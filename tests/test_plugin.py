@@ -200,30 +200,37 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert not response.error
     files = {item.name: item.content for item in response.file}
     header = files["oneof.protocyte.hpp"]
+    protected = header.split("protected:", maxsplit=1)[1]
 
     assert "Carrier(Carrier &&other) noexcept" in header
     assert "Carrier &operator=(Carrier &&other) noexcept" in header
     assert "~Carrier() noexcept { clear_choice(); }" in header
     assert "template<class T> static void destroy_at_(T *value) noexcept { value->~T(); }" in header
     assert "void clear_choice() noexcept {" in header
-    assert "destroy_at_(&text_);" in header
-    assert "destroy_at_(&inner_);" in header
-    assert "new (&choice_none_)::protocyte::u8(0u);" in header
-    assert "union {" in header
-    assert "::protocyte::u8 choice_none_;" in header
-    assert "typename Config::String text_;" in header
-    assert "::protocyte::i32 count_;" in header
-    assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner_;" in header
-    assert "new (&text_) typename Config::String(::protocyte::move(temp));" in header
-    assert "new (&count_)::protocyte::i32(value);" in header
-    assert "new (&inner_) typename Config::template Optional<::demo::Carrier_Inner<Config>>();" in header
+    assert "destroy_at_(&choice.text);" in header
+    assert "destroy_at_(&choice.inner);" in header
+    assert "new (&choice.none)::protocyte::u8(0u);" in header
+    assert "union ChoiceStorage {" in header
+    assert "ChoiceStorage() noexcept {}" in header
+    assert "~ChoiceStorage() noexcept {}" in header
+    assert "} choice;" in header
+    assert "::protocyte::u8 none;" in header
+    assert "typename Config::String text;" in header
+    assert "::protocyte::i32 count;" in header
+    assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner;" in header
+    assert "new (&choice.text) typename Config::String(::protocyte::move(temp));" in header
+    assert "new (&choice.count)::protocyte::i32(value);" in header
+    assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>>();" in header
     assert "auto ensured = ensure_inner();" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
     assert "choice_case_ == ChoiceCase::inner" in header
-    assert "typename Config::String text_;" in header
-    assert "typename Config::String text_ = " not in header
-    assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner_;" in header
+    assert "::protocyte::i32 before_ = 0;" in protected
+    assert "::protocyte::i32 after_ = 0;" in protected
+    assert protected.index("::protocyte::i32 before_ = 0;") < protected.index("ChoiceCase choice_case_ = ChoiceCase::none;")
+    assert protected.index("ChoiceCase choice_case_ = ChoiceCase::none;") < protected.index("union ChoiceStorage {")
+    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_ = 0;")
+    assert "typename Config::String text = " not in header
 
 
 def _simple_file() -> descriptor_pb2.FileDescriptorProto:
@@ -386,26 +393,38 @@ def _oneof_file() -> descriptor_pb2.FileDescriptorProto:
     message.oneof_decl.add().name = "choice"
 
     field = message.field.add()
-    field.name = "text"
+    field.name = "before"
     field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "text"
+    field.number = 2
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_STRING
     field.oneof_index = 0
 
     field = message.field.add()
     field.name = "count"
-    field.number = 2
+    field.number = 3
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_INT32
     field.oneof_index = 0
 
     field = message.field.add()
     field.name = "inner"
-    field.number = 3
+    field.number = 4
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_MESSAGE
     field.type_name = ".demo.Carrier.Inner"
     field.oneof_index = 0
+
+    field = message.field.add()
+    field.name = "after"
+    field.number = 5
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
 
     return file
 

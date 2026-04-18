@@ -256,17 +256,16 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
     w.line("protected:")
     w.push()
     w.line("Context* ctx_;")
-    for oneof in message.oneofs:
-        w.line(f"{oneof.cpp_name}Case {cpp_identifier(oneof.name)}_case_ = {oneof.cpp_name}Case::none;")
-        w.line("union {")
-        w.push()
-        w.line(f"::protocyte::u8 {_oneof_none_member(oneof)};")
-        for item in oneof.fields:
-            _emit_oneof_member(w, item, options)
-        w.pop()
-        w.line("};")
+    oneofs_by_name = {oneof.name: oneof for oneof in message.oneofs}
+    emitted_oneofs: set[str] = set()
     for item in message.fields:
         if item.oneof_name is not None:
+            if item.oneof_name in emitted_oneofs:
+                continue
+            oneof = oneofs_by_name[item.oneof_name]
+            w.line(f"{oneof.cpp_name}Case {cpp_identifier(oneof.name)}_case_ = {oneof.cpp_name}Case::none;")
+            _emit_oneof_storage(w, oneof, options)
+            emitted_oneofs.add(item.oneof_name)
             continue
         _emit_member(w, item, options)
     w.pop()
@@ -1207,12 +1206,25 @@ def _emit_clear_statement(w: CppWriter, item: FieldModel) -> None:
 
 
 def _emit_oneof_member(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
-    w.line(f"{_storage_type(item, options)} {_member(item)};")
+    w.line(f"{_storage_type(item, options)} {_oneof_member_name(item)};")
 
 
 def _emit_destroy_oneof_member(w: CppWriter, item: FieldModel) -> None:
     if item.kind in {"string", "bytes", "message"}:
         w.line(f"destroy_at_(&{_member(item)});")
+
+
+def _emit_oneof_storage(w: CppWriter, oneof: OneofModel, options: GeneratorOptions) -> None:
+    storage_type = _oneof_storage_type(oneof)
+    w.line(f"union {storage_type} {{")
+    w.push()
+    w.line(f"{storage_type}() noexcept {{}}")
+    w.line(f"~{storage_type}() noexcept {{}}")
+    w.line(f"::protocyte::u8 {_oneof_none_name()};")
+    for item in oneof.fields:
+        _emit_oneof_member(w, item, options)
+    w.pop()
+    w.line(f"}} {_oneof_storage_member(oneof.name)};")
 
 
 def _storage_type(item: FieldModel, options: GeneratorOptions) -> str:
@@ -1289,6 +1301,8 @@ def _default(item: FieldModel) -> str:
 
 
 def _member(item: FieldModel) -> str:
+    if item.oneof_name is not None:
+        return f"{_oneof_storage_member(item.oneof_name)}.{_oneof_member_name(item)}"
     return f"{item.cpp_name}_"
 
 
@@ -1300,8 +1314,24 @@ def _oneof_case_member(oneof_name: str) -> str:
     return f"{cpp_identifier(oneof_name)}_case_"
 
 
+def _oneof_storage_type(oneof: OneofModel) -> str:
+    return f"{oneof.cpp_name}Storage"
+
+
+def _oneof_storage_member(oneof_name: str) -> str:
+    return cpp_identifier(oneof_name)
+
+
+def _oneof_member_name(item: FieldModel) -> str:
+    return item.cpp_name
+
+
+def _oneof_none_name() -> str:
+    return "none"
+
+
 def _oneof_none_member(oneof: OneofModel) -> str:
-    return f"{cpp_identifier(oneof.name)}_none_"
+    return f"{_oneof_storage_member(oneof.name)}.{_oneof_none_name()}"
 
 
 def _fixed_size_literal(item: FieldModel) -> str:

@@ -540,7 +540,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(Context &ctx) noexcept:
             ctx_ {&ctx}, extreme_ {&ctx}, weird_map_ {&ctx} {
-            new (&deep_oneof_none_)::protocyte::u8(0u);
+            new (&deep_oneof.none)::protocyte::u8(0u);
         }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
@@ -553,15 +553,15 @@ namespace test::ultimate {
             ctx_ {other.ctx_},
             extreme_ {::protocyte::move(other.extreme_)},
             weird_map_ {::protocyte::move(other.weird_map_)} {
-            new (&deep_oneof_none_)::protocyte::u8(0u);
+            new (&deep_oneof.none)::protocyte::u8(0u);
             switch (other.deep_oneof_case_) {
                 case Deep_oneofCase::val: {
-                    new (&val_)::protocyte::i64(other.val_);
+                    new (&deep_oneof.val)::protocyte::i64(other.deep_oneof.val);
                     deep_oneof_case_ = Deep_oneofCase::val;
                     break;
                 }
                 case Deep_oneofCase::text: {
-                    new (&text_) typename Config::String(::protocyte::move(other.text_));
+                    new (&deep_oneof.text) typename Config::String(::protocyte::move(other.deep_oneof.text));
                     deep_oneof_case_ = Deep_oneofCase::text;
                     break;
                 }
@@ -583,12 +583,12 @@ namespace test::ultimate {
             weird_map_ = ::protocyte::move(other.weird_map_);
             switch (other.deep_oneof_case_) {
                 case Deep_oneofCase::val: {
-                    new (&val_)::protocyte::i64(other.val_);
+                    new (&deep_oneof.val)::protocyte::i64(other.deep_oneof.val);
                     deep_oneof_case_ = Deep_oneofCase::val;
                     break;
                 }
                 case Deep_oneofCase::text: {
-                    new (&text_) typename Config::String(::protocyte::move(other.text_));
+                    new (&deep_oneof.text) typename Config::String(::protocyte::move(other.deep_oneof.text));
                     deep_oneof_case_ = Deep_oneofCase::text;
                     break;
                 }
@@ -636,7 +636,7 @@ namespace test::ultimate {
                     break;
                 }
                 case Deep_oneofCase::text: {
-                    destroy_at_(&text_);
+                    destroy_at_(&deep_oneof.text);
                     break;
                 }
                 case Deep_oneofCase::none:
@@ -644,7 +644,7 @@ namespace test::ultimate {
                     break;
                 }
             }
-            new (&deep_oneof_none_)::protocyte::u8(0u);
+            new (&deep_oneof.none)::protocyte::u8(0u);
             deep_oneof_case_ = Deep_oneofCase::none;
         }
 
@@ -669,23 +669,25 @@ namespace test::ultimate {
         void clear_weird_map() noexcept { weird_map_.clear(); }
 
         bool has_val() const noexcept { return deep_oneof_case_ == Deep_oneofCase::val; }
-        ::protocyte::i64 val() const noexcept { return has_val() ? val_ : 0; }
+        ::protocyte::i64 val() const noexcept { return has_val() ? deep_oneof.val : 0; }
         ::protocyte::Status set_val(const ::protocyte::i64 value) noexcept {
             clear_deep_oneof();
-            new (&val_)::protocyte::i64(value);
+            new (&deep_oneof.val)::protocyte::i64(value);
             deep_oneof_case_ = Deep_oneofCase::val;
             return ::protocyte::Status::ok();
         }
 
         bool has_text() const noexcept { return deep_oneof_case_ == Deep_oneofCase::text; }
-        ::protocyte::ByteView text() const noexcept { return has_text() ? text_.view() : ::protocyte::ByteView {}; }
+        ::protocyte::ByteView text() const noexcept {
+            return has_text() ? deep_oneof.text.view() : ::protocyte::ByteView {};
+        }
         ::protocyte::Status set_text(const ::protocyte::ByteView value) noexcept {
             typename Config::String temp {ctx_};
             if (const auto st = temp.assign(value); !st) {
                 return st;
             }
             clear_deep_oneof();
-            new (&text_) typename Config::String(::protocyte::move(temp));
+            new (&deep_oneof.text) typename Config::String(::protocyte::move(temp));
             deep_oneof_case_ = Deep_oneofCase::text;
             return ::protocyte::Status::ok();
         }
@@ -800,13 +802,13 @@ namespace test::ultimate {
                                                               reader.position(), field_number);
                         }
                         clear_deep_oneof();
-                        new (&val_)::protocyte::i64(0);
+                        new (&deep_oneof.val)::protocyte::i64(0);
                         deep_oneof_case_ = Deep_oneofCase::val;
                         auto raw = ::protocyte::read_varint(reader);
                         if (!raw) {
                             return raw.status();
                         }
-                        val_ = static_cast<::protocyte::i64>(raw.value());
+                        deep_oneof.val = static_cast<::protocyte::i64>(raw.value());
                         break;
                     }
                     case 4u: {
@@ -819,10 +821,10 @@ namespace test::ultimate {
                             return len.status();
                         }
                         clear_deep_oneof();
-                        new (&text_) typename Config::String(ctx_);
+                        new (&deep_oneof.text) typename Config::String(ctx_);
                         deep_oneof_case_ = Deep_oneofCase::text;
                         if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), text_);
+                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), deep_oneof.text);
                             !st) {
                             return st;
                         }
@@ -899,7 +901,8 @@ namespace test::ultimate {
                 if (const auto st = ::protocyte::write_tag(writer, 3u, ::protocyte::WireType::VARINT); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(val_)); !st) {
+                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(deep_oneof.val));
+                    !st) {
                     return st;
                 }
             }
@@ -907,7 +910,7 @@ namespace test::ultimate {
                 if (const auto st = ::protocyte::write_tag(writer, 4u, ::protocyte::WireType::LEN); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_bytes(writer, text_.view()); !st) {
+                if (const auto st = ::protocyte::write_bytes(writer, deep_oneof.text.view()); !st) {
                     return st;
                 }
             }
@@ -951,15 +954,16 @@ namespace test::ultimate {
             }
             if (deep_oneof_case_ == Deep_oneofCase::val) {
                 if (const auto st = ::protocyte::add_size(
-                        &total,
-                        ::protocyte::tag_size(3u) + ::protocyte::varint_size(static_cast<::protocyte::u64>(val_)));
+                        &total, ::protocyte::tag_size(3u) +
+                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(deep_oneof.val)));
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
             if (deep_oneof_case_ == Deep_oneofCase::text) {
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(4u) + ::protocyte::varint_size(text_.size()) + text_.size());
+                if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size(4u) +
+                                                                      ::protocyte::varint_size(deep_oneof.text.size()) +
+                                                                      deep_oneof.text.size());
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -968,14 +972,16 @@ namespace test::ultimate {
         }
     protected:
         Context *ctx_;
-        Deep_oneofCase deep_oneof_case_ = Deep_oneofCase::none;
-        union {
-            ::protocyte::u8 deep_oneof_none_;
-            ::protocyte::i64 val_;
-            typename Config::String text_;
-        };
         typename Config::String extreme_;
         typename Config::template Map<::protocyte::i32, typename Config::String> weird_map_;
+        Deep_oneofCase deep_oneof_case_ = Deep_oneofCase::none;
+        union Deep_oneofStorage {
+            Deep_oneofStorage() noexcept {}
+            ~Deep_oneofStorage() noexcept {}
+            ::protocyte::u8 none;
+            ::protocyte::i64 val;
+            typename Config::String text;
+        } deep_oneof;
     };
 
     template<class Config> struct UltimateComplexMessage {
@@ -1008,7 +1014,7 @@ namespace test::ultimate {
             lots_of_nested_ {&ctx},
             colors_ {&ctx},
             opt_string_ {&ctx} {
-            new (&special_oneof_none_)::protocyte::u8(0u);
+            new (&special_oneof.none)::protocyte::u8(0u);
         }
 
         static ::protocyte::Result<UltimateComplexMessage> create(Context &ctx) noexcept {
@@ -1053,27 +1059,29 @@ namespace test::ultimate {
             if (other.has_sha256_) {
                 for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = other.sha256_[i]; }
             }
-            new (&special_oneof_none_)::protocyte::u8(0u);
+            new (&special_oneof.none)::protocyte::u8(0u);
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    new (&oneof_string_) typename Config::String(::protocyte::move(other.oneof_string_));
+                    new (&special_oneof.oneof_string)
+                        typename Config::String(::protocyte::move(other.special_oneof.oneof_string));
                     special_oneof_case_ = Special_oneofCase::oneof_string;
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    new (&oneof_int32_)::protocyte::i32(other.oneof_int32_);
+                    new (&special_oneof.oneof_int32)::protocyte::i32(other.special_oneof.oneof_int32);
                     special_oneof_case_ = Special_oneofCase::oneof_int32;
                     break;
                 }
                 case Special_oneofCase::oneof_msg: {
-                    new (&oneof_msg_) typename Config::template Optional<
+                    new (&special_oneof.oneof_msg) typename Config::template Optional<
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>(
-                        ::protocyte::move(other.oneof_msg_));
+                        ::protocyte::move(other.special_oneof.oneof_msg));
                     special_oneof_case_ = Special_oneofCase::oneof_msg;
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&oneof_bytes_) typename Config::Bytes(::protocyte::move(other.oneof_bytes_));
+                    new (&special_oneof.oneof_bytes)
+                        typename Config::Bytes(::protocyte::move(other.special_oneof.oneof_bytes));
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
                 }
@@ -1129,24 +1137,26 @@ namespace test::ultimate {
             extreme_nesting_ = ::protocyte::move(other.extreme_nesting_);
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    new (&oneof_string_) typename Config::String(::protocyte::move(other.oneof_string_));
+                    new (&special_oneof.oneof_string)
+                        typename Config::String(::protocyte::move(other.special_oneof.oneof_string));
                     special_oneof_case_ = Special_oneofCase::oneof_string;
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    new (&oneof_int32_)::protocyte::i32(other.oneof_int32_);
+                    new (&special_oneof.oneof_int32)::protocyte::i32(other.special_oneof.oneof_int32);
                     special_oneof_case_ = Special_oneofCase::oneof_int32;
                     break;
                 }
                 case Special_oneofCase::oneof_msg: {
-                    new (&oneof_msg_) typename Config::template Optional<
+                    new (&special_oneof.oneof_msg) typename Config::template Optional<
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>(
-                        ::protocyte::move(other.oneof_msg_));
+                        ::protocyte::move(other.special_oneof.oneof_msg));
                     special_oneof_case_ = Special_oneofCase::oneof_msg;
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&oneof_bytes_) typename Config::Bytes(::protocyte::move(other.oneof_bytes_));
+                    new (&special_oneof.oneof_bytes)
+                        typename Config::Bytes(::protocyte::move(other.special_oneof.oneof_bytes));
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
                 }
@@ -1306,18 +1316,18 @@ namespace test::ultimate {
         void clear_special_oneof() noexcept {
             switch (special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    destroy_at_(&oneof_string_);
+                    destroy_at_(&special_oneof.oneof_string);
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
                     break;
                 }
                 case Special_oneofCase::oneof_msg: {
-                    destroy_at_(&oneof_msg_);
+                    destroy_at_(&special_oneof.oneof_msg);
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    destroy_at_(&oneof_bytes_);
+                    destroy_at_(&special_oneof.oneof_bytes);
                     break;
                 }
                 case Special_oneofCase::none:
@@ -1325,7 +1335,7 @@ namespace test::ultimate {
                     break;
                 }
             }
-            new (&special_oneof_none_)::protocyte::u8(0u);
+            new (&special_oneof.none)::protocyte::u8(0u);
             special_oneof_case_ = Special_oneofCase::none;
         }
 
@@ -1498,7 +1508,7 @@ namespace test::ultimate {
 
         bool has_oneof_string() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_string; }
         ::protocyte::ByteView oneof_string() const noexcept {
-            return has_oneof_string() ? oneof_string_.view() : ::protocyte::ByteView {};
+            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::ByteView {};
         }
         ::protocyte::Status set_oneof_string(const ::protocyte::ByteView value) noexcept {
             typename Config::String temp {ctx_};
@@ -1506,34 +1516,34 @@ namespace test::ultimate {
                 return st;
             }
             clear_special_oneof();
-            new (&oneof_string_) typename Config::String(::protocyte::move(temp));
+            new (&special_oneof.oneof_string) typename Config::String(::protocyte::move(temp));
             special_oneof_case_ = Special_oneofCase::oneof_string;
             return ::protocyte::Status::ok();
         }
 
         bool has_oneof_int32() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_int32; }
-        ::protocyte::i32 oneof_int32() const noexcept { return has_oneof_int32() ? oneof_int32_ : 0; }
+        ::protocyte::i32 oneof_int32() const noexcept { return has_oneof_int32() ? special_oneof.oneof_int32 : 0; }
         ::protocyte::Status set_oneof_int32(const ::protocyte::i32 value) noexcept {
             clear_special_oneof();
-            new (&oneof_int32_)::protocyte::i32(value);
+            new (&special_oneof.oneof_int32)::protocyte::i32(value);
             special_oneof_case_ = Special_oneofCase::oneof_int32;
             return ::protocyte::Status::ok();
         }
 
         bool has_oneof_msg() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_msg; }
         const ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> *oneof_msg() const noexcept {
-            return has_oneof_msg() && oneof_msg_.has_value() ? &oneof_msg_.value() : nullptr;
+            return has_oneof_msg() && special_oneof.oneof_msg.has_value() ? &special_oneof.oneof_msg.value() : nullptr;
         }
         ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>>
         ensure_oneof_msg() noexcept {
             if (!has_oneof_msg()) {
                 clear_special_oneof();
-                new (&oneof_msg_)
+                new (&special_oneof.oneof_msg)
                     typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>();
             }
             special_oneof_case_ = Special_oneofCase::oneof_msg;
-            if (!oneof_msg_.has_value()) {
-                if (const auto st = oneof_msg_.emplace(*ctx_); !st) {
+            if (!special_oneof.oneof_msg.has_value()) {
+                if (const auto st = special_oneof.oneof_msg.emplace(*ctx_); !st) {
                     return ::protocyte::
                         Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>>::err(
                             st.error());
@@ -1542,12 +1552,12 @@ namespace test::ultimate {
             return ::protocyte::
                 Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>>::ok(
                     ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
-                        oneof_msg_.value()});
+                        special_oneof.oneof_msg.value()});
         }
 
         bool has_oneof_bytes() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_bytes; }
         ::protocyte::ByteView oneof_bytes() const noexcept {
-            return has_oneof_bytes() ? oneof_bytes_.view() : ::protocyte::ByteView {};
+            return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::ByteView {};
         }
         ::protocyte::Status set_oneof_bytes(const ::protocyte::ByteView value) noexcept {
             typename Config::Bytes temp {ctx_};
@@ -1555,7 +1565,7 @@ namespace test::ultimate {
                 return st;
             }
             clear_special_oneof();
-            new (&oneof_bytes_) typename Config::Bytes(::protocyte::move(temp));
+            new (&special_oneof.oneof_bytes) typename Config::Bytes(::protocyte::move(temp));
             special_oneof_case_ = Special_oneofCase::oneof_bytes;
             return ::protocyte::Status::ok();
         }
@@ -2099,10 +2109,11 @@ namespace test::ultimate {
                             return len.status();
                         }
                         clear_special_oneof();
-                        new (&oneof_string_) typename Config::String(ctx_);
+                        new (&special_oneof.oneof_string) typename Config::String(ctx_);
                         special_oneof_case_ = Special_oneofCase::oneof_string;
                         if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), oneof_string_);
+                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()),
+                                special_oneof.oneof_string);
                             !st) {
                             return st;
                         }
@@ -2114,13 +2125,13 @@ namespace test::ultimate {
                                                               reader.position(), field_number);
                         }
                         clear_special_oneof();
-                        new (&oneof_int32_)::protocyte::i32(0);
+                        new (&special_oneof.oneof_int32)::protocyte::i32(0);
                         special_oneof_case_ = Special_oneofCase::oneof_int32;
                         auto raw = ::protocyte::read_varint(reader);
                         if (!raw) {
                             return raw.status();
                         }
-                        oneof_int32_ = static_cast<::protocyte::i32>(raw.value());
+                        special_oneof.oneof_int32 = static_cast<::protocyte::i32>(raw.value());
                         break;
                     }
                     case 28u: {
@@ -2156,10 +2167,10 @@ namespace test::ultimate {
                             return len.status();
                         }
                         clear_special_oneof();
-                        new (&oneof_bytes_) typename Config::Bytes(ctx_);
+                        new (&special_oneof.oneof_bytes) typename Config::Bytes(ctx_);
                         special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         if (const auto st = ::protocyte::read_bytes<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), oneof_bytes_);
+                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), special_oneof.oneof_bytes);
                             !st) {
                             return st;
                         }
@@ -2880,7 +2891,7 @@ namespace test::ultimate {
                 if (const auto st = ::protocyte::write_tag(writer, 26u, ::protocyte::WireType::LEN); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_bytes(writer, oneof_string_.view()); !st) {
+                if (const auto st = ::protocyte::write_bytes(writer, special_oneof.oneof_string.view()); !st) {
                     return st;
                 }
             }
@@ -2888,7 +2899,8 @@ namespace test::ultimate {
                 if (const auto st = ::protocyte::write_tag(writer, 27u, ::protocyte::WireType::VARINT); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(oneof_int32_));
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(special_oneof.oneof_int32));
                     !st) {
                     return st;
                 }
@@ -2897,7 +2909,7 @@ namespace test::ultimate {
                 if (const auto st = ::protocyte::write_tag(writer, 28u, ::protocyte::WireType::LEN); !st) {
                     return st;
                 }
-                auto msg_size = oneof_msg_.value().encoded_size();
+                auto msg_size = special_oneof.oneof_msg.value().encoded_size();
                 if (!msg_size) {
                     return msg_size.status();
                 }
@@ -2905,7 +2917,7 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                if (const auto st = oneof_msg_.value().serialize(writer); !st) {
+                if (const auto st = special_oneof.oneof_msg.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -2913,7 +2925,7 @@ namespace test::ultimate {
                 if (const auto st = ::protocyte::write_tag(writer, 29u, ::protocyte::WireType::LEN); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_bytes(writer, oneof_bytes_.view()); !st) {
+                if (const auto st = ::protocyte::write_bytes(writer, special_oneof.oneof_bytes.view()); !st) {
                     return st;
                 }
             }
@@ -3412,9 +3424,10 @@ namespace test::ultimate {
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_string) {
-                if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size(26u) +
-                                                                      ::protocyte::varint_size(oneof_string_.size()) +
-                                                                      oneof_string_.size());
+                if (const auto st =
+                        ::protocyte::add_size(&total, ::protocyte::tag_size(26u) +
+                                                          ::protocyte::varint_size(special_oneof.oneof_string.size()) +
+                                                          special_oneof.oneof_string.size());
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -3422,13 +3435,13 @@ namespace test::ultimate {
             if (special_oneof_case_ == Special_oneofCase::oneof_int32) {
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(27u) +
-                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(oneof_int32_)));
+                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(special_oneof.oneof_int32)));
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_msg) {
-                auto nested_size = oneof_msg_.value().encoded_size();
+                auto nested_size = special_oneof.oneof_msg.value().encoded_size();
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
@@ -3440,9 +3453,10 @@ namespace test::ultimate {
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_bytes) {
-                if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size(29u) +
-                                                                      ::protocyte::varint_size(oneof_bytes_.size()) +
-                                                                      oneof_bytes_.size());
+                if (const auto st =
+                        ::protocyte::add_size(&total, ::protocyte::tag_size(29u) +
+                                                          ::protocyte::varint_size(special_oneof.oneof_bytes.size()) +
+                                                          special_oneof.oneof_bytes.size());
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -3653,15 +3667,6 @@ namespace test::ultimate {
         }
     protected:
         Context *ctx_;
-        Special_oneofCase special_oneof_case_ = Special_oneofCase::none;
-        union {
-            ::protocyte::u8 special_oneof_none_;
-            typename Config::String oneof_string_;
-            ::protocyte::i32 oneof_int32_;
-            typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>
-                oneof_msg_;
-            typename Config::Bytes oneof_bytes_;
-        };
         ::protocyte::f64 f_double_ = 0.0;
         ::protocyte::f32 f_float_ = 0.0f;
         ::protocyte::i32 f_int32_ = 0;
@@ -3682,6 +3687,16 @@ namespace test::ultimate {
         typename Config::template Vector<::protocyte::f64> r_double_;
         ::protocyte::i32 color_ = 0;
         typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> nested1_;
+        Special_oneofCase special_oneof_case_ = Special_oneofCase::none;
+        union Special_oneofStorage {
+            Special_oneofStorage() noexcept {}
+            ~Special_oneofStorage() noexcept {}
+            ::protocyte::u8 none;
+            typename Config::String oneof_string;
+            ::protocyte::i32 oneof_int32;
+            typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> oneof_msg;
+            typename Config::Bytes oneof_bytes;
+        } special_oneof;
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
         typename Config::template Map<bool, typename Config::Bytes> map_bool_bytes_;
