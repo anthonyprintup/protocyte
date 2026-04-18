@@ -10,7 +10,6 @@ from protocyte.model import (
     CONSTANT_KIND_STRING,
     SCALAR_CPP_TYPES,
     SCALAR_DEFAULTS,
-    ConstantModel,
     DescriptorModel,
     EnumModel,
     FieldDescriptorProto,
@@ -211,7 +210,7 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
         w.line(f"using {enum.name} = {enum.cpp_name};")
     for nested in message.nested_messages:
         if not nested.is_map_entry:
-            w.line(f"template <typename NestedConfig = Config>")
+            w.line("template <typename NestedConfig = Config>")
             w.line(f"using {nested.name} = {nested.cpp_name}<NestedConfig>;")
     if message.nested_enums or message.nested_messages:
         w.line()
@@ -560,7 +559,7 @@ def _emit_copy_map_field(w: CppWriter, item: FieldModel, options: GeneratorOptio
     w.line(f"if (const auto insert = mutable_{item.cpp_name}().insert_or_assign(::protocyte::move(copied_key), ::protocyte::move(copied_value)); !insert) {{ return insert; }}")
     w.line("return ::protocyte::Status::ok();")
     w.pop()
-    w.line(f"}}); !st) {{ return st; }}")
+    w.line("}); !st) { return st; }")
 
 
 def _emit_copy_oneof_from_other(w: CppWriter, oneof: OneofModel, options: GeneratorOptions, *, source: str) -> None:

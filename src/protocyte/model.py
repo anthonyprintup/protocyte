@@ -892,8 +892,8 @@ def _validate_constant_collisions(message: MessageModel) -> None:
     reserved.update(nested.name for nested in message.nested_messages if not nested.is_map_entry)
     reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
     reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
-    for field in message.descriptor.field:
-        cpp_name = cpp_identifier(field.name)
+    for proto_field in message.descriptor.field:
+        cpp_name = cpp_identifier(proto_field.name)
         reserved.add(cpp_name)
         reserved.add(f"clear_{cpp_name}")
         reserved.add(f"set_{cpp_name}")
@@ -1108,23 +1108,29 @@ def _resolve_constants_and_arrays(messages: dict[str, MessageModel]) -> None:
             continue
         for constant in message.constants:
             resolve_constant(message, constant)
-        for field in message.fields:
-            if field.array_expr is None:
+        for field_model in message.fields:
+            if field_model.array_expr is None:
                 continue
             value = _ExprParser(
-                field.array_expr,
+                field_model.array_expr,
                 lambda name, owner=message: lookup_constant_for_array(owner, name),
-                f"{message.full_name}.{field.name}",
+                f"{message.full_name}.{field_model.name}",
                 unsigned_integer_literals=True,
             ).parse()
-            numeric = _coerce_expression_value(CONSTANT_KIND_UINT32, value, f"{message.full_name}.{field.name}")
+            numeric = _coerce_expression_value(
+                CONSTANT_KIND_UINT32,
+                value,
+                f"{message.full_name}.{field_model.name}",
+            )
             if not isinstance(numeric, int) or numeric <= 0:
-                raise ProtocyteError(f"{message.full_name}.{field.name}: protocyte.array.expr must resolve to a positive integer")
-            field.array_max = numeric
+                raise ProtocyteError(
+                    f"{message.full_name}.{field_model.name}: protocyte.array.expr must resolve to a positive integer"
+                )
+            field_model.array_max = numeric
             if type(value.value) is int:
-                field.array_cpp_max = value.cpp_expr
+                field_model.array_cpp_max = value.cpp_expr
             else:
-                field.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
+                field_model.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
 
 
 def _validate_references(
@@ -1339,6 +1345,10 @@ def _numeric_value(
     if cpp_expr is None:
         cpp_expr = str(value)
     return _TypedValue("numeric", value, cpp_expr, cpp_precedence)
+
+
+def _cpp_escape_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _expect_bool(value: _TypedValue, label: str) -> bool:
