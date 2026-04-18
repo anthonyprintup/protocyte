@@ -1,15 +1,4 @@
-from __future__ import annotations
-
-
-def runtime_files(prefix: str = "protocyte/runtime") -> dict[str, str]:
-    normalized = prefix.strip("/") or "protocyte/runtime"
-    return {
-        f"{normalized}/runtime.hpp": RUNTIME_HPP,
-        f"{normalized}/runtime.cpp": RUNTIME_CPP,
-    }
-
-
-RUNTIME_HPP = r"""#pragma once
+#pragma once
 
 #ifndef PROTOCYTE_RUNTIME_RUNTIME_HPP
 #define PROTOCYTE_RUNTIME_RUNTIME_HPP
@@ -95,7 +84,8 @@ namespace protocyte {
         constexpr explicit Status(const Error error) noexcept: error_ {error} {}
 
         static constexpr Status ok() noexcept { return {}; }
-        static constexpr Status error(const ErrorCode code, const usize offset = {}, const u32 field_number = {}) noexcept {
+        static constexpr Status error(const ErrorCode code, const usize offset = {},
+                                      const u32 field_number = {}) noexcept {
             return Status {Error {.code = code, .offset = offset, .field_number = field_number}};
         }
 
@@ -108,7 +98,7 @@ namespace protocyte {
     };
 
     template<class T> struct Ref {
-        constexpr explicit Ref(T &value) noexcept: ptr_{&value} {}
+        constexpr explicit Ref(T &value) noexcept: ptr_ {&value} {}
         constexpr T &get() const noexcept { return *ptr_; }
         constexpr operator T &() const noexcept { return *ptr_; }
         constexpr T *operator->() const noexcept { return ptr_; }
@@ -124,7 +114,7 @@ namespace protocyte {
             return Result {Error {.code = code, .offset = offset, .field_number = field_number}};
         }
 
-        Result(Result &&other) noexcept: ok_{other.ok_} {
+        Result(Result &&other) noexcept: ok_ {other.ok_} {
             if (ok_) {
                 new (&value_) T(protocyte::move(other.value_));
             } else {
@@ -164,8 +154,8 @@ namespace protocyte {
         Status status() const noexcept { return ok_ ? Status {} : Status {error_}; }
 
     protected:
-        explicit Result(T &&value) noexcept: ok_{true} { new (&value_) T(protocyte::move(value)); }
-        explicit Result(const Error error) noexcept: ok_{false}, error_{error} {}
+        explicit Result(T &&value) noexcept: ok_ {true} { new (&value_) T(protocyte::move(value)); }
+        explicit Result(const Error error) noexcept: ok_ {false}, error_ {error} {}
 
         bool ok_;
         union {
@@ -358,9 +348,9 @@ namespace protocyte {
     template<class T, class Config> struct Vector {
         using Context = typename Config::Context;
 
-        explicit Vector(Context *ctx = nullptr) noexcept: ctx_{ctx} {}
+        explicit Vector(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}
         Vector(Vector &&other) noexcept:
-            ctx_{other.ctx_}, data_{other.data_}, size_{other.size_}, capacity_{other.capacity_} {
+            ctx_ {other.ctx_}, data_ {other.data_}, size_ {other.size_}, capacity_ {other.capacity_} {
             other.data_ = nullptr;
             other.size_ = {};
             other.capacity_ = {};
@@ -485,8 +475,8 @@ namespace protocyte {
     template<class Config> struct Bytes {
         using Context = typename Config::Context;
 
-        explicit Bytes(Context *ctx = nullptr) noexcept: ctx_{ctx}, bytes_{ctx} {}
-        Bytes(Bytes &&other) noexcept: ctx_{other.ctx_}, bytes_{protocyte::move(other.bytes_)} {}
+        explicit Bytes(Context *ctx = nullptr) noexcept: ctx_ {ctx}, bytes_ {ctx} {}
+        Bytes(Bytes &&other) noexcept: ctx_ {other.ctx_}, bytes_ {protocyte::move(other.bytes_)} {}
         Bytes &operator=(Bytes &&other) noexcept {
             ctx_ = other.ctx_;
             bytes_ = protocyte::move(other.bytes_);
@@ -506,7 +496,7 @@ namespace protocyte {
         }
 
         Status assign(const ByteView view) noexcept {
-            Bytes temp{ctx_};
+            Bytes temp {ctx_};
             if (const auto st = temp.bytes_.reserve(view.size); !st) {
                 return st;
             }
@@ -527,8 +517,8 @@ namespace protocyte {
     template<class Config> struct String {
         using Context = typename Config::Context;
 
-        explicit String(Context *ctx = nullptr) noexcept: bytes_{ctx} {}
-        String(String &&other) noexcept: bytes_{protocyte::move(other.bytes_)} {}
+        explicit String(Context *ctx = nullptr) noexcept: bytes_ {ctx} {}
+        String(String &&other) noexcept: bytes_ {protocyte::move(other.bytes_)} {}
         String &operator=(String &&other) noexcept {
             bytes_ = protocyte::move(other.bytes_);
             return *this;
@@ -602,8 +592,8 @@ namespace protocyte {
     template<class T, class Config> struct Box {
         using Context = typename Config::Context;
 
-        explicit Box(Context *ctx = nullptr) noexcept: ctx_{ctx} {}
-        Box(Box &&other) noexcept: ctx_{other.ctx_}, ptr_{other.ptr_} { other.ptr_ = nullptr; }
+        explicit Box(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}
+        Box(Box &&other) noexcept: ctx_ {other.ctx_}, ptr_ {other.ptr_} { other.ptr_ = nullptr; }
         Box &operator=(Box &&other) noexcept {
             if (this == &other) {
                 return *this;
@@ -633,7 +623,7 @@ namespace protocyte {
             if (raw == nullptr) {
                 return Result<Ref<T>>::err(ErrorCode::no_memory);
             }
-            ptr_ = new (raw) T{*ctx_};
+            ptr_ = new (raw) T {*ctx_};
             return Result<Ref<T>>::ok(Ref<T> {*ptr_});
         }
 
@@ -659,9 +649,9 @@ namespace protocyte {
 
         using Context = typename Config::Context;
 
-        explicit HashMap(Context *ctx = nullptr) noexcept: ctx_{ctx}, buckets_{ctx} {}
+        explicit HashMap(Context *ctx = nullptr) noexcept: ctx_ {ctx}, buckets_ {ctx} {}
         HashMap(HashMap &&other) noexcept:
-            ctx_{other.ctx_}, buckets_{protocyte::move(other.buckets_)}, size_{other.size_} {
+            ctx_ {other.ctx_}, buckets_ {protocyte::move(other.buckets_)}, size_ {other.size_} {
             other.size_ = {};
         }
         HashMap &operator=(HashMap &&other) noexcept {
@@ -694,7 +684,7 @@ namespace protocyte {
             if (desired <= buckets_.size()) {
                 return {};
             }
-            HashMap next{ctx_};
+            HashMap next {ctx_};
             if (const auto st = next.buckets_.resize_default(desired); !st) {
                 return st;
             }
@@ -771,7 +761,7 @@ namespace protocyte {
     }
 
     struct SliceReader {
-        SliceReader(const u8 *data, const usize size) noexcept: data_{data}, size_{size} {}
+        SliceReader(const u8 *data, const usize size) noexcept: data_ {data}, size_ {size} {}
         bool eof() const noexcept { return pos_ >= size_; }
         usize position() const noexcept { return pos_; }
         Result<u8> read_byte() noexcept {
@@ -804,12 +794,12 @@ namespace protocyte {
 
     struct ReaderRef {
         template<class Reader> explicit ReaderRef(Reader &reader) noexcept:
-            reader_{&reader},
-            eof_{&eof_impl<Reader>},
-            position_{&position_impl<Reader>},
-            read_byte_{&read_byte_impl<Reader>},
-            read_{&read_impl<Reader>},
-            skip_{&skip_impl<Reader>} {}
+            reader_ {&reader},
+            eof_ {&eof_impl<Reader>},
+            position_ {&position_impl<Reader>},
+            read_byte_ {&read_byte_impl<Reader>},
+            read_ {&read_impl<Reader>},
+            skip_ {&skip_impl<Reader>} {}
 
         bool eof() const noexcept { return eof_(reader_); }
         usize position() const noexcept { return position_(reader_); }
@@ -847,8 +837,7 @@ namespace protocyte {
     };
 
     template<class Reader> struct LimitedReader {
-        LimitedReader(Reader &inner, const usize remaining) noexcept:
-            inner_{&inner}, remaining_{remaining} {}
+        LimitedReader(Reader &inner, const usize remaining) noexcept: inner_ {&inner}, remaining_ {remaining} {}
         bool eof() const noexcept { return !remaining_; }
         usize position() const noexcept { return pos_; }
         Result<u8> read_byte() noexcept {
@@ -894,7 +883,7 @@ namespace protocyte {
     };
 
     struct SliceWriter {
-        SliceWriter(u8 *data, const usize capacity) noexcept: data_{data}, capacity_{capacity} {}
+        SliceWriter(u8 *data, const usize capacity) noexcept: data_ {data}, capacity_ {capacity} {}
         usize position() const noexcept { return pos_; }
         Status write_byte(const u8 value) noexcept {
             if (pos_ >= capacity_) {
@@ -954,13 +943,9 @@ namespace protocyte {
         return size;
     }
 
-    constexpr u32 encode_zigzag32(const i32 value) noexcept {
-        return static_cast<u32>((value << 1) ^ (value >> 31));
-    }
+    constexpr u32 encode_zigzag32(const i32 value) noexcept { return static_cast<u32>((value << 1) ^ (value >> 31)); }
 
-    constexpr u64 encode_zigzag64(const i64 value) noexcept {
-        return static_cast<u64>((value << 1) ^ (value >> 63));
-    }
+    constexpr u64 encode_zigzag64(const i64 value) noexcept { return static_cast<u64>((value << 1) ^ (value >> 63)); }
 
     constexpr i32 decode_zigzag32(const u32 value) noexcept {
         return static_cast<i32>((value >> 1) ^ (~(value & 1u) + 1u));
@@ -1006,8 +991,7 @@ namespace protocyte {
         return writer.write(bytes, 8u);
     }
 
-    template<class Writer>
-    Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept {
+    template<class Writer> Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept {
         return write_varint(writer, (static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
     }
 
@@ -1064,11 +1048,11 @@ namespace protocyte {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
-        typename Config::Bytes temp{&ctx};
+        typename Config::Bytes temp {&ctx};
         if (const auto st = temp.assign(ByteView {.data = nullptr, .size = {}}); !st) {
             return st;
         }
-        typename Config::template Vector<u8> buffer{&ctx};
+        typename Config::template Vector<u8> buffer {&ctx};
         if (const auto st = buffer.reserve(size); !st) {
             return st;
         }
@@ -1093,7 +1077,7 @@ namespace protocyte {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
-        typename Config::template Vector<u8> buffer{&ctx};
+        typename Config::template Vector<u8> buffer {&ctx};
         if (const auto st = buffer.reserve(size); !st) {
             return st;
         }
@@ -1106,7 +1090,7 @@ namespace protocyte {
                 return st;
             }
         }
-        typename Config::String temp{&ctx};
+        typename Config::String temp {&ctx};
         if (const auto st = temp.assign(ByteView {.data = buffer.data(), .size = buffer.size()}); !st) {
             return st;
         }
@@ -1134,20 +1118,3 @@ namespace protocyte {
 } // namespace protocyte
 
 #endif // PROTOCYTE_RUNTIME_RUNTIME_HPP
-"""
-
-
-RUNTIME_CPP = r"""#include "runtime.hpp"
-
-#ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
-#include <cstdlib>
-
-namespace protocyte {
-
-    void *hosted_allocate(void *, const usize size, usize) noexcept { return std::malloc(size); }
-
-    void hosted_deallocate(void *, void *ptr, const usize, const usize) noexcept { std::free(ptr); }
-
-} // namespace protocyte
-#endif
-"""

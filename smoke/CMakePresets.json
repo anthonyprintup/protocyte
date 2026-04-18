@@ -1,0 +1,44 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-clangcl-ninja",
+      "displayName": "Windows clang-cl + Ninja",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clangcl",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+        "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
+      }
+    },
+    {
+      "name": "windows-clangcl-ninja-driver",
+      "inherits": "windows-clangcl-ninja",
+      "displayName": "Windows clang-cl + Ninja + WDK driver",
+      "binaryDir": "${sourceDir}/build/clangcl-driver",
+      "cacheVariables": {
+        "PROTOCYTE_SMOKE_BUILD_DRIVER": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-clangcl-ninja",
+      "configurePreset": "windows-clangcl-ninja"
+    },
+    {
+      "name": "windows-clangcl-ninja-driver",
+      "configurePreset": "windows-clangcl-ninja-driver"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-clangcl-ninja",
+      "configurePreset": "windows-clangcl-ninja",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
