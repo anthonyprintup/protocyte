@@ -246,6 +246,12 @@ namespace protocyte {
 
     template<class T, class Config> struct Vector;
 
+    template<class T, usize Max> struct Array;
+
+    template<usize Max> struct ByteArray;
+
+    template<usize Max> struct FixedByteArray;
+
     template<class Config> struct Bytes;
 
     template<class Config> struct String;
@@ -471,6 +477,167 @@ namespace protocyte {
         T *data_ {};
         usize size_ {};
         usize capacity_ {};
+    };
+
+    template<class T, usize Max> struct Array {
+        Array() noexcept = default;
+        Array(Array &&other) noexcept {
+            for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
+            size_ = other.size_;
+            other.clear();
+        }
+        Array &operator=(Array &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            clear();
+            for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
+            size_ = other.size_;
+            other.clear();
+            return *this;
+        }
+        Array(const Array &) = delete;
+        Array &operator=(const Array &) = delete;
+        ~Array() noexcept { clear(); }
+
+        static constexpr usize max_size() noexcept { return Max; }
+        constexpr usize capacity() const noexcept { return Max; }
+        usize size() const noexcept { return size_; }
+        bool empty() const noexcept { return !size_; }
+        T *data() noexcept { return size_ ? ptr(0u) : nullptr; }
+        const T *data() const noexcept { return size_ ? ptr(0u) : nullptr; }
+        T &operator[](const usize index) noexcept { return *ptr(index); }
+        const T &operator[](const usize index) const noexcept { return *ptr(index); }
+
+        void clear() noexcept {
+            while (size_) {
+                --size_;
+                ptr(size_)->~T();
+            }
+        }
+
+        template<class... Args> Result<Ref<T>> emplace_back(Args &&...args) noexcept {
+            if (size_ >= Max) {
+                return Result<Ref<T>>::err(ErrorCode::count_limit);
+            }
+            new (ptr(size_)) T {protocyte::forward<Args>(args)...};
+            Ref<T> ref {*ptr(size_)};
+            ++size_;
+            return Result<Ref<T>>::ok(ref);
+        }
+
+        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
+        Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
+
+    protected:
+        T *ptr(const usize index) noexcept { return reinterpret_cast<T *>(&storage_[index * sizeof(T)]); }
+        const T *ptr(const usize index) const noexcept {
+            return reinterpret_cast<const T *>(&storage_[index * sizeof(T)]);
+        }
+
+        alignas(T) unsigned char storage_[sizeof(T) * Max];
+        usize size_ {};
+    };
+
+    template<usize Max> struct ByteArray {
+        ByteArray() noexcept = default;
+        ByteArray(ByteArray &&other) noexcept: size_ {other.size_} {
+            for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
+            other.size_ = {};
+        }
+        ByteArray &operator=(ByteArray &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            size_ = other.size_;
+            for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
+            other.size_ = {};
+            return *this;
+        }
+        ByteArray(const ByteArray &) = delete;
+        ByteArray &operator=(const ByteArray &) = delete;
+
+        static constexpr usize max_size() noexcept { return Max; }
+        ByteView view() const noexcept { return {.data = bytes_, .size = size_}; }
+        MutableByteView mutable_view() noexcept { return {.data = bytes_, .size = size_}; }
+        u8 *data() noexcept { return bytes_; }
+        const u8 *data() const noexcept { return bytes_; }
+        usize size() const noexcept { return size_; }
+        bool empty() const noexcept { return !size_; }
+        void clear() noexcept { size_ = {}; }
+
+        Status resize(const usize count) noexcept {
+            if (count > Max) {
+                return Status::error(ErrorCode::count_limit);
+            }
+            if (count > size_) {
+                for (usize i {size_}; i < count; ++i) { bytes_[i] = 0u; }
+            }
+            size_ = count;
+            return {};
+        }
+
+        Status assign(const ByteView view) noexcept {
+            if (view.size > Max) {
+                return Status::error(ErrorCode::count_limit);
+            }
+            for (usize i {}; i < view.size; ++i) { bytes_[i] = view.data[i]; }
+            size_ = view.size;
+            return {};
+        }
+
+    protected:
+        u8 bytes_[Max] {};
+        usize size_ {};
+    };
+
+    template<usize Max> struct FixedByteArray {
+        FixedByteArray() noexcept = default;
+        FixedByteArray(FixedByteArray &&other) noexcept: has_ {other.has_} {
+            if (other.has_) {
+                for (usize i {}; i < Max; ++i) { bytes_[i] = other.bytes_[i]; }
+            }
+            other.has_ = false;
+        }
+        FixedByteArray &operator=(FixedByteArray &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            has_ = other.has_;
+            if (other.has_) {
+                for (usize i {}; i < Max; ++i) { bytes_[i] = other.bytes_[i]; }
+            }
+            other.has_ = false;
+            return *this;
+        }
+        FixedByteArray(const FixedByteArray &) = delete;
+        FixedByteArray &operator=(const FixedByteArray &) = delete;
+
+        static constexpr usize fixed_size() noexcept { return Max; }
+        ByteView view() const noexcept { return has_ ? ByteView {.data = bytes_, .size = Max} : ByteView {}; }
+        MutableByteView mutable_view() noexcept {
+            has_ = true;
+            return {.data = bytes_, .size = Max};
+        }
+        u8 *data() noexcept { return bytes_; }
+        const u8 *data() const noexcept { return bytes_; }
+        usize size() const noexcept { return has_ ? Max : 0u; }
+        bool empty() const noexcept { return !has_; }
+        bool has_value() const noexcept { return has_; }
+        void clear() noexcept { has_ = false; }
+
+        Status assign(const ByteView view) noexcept {
+            if (view.size != Max) {
+                return Status::error(ErrorCode::invalid_argument);
+            }
+            for (usize i {}; i < Max; ++i) { bytes_[i] = view.data[i]; }
+            has_ = true;
+            return {};
+        }
+
+    protected:
+        u8 bytes_[Max] {};
+        bool has_ {};
     };
 
     template<class Config> struct Bytes {
