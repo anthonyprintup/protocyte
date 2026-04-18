@@ -10,6 +10,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(FetchContent)
+
 set(PROTOCYTE_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 set(PROTOCYTE_EXAMPLE_PROTO "${CMAKE_CURRENT_LIST_DIR}/example.proto")
 set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto/protocyte/options.proto")
@@ -38,7 +40,6 @@ if(PROTOCYTE_SMOKE_REGENERATE)
     find_program(PROTOC_EXECUTABLE protoc)
 
     if(NOT PROTOC_EXECUTABLE AND PROTOCYTE_SMOKE_FETCH_PROTOBUF)
-        include(FetchContent)
         set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
         set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -92,6 +93,13 @@ if(PROTOCYTE_SMOKE_REGENERATE)
     add_custom_target(protocyte_smoke_regenerate DEPENDS ${PROTOCYTE_GENERATED_FILES})
 endif()
 
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.7.1
+)
+FetchContent_MakeAvailable(Catch2)
+
 add_executable(protocyte_host_smoke
     src/host_smoke.cpp
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
@@ -100,6 +108,7 @@ add_executable(protocyte_host_smoke
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
 target_compile_definitions(protocyte_host_smoke PRIVATE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
+target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain)
 
 if(PROTOCYTE_SMOKE_REGENERATE)
     add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
@@ -112,7 +121,8 @@ else()
 endif()
 
 enable_testing()
-add_test(NAME protocyte_host_smoke COMMAND protocyte_host_smoke)
+include(Catch)
+catch_discover_tests(protocyte_host_smoke)
 
 if(PROTOCYTE_SMOKE_BUILD_DRIVER)
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")

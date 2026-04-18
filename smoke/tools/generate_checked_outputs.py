@@ -91,6 +91,34 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
 
     msg = file.message_type.add()
     msg.name = "UltimateComplexMessage"
+    msg.options.ParseFromString(
+        constant_options_bytes(
+            [
+                ("BASE_COUNT", 2, "5", None),
+                ("SHIFTED_COUNT", 3, None, "BASE_COUNT * 1000000000"),
+                ("MASK_BITS", 5, "1234567890123456789", None),
+                ("FLOAT_SCALE", 6, "1.25", None),
+                ("DOUBLE_SCALE", 7, None, "FLOAT_SCALE + 2.5"),
+                ("FLAG_LITERAL", 1, "true", None),
+                ("HEX_LITERAL", 4, "0x20", None),
+                ("HEX_SUM", 4, None, "0x10 + 0x8"),
+                ("INTEGER_ARRAY_CAP", 4, None, "(BASE_COUNT * 2) - 2"),
+                ("PREFIX", 8, None, 'substr("protocyte", 0, 5)'),
+                ("LABEL", 8, None, 'PREFIX + "-demo"'),
+                ("UNICODE_LABEL", 8, chr(0x0100) + chr(0x00E9), None),
+                ("BYTE_ARRAY_CAP", 4, None, "len(PREFIX) - 1"),
+                ("FIXED_INTEGER_ARRAY_CAP", 4, None, "BASE_COUNT - 2"),
+                ("FLOATISH_BOUND", 4, None, "4 / 2.0"),
+                ("GT_CHECK", 1, None, "BASE_COUNT > 4"),
+                ("LE_CHECK", 1, None, "BYTE_ARRAY_CAP <= INTEGER_ARRAY_CAP"),
+                ("EQ_CHECK", 1, None, 'PREFIX == "proto"'),
+                ("NE_CHECK", 1, None, 'LABEL != "proto"'),
+                ("HAS_PREFIX", 1, None, 'starts_with(LABEL, PREFIX) && !starts_with(LABEL, "zzz")'),
+                ("MOD_CHECK", 2, None, "BASE_COUNT % 2"),
+                ("OR_CHECK", 1, None, "HAS_PREFIX || false"),
+            ]
+        )
+    )
     msg.reserved_range.add(start=3, end=4)
     msg.reserved_range.add(start=5, end=8)
     msg.reserved_range.add(start=20, end=21)
@@ -175,7 +203,8 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
         type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1",
         oneof_index=0,
     )
-    add_field(msg, "oneof_bytes", 29, F.TYPE_BYTES, oneof_index=0)
+    oneof_bytes = add_field(msg, "oneof_bytes", 29, F.TYPE_BYTES, oneof_index=0)
+    oneof_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
 
     map_str_int32 = add_map_entry(msg, "MapStrInt32Entry", F.TYPE_STRING, F.TYPE_INT32)
     map_int32_str = add_map_entry(msg, "MapInt32StrEntry", F.TYPE_INT32, F.TYPE_STRING)
@@ -255,12 +284,50 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
         type_name=".test.ultimate.UltimateComplexMessage.LevelA.LevelB.LevelC.LevelD.LevelE",
     )
     sha256 = add_field(msg, "sha256", 41, F.TYPE_BYTES)
-    sha256.options.ParseFromString(fixed_size_option_bytes(32))
+    sha256.options.ParseFromString(array_option_bytes(expr="INTEGER_ARRAY_CAP * 4", fixed=True))
+    integer_array = add_field(msg, "integer_array", 42, F.TYPE_INT32, label=F.LABEL_REPEATED)
+    integer_array.options.ParseFromString(array_option_bytes(expr="INTEGER_ARRAY_CAP"))
+    byte_array = add_field(msg, "byte_array", 43, F.TYPE_BYTES)
+    byte_array.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
+    fixed_integer_array = add_field(msg, "fixed_integer_array", 44, F.TYPE_UINT32, label=F.LABEL_REPEATED)
+    fixed_integer_array.options.ParseFromString(array_option_bytes(expr="FIXED_INTEGER_ARRAY_CAP", fixed=True))
+    float_expr_array = add_field(msg, "float_expr_array", 45, F.TYPE_BYTES)
+    float_expr_array.options.ParseFromString(array_option_bytes(expr="FLOATISH_BOUND"))
 
     extra = file.message_type.add()
     extra.name = "ExtraMessage"
     add_field(extra, "tag", 1, F.TYPE_STRING)
     add_field(extra, "ref", 2, F.TYPE_MESSAGE, type_name=".test.ultimate.UltimateComplexMessage")
+
+    cross = file.message_type.add()
+    cross.name = "CrossMessageConstants"
+    cross.options.ParseFromString(
+        constant_options_bytes(
+            [
+                ("ROOT_MIRROR", 4, None, "UltimateComplexMessage.INTEGER_ARRAY_CAP + 2"),
+                ("LABEL_COPY", 8, None, 'UltimateComplexMessage.PREFIX + "-cross"'),
+                ("READY", 1, None, "UltimateComplexMessage.HAS_PREFIX && (ROOT_MIRROR == 10)"),
+            ]
+        )
+    )
+    external_bytes = add_field(cross, "external_bytes", 1, F.TYPE_BYTES)
+    external_bytes.options.ParseFromString(array_option_bytes(expr="UltimateComplexMessage.BYTE_ARRAY_CAP + 2"))
+    mirrored_values = add_field(cross, "mirrored_values", 2, F.TYPE_INT32, label=F.LABEL_REPEATED)
+    mirrored_values.options.ParseFromString(array_option_bytes(expr="ROOT_MIRROR"))
+
+    nested_cross = cross.nested_type.add()
+    nested_cross.name = "Nested"
+    nested_cross.options.ParseFromString(
+        constant_options_bytes(
+            [
+                ("EXTERNAL_CAP", 4, None, "UltimateComplexMessage.BASE_COUNT + 3"),
+            ]
+        )
+    )
+    nested_bytes = add_field(nested_cross, "nested_bytes", 1, F.TYPE_BYTES)
+    nested_bytes.options.ParseFromString(array_option_bytes(expr="EXTERNAL_CAP"))
+
+    add_field(cross, "nested", 3, F.TYPE_MESSAGE, type_name=".test.ultimate.CrossMessageConstants.Nested")
 
     return file
 
@@ -272,26 +339,132 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     file.syntax = "proto3"
     file.dependency.append("google/protobuf/descriptor.proto")
 
+    enum = file.enum_type.add()
+    enum.name = "ConstantKind"
+    for number, name in [
+        (0, "KIND_UNSPECIFIED"),
+        (1, "BOOL"),
+        (2, "INT32"),
+        (3, "INT64"),
+        (4, "UINT32"),
+        (5, "UINT64"),
+        (6, "FLOAT"),
+        (7, "DOUBLE"),
+        (8, "STRING"),
+    ]:
+        value = enum.value.add()
+        value.name = name
+        value.number = number
+
+    struct_constant = file.message_type.add()
+    struct_constant.name = "StructConstant"
+    field = struct_constant.field.add()
+    field.name = "name"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field = struct_constant.field.add()
+    field.name = "kind"
+    field.number = 2
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_ENUM
+    field.type_name = ".protocyte.ConstantKind"
+    add_oneof_field(struct_constant, "value", "literal", 3, F.TYPE_STRING)
+    add_oneof_field(struct_constant, "value", "expr", 4, F.TYPE_STRING)
+
+    array_options = file.message_type.add()
+    array_options.name = "ArrayOptions"
+    add_oneof_field(array_options, "bound", "max", 1, F.TYPE_UINT32)
+    add_oneof_field(array_options, "bound", "expr", 2, F.TYPE_STRING)
+
     ext = file.extension.add()
-    ext.name = "fixed_size"
+    ext.name = "constant"
+    ext.number = 50000
+    ext.label = F.LABEL_REPEATED
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.StructConstant"
+    ext.extendee = ".google.protobuf.MessageOptions"
+
+    ext = file.extension.add()
+    ext.name = "array"
     ext.number = 50000
     ext.label = F.LABEL_OPTIONAL
-    ext.type = F.TYPE_UINT32
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.ArrayOptions"
+    ext.extendee = ".google.protobuf.FieldOptions"
+
+    ext = file.extension.add()
+    ext.name = "fixed"
+    ext.number = 50001
+    ext.label = F.LABEL_OPTIONAL
+    ext.type = F.TYPE_BOOL
     ext.extendee = ".google.protobuf.FieldOptions"
 
     return file
 
 
-def fixed_size_option_bytes(size: int) -> bytes:
+def add_oneof_field(
+    message: descriptor_pb2.DescriptorProto,
+    oneof_name: str,
+    name: str,
+    number: int,
+    field_type: int,
+) -> None:
+    oneof_index: int | None = None
+    for index, oneof in enumerate(message.oneof_decl):
+        if oneof.name == oneof_name:
+            oneof_index = index
+            break
+    if oneof_index is None:
+        oneof = message.oneof_decl.add()
+        oneof.name = oneof_name
+        oneof_index = len(message.oneof_decl) - 1
+
+    field = message.field.add()
+    field.name = name
+    field.number = number
+    field.label = F.LABEL_OPTIONAL
+    field.type = field_type
+    field.oneof_index = oneof_index
+
+
+def array_option_bytes(*, max_value: int | None = None, expr: str | None = None, fixed: bool = False) -> bytes:
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
     pool.Add(options_file())
     field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
     field_options_cls = message_factory.GetMessageClass(field_options_desc)
-    fixed_size = pool.FindExtensionByName("protocyte.fixed_size")
+    array_ext = pool.FindExtensionByName("protocyte.array")
+    fixed_ext = pool.FindExtensionByName("protocyte.fixed")
 
     options = field_options_cls()
-    options.Extensions[fixed_size] = size
+    array_options = options.Extensions[array_ext]
+    if max_value is not None:
+        array_options.max = max_value
+    if expr is not None:
+        array_options.expr = expr
+    if fixed:
+        options.Extensions[fixed_ext] = True
+    return options.SerializeToString()
+
+
+def constant_options_bytes(constants: list[tuple[str, int, str | None, str | None]]) -> bytes:
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(options_file())
+    message_options_desc = pool.FindMessageTypeByName("google.protobuf.MessageOptions")
+    message_options_cls = message_factory.GetMessageClass(message_options_desc)
+    constant_ext = pool.FindExtensionByName("protocyte.constant")
+
+    options = message_options_cls()
+    for name, kind, literal, expr in constants:
+        item = options.Extensions[constant_ext].add()
+        item.name = name
+        item.kind = kind
+        if literal is not None:
+            item.literal = literal
+        if expr is not None:
+            item.expr = expr
     return options.SerializeToString()
 
 
