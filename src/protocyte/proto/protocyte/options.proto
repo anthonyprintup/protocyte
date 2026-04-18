@@ -4,6 +4,39 @@ package protocyte;
 
 import "google/protobuf/descriptor.proto";
 
+enum ConstantKind {
+  KIND_UNSPECIFIED = 0;
+  BOOL = 1;
+  INT32 = 2;
+  INT64 = 3;
+  UINT32 = 4;
+  UINT64 = 5;
+  FLOAT = 6;
+  DOUBLE = 7;
+  STRING = 8;
+}
+
+message StructConstant {
+  string name = 1;
+  ConstantKind kind = 2;
+  oneof value {
+    string literal = 3;
+    string expr = 4;
+  }
+}
+
+message ArrayOptions {
+  oneof bound {
+    uint32 max = 1;
+    string expr = 2;
+  }
+}
+
+extend google.protobuf.MessageOptions {
+  repeated StructConstant constant = 50000;
+}
+
 extend google.protobuf.FieldOptions {
-  uint32 fixed_size = 50000;
+  ArrayOptions array = 50000;
+  bool fixed = 50001;
 }
