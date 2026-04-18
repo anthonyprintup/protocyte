@@ -14,6 +14,7 @@ RUNTIME_HPP = r"""#pragma once
 #ifndef PROTOCYTE_RUNTIME_RUNTIME_HPP
 #define PROTOCYTE_RUNTIME_RUNTIME_HPP
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <new>

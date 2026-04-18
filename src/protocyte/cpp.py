@@ -971,9 +971,7 @@ def _emit_read_scalar(w: CppWriter, item: FieldModel, reader: str, target: str, 
         w.line(f"auto raw = ::protocyte::read_fixed32({reader});")
         w.line("if (!raw) { return raw.status(); }")
         if t == FieldDescriptorProto.TYPE_FLOAT:
-            w.line("union { ::protocyte::u32 bits; ::protocyte::f32 value; } conv;")
-            w.line("conv.bits = raw.value();")
-            w.line(f"{target} = conv.value;")
+            w.line(f"{target} = ::std::bit_cast<::protocyte::f32>(raw.value());")
         else:
             w.line(f"{target} = static_cast<{_field_type(item, GeneratorOptions())}>(raw.value());")
         return
@@ -981,9 +979,7 @@ def _emit_read_scalar(w: CppWriter, item: FieldModel, reader: str, target: str, 
         w.line(f"auto raw = ::protocyte::read_fixed64({reader});")
         w.line("if (!raw) { return raw.status(); }")
         if t == FieldDescriptorProto.TYPE_DOUBLE:
-            w.line("union { ::protocyte::u64 bits; ::protocyte::f64 value; } conv;")
-            w.line("conv.bits = raw.value();")
-            w.line(f"{target} = conv.value;")
+            w.line(f"{target} = ::std::bit_cast<::protocyte::f64>(raw.value());")
         else:
             w.line(f"{target} = static_cast<{_field_type(item, GeneratorOptions())}>(raw.value());")
 
@@ -1071,15 +1067,15 @@ def _emit_write_scalar(w: CppWriter, item: FieldModel, value: str) -> None:
     elif t in {FieldDescriptorProto.TYPE_FIXED32, FieldDescriptorProto.TYPE_SFIXED32}:
         w.line(f"if (const auto st = ::protocyte::write_fixed32(writer, static_cast<::protocyte::u32>({value})); !st) {{ return st; }}")
     elif t == FieldDescriptorProto.TYPE_FLOAT:
-        w.line("union { ::protocyte::f32 value; ::protocyte::u32 bits; } conv;")
-        w.line(f"conv.value = {value};")
-        w.line("if (const auto st = ::protocyte::write_fixed32(writer, conv.bits); !st) { return st; }")
+        w.line(
+            f"if (const auto st = ::protocyte::write_fixed32(writer, ::std::bit_cast<::protocyte::u32>({value})); !st) {{ return st; }}"
+        )
     elif t in {FieldDescriptorProto.TYPE_FIXED64, FieldDescriptorProto.TYPE_SFIXED64}:
         w.line(f"if (const auto st = ::protocyte::write_fixed64(writer, static_cast<::protocyte::u64>({value})); !st) {{ return st; }}")
     elif t == FieldDescriptorProto.TYPE_DOUBLE:
-        w.line("union { ::protocyte::f64 value; ::protocyte::u64 bits; } conv;")
-        w.line(f"conv.value = {value};")
-        w.line("if (const auto st = ::protocyte::write_fixed64(writer, conv.bits); !st) { return st; }")
+        w.line(
+            f"if (const auto st = ::protocyte::write_fixed64(writer, ::std::bit_cast<::protocyte::u64>({value})); !st) {{ return st; }}"
+        )
 
 
 def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
