@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from google.protobuf import descriptor_pb2
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 from protocyte.errors import ProtocyteError
 
@@ -144,6 +144,28 @@ SCALAR_DEFAULTS = {
 }
 
 PACKABLE_TYPES = set(SCALAR_CPP_TYPES) | {FieldDescriptorProto.TYPE_ENUM}
+FIXED_SIZE_OPTION_NAME = "protocyte.fixed_size"
+
+
+@dataclass(slots=True)
+class _CustomOptions:
+    field_options_cls: type[object] | None = None
+    fixed_size_extension: object | None = None
+
+    def fixed_size(
+        self,
+        options: descriptor_pb2.FieldOptions,
+    ) -> int | None:
+        if self.field_options_cls is None or self.fixed_size_extension is None:
+            return None
+        parsed = self.field_options_cls()
+        parsed.ParseFromString(options.SerializeToString())
+        try:
+            if parsed.HasExtension(self.fixed_size_extension):
+                return int(parsed.Extensions[self.fixed_size_extension])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return None
+        return None
 
 
 @dataclass(slots=True)
@@ -193,10 +215,15 @@ class FieldModel:
     map_key: "FieldModel | None" = None
     map_value: "FieldModel | None" = None
     recursive_box: bool = False
+    fixed_size: int | None = None
 
     @property
     def has_explicit_presence(self) -> bool:
         return self.proto3_optional or self.oneof_name is not None or self.kind == "message"
+
+    @property
+    def fixed_bytes(self) -> bool:
+        return self.kind == "bytes" and self.fixed_size is not None
 
     @property
     def packable(self) -> bool:
@@ -250,6 +277,7 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     """Build a resolved model from a CodeGeneratorRequest-like object."""
     files_by_name = {file.name: file for file in request.proto_file}
     file_to_generate = list(request.file_to_generate)
+    custom_options = _custom_options(request.proto_file)
 
     missing = [name for name in file_to_generate if name not in files_by_name]
     if missing:
@@ -285,7 +313,7 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
-            _fill_message_fields(message, files, messages, enums)
+            _fill_message_fields(message, files, messages, enums, custom_options)
 
     _validate_references(file_to_generate, files, messages, enums)
     _compute_file_dependencies(file_to_generate, files)
@@ -297,6 +325,37 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         messages=messages,
         enums=enums,
     )
+
+
+def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -> _CustomOptions:
+    pool = descriptor_pool.DescriptorPool()
+    try:
+        pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    except Exception:
+        return _CustomOptions()
+
+    pending = [file for file in proto_files if file.name != descriptor_pb2.DESCRIPTOR.name]
+    while pending:
+        next_pending: list[descriptor_pb2.FileDescriptorProto] = []
+        progressed = False
+        for file in pending:
+            try:
+                pool.Add(file)
+                progressed = True
+            except Exception:
+                next_pending.append(file)
+        if not progressed:
+            break
+        pending = next_pending
+
+    try:
+        field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
+        return _CustomOptions(
+            field_options_cls=message_factory.GetMessageClass(field_options_desc),
+            fixed_size_extension=pool.FindExtensionByName(FIXED_SIZE_OPTION_NAME),
+        )
+    except Exception:
+        return _CustomOptions()
 
 
 def cpp_identifier(name: str) -> str:
@@ -405,6 +464,7 @@ def _fill_message_fields(
     files: dict[str, FileModel],
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
+    custom_options: _CustomOptions,
 ) -> None:
     oneof_fields: dict[int, OneofModel] = {}
     for index, oneof in enumerate(message.descriptor.oneof_decl):
@@ -414,7 +474,7 @@ def _fill_message_fields(
         )
 
     for field_proto in message.descriptor.field:
-        field_model = _build_field(message, field_proto, messages, enums)
+        field_model = _build_field(message, field_proto, messages, enums, custom_options)
         message.fields.append(field_model)
         if field_model.oneof_index is not None and field_model.oneof_name is not None:
             oneof_fields[field_model.oneof_index].fields.append(field_model)
@@ -436,6 +496,7 @@ def _build_field(
     proto: descriptor_pb2.FieldDescriptorProto,
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
+    custom_options: _CustomOptions,
 ) -> FieldModel:
     if proto.type == FieldDescriptorProto.TYPE_GROUP:
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: groups are not supported by proto3")
@@ -454,6 +515,7 @@ def _build_field(
     map_key = None
     map_value = None
     type_name = strip_type_name(proto.type_name)
+    fixed_size = custom_options.fixed_size(proto.options)
 
     if proto.type == FieldDescriptorProto.TYPE_STRING:
         kind = "string"
@@ -471,14 +533,26 @@ def _build_field(
             kind = "map"
             key_proto = message_type.descriptor.field[0]
             value_proto = message_type.descriptor.field[1]
-            map_key = _build_field(message_type, key_proto, messages, enums)
-            map_value = _build_field(message_type, value_proto, messages, enums)
+            map_key = _build_field(message_type, key_proto, messages, enums, custom_options)
+            map_value = _build_field(message_type, value_proto, messages, enums, custom_options)
             cpp_type = f"typename Config::template Map<{map_key.cpp_type}, {map_value.cpp_type}>"
         else:
             kind = "message"
             cpp_type = ""
     elif proto.type not in SCALAR_CPP_TYPES:
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: unsupported field type {proto.type}")
+
+    if fixed_size is not None:
+        if proto.type != FieldDescriptorProto.TYPE_BYTES:
+            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.fixed_size is only supported on bytes fields")
+        if repeated:
+            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.fixed_size does not support repeated fields")
+        if proto.proto3_optional or oneof_index is not None:
+            raise ProtocyteError(
+                f"{owner.full_name}.{proto.name}: protocyte.fixed_size does not support optional or oneof fields"
+            )
+        if fixed_size <= 0:
+            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.fixed_size must be greater than zero")
 
     return FieldModel(
         name=proto.name,
@@ -500,6 +574,7 @@ def _build_field(
         enum_type=enum_type,
         map_key=map_key,
         map_value=map_value,
+        fixed_size=fixed_size,
     )
 
 

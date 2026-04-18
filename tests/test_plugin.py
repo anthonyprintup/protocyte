@@ -1,4 +1,4 @@
-from google.protobuf import descriptor_pb2
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
 from protocyte.model import build_model
@@ -22,8 +22,65 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "simple.protocyte.hpp" in files
     assert "simple.protocyte.cpp" in files
     assert "protocyte/runtime/runtime.hpp" in files
-    assert "class Sample;" in files["simple.protocyte.hpp"]
+    assert "struct Sample;" in files["simple.protocyte.hpp"]
+    assert files["simple.protocyte.hpp"].startswith("#pragma once\n\n#ifndef PROTOCYTE_GENERATED_SIMPLE_PROTO_HPP")
+    assert "#include <cstddef>" not in files["simple.protocyte.hpp"]
+    assert "#include <cstdint>" not in files["simple.protocyte.hpp"]
+    assert "#include <cstdlib>" not in files["simple.protocyte.hpp"]
+    assert "#include <stddef.h>" not in files["simple.protocyte.hpp"]
+    assert "#include <stdint.h>" not in files["simple.protocyte.hpp"]
+    assert files["protocyte/runtime/runtime.hpp"].startswith("#pragma once\n\n#ifndef PROTOCYTE_RUNTIME_RUNTIME_HPP")
+    assert "#include <cstddef>" in files["protocyte/runtime/runtime.hpp"]
+    assert "#include <cstdint>" in files["protocyte/runtime/runtime.hpp"]
+    assert "#include <cstdlib>" not in files["protocyte/runtime/runtime.hpp"]
+    assert "#include <stddef.h>" not in files["protocyte/runtime/runtime.hpp"]
+    assert "#include <stdint.h>" not in files["protocyte/runtime/runtime.hpp"]
+    assert "kDefaultMaxRecursionDepth = 100u" in files["protocyte/runtime/runtime.hpp"]
+    assert "kDefaultMaxMessageBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
+    assert "kDefaultMaxStringBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
+    assert "kDefaultMaxRepeatedCount = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
+    assert "kDefaultMaxMapEntries = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
     assert "template<class Config = ::protocyte::DefaultConfig>" in files["simple.protocyte.hpp"]
+    assert "class Status" not in files["protocyte/runtime/runtime.hpp"]
+    assert "public:" not in files["protocyte/runtime/runtime.hpp"]
+    assert "private:" not in files["protocyte/runtime/runtime.hpp"]
+    assert "protected:" in files["protocyte/runtime/runtime.hpp"]
+    assert "protected:" in files["simple.protocyte.hpp"]
+    assert "enum class ErrorCode : u32" in files["protocyte/runtime/runtime.hpp"]
+    assert "enum class WireType : u32" in files["protocyte/runtime/runtime.hpp"]
+    assert "VARINT = 0u" in files["protocyte/runtime/runtime.hpp"]
+    assert "I64 = 1u" in files["protocyte/runtime/runtime.hpp"]
+    assert "LEN = 2u" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Status() noexcept = default;" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Status() noexcept: error_" not in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr explicit Status(const Error error) noexcept" in files["protocyte/runtime/runtime.hpp"]
+    assert "static constexpr Status ok() noexcept { return {}; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "const usize offset = {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "void *hosted_allocate(void *state, usize size, usize alignment) noexcept;" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "return Status {Error {.code = code, .offset = offset, .field_number = field_number}};" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "u64 value {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "u64 value = {};" not in files["protocyte/runtime/runtime.hpp"]
+    assert "u8 bytes[4u] {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "u8 bytes[8u] {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "for (usize i {}; i < lhs.size; ++i)" in files["protocyte/runtime/runtime.hpp"]
+    assert "if (!size)" in files["protocyte/runtime/runtime.hpp"]
+    assert "other.size_ = {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "if (const auto st = checked_mul(requested, sizeof(T), &bytes); !st)" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "if (const Bucket &bucket = buckets_[i]; bucket.occupied)" in files["protocyte/runtime/runtime.hpp"]
+    assert "const auto field = static_cast<u32>(tag.value() >> 3u);" in files["protocyte/runtime/runtime.hpp"]
+    assert "const auto wire = static_cast<WireType>(tag.value() & 0x7u);" in files["protocyte/runtime/runtime.hpp"]
+    assert "Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
     assert "FEATURE_PROTO3_OPTIONAL" not in files["simple.protocyte.hpp"]
 
 
@@ -63,11 +120,70 @@ def test_generated_header_contains_expected_field_api() -> None:
 
     assert "namespace demo {" in header
     assert "bool has_opt_name() const noexcept" in header
-    assert "typename Config::template Map<typename Config::String, int32_t> items_;" in header
+    assert "struct Sample {" in header
+    assert "typename Config::template Map<typename Config::String, ::protocyte::i32> items_;" in header
     assert "typename Config::template Box<::demo::Sample<Config>> self_;" in header
+    assert "ctx_ {&ctx}" in header
+    assert "items_ {&ctx}" in header
+    assert "::protocyte::Status set_id(const ::protocyte::i32 value) noexcept" in header
+    assert "const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);" in header
+    assert "const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);" in header
+    assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     assert "template<class Reader>" in header
     assert "merge_from(Reader &reader)" in header
+    assert "for (::protocyte::usize i {}; i < samples_.size(); ++i)" in header
+    assert "if (const auto st = out.value().copy_from(*this); !st)" in header
+    assert "if (wire_type != ::protocyte::WireType::LEN)" in header
+    assert "case 1u: {" in header
+    assert "case 2u: {" in header
+    assert "auto raw = ::protocyte::read_fixed32(packed);" in header
+    assert "auto value = ::protocyte::read_fixed32(packed);" not in header
+    assert "if (other.has_items())" not in header
+    assert "other.samples()" not in header
+    assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
+    assert "::protocyte::LimitedReader nested {entry_reader" in header
+    assert "::protocyte::ReaderRef sub_reader {sub};" in header
+    assert "merge_from(sub_reader);" in header
+    assert "::protocyte::ReaderRef nested_reader {nested};" in header
+
+
+def test_model_decodes_fixed_size_bytes_option() -> None:
+    model = build_model(_fixed_size_request())
+
+    sha256 = model.messages["demo.FixedBytes"].fields[0]
+
+    assert sha256.kind == "bytes"
+    assert sha256.fixed_bytes is True
+    assert sha256.fixed_size == 32
+
+
+def test_generated_header_uses_inline_fixed_size_bytes_storage() -> None:
+    response = generate_response(_fixed_size_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["fixed.protocyte.hpp"]
+    runtime_header = files["protocyte/runtime/runtime.hpp"]
+
+    assert "::protocyte::ByteView sha256() const noexcept" in header
+    assert "::protocyte::MutableByteView mutable_sha256() noexcept" in header
+    assert "::protocyte::u8 sha256_[32u] {};" in header
+    assert "sha256_ {&ctx}" not in header
+    assert "if (value.size != 32u)" in header
+    assert "len.value() == 0u" in header
+    assert "len.value() == 32u" in header
+    assert "if (const auto st = writer.write(" in header
+    assert "::protocyte::bytes_zero(" in header
+    assert "constexpr bool bytes_zero(const ByteView view) noexcept" in runtime_header
+
+
+def test_rejects_invalid_fixed_size_targets() -> None:
+    bad_type_response = generate_response(_fixed_size_request(field_type=F.TYPE_STRING))
+    repeated_response = generate_response(_fixed_size_request(label=F.LABEL_REPEATED))
+
+    assert "only supported on bytes fields" in bad_type_response.error
+    assert "does not support repeated fields" in repeated_response.error
 
 
 def _simple_file() -> descriptor_pb2.FileDescriptorProto:
@@ -108,12 +224,41 @@ def _simple_file() -> descriptor_pb2.FileDescriptorProto:
     value.label = F.LABEL_OPTIONAL
     value.type = F.TYPE_INT32
 
+    message_entry = message.nested_type.add()
+    message_entry.name = "MessageItemsEntry"
+    message_entry.options.map_entry = True
+    key = message_entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = message_entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_MESSAGE
+    value.type_name = ".demo.Sample"
+
     field = message.field.add()
     field.name = "items"
     field.number = 3
     field.label = F.LABEL_REPEATED
     field.type = F.TYPE_MESSAGE
     field.type_name = ".demo.Sample.ItemsEntry"
+
+    field = message.field.add()
+    field.name = "samples"
+    field.number = 5
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_FLOAT
+    field.options.packed = True
+
+    field = message.field.add()
+    field.name = "message_items"
+    field.number = 6
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Sample.MessageItemsEntry"
 
     field = message.field.add()
     field.name = "self"
@@ -123,3 +268,65 @@ def _simple_file() -> descriptor_pb2.FileDescriptorProto:
     field.type_name = ".demo.Sample"
 
     return file
+
+
+def _fixed_size_request(
+    *,
+    field_type: int = F.TYPE_BYTES,
+    label: int = F.LABEL_OPTIONAL,
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("fixed.proto")
+    request.parameter = "runtime=emit"
+    request.proto_file.extend([_fixed_size_options_file(), _fixed_size_file(field_type=field_type, label=label)])
+    return request
+
+
+def _fixed_size_options_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "protocyte/options.proto"
+    file.package = "protocyte"
+    file.syntax = "proto3"
+    file.dependency.append("google/protobuf/descriptor.proto")
+
+    ext = file.extension.add()
+    ext.name = "fixed_size"
+    ext.number = 50000
+    ext.label = F.LABEL_OPTIONAL
+    ext.type = F.TYPE_UINT32
+    ext.extendee = ".google.protobuf.FieldOptions"
+
+    return file
+
+
+def _fixed_size_file(*, field_type: int, label: int) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "fixed.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "FixedBytes"
+
+    field = message.field.add()
+    field.name = "sha256"
+    field.number = 1
+    field.label = label
+    field.type = field_type
+    field.options.ParseFromString(_fixed_size_option_bytes(32))
+
+    return file
+
+
+def _fixed_size_option_bytes(size: int) -> bytes:
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(_fixed_size_options_file())
+    field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
+    field_options_cls = message_factory.GetMessageClass(field_options_desc)
+    fixed_size = pool.FindExtensionByName("protocyte.fixed_size")
+
+    options = field_options_cls()
+    options.Extensions[fixed_size] = size
+    return options.SerializeToString()

@@ -50,6 +50,11 @@ Supported parameters:
 - `include_prefix=<path>`: prefix includes for imported generated headers.
 - `explicit_default_instantiations=true`: reserved for future source emission.
 
+Custom field options:
+
+- Import `protocyte/options.proto` and use `bytes sha256 = 1 [(protocyte.fixed_size) = 32];`.
+- Custom protobuf options must use the parenthesized extension syntax; `protocyte.fixed_size = 32` is not valid `.proto` syntax for an extension option.
+
 ## C++ Contract
 
 Every generated message is templated on a runtime config:
