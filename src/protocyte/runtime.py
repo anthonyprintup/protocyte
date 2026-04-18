@@ -14,6 +14,7 @@ RUNTIME_HPP = r"""#pragma once
 #ifndef PROTOCYTE_RUNTIME_RUNTIME_HPP
 #define PROTOCYTE_RUNTIME_RUNTIME_HPP
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <new>
@@ -126,7 +127,7 @@ namespace protocyte {
 
         Result(Result &&other) noexcept: ok_{other.ok_} {
             if (ok_) {
-                new (&value_) T(protocyte::move(other.value_));
+                new (&value_) T {protocyte::move(other.value_)};
             } else {
                 error_ = other.error_;
             }
@@ -139,7 +140,7 @@ namespace protocyte {
             this->~Result();
             ok_ = other.ok_;
             if (ok_) {
-                new (&value_) T(protocyte::move(other.value_));
+                new (&value_) T {protocyte::move(other.value_)};
             } else {
                 error_ = other.error_;
             }
@@ -164,7 +165,7 @@ namespace protocyte {
         Status status() const noexcept { return ok_ ? Status {} : Status {error_}; }
 
     protected:
-        explicit Result(T &&value) noexcept: ok_{true} { new (&value_) T(protocyte::move(value)); }
+        explicit Result(T &&value) noexcept: ok_{true} { new (&value_) T {protocyte::move(value)}; }
         explicit Result(const Error error) noexcept: ok_{false}, error_{error} {}
 
         bool ok_;
@@ -308,7 +309,7 @@ namespace protocyte {
         Optional() noexcept = default;
         Optional(Optional &&other) noexcept {
             if (other.has_) {
-                new (ptr()) T(protocyte::move(*other.ptr()));
+                new (ptr()) T {protocyte::move(*other.ptr())};
                 has_ = true;
                 other.reset();
             }
@@ -319,7 +320,7 @@ namespace protocyte {
             }
             reset();
             if (other.has_) {
-                new (ptr()) T(protocyte::move(*other.ptr()));
+                new (ptr()) T {protocyte::move(*other.ptr())};
                 has_ = true;
                 other.reset();
             }
@@ -331,7 +332,7 @@ namespace protocyte {
 
         template<class... Args> Status emplace(Args &&...args) noexcept {
             reset();
-            new (ptr()) T(protocyte::forward<Args>(args)...);
+            new (ptr()) T {protocyte::forward<Args>(args)...};
             has_ = true;
             return {};
         }
@@ -414,7 +415,7 @@ namespace protocyte {
             }
             auto *next = static_cast<T *>(raw);
             for (usize i {}; i < size_; ++i) {
-                new (&next[i]) T(protocyte::move(data_[i]));
+                new (&next[i]) T {protocyte::move(data_[i])};
                 data_[i].~T();
             }
             if (data_ != nullptr) {
@@ -432,7 +433,7 @@ namespace protocyte {
                     return Result<Ref<T>>::err(st.error());
                 }
             }
-            new (&data_[size_]) T(protocyte::forward<Args>(args)...);
+            new (&data_[size_]) T {protocyte::forward<Args>(args)...};
             Ref<T> ref {data_[size_]};
             ++size_;
             return Result<Ref<T>>::ok(ref);
@@ -633,7 +634,7 @@ namespace protocyte {
             if (raw == nullptr) {
                 return Result<Ref<T>>::err(ErrorCode::no_memory);
             }
-            ptr_ = new (raw) T{*ctx_};
+            ptr_ = new (raw) T {*ctx_};
             return Result<Ref<T>>::ok(Ref<T> {*ptr_});
         }
 
@@ -971,7 +972,7 @@ namespace protocyte {
     }
 
     template<class Reader> Result<u32> read_fixed32(Reader &reader) noexcept {
-        u8 bytes[4u] {};
+        u8 bytes[4u];
         if (const auto st = reader.read(bytes, 4u); !st) {
             return Result<u32>::err(st.error());
         }
@@ -981,7 +982,7 @@ namespace protocyte {
     }
 
     template<class Reader> Result<u64> read_fixed64(Reader &reader) noexcept {
-        u8 bytes[8u] {};
+        u8 bytes[8u];
         if (const auto st = reader.read(bytes, 8u); !st) {
             return Result<u64>::err(st.error());
         }
@@ -1001,8 +1002,16 @@ namespace protocyte {
     }
 
     template<class Writer> Status write_fixed64(Writer &writer, const u64 value) noexcept {
-        u8 bytes[8u] {};
-        for (u32 i {}; i < 8u; ++i) { bytes[i] = static_cast<u8>(value >> (i * 8u)); }
+        u8 bytes[8u] {
+            static_cast<u8>(value),
+            static_cast<u8>(value >> 8u),
+            static_cast<u8>(value >> 16u),
+            static_cast<u8>(value >> 24u),
+            static_cast<u8>(value >> 32u),
+            static_cast<u8>(value >> 40u),
+            static_cast<u8>(value >> 48u),
+            static_cast<u8>(value >> 56u),
+        };
         return writer.write(bytes, 8u);
     }
 
@@ -1015,7 +1024,7 @@ namespace protocyte {
         return varint_size(static_cast<u64>(field_number) << 3u);
     }
 
-    template<class Reader> Status skip_group(Reader &reader, const u32 start_field_number) noexcept;
+    template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;
 
     template<class Reader>
     Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept {

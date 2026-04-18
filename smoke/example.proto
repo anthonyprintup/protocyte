@@ -128,12 +128,6 @@ message UltimateComplexMessage {
   optional string opt_string = 39;
 
   // -------------------------------------------------------------------------
-  // Fixed-size binary fields
-  // -------------------------------------------------------------------------
-  // SHA-256 digest stored inline as exactly 32 bytes.
-  bytes sha256 = 41 [(protocyte.fixed_size) = 32];
-
-  // -------------------------------------------------------------------------
   // Extremely deep nesting
   // -------------------------------------------------------------------------
   message LevelA {
@@ -154,6 +148,12 @@ message UltimateComplexMessage {
   }
 
   LevelA.LevelB.LevelC.LevelD.LevelE extreme_nesting = 40;
+
+  // -------------------------------------------------------------------------
+  // Fixed-size binary fields
+  // -------------------------------------------------------------------------
+  // SHA-256 digest stored inline as exactly 32 bytes.
+  bytes sha256 = 41 [(protocyte.fixed_size) = 32];
 }
 
 // -----------------------------------------------------------------------------

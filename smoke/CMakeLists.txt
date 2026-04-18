@@ -15,6 +15,16 @@ set(PROTOCYTE_EXAMPLE_PROTO "${CMAKE_CURRENT_LIST_DIR}/example.proto")
 set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto/protocyte/options.proto")
 set(PROTOCYTE_OPTIONS_ROOT "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
+set(PROTOCYTE_GENERATOR_SOURCES
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/__init__.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/cpp.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/errors.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/main.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/model.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/parameters.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/plugin.py"
+    "${PROTOCYTE_REPO_ROOT}/src/protocyte/runtime.py"
+)
 set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
@@ -71,7 +81,10 @@ if(PROTOCYTE_SMOKE_REGENERATE)
             "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
             "--protocyte_out=runtime=emit:${PROTOCYTE_GENERATED_DIR}"
             "${PROTOCYTE_EXAMPLE_PROTO}"
-        DEPENDS "${PROTOCYTE_EXAMPLE_PROTO}" "${PROTOCYTE_OPTIONS_PROTO}" "${PROTOCYTE_REPO_ROOT}/src/protocyte/main.py"
+        DEPENDS
+            "${PROTOCYTE_EXAMPLE_PROTO}"
+            "${PROTOCYTE_OPTIONS_PROTO}"
+            ${PROTOCYTE_GENERATOR_SOURCES}
         WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
         VERBATIM
     )
@@ -87,6 +100,10 @@ add_executable(protocyte_host_smoke
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
 target_compile_definitions(protocyte_host_smoke PRIVATE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
+
+if(PROTOCYTE_SMOKE_REGENERATE)
+    add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
+endif()
 
 if(MSVC)
     target_compile_options(protocyte_host_smoke PRIVATE /W4 /permissive-)
@@ -109,4 +126,8 @@ if(PROTOCYTE_SMOKE_BUILD_DRIVER)
     target_include_directories(protocyte_kernel_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
     target_compile_features(protocyte_kernel_smoke PRIVATE cxx_std_20)
     target_compile_options(protocyte_kernel_smoke PRIVATE /std:c++20 /permissive- /W4)
+
+    if(PROTOCYTE_SMOKE_REGENERATE)
+        add_dependencies(protocyte_kernel_smoke protocyte_smoke_regenerate)
+    endif()
 endif()
