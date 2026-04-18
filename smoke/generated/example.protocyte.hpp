@@ -539,7 +539,9 @@ namespace test::ultimate {
         };
 
         explicit UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(Context &ctx) noexcept:
-            ctx_ {&ctx}, extreme_ {&ctx}, weird_map_ {&ctx}, text_ {&ctx} {}
+            ctx_ {&ctx}, extreme_ {&ctx}, weird_map_ {&ctx} {
+            new (&deep_oneof_none_)::protocyte::u8(0u);
+        }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
         create(Context &ctx) noexcept {
@@ -547,13 +549,64 @@ namespace test::ultimate {
                 UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {ctx});
         }
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(
-            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &&) noexcept = default;
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &&other) noexcept:
+            ctx_ {other.ctx_},
+            extreme_ {::protocyte::move(other.extreme_)},
+            weird_map_ {::protocyte::move(other.weird_map_)} {
+            new (&deep_oneof_none_)::protocyte::u8(0u);
+            switch (other.deep_oneof_case_) {
+                case Deep_oneofCase::val: {
+                    new (&val_)::protocyte::i64(other.val_);
+                    deep_oneof_case_ = Deep_oneofCase::val;
+                    break;
+                }
+                case Deep_oneofCase::text: {
+                    new (&text_) typename Config::String(::protocyte::move(other.text_));
+                    deep_oneof_case_ = Deep_oneofCase::text;
+                    break;
+                }
+                case Deep_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_deep_oneof();
+        }
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &
-        operator=(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &&) noexcept = default;
+        operator=(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            clear_deep_oneof();
+            ctx_ = other.ctx_;
+            extreme_ = ::protocyte::move(other.extreme_);
+            weird_map_ = ::protocyte::move(other.weird_map_);
+            switch (other.deep_oneof_case_) {
+                case Deep_oneofCase::val: {
+                    new (&val_)::protocyte::i64(other.val_);
+                    deep_oneof_case_ = Deep_oneofCase::val;
+                    break;
+                }
+                case Deep_oneofCase::text: {
+                    new (&text_) typename Config::String(::protocyte::move(other.text_));
+                    deep_oneof_case_ = Deep_oneofCase::text;
+                    break;
+                }
+                case Deep_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_deep_oneof();
+            return *this;
+        }
+        ~UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE() noexcept { clear_deep_oneof(); }
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(
             const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &) = delete;
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &
         operator=(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &) = delete;
+
+        template<class T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
         ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &other) noexcept {
             (void) other;
@@ -578,8 +631,20 @@ namespace test::ultimate {
 
         Deep_oneofCase deep_oneof_case() const noexcept { return deep_oneof_case_; }
         void clear_deep_oneof() noexcept {
-            val_ = 0;
-            text_.clear();
+            switch (deep_oneof_case_) {
+                case Deep_oneofCase::val: {
+                    break;
+                }
+                case Deep_oneofCase::text: {
+                    destroy_at_(&text_);
+                    break;
+                }
+                case Deep_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            new (&deep_oneof_none_)::protocyte::u8(0u);
             deep_oneof_case_ = Deep_oneofCase::none;
         }
 
@@ -604,23 +669,23 @@ namespace test::ultimate {
         void clear_weird_map() noexcept { weird_map_.clear(); }
 
         bool has_val() const noexcept { return deep_oneof_case_ == Deep_oneofCase::val; }
-        ::protocyte::i64 val() const noexcept { return val_; }
+        ::protocyte::i64 val() const noexcept { return has_val() ? val_ : 0; }
         ::protocyte::Status set_val(const ::protocyte::i64 value) noexcept {
             clear_deep_oneof();
-            val_ = value;
+            new (&val_)::protocyte::i64(value);
             deep_oneof_case_ = Deep_oneofCase::val;
             return ::protocyte::Status::ok();
         }
 
         bool has_text() const noexcept { return deep_oneof_case_ == Deep_oneofCase::text; }
-        ::protocyte::ByteView text() const noexcept { return text_.view(); }
+        ::protocyte::ByteView text() const noexcept { return has_text() ? text_.view() : ::protocyte::ByteView {}; }
         ::protocyte::Status set_text(const ::protocyte::ByteView value) noexcept {
             typename Config::String temp {ctx_};
             if (const auto st = temp.assign(value); !st) {
                 return st;
             }
             clear_deep_oneof();
-            text_ = ::protocyte::move(temp);
+            new (&text_) typename Config::String(::protocyte::move(temp));
             deep_oneof_case_ = Deep_oneofCase::text;
             return ::protocyte::Status::ok();
         }
@@ -734,12 +799,14 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
+                        clear_deep_oneof();
+                        new (&val_)::protocyte::i64(0);
+                        deep_oneof_case_ = Deep_oneofCase::val;
                         auto raw = ::protocyte::read_varint(reader);
                         if (!raw) {
                             return raw.status();
                         }
                         val_ = static_cast<::protocyte::i64>(raw.value());
-                        deep_oneof_case_ = Deep_oneofCase::val;
                         break;
                     }
                     case 4u: {
@@ -751,12 +818,14 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
+                        clear_deep_oneof();
+                        new (&text_) typename Config::String(ctx_);
+                        deep_oneof_case_ = Deep_oneofCase::text;
                         if (const auto st = ::protocyte::read_string<Config>(
                                 *ctx_, reader, static_cast<::protocyte::usize>(len.value()), text_);
                             !st) {
                             return st;
                         }
-                        deep_oneof_case_ = Deep_oneofCase::text;
                         break;
                     }
                     default: {
@@ -900,10 +969,13 @@ namespace test::ultimate {
     protected:
         Context *ctx_;
         Deep_oneofCase deep_oneof_case_ = Deep_oneofCase::none;
+        union {
+            ::protocyte::u8 deep_oneof_none_;
+            ::protocyte::i64 val_;
+            typename Config::String text_;
+        };
         typename Config::String extreme_;
         typename Config::template Map<::protocyte::i32, typename Config::String> weird_map_;
-        ::protocyte::i64 val_ = 0;
-        typename Config::String text_;
     };
 
     template<class Config> struct UltimateComplexMessage {
@@ -927,8 +999,6 @@ namespace test::ultimate {
             r_int32_unpacked_ {&ctx},
             r_int32_packed_ {&ctx},
             r_double_ {&ctx},
-            oneof_string_ {&ctx},
-            oneof_bytes_ {&ctx},
             map_str_int32_ {&ctx},
             map_int32_str_ {&ctx},
             map_bool_bytes_ {&ctx},
@@ -937,15 +1007,162 @@ namespace test::ultimate {
             recursive_self_ {&ctx},
             lots_of_nested_ {&ctx},
             colors_ {&ctx},
-            opt_string_ {&ctx} {}
+            opt_string_ {&ctx} {
+            new (&special_oneof_none_)::protocyte::u8(0u);
+        }
 
         static ::protocyte::Result<UltimateComplexMessage> create(Context &ctx) noexcept {
             return ::protocyte::Result<UltimateComplexMessage>::ok(UltimateComplexMessage {ctx});
         }
-        UltimateComplexMessage(UltimateComplexMessage &&) noexcept = default;
-        UltimateComplexMessage &operator=(UltimateComplexMessage &&) noexcept = default;
+        UltimateComplexMessage(UltimateComplexMessage &&other) noexcept:
+            ctx_ {other.ctx_},
+            f_double_ {other.f_double_},
+            f_float_ {other.f_float_},
+            f_int32_ {other.f_int32_},
+            f_int64_ {other.f_int64_},
+            f_uint32_ {other.f_uint32_},
+            f_uint64_ {other.f_uint64_},
+            f_sint32_ {other.f_sint32_},
+            f_sint64_ {other.f_sint64_},
+            f_fixed32_ {other.f_fixed32_},
+            f_fixed64_ {other.f_fixed64_},
+            f_sfixed32_ {other.f_sfixed32_},
+            f_sfixed64_ {other.f_sfixed64_},
+            f_bool_ {other.f_bool_},
+            f_string_ {::protocyte::move(other.f_string_)},
+            f_bytes_ {::protocyte::move(other.f_bytes_)},
+            r_int32_unpacked_ {::protocyte::move(other.r_int32_unpacked_)},
+            r_int32_packed_ {::protocyte::move(other.r_int32_packed_)},
+            r_double_ {::protocyte::move(other.r_double_)},
+            color_ {other.color_},
+            nested1_ {::protocyte::move(other.nested1_)},
+            map_str_int32_ {::protocyte::move(other.map_str_int32_)},
+            map_int32_str_ {::protocyte::move(other.map_int32_str_)},
+            map_bool_bytes_ {::protocyte::move(other.map_bool_bytes_)},
+            map_uint64_msg_ {::protocyte::move(other.map_uint64_msg_)},
+            very_nested_map_ {::protocyte::move(other.very_nested_map_)},
+            recursive_self_ {::protocyte::move(other.recursive_self_)},
+            lots_of_nested_ {::protocyte::move(other.lots_of_nested_)},
+            colors_ {::protocyte::move(other.colors_)},
+            opt_int32_ {other.opt_int32_},
+            opt_string_ {::protocyte::move(other.opt_string_)},
+            extreme_nesting_ {::protocyte::move(other.extreme_nesting_)} {
+            has_opt_int32_ = other.has_opt_int32_;
+            has_opt_string_ = other.has_opt_string_;
+            has_sha256_ = other.has_sha256_;
+            if (other.has_sha256_) {
+                for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = other.sha256_[i]; }
+            }
+            new (&special_oneof_none_)::protocyte::u8(0u);
+            switch (other.special_oneof_case_) {
+                case Special_oneofCase::oneof_string: {
+                    new (&oneof_string_) typename Config::String(::protocyte::move(other.oneof_string_));
+                    special_oneof_case_ = Special_oneofCase::oneof_string;
+                    break;
+                }
+                case Special_oneofCase::oneof_int32: {
+                    new (&oneof_int32_)::protocyte::i32(other.oneof_int32_);
+                    special_oneof_case_ = Special_oneofCase::oneof_int32;
+                    break;
+                }
+                case Special_oneofCase::oneof_msg: {
+                    new (&oneof_msg_) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>(
+                        ::protocyte::move(other.oneof_msg_));
+                    special_oneof_case_ = Special_oneofCase::oneof_msg;
+                    break;
+                }
+                case Special_oneofCase::oneof_bytes: {
+                    new (&oneof_bytes_) typename Config::Bytes(::protocyte::move(other.oneof_bytes_));
+                    special_oneof_case_ = Special_oneofCase::oneof_bytes;
+                    break;
+                }
+                case Special_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_special_oneof();
+        }
+        UltimateComplexMessage &operator=(UltimateComplexMessage &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            clear_special_oneof();
+            ctx_ = other.ctx_;
+            f_double_ = other.f_double_;
+            f_float_ = other.f_float_;
+            f_int32_ = other.f_int32_;
+            f_int64_ = other.f_int64_;
+            f_uint32_ = other.f_uint32_;
+            f_uint64_ = other.f_uint64_;
+            f_sint32_ = other.f_sint32_;
+            f_sint64_ = other.f_sint64_;
+            f_fixed32_ = other.f_fixed32_;
+            f_fixed64_ = other.f_fixed64_;
+            f_sfixed32_ = other.f_sfixed32_;
+            f_sfixed64_ = other.f_sfixed64_;
+            f_bool_ = other.f_bool_;
+            f_string_ = ::protocyte::move(other.f_string_);
+            f_bytes_ = ::protocyte::move(other.f_bytes_);
+            r_int32_unpacked_ = ::protocyte::move(other.r_int32_unpacked_);
+            r_int32_packed_ = ::protocyte::move(other.r_int32_packed_);
+            r_double_ = ::protocyte::move(other.r_double_);
+            color_ = other.color_;
+            nested1_ = ::protocyte::move(other.nested1_);
+            map_str_int32_ = ::protocyte::move(other.map_str_int32_);
+            map_int32_str_ = ::protocyte::move(other.map_int32_str_);
+            map_bool_bytes_ = ::protocyte::move(other.map_bool_bytes_);
+            map_uint64_msg_ = ::protocyte::move(other.map_uint64_msg_);
+            very_nested_map_ = ::protocyte::move(other.very_nested_map_);
+            recursive_self_ = ::protocyte::move(other.recursive_self_);
+            lots_of_nested_ = ::protocyte::move(other.lots_of_nested_);
+            colors_ = ::protocyte::move(other.colors_);
+            opt_int32_ = other.opt_int32_;
+            has_opt_int32_ = other.has_opt_int32_;
+            opt_string_ = ::protocyte::move(other.opt_string_);
+            has_opt_string_ = other.has_opt_string_;
+            has_sha256_ = other.has_sha256_;
+            if (other.has_sha256_) {
+                for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = other.sha256_[i]; }
+            }
+            extreme_nesting_ = ::protocyte::move(other.extreme_nesting_);
+            switch (other.special_oneof_case_) {
+                case Special_oneofCase::oneof_string: {
+                    new (&oneof_string_) typename Config::String(::protocyte::move(other.oneof_string_));
+                    special_oneof_case_ = Special_oneofCase::oneof_string;
+                    break;
+                }
+                case Special_oneofCase::oneof_int32: {
+                    new (&oneof_int32_)::protocyte::i32(other.oneof_int32_);
+                    special_oneof_case_ = Special_oneofCase::oneof_int32;
+                    break;
+                }
+                case Special_oneofCase::oneof_msg: {
+                    new (&oneof_msg_) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>(
+                        ::protocyte::move(other.oneof_msg_));
+                    special_oneof_case_ = Special_oneofCase::oneof_msg;
+                    break;
+                }
+                case Special_oneofCase::oneof_bytes: {
+                    new (&oneof_bytes_) typename Config::Bytes(::protocyte::move(other.oneof_bytes_));
+                    special_oneof_case_ = Special_oneofCase::oneof_bytes;
+                    break;
+                }
+                case Special_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_special_oneof();
+            return *this;
+        }
+        ~UltimateComplexMessage() noexcept { clear_special_oneof(); }
         UltimateComplexMessage(const UltimateComplexMessage &) = delete;
         UltimateComplexMessage &operator=(const UltimateComplexMessage &) = delete;
+
+        template<class T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
         ::protocyte::Status copy_from(const UltimateComplexMessage &other) noexcept {
             (void) other;
@@ -1035,17 +1252,29 @@ namespace test::ultimate {
             } else {
                 clear_recursive_self();
             }
-            auto st_opt_int32 = set_opt_int32(other.opt_int32());
-            if (!st_opt_int32) {
-                return st_opt_int32;
+            if (other.has_opt_int32()) {
+                auto st_opt_int32 = set_opt_int32(other.opt_int32());
+                if (!st_opt_int32) {
+                    return st_opt_int32;
+                }
+            } else {
+                clear_opt_int32();
             }
-            auto st_opt_string = set_opt_string(other.opt_string());
-            if (!st_opt_string) {
-                return st_opt_string;
+            if (other.has_opt_string()) {
+                auto st_opt_string = set_opt_string(other.opt_string());
+                if (!st_opt_string) {
+                    return st_opt_string;
+                }
+            } else {
+                clear_opt_string();
             }
-            auto st_sha256 = set_sha256(other.sha256());
-            if (!st_sha256) {
-                return st_sha256;
+            if (other.has_sha256()) {
+                auto st_sha256 = set_sha256(other.sha256());
+                if (!st_sha256) {
+                    return st_sha256;
+                }
+            } else {
+                clear_sha256();
             }
             if (other.has_extreme_nesting()) {
                 auto ensured = ensure_extreme_nesting();
@@ -1075,10 +1304,28 @@ namespace test::ultimate {
 
         Special_oneofCase special_oneof_case() const noexcept { return special_oneof_case_; }
         void clear_special_oneof() noexcept {
-            oneof_string_.clear();
-            oneof_int32_ = 0;
-            oneof_msg_.reset();
-            oneof_bytes_.clear();
+            switch (special_oneof_case_) {
+                case Special_oneofCase::oneof_string: {
+                    destroy_at_(&oneof_string_);
+                    break;
+                }
+                case Special_oneofCase::oneof_int32: {
+                    break;
+                }
+                case Special_oneofCase::oneof_msg: {
+                    destroy_at_(&oneof_msg_);
+                    break;
+                }
+                case Special_oneofCase::oneof_bytes: {
+                    destroy_at_(&oneof_bytes_);
+                    break;
+                }
+                case Special_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            new (&special_oneof_none_)::protocyte::u8(0u);
             special_oneof_case_ = Special_oneofCase::none;
         }
 
@@ -1250,23 +1497,25 @@ namespace test::ultimate {
         void clear_nested1() noexcept { nested1_.reset(); }
 
         bool has_oneof_string() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_string; }
-        ::protocyte::ByteView oneof_string() const noexcept { return oneof_string_.view(); }
+        ::protocyte::ByteView oneof_string() const noexcept {
+            return has_oneof_string() ? oneof_string_.view() : ::protocyte::ByteView {};
+        }
         ::protocyte::Status set_oneof_string(const ::protocyte::ByteView value) noexcept {
             typename Config::String temp {ctx_};
             if (const auto st = temp.assign(value); !st) {
                 return st;
             }
             clear_special_oneof();
-            oneof_string_ = ::protocyte::move(temp);
+            new (&oneof_string_) typename Config::String(::protocyte::move(temp));
             special_oneof_case_ = Special_oneofCase::oneof_string;
             return ::protocyte::Status::ok();
         }
 
         bool has_oneof_int32() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_int32; }
-        ::protocyte::i32 oneof_int32() const noexcept { return oneof_int32_; }
+        ::protocyte::i32 oneof_int32() const noexcept { return has_oneof_int32() ? oneof_int32_ : 0; }
         ::protocyte::Status set_oneof_int32(const ::protocyte::i32 value) noexcept {
             clear_special_oneof();
-            oneof_int32_ = value;
+            new (&oneof_int32_)::protocyte::i32(value);
             special_oneof_case_ = Special_oneofCase::oneof_int32;
             return ::protocyte::Status::ok();
         }
@@ -1279,7 +1528,10 @@ namespace test::ultimate {
         ensure_oneof_msg() noexcept {
             if (!has_oneof_msg()) {
                 clear_special_oneof();
+                new (&oneof_msg_)
+                    typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>();
             }
+            special_oneof_case_ = Special_oneofCase::oneof_msg;
             if (!oneof_msg_.has_value()) {
                 if (const auto st = oneof_msg_.emplace(*ctx_); !st) {
                     return ::protocyte::
@@ -1287,7 +1539,6 @@ namespace test::ultimate {
                             st.error());
                 }
             }
-            special_oneof_case_ = Special_oneofCase::oneof_msg;
             return ::protocyte::
                 Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>>::ok(
                     ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
@@ -1295,14 +1546,16 @@ namespace test::ultimate {
         }
 
         bool has_oneof_bytes() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_bytes; }
-        ::protocyte::ByteView oneof_bytes() const noexcept { return oneof_bytes_.view(); }
+        ::protocyte::ByteView oneof_bytes() const noexcept {
+            return has_oneof_bytes() ? oneof_bytes_.view() : ::protocyte::ByteView {};
+        }
         ::protocyte::Status set_oneof_bytes(const ::protocyte::ByteView value) noexcept {
             typename Config::Bytes temp {ctx_};
             if (const auto st = temp.assign(value); !st) {
                 return st;
             }
             clear_special_oneof();
-            oneof_bytes_ = ::protocyte::move(temp);
+            new (&oneof_bytes_) typename Config::Bytes(::protocyte::move(temp));
             special_oneof_case_ = Special_oneofCase::oneof_bytes;
             return ::protocyte::Status::ok();
         }
@@ -1411,8 +1664,15 @@ namespace test::ultimate {
             has_opt_string_ = false;
         }
 
-        ::protocyte::ByteView sha256() const noexcept { return ::protocyte::ByteView {.data = sha256_, .size = 32u}; }
+        bool has_sha256() const noexcept { return has_sha256_; }
+        ::protocyte::ByteView sha256() const noexcept {
+            return has_sha256_ ? ::protocyte::ByteView {.data = sha256_, .size = 32u} : ::protocyte::ByteView {};
+        }
         ::protocyte::MutableByteView mutable_sha256() noexcept {
+            if (!has_sha256_) {
+                for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = 0u; }
+                has_sha256_ = true;
+            }
             return ::protocyte::MutableByteView {.data = sha256_, .size = 32u};
         }
         ::protocyte::Status set_sha256(const ::protocyte::ByteView value) noexcept {
@@ -1420,11 +1680,10 @@ namespace test::ultimate {
                 return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument);
             }
             for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = value.data[i]; }
+            has_sha256_ = true;
             return ::protocyte::Status::ok();
         }
-        void clear_sha256() noexcept {
-            for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = 0u; }
-        }
+        void clear_sha256() noexcept { has_sha256_ = false; }
 
         bool has_extreme_nesting() const noexcept { return extreme_nesting_.has_value(); }
         const ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config> *
@@ -1839,12 +2098,14 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
+                        clear_special_oneof();
+                        new (&oneof_string_) typename Config::String(ctx_);
+                        special_oneof_case_ = Special_oneofCase::oneof_string;
                         if (const auto st = ::protocyte::read_string<Config>(
                                 *ctx_, reader, static_cast<::protocyte::usize>(len.value()), oneof_string_);
                             !st) {
                             return st;
                         }
-                        special_oneof_case_ = Special_oneofCase::oneof_string;
                         break;
                     }
                     case 27u: {
@@ -1852,12 +2113,14 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
+                        clear_special_oneof();
+                        new (&oneof_int32_)::protocyte::i32(0);
+                        special_oneof_case_ = Special_oneofCase::oneof_int32;
                         auto raw = ::protocyte::read_varint(reader);
                         if (!raw) {
                             return raw.status();
                         }
                         oneof_int32_ = static_cast<::protocyte::i32>(raw.value());
-                        special_oneof_case_ = Special_oneofCase::oneof_int32;
                         break;
                     }
                     case 28u: {
@@ -1892,12 +2155,14 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
+                        clear_special_oneof();
+                        new (&oneof_bytes_) typename Config::Bytes(ctx_);
+                        special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         if (const auto st = ::protocyte::read_bytes<Config>(
                                 *ctx_, reader, static_cast<::protocyte::usize>(len.value()), oneof_bytes_);
                             !st) {
                             return st;
                         }
-                        special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         break;
                     }
                     case 30u: {
@@ -2397,12 +2662,11 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
-                        if (len.value() == 0u) {
-                            for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = 0u; }
-                        } else if (len.value() == 32u) {
+                        if (len.value() == 32u) {
                             if (const auto st = reader.read(sha256_, 32u); !st) {
                                 return st;
                             }
+                            has_sha256_ = true;
                         } else {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument,
                                                               reader.position(), field_number);
@@ -2988,23 +3252,15 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            if (true) {
+            if (has_sha256_) {
                 if (const auto st = ::protocyte::write_tag(writer, 41u, ::protocyte::WireType::LEN); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_varint(
-                        writer,
-                        (::protocyte::bytes_zero(::protocyte::ByteView {.data = sha256_, .size = 32u}) ? 0u : 32u));
-                    !st) {
+                if (const auto st = ::protocyte::write_varint(writer, 32u); !st) {
                     return st;
                 }
-                if ((::protocyte::bytes_zero(::protocyte::ByteView {.data = sha256_, .size = 32u}) ? 0u : 32u) != 0u) {
-                    if (const auto st = writer.write(
-                            sha256_,
-                            (::protocyte::bytes_zero(::protocyte::ByteView {.data = sha256_, .size = 32u}) ? 0u : 32u));
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = writer.write(sha256_, 32u); !st) {
+                    return st;
                 }
             }
             return ::protocyte::Status::ok();
@@ -3386,14 +3642,9 @@ namespace test::ultimate {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            if (true) {
-                if (const auto st = ::protocyte::add_size(
-                        &total,
-                        ::protocyte::tag_size(41u) +
-                            ::protocyte::varint_size(
-                                (::protocyte::bytes_zero(::protocyte::ByteView {.data = sha256_, .size = 32u}) ? 0u :
-                                                                                                                 32u)) +
-                            (::protocyte::bytes_zero(::protocyte::ByteView {.data = sha256_, .size = 32u}) ? 0u : 32u));
+            if (has_sha256_) {
+                if (const auto st =
+                        ::protocyte::add_size(&total, ::protocyte::tag_size(41u) + ::protocyte::varint_size(32u) + 32u);
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -3403,6 +3654,14 @@ namespace test::ultimate {
     protected:
         Context *ctx_;
         Special_oneofCase special_oneof_case_ = Special_oneofCase::none;
+        union {
+            ::protocyte::u8 special_oneof_none_;
+            typename Config::String oneof_string_;
+            ::protocyte::i32 oneof_int32_;
+            typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>
+                oneof_msg_;
+            typename Config::Bytes oneof_bytes_;
+        };
         ::protocyte::f64 f_double_ = 0.0;
         ::protocyte::f32 f_float_ = 0.0f;
         ::protocyte::i32 f_int32_ = 0;
@@ -3423,10 +3682,6 @@ namespace test::ultimate {
         typename Config::template Vector<::protocyte::f64> r_double_;
         ::protocyte::i32 color_ = 0;
         typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> nested1_;
-        typename Config::String oneof_string_;
-        ::protocyte::i32 oneof_int32_ = 0;
-        typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> oneof_msg_;
-        typename Config::Bytes oneof_bytes_;
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
         typename Config::template Map<bool, typename Config::Bytes> map_bool_bytes_;
@@ -3443,7 +3698,8 @@ namespace test::ultimate {
         bool has_opt_int32_ = false;
         typename Config::String opt_string_;
         bool has_opt_string_ = false;
-        ::protocyte::u8 sha256_[32u] {};
+        ::protocyte::u8 sha256_[32u];
+        bool has_sha256_ = false;
         typename Config::template Optional<
             ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>>
             extreme_nesting_;

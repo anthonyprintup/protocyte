@@ -39,18 +39,6 @@ namespace {
 
     void smoke_deallocate(void *, void *ptr, size_t, size_t) noexcept { free(ptr); }
 
-    bool view_equal(protocyte::ByteView view, const uint8_t *data, size_t size) noexcept {
-        if (view.size != size) {
-            return false;
-        }
-        for (size_t i = 0; i < size; ++i) {
-            if (view.data[i] != data[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     bool view_equal(protocyte::ByteView lhs, protocyte::ByteView rhs) noexcept {
         return protocyte::bytes_equal(lhs, rhs);
     }
@@ -457,7 +445,7 @@ namespace {
             !view_equal(parsed.opt_string(), view_of(kOptionalString))) {
             return 29;
         }
-        if (!view_equal(parsed.sha256(), view_of(kSha256))) {
+        if (!parsed.has_sha256() || !view_equal(parsed.sha256(), view_of(kSha256))) {
             return 33;
         }
         if (!parsed.has_extreme_nesting()) {
@@ -598,32 +586,169 @@ namespace {
                 return 65;
             }
         }
+        {
+            Message first(ctx);
+            if (!first.set_oneof_string(view_of(kOneofString))) {
+                return 66;
+            }
+            Message second(ctx);
+            if (!second.set_oneof_int32(2701)) {
+                return 67;
+            }
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            if (!first.serialize(writer)) {
+                return 68;
+            }
+            if (!second.serialize(writer)) {
+                return 69;
+            }
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            if (!parsed.merge_from(reader) || !parsed.has_oneof_int32() ||
+                parsed.special_oneof_case() != Message::Special_oneofCase::oneof_int32 ||
+                parsed.oneof_int32() != 2701) {
+                return 70;
+            }
+        }
+        {
+            Message first(ctx);
+            auto first_oneof = first.ensure_oneof_msg();
+            if (!first_oneof) {
+                return 71;
+            }
+            if (const auto st = first_oneof.value().get().set_name(view_of(kNestedName)); !st) {
+                return 72;
+            }
+            Message second(ctx);
+            auto second_oneof = second.ensure_oneof_msg();
+            if (!second_oneof) {
+                return 73;
+            }
+            if (const auto st = second_oneof.value().get().set_id(2801); !st) {
+                return 74;
+            }
+            auto inner = second_oneof.value().get().ensure_inner();
+            if (!inner) {
+                return 75;
+            }
+            if (const auto st =
+                    populate_nested2(inner.value().get(), view_of(kNestedDescription), 9.5f, 10.5f, InnerMode::C);
+                !st) {
+                return 76;
+            }
+            uint8_t encoded[512] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            if (!first.serialize(writer)) {
+                return 77;
+            }
+            if (!second.serialize(writer)) {
+                return 78;
+            }
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            if (!parsed.merge_from(reader) || !parsed.has_oneof_msg() || parsed.oneof_msg() == nullptr) {
+                return 79;
+            }
+            if (!view_equal(parsed.oneof_msg()->name(), view_of(kNestedName)) || parsed.oneof_msg()->id() != 2801 ||
+                !parsed.oneof_msg()->has_inner() ||
+                !check_nested2(*parsed.oneof_msg()->inner(), view_of(kNestedDescription), 9.5f, 10.5f, InnerMode::C)) {
+                return 80;
+            }
+        }
+        {
+            Message source(ctx);
+            if (!source.set_oneof_bytes(view_of(kOneofBytes))) {
+                return 81;
+            }
+            Message moved(protocyte::move(source));
+            if (!moved.has_oneof_bytes() || !view_equal(moved.oneof_bytes(), view_of(kOneofBytes)) ||
+                source.special_oneof_case() != Message::Special_oneofCase::none || source.oneof_bytes().size != 0u) {
+                return 82;
+            }
+        }
+        {
+            Message source(ctx);
+            auto oneof_msg = source.ensure_oneof_msg();
+            if (!oneof_msg) {
+                return 83;
+            }
+            auto st = populate_nested1(oneof_msg.value().get(), view_of(kNestedName), 2802);
+            if (!st) {
+                return 84;
+            }
+            Message target(ctx);
+            if (!target.set_oneof_string(view_of(kOneofString))) {
+                return 85;
+            }
+            target = protocyte::move(source);
+            if (!target.has_oneof_msg() || target.oneof_msg() == nullptr ||
+                !check_nested1(*target.oneof_msg(), view_of(kNestedName), 2802) ||
+                source.special_oneof_case() != Message::Special_oneofCase::none) {
+                return 86;
+            }
+        }
         return 0;
     }
 
-    int check_zero_sha256(Config::Context &ctx) noexcept {
-        Message message(ctx);
-        auto encoded_size = message.encoded_size();
-        if (!encoded_size) {
-            return 70;
+    int check_fixed_size_presence(Config::Context &ctx) noexcept {
+        {
+            Message message(ctx);
+            if (message.has_sha256() || message.sha256().size != 0u) {
+                return 90;
+            }
+            auto encoded_size = message.encoded_size();
+            if (!encoded_size || encoded_size.value() != 0u) {
+                return 91;
+            }
+            uint8_t encoded[64] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            if (!message.serialize(writer) || writer.position() != 0u) {
+                return 92;
+            }
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            if (!parsed.merge_from(reader) || parsed.has_sha256() || parsed.sha256().size != 0u) {
+                return 93;
+            }
         }
-        uint8_t encoded[64] = {};
-        protocyte::SliceWriter writer(encoded, sizeof(encoded));
-        if (!message.serialize(writer)) {
-            return 71;
+        {
+            Message message(ctx);
+            auto sha256 = message.mutable_sha256();
+            if (!message.has_sha256() || sha256.size != 32u) {
+                return 94;
+            }
+            for (size_t i = 0; i < sha256.size; ++i) {
+                if (sha256.data[i] != 0u) {
+                    return 95;
+                }
+            }
+            message.clear_sha256();
+            if (message.has_sha256() || message.sha256().size != 0u) {
+                return 96;
+            }
         }
-        if (writer.position() != encoded_size.value()) {
-            return 72;
-        }
-
-        Message parsed(ctx);
-        protocyte::SliceReader reader(encoded, writer.position());
-        if (!parsed.merge_from(reader)) {
-            return 73;
-        }
-        constexpr uint8_t kZeroSha256[32] = {};
-        if (!view_equal(parsed.sha256(), view_of(kZeroSha256))) {
-            return 74;
+        {
+            Message message(ctx);
+            constexpr uint8_t kZeroSha256[32] = {};
+            if (!message.set_sha256(view_of(kZeroSha256)) || !message.has_sha256()) {
+                return 97;
+            }
+            auto encoded_size = message.encoded_size();
+            if (!encoded_size || encoded_size.value() == 0u) {
+                return 98;
+            }
+            uint8_t encoded[64] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            if (!message.serialize(writer) || writer.position() != encoded_size.value()) {
+                return 99;
+            }
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            if (!parsed.merge_from(reader) || !parsed.has_sha256() ||
+                !view_equal(parsed.sha256(), view_of(kZeroSha256))) {
+                return 100;
+            }
         }
         return 0;
     }
@@ -657,9 +782,9 @@ int main() {
         return oneofs;
     }
 
-    const int zero_sha256 = check_zero_sha256(ctx);
-    if (zero_sha256 != 0) {
-        return zero_sha256;
+    const int fixed_size = check_fixed_size_presence(ctx);
+    if (fixed_size != 0) {
+        return fixed_size;
     }
 
     return 0;
