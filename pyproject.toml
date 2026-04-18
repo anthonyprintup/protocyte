@@ -1,0 +1,22 @@
+[project]
+name = "protocyte"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "protobuf>=6.30.0",
+]
+
+[project.scripts]
+protoc-gen-protocyte = "protocyte.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

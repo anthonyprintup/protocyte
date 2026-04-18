@@ -1,0 +1,158 @@
+syntax = "proto3";
+
+package test.ultimate;
+
+// File-level options
+option optimize_for = SPEED;
+
+// -----------------------------------------------------------------------------
+//                      The Most Annoying Proto3 Message
+// -----------------------------------------------------------------------------
+
+message UltimateComplexMessage {
+  // -------------------------------------------------------------------------
+  // Reserved slots (ensure your generator correctly handles “holes”)
+  // -------------------------------------------------------------------------
+  reserved 3, 5 to 7, 20;
+  reserved "old_name", "legacy_field";
+
+  // -------------------------------------------------------------------------
+  // Basic Scalar Fields (all proto3 types)
+  // -------------------------------------------------------------------------
+  double      f_double        = 1;
+  float       f_float         = 2;
+  int32       f_int32         = 4;
+  int64       f_int64         = 8;
+  uint32      f_uint32        = 9;
+  uint64      f_uint64        = 10;
+  sint32      f_sint32        = 11;
+  sint64      f_sint64        = 12;
+  fixed32     f_fixed32       = 13;
+  fixed64     f_fixed64       = 14;
+  sfixed32    f_sfixed32      = 15;
+  sfixed64    f_sfixed64      = 16;
+  bool        f_bool          = 17;
+  string      f_string        = 18;
+  bytes       f_bytes         = 19;
+
+  // -------------------------------------------------------------------------
+  // Repeated Scalars (packed and unpacked)
+  // -------------------------------------------------------------------------
+  repeated int32 r_int32_unpacked = 21 [packed = false];
+  repeated int32 r_int32_packed   = 22 [packed = true];
+
+  repeated double r_double        = 23; // implicit packed=true in proto3
+
+  // -------------------------------------------------------------------------
+  // Enums (with nested enum)
+  // -------------------------------------------------------------------------
+  enum Color {
+    COLOR_UNSPECIFIED = 0;
+    RED = 1;
+    GREEN = 2;
+    BLUE = 3;
+  }
+
+  Color color = 24;
+
+  // -------------------------------------------------------------------------
+  // Nested Message Types
+  // -------------------------------------------------------------------------
+  message NestedLevel1 {
+    string name = 1;
+    int32  id   = 2;
+
+    message NestedLevel2 {
+      string description = 1;
+      repeated float values = 2;
+
+      enum InnerEnum {
+        INNER_UNSPECIFIED = 0;
+        A = 1;
+        B = 2;
+        C = 3;
+      }
+
+      InnerEnum mode = 3;
+    }
+
+    NestedLevel2 inner = 3;
+  }
+
+  NestedLevel1 nested1 = 25;
+
+  // -------------------------------------------------------------------------
+  // Oneof fields (mixed types)
+  // -------------------------------------------------------------------------
+  oneof special_oneof {
+    string oneof_string = 26;
+    int32  oneof_int32  = 27;
+    NestedLevel1 oneof_msg = 28;
+    bytes oneof_bytes   = 29;
+  }
+
+  // -------------------------------------------------------------------------
+  // Maps (all legal map key types)
+  // -------------------------------------------------------------------------
+  map<string, int32> map_str_int32      = 30;
+  map<int32, string> map_int32_str      = 31;
+  map<bool, bytes>   map_bool_bytes     = 32;
+  map<uint64, NestedLevel1> map_uint64_msg = 33;
+
+  // -------------------------------------------------------------------------
+  // Deeply Nested Maps & Messages
+  // -------------------------------------------------------------------------
+  map<string, NestedLevel1.NestedLevel2> very_nested_map = 34;
+
+  // -------------------------------------------------------------------------
+  // Messages referencing themselves (cycle)
+  // -------------------------------------------------------------------------
+  UltimateComplexMessage recursive_self = 35;
+
+  // -------------------------------------------------------------------------
+  // Repeated messages + oneofs mixed
+  // -------------------------------------------------------------------------
+  repeated NestedLevel1.NestedLevel2 lots_of_nested = 36;
+
+  // -------------------------------------------------------------------------
+  // Huge repeated enum list
+  // -------------------------------------------------------------------------
+  repeated Color colors = 37;
+
+  // -------------------------------------------------------------------------
+  // Optional fields (proto3 style)
+  // -------------------------------------------------------------------------
+  optional int32 opt_int32 = 38;
+  optional string opt_string = 39;
+
+  // -------------------------------------------------------------------------
+  // Extremely deep nesting
+  // -------------------------------------------------------------------------
+  message LevelA {
+    message LevelB {
+      message LevelC {
+        message LevelD {
+          message LevelE {
+            string extreme = 1;
+            map<int32, string> weird_map = 2;
+            oneof deep_oneof {
+              int64 val = 3;
+              string text = 4;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  LevelA.LevelB.LevelC.LevelD.LevelE extreme_nesting = 40;
+}
+
+// -----------------------------------------------------------------------------
+// Additional Messages to Cross-Reference
+// -----------------------------------------------------------------------------
+
+message ExtraMessage {
+  string tag = 1;
+  UltimateComplexMessage ref = 2;
+}
