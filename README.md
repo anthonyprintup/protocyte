@@ -52,8 +52,13 @@ Supported parameters:
 
 Custom field options:
 
-- Import `protocyte/options.proto` and use `bytes sha256 = 1 [(protocyte.fixed_size) = 32];`.
-- Custom protobuf options must use the parenthesized extension syntax; `protocyte.fixed_size = 32` is not valid `.proto` syntax for an extension option.
+- Import `protocyte/options.proto` and use `bytes sha256 = 1 [(protocyte.array) = { max: 32 }, (protocyte.fixed) = true];`.
+- Message constants are declared with repeated `option (protocyte.constant) = { ... };` entries and can be referenced from `array.expr`.
+- Constants resolve within the current message, through enclosing messages, and across messages via qualified root-relative names such as `Outer.Inner.CAPACITY`.
+- Supported constant kinds are `bool`, `int32`, `int64`, `uint32`, `uint64`, `float`, `double`, and `string`.
+- Supported expression features are numeric `+ - * / %`, comparisons `< <= > >=`, equality `== !=`, boolean `! && ||`, string `+`, and the string helpers `len(...)`, `substr(...)`, and `starts_with(...)`.
+- `array` on `bytes` generates inline bounded byte storage with a mutable size; `fixed` changes `bytes` to fixed-size storage with presence semantics and changes repeated arrays to exact-count validation on parse/serialize.
+- Custom protobuf options must use the parenthesized extension syntax; `protocyte.array = { max: 32 }` is not valid `.proto` syntax for an extension option.
 
 ## C++ Contract
 

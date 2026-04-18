@@ -3,8 +3,9 @@
 This project keeps a checked-in protocyte output fixture for `example.proto` and
 builds two smoke targets:
 
-- `protocyte_host_smoke`: a user-mode C++20 executable that serializes and
-  deserializes `test.ultimate.UltimateComplexMessage`.
+- `protocyte_host_smoke`: a Catch2-based user-mode C++20 test binary that
+  exercises `test.ultimate.UltimateComplexMessage` plus cross-message constant
+  resolution cases.
 - `protocyte_kernel_smoke`: an optional WDK kernel driver that uses an
   `ExAllocatePool2` allocator and performs the same protobuf round trip in
   `DriverEntry`.
@@ -16,6 +17,9 @@ cmake --preset windows-clangcl-ninja -S smoke
 cmake --build --preset windows-clangcl-ninja
 ctest --preset windows-clangcl-ninja
 ```
+
+The host binary uses Catch2 via `FetchContent`, so a normal `ctest` run will
+discover and execute the individual smoke cases.
 
 Build the driver smoke test:
 
