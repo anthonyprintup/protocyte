@@ -73,10 +73,13 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Configure non-kernel smoke tests
-        run: cmake --preset windows-clangcl-ninja -S smoke
+        working-directory: smoke
+        run: cmake --preset windows-clangcl-ninja
 
       - name: Build non-kernel smoke tests
+        working-directory: smoke
         run: cmake --build --preset windows-clangcl-ninja
 
       - name: Run non-kernel smoke tests
+        working-directory: smoke
         run: ctest --preset windows-clangcl-ninja
