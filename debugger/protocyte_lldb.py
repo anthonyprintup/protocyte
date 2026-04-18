@@ -179,6 +179,21 @@ def _case_field_names(value):
     return names
 
 
+def _oneof_payload(value, prefix, case_name):
+    if case_name == "none":
+        return lldb.SBValue()
+    payload = _child(value, f"{case_name}_")
+    if payload.IsValid():
+        return payload
+    union_value = _child(value, prefix)
+    if not union_value.IsValid():
+        return lldb.SBValue()
+    payload = _child(union_value, case_name)
+    if payload.IsValid():
+        return payload
+    return _child(union_value, f"{case_name}_")
+
+
 def _renamed_value(parent, source, name):
     if not source.IsValid():
         return lldb.SBValue()
@@ -567,9 +582,10 @@ class GeneratedMessageOneofSyntheticProvider:
             case_name = _case_name(case_field)
             prefix = _oneof_prefix(case_field_name)
             if case_name == "none":
-                self.children.append(_renamed_value(self.value, case_field, prefix or case_field_name))
+                payload = _oneof_payload(self.value, prefix, case_name)
+                self.children.append(_renamed_value(self.value, payload if payload.IsValid() else case_field, prefix or case_field_name))
                 continue
-            payload = _child(self.value, f"{case_name}_")
+            payload = _oneof_payload(self.value, prefix, case_name)
             if not payload.IsValid():
                 payload = _child(self.value, f"{prefix}_{case_name}_")
             if not payload.IsValid():

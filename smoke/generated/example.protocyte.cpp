@@ -67,7 +67,7 @@ namespace test::ultimate {
             {"colors", 37u, "enum", true, false, true},
             {"opt_int32", 38u, "scalar", false, true, false},
             {"opt_string", 39u, "string", false, true, false},
-            {"sha256", 41u, "bytes", false, false, false},
+            {"sha256", 41u, "bytes", false, true, false},
             {"extreme_nesting", 40u, "message", false, true, false},
         };
 

@@ -168,13 +168,21 @@ def test_generated_header_uses_inline_fixed_size_bytes_storage() -> None:
 
     assert "::protocyte::ByteView sha256() const noexcept" in header
     assert "::protocyte::MutableByteView mutable_sha256() noexcept" in header
-    assert "::protocyte::u8 sha256_[32u] {};" in header
+    assert "bool has_sha256() const noexcept" in header
+    assert "::protocyte::u8 sha256_[32u];" in header
+    assert "bool has_sha256_ = false;" in header
     assert "sha256_ {&ctx}" not in header
+    assert "return has_sha256_ ? ::protocyte::ByteView {.data = sha256_, .size = 32u} : ::protocyte::ByteView {};" in header
+    assert "if (!has_sha256_) {" in header
+    assert "has_sha256_ = true;" in header
     assert "if (value.size != 32u)" in header
-    assert "len.value() == 0u" in header
     assert "len.value() == 32u" in header
+    assert "len.value() == 0u" not in header
     assert "if (const auto st = writer.write(" in header
-    assert "::protocyte::bytes_zero(" in header
+    assert "::protocyte::bytes_zero(" not in header
+    assert "if (has_sha256_)" in header
+    assert "::protocyte::write_varint(writer, 32u)" in header
+    assert "void clear_sha256() noexcept { has_sha256_ = false; }" in header
     assert "constexpr bool bytes_zero(const ByteView view) noexcept" in runtime_header
 
 
@@ -184,6 +192,45 @@ def test_rejects_invalid_fixed_size_targets() -> None:
 
     assert "only supported on bytes fields" in bad_type_response.error
     assert "does not support repeated fields" in repeated_response.error
+
+
+def test_generated_header_emits_tagged_union_oneofs() -> None:
+    response = generate_response(_oneof_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["oneof.protocyte.hpp"]
+    protected = header.split("protected:", maxsplit=1)[1]
+
+    assert "Carrier(Carrier &&other) noexcept" in header
+    assert "Carrier &operator=(Carrier &&other) noexcept" in header
+    assert "~Carrier() noexcept { clear_choice(); }" in header
+    assert "template<class T> static void destroy_at_(T *value) noexcept { value->~T(); }" in header
+    assert "void clear_choice() noexcept {" in header
+    assert "destroy_at_(&choice.text);" in header
+    assert "destroy_at_(&choice.inner);" in header
+    assert "union ChoiceStorage {" in header
+    assert "ChoiceStorage() noexcept {}" in header
+    assert "~ChoiceStorage() noexcept {}" in header
+    assert "} choice;" in header
+    assert "typename Config::String text;" in header
+    assert "::protocyte::i32 count;" in header
+    assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner;" in header
+    assert "new (&choice.text) typename Config::String(::protocyte::move(temp));" in header
+    assert "new (&choice.count)::protocyte::i32(value);" in header
+    assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>>();" in header
+    assert "new (&choice.none)::protocyte::u8(0u);" not in header
+    assert "::protocyte::u8 none;" not in header
+    assert "auto ensured = ensure_inner();" in header
+    assert "clear_choice();" in header
+    assert "choice_case_ == ChoiceCase::text" in header
+    assert "choice_case_ == ChoiceCase::inner" in header
+    assert "::protocyte::i32 before_ = 0;" in protected
+    assert "::protocyte::i32 after_ = 0;" in protected
+    assert protected.index("::protocyte::i32 before_ = 0;") < protected.index("ChoiceCase choice_case_ = ChoiceCase::none;")
+    assert protected.index("ChoiceCase choice_case_ = ChoiceCase::none;") < protected.index("union ChoiceStorage {")
+    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_ = 0;")
+    assert "typename Config::String text = " not in header
 
 
 def _simple_file() -> descriptor_pb2.FileDescriptorProto:
@@ -282,6 +329,13 @@ def _fixed_size_request(
     return request
 
 
+def _oneof_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("oneof.proto")
+    request.proto_file.append(_oneof_file())
+    return request
+
+
 def _fixed_size_options_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = "protocyte/options.proto"
@@ -315,6 +369,62 @@ def _fixed_size_file(*, field_type: int, label: int) -> descriptor_pb2.FileDescr
     field.label = label
     field.type = field_type
     field.options.ParseFromString(_fixed_size_option_bytes(32))
+
+    return file
+
+
+def _oneof_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "oneof.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Carrier"
+
+    inner = message.nested_type.add()
+    inner.name = "Inner"
+    field = inner.field.add()
+    field.name = "value"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    message.oneof_decl.add().name = "choice"
+
+    field = message.field.add()
+    field.name = "before"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "text"
+    field.number = 2
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field.oneof_index = 0
+
+    field = message.field.add()
+    field.name = "count"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.oneof_index = 0
+
+    field = message.field.add()
+    field.name = "inner"
+    field.number = 4
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Carrier.Inner"
+    field.oneof_index = 0
+
+    field = message.field.add()
+    field.name = "after"
+    field.number = 5
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
 
     return file
 

@@ -219,7 +219,7 @@ class FieldModel:
 
     @property
     def has_explicit_presence(self) -> bool:
-        return self.proto3_optional or self.oneof_name is not None or self.kind == "message"
+        return self.proto3_optional or self.oneof_name is not None or self.kind == "message" or self.fixed_bytes
 
     @property
     def fixed_bytes(self) -> bool:
