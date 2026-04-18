@@ -243,7 +243,6 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
         w.line("}")
         w.pop()
         w.line("}")
-        w.line(f"new (&{_oneof_none_member(oneof)}) ::protocyte::u8(0u);")
         w.line(f"{lower}_case_ = {oneof.cpp_name}Case::none;")
         w.pop()
         w.line("}")
@@ -302,15 +301,8 @@ def _emit_constructor_initializers(w: CppWriter, message: MessageModel) -> None:
 
 
 def _emit_constructor_body(w: CppWriter, message: MessageModel) -> None:
-    if not message.oneofs:
-        w.line("{}")
-        return
-    w.line("{")
-    w.push()
-    for oneof in message.oneofs:
-        w.line(f"new (&{_oneof_none_member(oneof)}) ::protocyte::u8(0u);")
-    w.pop()
-    w.line("}")
+    del message
+    w.line("{}")
 
 
 def _emit_special_members(w: CppWriter, message: MessageModel, options: GeneratorOptions) -> None:
@@ -382,8 +374,6 @@ def _emit_move_state_setup(w: CppWriter, message: MessageModel) -> None:
             continue
         if _has_presence_flag(item):
             w.line(f"has_{item.cpp_name}_ = other.has_{item.cpp_name}_;")
-    for oneof in message.oneofs:
-        w.line(f"new (&{_oneof_none_member(oneof)}) ::protocyte::u8(0u);")
 
 
 def _emit_move_assignment_for_field(w: CppWriter, item: FieldModel) -> None:
@@ -1220,7 +1210,6 @@ def _emit_oneof_storage(w: CppWriter, oneof: OneofModel, options: GeneratorOptio
     w.push()
     w.line(f"{storage_type}() noexcept {{}}")
     w.line(f"~{storage_type}() noexcept {{}}")
-    w.line(f"::protocyte::u8 {_oneof_none_name()};")
     for item in oneof.fields:
         _emit_oneof_member(w, item, options)
     w.pop()
@@ -1324,14 +1313,6 @@ def _oneof_storage_member(oneof_name: str) -> str:
 
 def _oneof_member_name(item: FieldModel) -> str:
     return item.cpp_name
-
-
-def _oneof_none_name() -> str:
-    return "none"
-
-
-def _oneof_none_member(oneof: OneofModel) -> str:
-    return f"{_oneof_storage_member(oneof.name)}.{_oneof_none_name()}"
 
 
 def _fixed_size_literal(item: FieldModel) -> str:

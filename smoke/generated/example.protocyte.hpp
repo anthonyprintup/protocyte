@@ -539,9 +539,7 @@ namespace test::ultimate {
         };
 
         explicit UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(Context &ctx) noexcept:
-            ctx_ {&ctx}, extreme_ {&ctx}, weird_map_ {&ctx} {
-            new (&deep_oneof.none)::protocyte::u8(0u);
-        }
+            ctx_ {&ctx}, extreme_ {&ctx}, weird_map_ {&ctx} {}
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
         create(Context &ctx) noexcept {
@@ -553,7 +551,6 @@ namespace test::ultimate {
             ctx_ {other.ctx_},
             extreme_ {::protocyte::move(other.extreme_)},
             weird_map_ {::protocyte::move(other.weird_map_)} {
-            new (&deep_oneof.none)::protocyte::u8(0u);
             switch (other.deep_oneof_case_) {
                 case Deep_oneofCase::val: {
                     new (&deep_oneof.val)::protocyte::i64(other.deep_oneof.val);
@@ -644,7 +641,6 @@ namespace test::ultimate {
                     break;
                 }
             }
-            new (&deep_oneof.none)::protocyte::u8(0u);
             deep_oneof_case_ = Deep_oneofCase::none;
         }
 
@@ -978,7 +974,6 @@ namespace test::ultimate {
         union Deep_oneofStorage {
             Deep_oneofStorage() noexcept {}
             ~Deep_oneofStorage() noexcept {}
-            ::protocyte::u8 none;
             ::protocyte::i64 val;
             typename Config::String text;
         } deep_oneof;
@@ -1013,9 +1008,7 @@ namespace test::ultimate {
             recursive_self_ {&ctx},
             lots_of_nested_ {&ctx},
             colors_ {&ctx},
-            opt_string_ {&ctx} {
-            new (&special_oneof.none)::protocyte::u8(0u);
-        }
+            opt_string_ {&ctx} {}
 
         static ::protocyte::Result<UltimateComplexMessage> create(Context &ctx) noexcept {
             return ::protocyte::Result<UltimateComplexMessage>::ok(UltimateComplexMessage {ctx});
@@ -1059,7 +1052,6 @@ namespace test::ultimate {
             if (other.has_sha256_) {
                 for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = other.sha256_[i]; }
             }
-            new (&special_oneof.none)::protocyte::u8(0u);
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
                     new (&special_oneof.oneof_string)
@@ -1335,7 +1327,6 @@ namespace test::ultimate {
                     break;
                 }
             }
-            new (&special_oneof.none)::protocyte::u8(0u);
             special_oneof_case_ = Special_oneofCase::none;
         }
 
@@ -3691,7 +3682,6 @@ namespace test::ultimate {
         union Special_oneofStorage {
             Special_oneofStorage() noexcept {}
             ~Special_oneofStorage() noexcept {}
-            ::protocyte::u8 none;
             typename Config::String oneof_string;
             ::protocyte::i32 oneof_int32;
             typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> oneof_msg;

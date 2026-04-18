@@ -209,18 +209,18 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "void clear_choice() noexcept {" in header
     assert "destroy_at_(&choice.text);" in header
     assert "destroy_at_(&choice.inner);" in header
-    assert "new (&choice.none)::protocyte::u8(0u);" in header
     assert "union ChoiceStorage {" in header
     assert "ChoiceStorage() noexcept {}" in header
     assert "~ChoiceStorage() noexcept {}" in header
     assert "} choice;" in header
-    assert "::protocyte::u8 none;" in header
     assert "typename Config::String text;" in header
     assert "::protocyte::i32 count;" in header
     assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner;" in header
     assert "new (&choice.text) typename Config::String(::protocyte::move(temp));" in header
     assert "new (&choice.count)::protocyte::i32(value);" in header
     assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>>();" in header
+    assert "new (&choice.none)::protocyte::u8(0u);" not in header
+    assert "::protocyte::u8 none;" not in header
     assert "auto ensured = ensure_inner();" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header

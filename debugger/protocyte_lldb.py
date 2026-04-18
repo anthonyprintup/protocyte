@@ -180,14 +180,14 @@ def _case_field_names(value):
 
 
 def _oneof_payload(value, prefix, case_name):
+    if case_name == "none":
+        return lldb.SBValue()
     payload = _child(value, f"{case_name}_")
     if payload.IsValid():
         return payload
     union_value = _child(value, prefix)
     if not union_value.IsValid():
         return lldb.SBValue()
-    if case_name == "none":
-        return _child(union_value, "none")
     payload = _child(union_value, case_name)
     if payload.IsValid():
         return payload
