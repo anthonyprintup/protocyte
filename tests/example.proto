@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package test.ultimate;
 
+import "protocyte/options.proto";
+
 // File-level options
 option optimize_for = SPEED;
 
@@ -146,6 +148,12 @@ message UltimateComplexMessage {
   }
 
   LevelA.LevelB.LevelC.LevelD.LevelE extreme_nesting = 40;
+
+  // -------------------------------------------------------------------------
+  // Fixed-size binary fields
+  // -------------------------------------------------------------------------
+  // SHA-256 digest stored inline as exactly 32 bytes.
+  bytes sha256 = 41 [(protocyte.fixed_size) = 32];
 }
 
 // -----------------------------------------------------------------------------

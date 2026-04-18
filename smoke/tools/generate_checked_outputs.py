@@ -223,8 +223,6 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     msg.oneof_decl.add().name = "_opt_string"
     add_field(msg, "opt_int32", 38, F.TYPE_INT32, oneof_index=1, proto3_optional=True)
     add_field(msg, "opt_string", 39, F.TYPE_STRING, oneof_index=2, proto3_optional=True)
-    sha256 = add_field(msg, "sha256", 41, F.TYPE_BYTES)
-    sha256.options.ParseFromString(fixed_size_option_bytes(32))
 
     level_a = msg.nested_type.add()
     level_a.name = "LevelA"
@@ -256,6 +254,8 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
         F.TYPE_MESSAGE,
         type_name=".test.ultimate.UltimateComplexMessage.LevelA.LevelB.LevelC.LevelD.LevelE",
     )
+    sha256 = add_field(msg, "sha256", 41, F.TYPE_BYTES)
+    sha256.options.ParseFromString(fixed_size_option_bytes(32))
 
     extra = file.message_type.add()
     extra.name = "ExtraMessage"

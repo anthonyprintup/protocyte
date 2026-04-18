@@ -40,7 +40,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "kDefaultMaxStringBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
     assert "kDefaultMaxRepeatedCount = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
     assert "kDefaultMaxMapEntries = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
-    assert "template<class Config = ::protocyte::DefaultConfig>" in files["simple.protocyte.hpp"]
+    assert "template<typename Config = ::protocyte::DefaultConfig>" in files["simple.protocyte.hpp"]
     assert "class Status" not in files["protocyte/runtime/runtime.hpp"]
     assert "public:" not in files["protocyte/runtime/runtime.hpp"]
     assert "private:" not in files["protocyte/runtime/runtime.hpp"]
@@ -64,8 +64,9 @@ def test_generates_proto3_files_and_runtime() -> None:
     ]
     assert "u64 value {};" in files["protocyte/runtime/runtime.hpp"]
     assert "u64 value = {};" not in files["protocyte/runtime/runtime.hpp"]
-    assert "u8 bytes[4u] {};" in files["protocyte/runtime/runtime.hpp"]
-    assert "u8 bytes[8u] {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "u8 bytes[4u];" in files["protocyte/runtime/runtime.hpp"]
+    assert "u8 bytes[8u];" in files["protocyte/runtime/runtime.hpp"]
+    assert "u8 bytes[8u] {\n" in files["protocyte/runtime/runtime.hpp"]
     assert "for (usize i {}; i < lhs.size; ++i)" in files["protocyte/runtime/runtime.hpp"]
     assert "if (!size)" in files["protocyte/runtime/runtime.hpp"]
     assert "other.size_ = {};" in files["protocyte/runtime/runtime.hpp"]
@@ -130,13 +131,16 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
-    assert "template<class Reader>" in header
+    assert "template<typename Reader>" in header
     assert "merge_from(Reader &reader)" in header
     assert "for (::protocyte::usize i {}; i < samples_.size(); ++i)" in header
     assert "if (const auto st = out.value().copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
-    assert "case 1u: {" in header
-    assert "case 2u: {" in header
+    assert "enum struct FieldNumber : ::protocyte::u32 {" in header
+    assert "id = 1u," in header
+    assert "opt_name = 2u," in header
+    assert "case FieldNumber::id: {" in header
+    assert "case FieldNumber::opt_name: {" in header
     assert "auto raw = ::protocyte::read_fixed32(packed);" in header
     assert "auto value = ::protocyte::read_fixed32(packed);" not in header
     assert "if (other.has_items())" not in header
@@ -170,7 +174,7 @@ def test_generated_header_uses_inline_fixed_size_bytes_storage() -> None:
     assert "::protocyte::MutableByteView mutable_sha256() noexcept" in header
     assert "bool has_sha256() const noexcept" in header
     assert "::protocyte::u8 sha256_[32u];" in header
-    assert "bool has_sha256_ = false;" in header
+    assert "bool has_sha256_ {};" in header
     assert "sha256_ {&ctx}" not in header
     assert "return has_sha256_ ? ::protocyte::ByteView {.data = sha256_, .size = 32u} : ::protocyte::ByteView {};" in header
     assert "if (!has_sha256_) {" in header
@@ -205,7 +209,7 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "Carrier(Carrier &&other) noexcept" in header
     assert "Carrier &operator=(Carrier &&other) noexcept" in header
     assert "~Carrier() noexcept { clear_choice(); }" in header
-    assert "template<class T> static void destroy_at_(T *value) noexcept { value->~T(); }" in header
+    assert "template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }" in header
     assert "void clear_choice() noexcept {" in header
     assert "destroy_at_(&choice.text);" in header
     assert "destroy_at_(&choice.inner);" in header
@@ -216,21 +220,37 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "typename Config::String text;" in header
     assert "::protocyte::i32 count;" in header
     assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner;" in header
-    assert "new (&choice.text) typename Config::String(::protocyte::move(temp));" in header
-    assert "new (&choice.count)::protocyte::i32(value);" in header
-    assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>>();" in header
+    assert "new (&choice.text) typename Config::String {::protocyte::move(temp)};" in header
+    assert "new (&choice.count)::protocyte::i32 {value};" in header
+    assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>> {};" in header
     assert "new (&choice.none)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none;" not in header
     assert "auto ensured = ensure_inner();" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
     assert "choice_case_ == ChoiceCase::inner" in header
-    assert "::protocyte::i32 before_ = 0;" in protected
-    assert "::protocyte::i32 after_ = 0;" in protected
-    assert protected.index("::protocyte::i32 before_ = 0;") < protected.index("ChoiceCase choice_case_ = ChoiceCase::none;")
-    assert protected.index("ChoiceCase choice_case_ = ChoiceCase::none;") < protected.index("union ChoiceStorage {")
-    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_ = 0;")
+    assert "::protocyte::i32 before_ {};" in protected
+    assert "::protocyte::i32 after_ {};" in protected
+    assert protected.index("::protocyte::i32 before_ {};") < protected.index("ChoiceCase choice_case_ {ChoiceCase::none};")
+    assert protected.index("ChoiceCase choice_case_ {ChoiceCase::none};") < protected.index("union ChoiceStorage {")
+    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_ {};")
     assert "typename Config::String text = " not in header
+
+
+def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("empty.proto")
+    request.proto_file.append(_empty_file())
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "empty.protocyte.hpp")
+
+    assert "template<typename Writer> protocyte::Status serialize(Writer & /* writer */) const noexcept {" in header
+    assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {" in header
+    assert "::protocyte::usize total {};" not in header
+    assert "return ::protocyte::Result<::protocyte::usize>::ok({});" in header
 
 
 def _simple_file() -> descriptor_pb2.FileDescriptorProto:
@@ -425,6 +445,18 @@ def _oneof_file() -> descriptor_pb2.FileDescriptorProto:
     field.number = 5
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_INT32
+
+    return file
+
+
+def _empty_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "empty.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Empty"
 
     return file
 
