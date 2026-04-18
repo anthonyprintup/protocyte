@@ -194,6 +194,7 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
     w.line(f"struct {message.cpp_name} {{")
     w.push()
     w.line("using Context = typename Config::Context;")
+    w.line("using RuntimeStatus = ::protocyte::Status;")
     for enum in message.nested_enums:
         w.line(f"using {enum.name} = {enum.cpp_name};")
     for nested in message.nested_messages:
@@ -717,7 +718,8 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
     w.pop()
     w.line("}")
     w.line()
-    w.line("template <typename Reader> protocyte::Status merge_from(Reader& reader) noexcept {")
+    w.line("template <typename Reader>")
+    w.line("RuntimeStatus merge_from(Reader& reader) noexcept {")
     w.push()
     w.line("while (!reader.eof()) {")
     w.push()
@@ -752,7 +754,8 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
     w.line("}")
     w.line()
     writer_name = "writer" if message.fields else "/* writer */"
-    w.line(f"template <typename Writer> protocyte::Status serialize(Writer& {writer_name}) const noexcept {{")
+    w.line("template <typename Writer>")
+    w.line(f"RuntimeStatus serialize(Writer& {writer_name}) const noexcept {{")
     w.push()
     for item in sorted(message.fields, key=lambda f: f.number):
         _emit_serialize_statement(w, item, options)

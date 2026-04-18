@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
@@ -130,9 +132,10 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);" in header
     assert "const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
+    assert "using RuntimeStatus = ::protocyte::Status;" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     assert "template<typename Reader>" in header
-    assert "merge_from(Reader &reader)" in header
+    assert "RuntimeStatus merge_from(Reader &reader) noexcept" in header
     assert "for (::protocyte::usize i {}; i < samples_.size(); ++i)" in header
     assert "if (const auto st = out.value().copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
@@ -247,10 +250,34 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
     assert not response.error
     header = next(file.content for file in response.file if file.name == "empty.protocyte.hpp")
 
-    assert "template<typename Writer> protocyte::Status serialize(Writer & /* writer */) const noexcept {" in header
+    assert "RuntimeStatus serialize(Writer & /* writer */) const noexcept {" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {" in header
     assert "::protocyte::usize total {};" not in header
     assert "return ::protocyte::Result<::protocyte::usize>::ok({});" in header
+
+
+def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("namespaced.proto")
+    request.proto_file.append(_protocyte_package_file())
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "namespaced.protocyte.hpp")
+
+    assert "namespace test::protocyte {" in header
+    assert "using RuntimeStatus = ::protocyte::Status;" in header
+    assert "RuntimeStatus merge_from(Reader &reader) noexcept {" in header
+    assert "RuntimeStatus serialize(Writer &writer) const noexcept {" in header
+
+
+def test_repo_root_options_proto_matches_generator_copy() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    root_copy = repo_root / "protocyte" / "options.proto"
+    source_copy = repo_root / "src" / "protocyte" / "proto" / "protocyte" / "options.proto"
+
+    assert root_copy.read_text(encoding="utf-8") == source_copy.read_text(encoding="utf-8")
 
 
 def _simple_file() -> descriptor_pb2.FileDescriptorProto:
@@ -457,6 +484,24 @@ def _empty_file() -> descriptor_pb2.FileDescriptorProto:
 
     message = file.message_type.add()
     message.name = "Empty"
+
+    return file
+
+
+def _protocyte_package_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "namespaced.proto"
+    file.package = "test.protocyte"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "StatusHolder"
+
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
 
     return file
 
