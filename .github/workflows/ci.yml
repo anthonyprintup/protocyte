@@ -117,3 +117,43 @@ jobs:
 
       - name: Run FetchContent integration test
         run: ctest --test-dir tests/fetchcontent/build --output-on-failure
+
+  find-package-linux:
+    name: Find Package Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Configure protocyte install tree
+        run: cmake -S . -B build/protocyte-install
+
+      - name: Install protocyte package
+        run: cmake --install build/protocyte-install --prefix build/protocyte-prefix
+
+      - name: Configure find_package integration test
+        run: >
+          cmake -S tests/find_package -B tests/find_package/build
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
+          -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
+          -DPROTOCYTE_FETCH_PROTOBUF=ON
+
+      - name: Build find_package integration test
+        run: cmake --build tests/find_package/build
+
+      - name: Run find_package integration test
+        run: ctest --test-dir tests/find_package/build --output-on-failure

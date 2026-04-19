@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package findpackage.common;
+
+import "protocyte/options.proto";
+
+message Header {
+  uint32 version = 1;
+  bytes tag = 2 [(protocyte.array) = { max: 2 }, (protocyte.fixed) = true];
+}

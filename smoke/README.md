@@ -89,6 +89,32 @@ environment you want to use for code generation:
 python -m pip install dist\protocyte-<version>-py3-none-any.whl
 ```
 
+### Option C: Install The CMake Package
+
+If you want downstream CMake projects to consume protocyte through
+`find_package(protocyte CONFIG REQUIRED)`, install the CMake package into a
+prefix:
+
+```powershell
+cmake -S . -B build/protocyte
+cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
+```
+
+That install prefix contains:
+
+- the `protocyte_generate(...)` CMake integration
+- the protocyte Python sources used by the plugin wrapper
+- `protocyte/options.proto`
+
+Downstream consumers then configure with
+`-DCMAKE_PREFIX_PATH=C:\path\to\protocyte-prefix` and call
+`find_package(protocyte CONFIG REQUIRED)`.
+
+The installed package still expects a usable `Python3_EXECUTABLE` at configure
+time. Protobuf is caller-supplied by default. If you want the installed package
+to fetch protobuf as a fallback, set `PROTOCYTE_FETCH_PROTOBUF=ON` before
+calling `find_package(protocyte CONFIG REQUIRED)`.
+
 ## 3. Find `protocyte/options.proto`
 
 If your `.proto` files use protocyte's custom options, they must import:
@@ -295,6 +321,27 @@ target_compile_definitions(sensor_proto PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
 If you are targeting a freestanding or kernel environment, do not define that
 macro. Instead, provide your own allocator callbacks through the runtime config
 you instantiate in your C++ code.
+
+If protocyte was installed to a prefix instead of being consumed directly from a
+checkout, the manual `protoc`/custom-command pattern above can be replaced with
+the installed package:
+
+```cmake
+find_package(protocyte CONFIG REQUIRED)
+
+protocyte_generate(
+    TARGET sensor_proto_codegen
+    PROTO_ROOT "${PROTO_ROOT}"
+    OUT_DIR "${GENERATED_DIR}"
+    DISCOVER
+    EMIT_RUNTIME
+    GENERATED_SOURCES_VAR PROTOCYTE_GENERATED_SOURCES
+)
+```
+
+If protobuf is not already available to that consumer project and you want
+protocyte to fetch it, set `PROTOCYTE_FETCH_PROTOBUF=ON` before
+`find_package(protocyte CONFIG REQUIRED)`.
 
 ## 7. Use The Generated Headers In C++
 
