@@ -32,6 +32,40 @@ _RUNTIME_SCALAR_TYPES = {
     "double": "::protocyte::f64",
 }
 
+_SCALAR_READ_HELPERS = {
+    FieldDescriptorProto.TYPE_INT32: "read_int32",
+    FieldDescriptorProto.TYPE_INT64: "read_int64",
+    FieldDescriptorProto.TYPE_UINT32: "read_uint32",
+    FieldDescriptorProto.TYPE_UINT64: "read_uint64",
+    FieldDescriptorProto.TYPE_SINT32: "read_sint32",
+    FieldDescriptorProto.TYPE_SINT64: "read_sint64",
+    FieldDescriptorProto.TYPE_FIXED32: "read_fixed32_value",
+    FieldDescriptorProto.TYPE_FIXED64: "read_fixed64_value",
+    FieldDescriptorProto.TYPE_SFIXED32: "read_sfixed32",
+    FieldDescriptorProto.TYPE_SFIXED64: "read_sfixed64",
+    FieldDescriptorProto.TYPE_FLOAT: "read_float",
+    FieldDescriptorProto.TYPE_DOUBLE: "read_double",
+    FieldDescriptorProto.TYPE_BOOL: "read_bool",
+    FieldDescriptorProto.TYPE_ENUM: "read_enum",
+}
+
+_SCALAR_WRITE_HELPERS = {
+    FieldDescriptorProto.TYPE_INT32: "write_int32",
+    FieldDescriptorProto.TYPE_INT64: "write_int64",
+    FieldDescriptorProto.TYPE_UINT32: "write_uint32",
+    FieldDescriptorProto.TYPE_UINT64: "write_uint64",
+    FieldDescriptorProto.TYPE_SINT32: "write_sint32",
+    FieldDescriptorProto.TYPE_SINT64: "write_sint64",
+    FieldDescriptorProto.TYPE_FIXED32: "write_fixed32_value",
+    FieldDescriptorProto.TYPE_FIXED64: "write_fixed64_value",
+    FieldDescriptorProto.TYPE_SFIXED32: "write_sfixed32",
+    FieldDescriptorProto.TYPE_SFIXED64: "write_sfixed64",
+    FieldDescriptorProto.TYPE_FLOAT: "write_float",
+    FieldDescriptorProto.TYPE_DOUBLE: "write_double",
+    FieldDescriptorProto.TYPE_BOOL: "write_bool",
+    FieldDescriptorProto.TYPE_ENUM: "write_enum",
+}
+
 
 @dataclass
 class CppWriter:
@@ -952,17 +986,25 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
             w.line("break;")
             w.pop()
             w.line("}")
-        w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
-        _emit_read_repeated_value(w, item, "reader", options)
+        if _is_scalar_field(item):
+            _emit_read_repeated_value(w, item, "reader", options, checked=True)
+        else:
+            w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
+            _emit_read_repeated_value(w, item, "reader", options)
         return
     if item.kind == "map":
         _emit_read_map(w, item, options)
+        return
+    if _is_scalar_field(item):
+        _emit_read_single_value(w, item, "reader", options)
         return
     w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
     _emit_read_single_value(w, item, "reader", options)
 
 
-def _emit_read_repeated_value(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
+def _emit_read_repeated_value(
+    w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions, *, checked: bool = False
+) -> None:
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
         helper = "read_string" if item.kind == "string" else "read_bytes"
@@ -984,7 +1026,7 @@ def _emit_read_repeated_value(w: CppWriter, item: FieldModel, reader: str, optio
         w.line(f"if (const auto st = {_member(item)}.push_back(::protocyte::move(value)); !st) {{ return st; }}")
         return
     w.line(f"{_element_type(item, options)} value{{}};")
-    _emit_read_scalar(w, item, reader, "value", options)
+    _emit_read_scalar(w, item, reader, "value", options, checked=checked)
     w.line(f"if (const auto st = {_member(item)}.push_back(value); !st) {{ return st; }}")
 
 
@@ -1055,9 +1097,9 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
         w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{{_default(item)}}};")
         w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-        _emit_read_scalar(w, item, reader, _member(item), options)
+        _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
         return
-    _emit_read_scalar(w, item, reader, _member(item), options)
+    _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
     if _has_presence_flag(item):
         w.line(f"has_{item.cpp_name}_ = true;")
 
@@ -1145,49 +1187,15 @@ def _emit_read_named_value(w: CppWriter, item: FieldModel, reader: str, target: 
         _emit_read_scalar(w, item, reader, target, options)
 
 
-def _emit_read_scalar(w: CppWriter, item: FieldModel, reader: str, target: str, options: GeneratorOptions) -> None:
+def _emit_read_scalar(
+    w: CppWriter, item: FieldModel, reader: str, target: str, options: GeneratorOptions, *, checked: bool = False
+) -> None:
     del options
-    t = item.proto_type
-    if t in {
-        FieldDescriptorProto.TYPE_INT32,
-        FieldDescriptorProto.TYPE_INT64,
-        FieldDescriptorProto.TYPE_UINT32,
-        FieldDescriptorProto.TYPE_UINT64,
-        FieldDescriptorProto.TYPE_BOOL,
-        FieldDescriptorProto.TYPE_ENUM,
-    }:
-        w.line(f"auto raw = ::protocyte::read_varint({reader});")
-        w.line("if (!raw) { return raw.status(); }")
-        if t == FieldDescriptorProto.TYPE_BOOL:
-            w.line(f"{target} = raw.value() != 0u;")
-        else:
-            w.line(f"{target} = static_cast<{_field_type(item, GeneratorOptions())}>(raw.value());")
-        return
-    if t == FieldDescriptorProto.TYPE_SINT32:
-        w.line(f"auto raw = ::protocyte::read_varint({reader});")
-        w.line("if (!raw) { return raw.status(); }")
-        w.line(f"{target} = ::protocyte::decode_zigzag32(static_cast<::protocyte::u32>(raw.value()));")
-        return
-    if t == FieldDescriptorProto.TYPE_SINT64:
-        w.line(f"auto raw = ::protocyte::read_varint({reader});")
-        w.line("if (!raw) { return raw.status(); }")
-        w.line(f"{target} = ::protocyte::decode_zigzag64(raw.value());")
-        return
-    if t in {FieldDescriptorProto.TYPE_FIXED32, FieldDescriptorProto.TYPE_SFIXED32, FieldDescriptorProto.TYPE_FLOAT}:
-        w.line(f"auto raw = ::protocyte::read_fixed32({reader});")
-        w.line("if (!raw) { return raw.status(); }")
-        if t == FieldDescriptorProto.TYPE_FLOAT:
-            w.line(f"{target} = ::std::bit_cast<::protocyte::f32>(raw.value());")
-        else:
-            w.line(f"{target} = static_cast<{_field_type(item, GeneratorOptions())}>(raw.value());")
-        return
-    if t in {FieldDescriptorProto.TYPE_FIXED64, FieldDescriptorProto.TYPE_SFIXED64, FieldDescriptorProto.TYPE_DOUBLE}:
-        w.line(f"auto raw = ::protocyte::read_fixed64({reader});")
-        w.line("if (!raw) { return raw.status(); }")
-        if t == FieldDescriptorProto.TYPE_DOUBLE:
-            w.line(f"{target} = ::std::bit_cast<::protocyte::f64>(raw.value());")
-        else:
-            w.line(f"{target} = static_cast<{_field_type(item, GeneratorOptions())}>(raw.value());")
+    helper = _scalar_read_helper(item, checked=checked)
+    args = f"{reader}, wire_type, field_number" if checked else reader
+    w.line(f"auto decoded = ::protocyte::{helper}({args});")
+    w.line("if (!decoded) { return decoded.status(); }")
+    w.line(f"{target} = decoded.value();")
 
 
 def _emit_serialize_statement(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
@@ -1227,6 +1235,12 @@ def _emit_write_field(
     enum_type: str = "FieldNumber",
 ) -> None:
     del options
+    if _is_scalar_field(item):
+        helper = _scalar_write_helper(item, field=True)
+        w.line(
+            f"if (const auto st = ::protocyte::{helper}(writer, {_field_number_u32(item, enum_type)}, {value}); !st) {{ return st; }}"
+        )
+        return
     w.line(
         f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item, enum_type)}, {_wire(item)}); !st) {{ return st; }}"
     )
@@ -1308,32 +1322,8 @@ def _emit_write_packed_field(
 
 
 def _emit_write_scalar(w: CppWriter, item: FieldModel, value: str) -> None:
-    t = item.proto_type
-    if t in {
-        FieldDescriptorProto.TYPE_INT32,
-        FieldDescriptorProto.TYPE_INT64,
-        FieldDescriptorProto.TYPE_UINT32,
-        FieldDescriptorProto.TYPE_UINT64,
-        FieldDescriptorProto.TYPE_BOOL,
-        FieldDescriptorProto.TYPE_ENUM,
-    }:
-        w.line(f"if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>({value})); !st) {{ return st; }}")
-    elif t == FieldDescriptorProto.TYPE_SINT32:
-        w.line(f"if (const auto st = ::protocyte::write_varint(writer, ::protocyte::encode_zigzag32({value})); !st) {{ return st; }}")
-    elif t == FieldDescriptorProto.TYPE_SINT64:
-        w.line(f"if (const auto st = ::protocyte::write_varint(writer, ::protocyte::encode_zigzag64({value})); !st) {{ return st; }}")
-    elif t in {FieldDescriptorProto.TYPE_FIXED32, FieldDescriptorProto.TYPE_SFIXED32}:
-        w.line(f"if (const auto st = ::protocyte::write_fixed32(writer, static_cast<::protocyte::u32>({value})); !st) {{ return st; }}")
-    elif t == FieldDescriptorProto.TYPE_FLOAT:
-        w.line(
-            f"if (const auto st = ::protocyte::write_fixed32(writer, ::std::bit_cast<::protocyte::u32>({value})); !st) {{ return st; }}"
-        )
-    elif t in {FieldDescriptorProto.TYPE_FIXED64, FieldDescriptorProto.TYPE_SFIXED64}:
-        w.line(f"if (const auto st = ::protocyte::write_fixed64(writer, static_cast<::protocyte::u64>({value})); !st) {{ return st; }}")
-    elif t == FieldDescriptorProto.TYPE_DOUBLE:
-        w.line(
-            f"if (const auto st = ::protocyte::write_fixed64(writer, ::std::bit_cast<::protocyte::u64>({value})); !st) {{ return st; }}"
-        )
+    helper = _scalar_write_helper(item, field=False)
+    w.line(f"if (const auto st = ::protocyte::{helper}(writer, {value}); !st) {{ return st; }}")
 
 
 def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
@@ -1713,6 +1703,20 @@ def _scalar_size(item: FieldModel, value: str) -> str:
     if item.proto_type == FieldDescriptorProto.TYPE_SINT64:
         return f"::protocyte::varint_size(::protocyte::encode_zigzag64({value}))"
     return f"::protocyte::varint_size(static_cast<::protocyte::u64>({value}))"
+
+
+def _is_scalar_field(item: FieldModel) -> bool:
+    return item.kind not in {"string", "bytes", "message", "map"}
+
+
+def _scalar_read_helper(item: FieldModel, *, checked: bool) -> str:
+    helper = _SCALAR_READ_HELPERS[item.proto_type]
+    return f"{helper}_field" if checked else helper
+
+
+def _scalar_write_helper(item: FieldModel, *, field: bool) -> str:
+    helper = _SCALAR_WRITE_HELPERS[item.proto_type]
+    return f"{helper}_field" if field else helper
 
 
 def _runtime_scalar_type(cpp_type: str) -> str:

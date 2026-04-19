@@ -1171,6 +1171,172 @@ namespace protocyte {
         return writer.write(bytes, 8u);
     }
 
+    template<class Reader> Status expect_wire_type(Reader &reader, const WireType actual, const WireType expected,
+                                                   const u32 field_number) noexcept {
+        if (actual != expected) {
+            return Status::error(ErrorCode::invalid_wire_type, reader.position(), field_number);
+        }
+        return {};
+    }
+
+    template<class T, class Reader> Result<T> read_varint_scalar(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(raw.value()));
+    }
+
+    template<class T, class Reader> Result<T> read_zigzag32_scalar(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(decode_zigzag32(static_cast<u32>(raw.value()))));
+    }
+
+    template<class T, class Reader> Result<T> read_zigzag64_scalar(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(decode_zigzag64(raw.value())));
+    }
+
+    template<class T, class Reader> Result<T> read_fixed32_scalar(Reader &reader) noexcept {
+        auto raw = read_fixed32(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(raw.value()));
+    }
+
+    template<class T, class Reader> Result<T> read_fixed64_scalar(Reader &reader) noexcept {
+        auto raw = read_fixed64(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(raw.value()));
+    }
+
+    template<class Reader> Result<i32> read_int32(Reader &reader) noexcept { return read_varint_scalar<i32>(reader); }
+
+    template<class Reader> Result<i64> read_int64(Reader &reader) noexcept { return read_varint_scalar<i64>(reader); }
+
+    template<class Reader> Result<u32> read_uint32(Reader &reader) noexcept { return read_varint_scalar<u32>(reader); }
+
+    template<class Reader> Result<u64> read_uint64(Reader &reader) noexcept { return read_varint_scalar<u64>(reader); }
+
+    template<class Reader> Result<bool> read_bool(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<bool>::err(raw.error());
+        }
+        return Result<bool>::ok(raw.value() != 0u);
+    }
+
+    template<class Reader> Result<i32> read_enum(Reader &reader) noexcept { return read_varint_scalar<i32>(reader); }
+
+    template<class Reader> Result<i32> read_sint32(Reader &reader) noexcept {
+        return read_zigzag32_scalar<i32>(reader);
+    }
+
+    template<class Reader> Result<i64> read_sint64(Reader &reader) noexcept {
+        return read_zigzag64_scalar<i64>(reader);
+    }
+
+    template<class Reader> Result<u32> read_fixed32_value(Reader &reader) noexcept {
+        return read_fixed32_scalar<u32>(reader);
+    }
+
+    template<class Reader> Result<u64> read_fixed64_value(Reader &reader) noexcept {
+        return read_fixed64_scalar<u64>(reader);
+    }
+
+    template<class Reader> Result<i32> read_sfixed32(Reader &reader) noexcept {
+        return read_fixed32_scalar<i32>(reader);
+    }
+
+    template<class Reader> Result<i64> read_sfixed64(Reader &reader) noexcept {
+        return read_fixed64_scalar<i64>(reader);
+    }
+
+    template<class Reader> Result<f32> read_float(Reader &reader) noexcept {
+        auto raw = read_fixed32(reader);
+        if (!raw) {
+            return Result<f32>::err(raw.error());
+        }
+        return Result<f32>::ok(::std::bit_cast<f32>(raw.value()));
+    }
+
+    template<class Reader> Result<f64> read_double(Reader &reader) noexcept {
+        auto raw = read_fixed64(reader);
+        if (!raw) {
+            return Result<f64>::err(raw.error());
+        }
+        return Result<f64>::ok(::std::bit_cast<f64>(raw.value()));
+    }
+
+    template<class Writer, class T> Status write_varint_scalar(Writer &writer, const T value) noexcept {
+        return write_varint(writer, static_cast<u64>(value));
+    }
+
+    template<class Writer> Status write_int32(Writer &writer, const i32 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_int64(Writer &writer, const i64 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_uint32(Writer &writer, const u32 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_uint64(Writer &writer, const u64 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_bool(Writer &writer, const bool value) noexcept {
+        return write_varint(writer, value ? 1u : 0u);
+    }
+
+    template<class Writer> Status write_enum(Writer &writer, const i32 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_sint32(Writer &writer, const i32 value) noexcept {
+        return write_varint(writer, encode_zigzag32(value));
+    }
+
+    template<class Writer> Status write_sint64(Writer &writer, const i64 value) noexcept {
+        return write_varint(writer, encode_zigzag64(value));
+    }
+
+    template<class Writer> Status write_fixed32_value(Writer &writer, const u32 value) noexcept {
+        return write_fixed32(writer, value);
+    }
+
+    template<class Writer> Status write_fixed64_value(Writer &writer, const u64 value) noexcept {
+        return write_fixed64(writer, value);
+    }
+
+    template<class Writer> Status write_sfixed32(Writer &writer, const i32 value) noexcept {
+        return write_fixed32(writer, static_cast<u32>(value));
+    }
+
+    template<class Writer> Status write_sfixed64(Writer &writer, const i64 value) noexcept {
+        return write_fixed64(writer, static_cast<u64>(value));
+    }
+
+    template<class Writer> Status write_float(Writer &writer, const f32 value) noexcept {
+        return write_fixed32(writer, ::std::bit_cast<u32>(value));
+    }
+
+    template<class Writer> Status write_double(Writer &writer, const f64 value) noexcept {
+        return write_fixed64(writer, ::std::bit_cast<u64>(value));
+    }
+
     template<class Writer> Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept {
         return write_varint(writer, (static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
     }
@@ -1178,6 +1344,220 @@ namespace protocyte {
     constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept {
         const auto size = varint_size((static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
         return wire_type == WireType::SGROUP ? size * 2u : size;
+    }
+
+    template<class Reader>
+    Result<i32> read_int32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_int32(reader);
+    }
+
+    template<class Reader>
+    Result<i64> read_int64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i64>::err(st.error());
+        }
+        return read_int64(reader);
+    }
+
+    template<class Reader>
+    Result<u32> read_uint32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<u32>::err(st.error());
+        }
+        return read_uint32(reader);
+    }
+
+    template<class Reader>
+    Result<u64> read_uint64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<u64>::err(st.error());
+        }
+        return read_uint64(reader);
+    }
+
+    template<class Reader>
+    Result<bool> read_bool_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<bool>::err(st.error());
+        }
+        return read_bool(reader);
+    }
+
+    template<class Reader>
+    Result<i32> read_enum_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_enum(reader);
+    }
+
+    template<class Reader>
+    Result<i32> read_sint32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_sint32(reader);
+    }
+
+    template<class Reader>
+    Result<i64> read_sint64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i64>::err(st.error());
+        }
+        return read_sint64(reader);
+    }
+
+    template<class Reader>
+    Result<u32> read_fixed32_value_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
+            return Result<u32>::err(st.error());
+        }
+        return read_fixed32_value(reader);
+    }
+
+    template<class Reader>
+    Result<u64> read_fixed64_value_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
+            return Result<u64>::err(st.error());
+        }
+        return read_fixed64_value(reader);
+    }
+
+    template<class Reader>
+    Result<i32> read_sfixed32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_sfixed32(reader);
+    }
+
+    template<class Reader>
+    Result<i64> read_sfixed64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
+            return Result<i64>::err(st.error());
+        }
+        return read_sfixed64(reader);
+    }
+
+    template<class Reader>
+    Result<f32> read_float_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
+            return Result<f32>::err(st.error());
+        }
+        return read_float(reader);
+    }
+
+    template<class Reader>
+    Result<f64> read_double_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
+            return Result<f64>::err(st.error());
+        }
+        return read_double(reader);
+    }
+
+    template<class Writer> Status write_int32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_int32(writer, value);
+    }
+
+    template<class Writer> Status write_int64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_int64(writer, value);
+    }
+
+    template<class Writer> Status write_uint32_field(Writer &writer, const u32 field_number, const u32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_uint32(writer, value);
+    }
+
+    template<class Writer> Status write_uint64_field(Writer &writer, const u32 field_number, const u64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_uint64(writer, value);
+    }
+
+    template<class Writer> Status write_bool_field(Writer &writer, const u32 field_number, const bool value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_bool(writer, value);
+    }
+
+    template<class Writer> Status write_enum_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_enum(writer, value);
+    }
+
+    template<class Writer> Status write_sint32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_sint32(writer, value);
+    }
+
+    template<class Writer> Status write_sint64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_sint64(writer, value);
+    }
+
+    template<class Writer>
+    Status write_fixed32_value_field(Writer &writer, const u32 field_number, const u32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
+            return st;
+        }
+        return write_fixed32_value(writer, value);
+    }
+
+    template<class Writer>
+    Status write_fixed64_value_field(Writer &writer, const u32 field_number, const u64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
+            return st;
+        }
+        return write_fixed64_value(writer, value);
+    }
+
+    template<class Writer>
+    Status write_sfixed32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
+            return st;
+        }
+        return write_sfixed32(writer, value);
+    }
+
+    template<class Writer>
+    Status write_sfixed64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
+            return st;
+        }
+        return write_sfixed64(writer, value);
+    }
+
+    template<class Writer> Status write_float_field(Writer &writer, const u32 field_number, const f32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
+            return st;
+        }
+        return write_float(writer, value);
+    }
+
+    template<class Writer> Status write_double_field(Writer &writer, const u32 field_number, const f64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
+            return st;
+        }
+        return write_double(writer, value);
     }
 
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;

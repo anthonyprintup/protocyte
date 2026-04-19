@@ -86,6 +86,15 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "Status expect_wire_type(Reader &reader, const WireType actual, const WireType expected," in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<f64> read_double_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status write_double_field(Writer &writer, const u32 field_number, const f64 value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
     assert (
         "constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept"
         in files["protocyte/runtime/runtime.hpp"]
@@ -151,8 +160,10 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "opt_name = 2u," in header
     assert "case FieldNumber::id: {" in header
     assert "case FieldNumber::opt_name: {" in header
-    assert "auto raw = ::protocyte::read_fixed32(packed);" in header
-    assert "auto value = ::protocyte::read_fixed32(packed);" not in header
+    assert "auto decoded = ::protocyte::read_float(packed);" in header
+    assert "auto decoded = ::protocyte::read_fixed32(packed);" not in header
+    assert "::protocyte::read_int32_field(reader, wire_type, field_number);" in header
+    assert "::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);" in header
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
     assert "::protocyte::LimitedReader nested {entry_reader" in header
     assert "::protocyte::ReaderRef sub_reader {sub};" in header
