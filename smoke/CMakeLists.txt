@@ -13,8 +13,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 
 set(PROTOCYTE_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
-set(PROTOCYTE_EXAMPLE_PROTO "${CMAKE_CURRENT_LIST_DIR}/example.proto")
-set(PROTOCYTE_COMPAT_PROTO "${CMAKE_CURRENT_LIST_DIR}/compat.proto")
+set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
+set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
+set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
 set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto/protocyte/options.proto")
 set(PROTOCYTE_OPTIONS_ROOT "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
@@ -84,7 +85,7 @@ if(PROTOCYTE_SMOKE_REGENERATE)
             "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_GENERATED_DIR}"
         COMMAND "${PROTOC_EXECUTABLE}"
-            "--proto_path=${CMAKE_CURRENT_LIST_DIR}"
+            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
             "--proto_path=${PROTOCYTE_OPTIONS_ROOT}"
             "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
             "--protocyte_out=runtime=emit:${PROTOCYTE_GENERATED_DIR}"
@@ -103,7 +104,7 @@ if(PROTOCYTE_SMOKE_REGENERATE)
             "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_GENERATED_DIR}"
         COMMAND "${PROTOC_EXECUTABLE}"
-            "--proto_path=${CMAKE_CURRENT_LIST_DIR}"
+            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
             "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
             "--protocyte_out=namespace_prefix=protocyte_smoke:${PROTOCYTE_GENERATED_DIR}"
             "${PROTOCYTE_COMPAT_PROTO}"

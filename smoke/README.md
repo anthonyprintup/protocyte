@@ -1,7 +1,7 @@
 # Protocyte Smoke Project
 
-This project keeps a checked-in protocyte output fixture for `example.proto` and
-builds two smoke targets:
+This project keeps checked-in protocyte output fixtures for
+`proto/example.proto` and builds two smoke targets:
 
 - `protocyte_host_smoke`: a Catch2-based user-mode C++20 test binary that
   exercises `test.ultimate.UltimateComplexMessage` plus cross-message constant
@@ -28,7 +28,7 @@ cmake --preset windows-clangcl-ninja-driver -S smoke
 cmake --build --preset windows-clangcl-ninja-driver
 ```
 
-Refresh the checked generated output from `example.proto`:
+Refresh the checked generated output from `proto/example.proto`:
 
 ```powershell
 cmake --preset windows-clangcl-ninja -S smoke -DPROTOCYTE_SMOKE_REGENERATE=ON
