@@ -56,6 +56,11 @@ script:
 uv sync
 ```
 
+For a ground-zero walkthrough that covers getting `protoc`, building and
+installing the protocyte package, running `protoc` with the plugin, wiring the
+generated files into a CMake target, and setting up automatic regeneration, see
+[smoke/README.md](smoke/README.md).
+
 Generate code:
 
 ```powershell
