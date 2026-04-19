@@ -22,6 +22,9 @@ namespace {
     using Message = test::ultimate::UltimateComplexMessage<>;
     using Nested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<>;
     using Nested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<>;
+    using RepeatedBytesHolder = test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<>;
+    using BoundedRepeatedBytesHolder = test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<>;
+    using FixedRepeatedBytesHolder = test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<>;
     using Deep = test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<>;
     using Cross = test::ultimate::CrossMessageConstants<>;
     using CrossNested = test::ultimate::CrossMessageConstants_Nested<>;
@@ -69,6 +72,9 @@ namespace {
     constexpr uint8_t kNestedDescription[] = {'i', 'n', 'n', 'e', 'r'};
     constexpr uint8_t kOneofString[] = {'o', 'n', 'e', 'o', 'f', '-', 's', 't', 'r'};
     constexpr uint8_t kOneofBytes[] = {0xdeu, 0xadu, 0xbeu, 0xefu};
+    constexpr uint8_t kCrazyPlainBytes[] = {0x60u, 0x61u, 0x62u, 0x63u, 0x64u};
+    constexpr uint8_t kCrazyBoundedBytes[] = {0x70u, 0x71u, 0x72u, 0x73u};
+    constexpr uint8_t kCrazyFixedBytes[] = {0x80u, 0x81u, 0x82u, 0x83u};
     constexpr uint8_t kMapKey[] = {'m', 'a', 'p', '-', 'k', 'e', 'y'};
     constexpr uint8_t kMapValue[] = {'m', 'a', 'p', '-', 'v', 'a', 'l'};
     constexpr uint8_t kBoolBytes[] = {'b', 'o', 'o', 'l'};
@@ -84,6 +90,10 @@ namespace {
     constexpr uint8_t kNestedBytes[] = {0x80u, 0x81u, 0x82u, 0x83u, 0x84u, 0x85u, 0x86u, 0x87u};
     constexpr uint8_t kLargeByteArray[] = {0x01u, 0x02u, 0x03u, 0x04u, 0x05u};
     constexpr uint8_t kAlternateByteArray[] = {0x55u, 0x66u, 0x77u, 0x88u};
+    constexpr uint8_t kRepeatedBytes0[] = {0x11u};
+    constexpr uint8_t kRepeatedBytes1[] = {0x22u, 0x23u};
+    constexpr uint8_t kRepeatedBytes2[] = {0x34u, 0x35u, 0x36u, 0x37u};
+    constexpr uint8_t kRepeatedBytes3[] = {0x48u, 0x49u, 0x4au};
     constexpr uint8_t kSha256[] = {
         0x10u, 0x21u, 0x32u, 0x43u, 0x54u, 0x65u, 0x76u, 0x87u, 0x98u, 0xa9u, 0xbau, 0xcbu, 0xdcu, 0xedu, 0xfeu, 0x0fu,
         0x1eu, 0x2du, 0x3cu, 0x4bu, 0x5au, 0x69u, 0x78u, 0x87u, 0x96u, 0xa5u, 0xb4u, 0xc3u, 0xd2u, 0xe1u, 0xf0u, 0x0fu,
@@ -148,6 +158,12 @@ namespace {
 
     void assign_bytes(Config::Bytes &out, protocyte::ByteView view) { require_success(out.assign(view)); }
 
+    template<class Container> void append_bytes(Container &out, Config::Context &ctx, protocyte::ByteView view) {
+        Config::Bytes value(&ctx);
+        assign_bytes(value, view);
+        require_success(out.push_back(protocyte::move(value)));
+    }
+
     std::string serialize_compat(const CompatMessage &message) {
         auto encoded_size = message.encoded_size();
         require_success(encoded_size);
@@ -175,10 +191,54 @@ namespace {
         require_success(nested.set_label(label));
     }
 
-    void populate_required_fixed_array(Message &message) {
+    void populate_required_fixed_array(Message &message, Config::Context &ctx) {
         for (size_t i = 0; i < sizeof(kFixedIntegerArray) / sizeof(kFixedIntegerArray[0]); ++i) {
             require_success(message.mutable_fixed_integer_array().push_back(kFixedIntegerArray[i]));
         }
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes0));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes3));
+    }
+
+    template<class Container> void check_three_byte_entries(const Container &values, protocyte::ByteView first,
+                                                            protocyte::ByteView second, protocyte::ByteView third) {
+        REQUIRE(values.size() == 3u);
+        CHECK(view_equal(values[0].view(), first));
+        CHECK(view_equal(values[1].view(), second));
+        CHECK(view_equal(values[2].view(), third));
+    }
+
+    void populate_repeated_bytes_holder(RepeatedBytesHolder &value, Config::Context &ctx) {
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes0));
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes1));
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes2));
+    }
+
+    void check_repeated_bytes_holder(const RepeatedBytesHolder &value) {
+        check_three_byte_entries(value.values(), view_of(kRepeatedBytes0), view_of(kRepeatedBytes1),
+                                 view_of(kRepeatedBytes2));
+    }
+
+    void populate_bounded_repeated_bytes_holder(BoundedRepeatedBytesHolder &value, Config::Context &ctx) {
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes1));
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes3));
+    }
+
+    void check_bounded_repeated_bytes_holder(const BoundedRepeatedBytesHolder &value) {
+        check_three_byte_entries(value.values(), view_of(kRepeatedBytes1), view_of(kRepeatedBytes2),
+                                 view_of(kRepeatedBytes3));
+    }
+
+    void populate_fixed_repeated_bytes_holder(FixedRepeatedBytesHolder &value, Config::Context &ctx) {
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes0));
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(value.mutable_values(), ctx, view_of(kRepeatedBytes3));
+    }
+
+    void check_fixed_repeated_bytes_holder(const FixedRepeatedBytesHolder &value) {
+        check_three_byte_entries(value.values(), view_of(kRepeatedBytes0), view_of(kRepeatedBytes2),
+                                 view_of(kRepeatedBytes3));
     }
 
     bool nested2_matches(const Nested2 &value, protocyte::ByteView description, float first, float second,
@@ -307,7 +367,7 @@ namespace {
         require_success(recursive);
         require_success(recursive.value().get().set_f_string(view_of(kRecursiveString)));
         require_success(recursive.value().get().set_f_int32(350));
-        populate_required_fixed_array(recursive.value().get());
+        populate_required_fixed_array(recursive.value().get(), ctx);
 
         auto nested_item = message.mutable_lots_of_nested().emplace_back(ctx);
         require_success(nested_item);
@@ -320,6 +380,18 @@ namespace {
         require_success(message.set_sha256(view_of(kSha256)));
         require_success(message.set_byte_array(view_of(kByteArray)));
         require_success(message.set_float_expr_array(view_of(kFloatExprArray)));
+        append_bytes(message.mutable_repeated_byte_array(), ctx, view_of(kRepeatedBytes0));
+        append_bytes(message.mutable_repeated_byte_array(), ctx, view_of(kRepeatedBytes1));
+        append_bytes(message.mutable_repeated_byte_array(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(message.mutable_bounded_repeated_byte_array(), ctx, view_of(kRepeatedBytes1));
+        append_bytes(message.mutable_bounded_repeated_byte_array(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(message.mutable_bounded_repeated_byte_array(), ctx, view_of(kRepeatedBytes3));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes0));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes3));
+        auto crazy_fixed_repeated = message.ensure_crazy_fixed_repeated_bytes();
+        require_success(crazy_fixed_repeated);
+        populate_fixed_repeated_bytes_holder(crazy_fixed_repeated.value().get(), ctx);
 
         for (size_t i = 0; i < sizeof(kIntegerArray) / sizeof(kIntegerArray[0]); ++i) {
             require_success(message.mutable_integer_array().push_back(kIntegerArray[i]));
@@ -431,6 +503,9 @@ namespace {
         REQUIRE(parsed.has_oneof_bytes());
         CHECK(parsed.special_oneof_case() == Message::Special_oneofCase::oneof_bytes);
         CHECK(view_equal(parsed.oneof_bytes(), view_of(kOneofBytes)));
+        REQUIRE(parsed.has_crazy_fixed_repeated_bytes());
+        CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes);
+        check_fixed_repeated_bytes_holder(*parsed.crazy_fixed_repeated_bytes());
 
         check_maps(parsed);
 
@@ -457,6 +532,21 @@ namespace {
         CHECK(parsed.byte_array_size() == test::ultimate::BYTE_ARRAY_CAP);
         CHECK(view_equal(parsed.float_expr_array(), view_of(kFloatExprArray)));
         CHECK(parsed.float_expr_array_size() == Message::FLOATISH_BOUND);
+        const auto &repeated_byte_array = parsed.repeated_byte_array();
+        REQUIRE(repeated_byte_array.size() == 3u);
+        CHECK(view_equal(repeated_byte_array[0].view(), view_of(kRepeatedBytes0)));
+        CHECK(view_equal(repeated_byte_array[1].view(), view_of(kRepeatedBytes1)));
+        CHECK(view_equal(repeated_byte_array[2].view(), view_of(kRepeatedBytes2)));
+        const auto &bounded_repeated_byte_array = parsed.bounded_repeated_byte_array();
+        REQUIRE(bounded_repeated_byte_array.size() == 3u);
+        CHECK(view_equal(bounded_repeated_byte_array[0].view(), view_of(kRepeatedBytes1)));
+        CHECK(view_equal(bounded_repeated_byte_array[1].view(), view_of(kRepeatedBytes2)));
+        CHECK(view_equal(bounded_repeated_byte_array[2].view(), view_of(kRepeatedBytes3)));
+        const auto &fixed_repeated_byte_array = parsed.fixed_repeated_byte_array();
+        REQUIRE(fixed_repeated_byte_array.size() == 3u);
+        CHECK(view_equal(fixed_repeated_byte_array[0].view(), view_of(kRepeatedBytes0)));
+        CHECK(view_equal(fixed_repeated_byte_array[1].view(), view_of(kRepeatedBytes2)));
+        CHECK(view_equal(fixed_repeated_byte_array[2].view(), view_of(kRepeatedBytes3)));
 
         const auto &integer_array = parsed.integer_array();
         REQUIRE(integer_array.size() == Message::INTEGER_ARRAY_CAP);
@@ -522,7 +612,7 @@ namespace {
         SECTION("string alternative round trips") {
             Message message(ctx);
             require_success(message.set_oneof_string(view_of(kOneofString)));
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -538,7 +628,7 @@ namespace {
         SECTION("int32 alternative round trips") {
             Message message(ctx);
             require_success(message.set_oneof_int32(2700));
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -556,7 +646,7 @@ namespace {
             auto oneof_msg = message.ensure_oneof_msg();
             require_success(oneof_msg);
             populate_nested1(oneof_msg.value().get(), view_of(kNestedName), 2800);
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -572,7 +662,7 @@ namespace {
         SECTION("bytes alternative round trips") {
             Message message(ctx);
             require_success(message.set_oneof_bytes(view_of(kOneofBytes)));
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -604,7 +694,7 @@ namespace {
         SECTION("new oneof assignment replaces old case") {
             Message first(ctx);
             require_success(first.set_oneof_string(view_of(kOneofString)));
-            populate_required_fixed_array(first);
+            populate_required_fixed_array(first, ctx);
             require_success(first.set_oneof_int32(2701));
 
             uint8_t encoded[256] = {};
@@ -624,7 +714,7 @@ namespace {
             auto first_oneof = first.ensure_oneof_msg();
             require_success(first_oneof);
             require_success(first_oneof.value().get().set_name(view_of(kNestedName)));
-            populate_required_fixed_array(first);
+            populate_required_fixed_array(first, ctx);
             require_success(first.set_oneof_bytes(view_of(kOneofBytes)));
 
             uint8_t encoded[512] = {};
@@ -697,12 +787,162 @@ namespace {
         }
     }
 
+    void check_crazy_bytes_oneof_alternatives(Config::Context &ctx) {
+        SECTION("plain bytes alternative round trips") {
+            Message message(ctx);
+            require_success(message.set_crazy_plain_bytes(view_of(kCrazyPlainBytes)));
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_plain_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_plain_bytes);
+            CHECK(view_equal(parsed.crazy_plain_bytes(), view_of(kCrazyPlainBytes)));
+        }
+
+        SECTION("bounded bytes alternative round trips") {
+            Message message(ctx);
+            require_success(message.set_crazy_bounded_bytes(view_of(kCrazyBoundedBytes)));
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_bounded_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_bounded_bytes);
+            CHECK(view_equal(parsed.crazy_bounded_bytes(), view_of(kCrazyBoundedBytes)));
+        }
+
+        SECTION("fixed bytes alternative round trips") {
+            Message message(ctx);
+            require_success(message.set_crazy_fixed_bytes(view_of(kCrazyFixedBytes)));
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_fixed_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_fixed_bytes);
+            CHECK(view_equal(parsed.crazy_fixed_bytes(), view_of(kCrazyFixedBytes)));
+        }
+
+        SECTION("repeated bytes wrapper alternative round trips") {
+            Message message(ctx);
+            auto crazy_repeated = message.ensure_crazy_repeated_bytes();
+            require_success(crazy_repeated);
+            populate_repeated_bytes_holder(crazy_repeated.value().get(), ctx);
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_repeated_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_repeated_bytes);
+            check_repeated_bytes_holder(*parsed.crazy_repeated_bytes());
+        }
+
+        SECTION("bounded repeated bytes wrapper alternative round trips") {
+            Message message(ctx);
+            auto crazy_bounded = message.ensure_crazy_bounded_repeated_bytes();
+            require_success(crazy_bounded);
+            populate_bounded_repeated_bytes_holder(crazy_bounded.value().get(), ctx);
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_bounded_repeated_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes);
+            check_bounded_repeated_bytes_holder(*parsed.crazy_bounded_repeated_bytes());
+        }
+
+        SECTION("fixed repeated bytes wrapper alternative round trips") {
+            Message message(ctx);
+            auto crazy_fixed = message.ensure_crazy_fixed_repeated_bytes();
+            require_success(crazy_fixed);
+            populate_fixed_repeated_bytes_holder(crazy_fixed.value().get(), ctx);
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_fixed_repeated_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes);
+            check_fixed_repeated_bytes_holder(*parsed.crazy_fixed_repeated_bytes());
+        }
+
+        SECTION("fixed bytes replace repeated wrapper case") {
+            Message message(ctx);
+            auto crazy_repeated = message.ensure_crazy_repeated_bytes();
+            require_success(crazy_repeated);
+            populate_repeated_bytes_holder(crazy_repeated.value().get(), ctx);
+            require_success(message.set_crazy_fixed_bytes(view_of(kCrazyFixedBytes)));
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_fixed_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_fixed_bytes);
+            CHECK(view_equal(parsed.crazy_fixed_bytes(), view_of(kCrazyFixedBytes)));
+        }
+
+        SECTION("fixed repeated wrapper replaces bounded bytes case") {
+            Message message(ctx);
+            require_success(message.set_crazy_bounded_bytes(view_of(kCrazyBoundedBytes)));
+            auto crazy_fixed = message.ensure_crazy_fixed_repeated_bytes();
+            require_success(crazy_fixed);
+            populate_fixed_repeated_bytes_holder(crazy_fixed.value().get(), ctx);
+            populate_required_fixed_array(message, ctx);
+
+            uint8_t encoded[256] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.has_crazy_fixed_repeated_bytes());
+            CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes);
+            check_fixed_repeated_bytes_holder(*parsed.crazy_fixed_repeated_bytes());
+        }
+    }
+
     void check_fixed_array_presence(Config::Context &ctx) {
         SECTION("unset fixed bytes stay absent through round trip") {
             Message message(ctx);
             CHECK_FALSE(message.has_sha256());
             CHECK(message.sha256().size == 0u);
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             auto encoded_size = message.encoded_size();
             require_success(encoded_size);
@@ -736,7 +976,7 @@ namespace {
             constexpr uint8_t kZeroSha256[32] = {};
             require_success(message.set_sha256(view_of(kZeroSha256)));
             REQUIRE(message.has_sha256());
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             auto encoded_size = message.encoded_size();
             require_success(encoded_size);
@@ -783,6 +1023,32 @@ namespace {
                 require_success(integer_array.push_back(kIntegerArray[i]));
             }
             require_failure(integer_array.push_back(999), protocyte::ErrorCode::count_limit);
+        }
+
+        SECTION("bounded repeated bytes reject extra elements") {
+            Message message(ctx);
+            auto &bounded_repeated_byte_array = message.mutable_bounded_repeated_byte_array();
+            append_bytes(bounded_repeated_byte_array, ctx, view_of(kRepeatedBytes0));
+            append_bytes(bounded_repeated_byte_array, ctx, view_of(kRepeatedBytes1));
+            append_bytes(bounded_repeated_byte_array, ctx, view_of(kRepeatedBytes2));
+
+            Config::Bytes overflow(&ctx);
+            assign_bytes(overflow, view_of(kRepeatedBytes3));
+            require_failure(bounded_repeated_byte_array.push_back(protocyte::move(overflow)),
+                            protocyte::ErrorCode::count_limit);
+        }
+
+        SECTION("required fixed repeated bytes must be fully populated before encoding") {
+            Message message(ctx);
+            auto &fixed_repeated_byte_array = message.mutable_fixed_repeated_byte_array();
+            append_bytes(fixed_repeated_byte_array, ctx, view_of(kRepeatedBytes0));
+            append_bytes(fixed_repeated_byte_array, ctx, view_of(kRepeatedBytes1));
+
+            require_failure(message.encoded_size(), protocyte::ErrorCode::invalid_argument);
+
+            uint8_t encoded[64] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_failure(message.serialize(writer), protocyte::ErrorCode::invalid_argument);
         }
 
         SECTION("copy_from self-assignment keeps bounded repeated arrays intact") {
@@ -920,6 +1186,42 @@ namespace {
             protocyte::SliceReader reader(encoded, writer.position());
             require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
         }
+
+        SECTION("bounded repeated bytes reject a fourth parsed element") {
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_bytes_field(
+                writer, static_cast<uint32_t>(Message::FieldNumber::bounded_repeated_byte_array),
+                view_of(kRepeatedBytes0)));
+            require_success(protocyte::write_bytes_field(
+                writer, static_cast<uint32_t>(Message::FieldNumber::bounded_repeated_byte_array),
+                view_of(kRepeatedBytes1)));
+            require_success(protocyte::write_bytes_field(
+                writer, static_cast<uint32_t>(Message::FieldNumber::bounded_repeated_byte_array),
+                view_of(kRepeatedBytes2)));
+            require_success(protocyte::write_bytes_field(
+                writer, static_cast<uint32_t>(Message::FieldNumber::bounded_repeated_byte_array),
+                view_of(kRepeatedBytes3)));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
+        }
+
+        SECTION("partial required fixed repeated bytes are rejected while parsing") {
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_bytes_field(
+                writer, static_cast<uint32_t>(Message::FieldNumber::fixed_repeated_byte_array),
+                view_of(kRepeatedBytes0)));
+            require_success(protocyte::write_bytes_field(
+                writer, static_cast<uint32_t>(Message::FieldNumber::fixed_repeated_byte_array),
+                view_of(kRepeatedBytes1)));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        }
     }
 
     void populate_cross_message(Cross &message) {
@@ -982,6 +1284,11 @@ TEST_CASE("UltimateComplexMessage round-trips", "[smoke][roundtrip]") {
 TEST_CASE("UltimateComplexMessage oneofs merge correctly", "[smoke][oneof]") {
     auto ctx = make_context();
     check_oneof_alternatives(ctx);
+}
+
+TEST_CASE("Crazy bytes oneof variants merge correctly", "[smoke][oneof][bytes]") {
+    auto ctx = make_context();
+    check_crazy_bytes_oneof_alternatives(ctx);
 }
 
 TEST_CASE("Fixed bytes preserve presence semantics", "[smoke][fixed]") {

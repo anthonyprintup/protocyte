@@ -25,6 +25,18 @@ namespace test::ultimate {
             {"inner", 3u, "message", false, true, false},
         };
 
+        static const FieldInfo UltimateComplexMessage_RepeatedBytesHolder_fields[] = {
+            {"values", 1u, "bytes", true, false, false},
+        };
+
+        static const FieldInfo UltimateComplexMessage_BoundedRepeatedBytesHolder_fields[] = {
+            {"values", 1u, "bytes", true, false, false},
+        };
+
+        static const FieldInfo UltimateComplexMessage_FixedRepeatedBytesHolder_fields[] = {
+            {"values", 1u, "bytes", true, false, false},
+        };
+
         static const FieldInfo UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE_fields[] = {
             {"extreme", 1u, "string", false, false, false},
             {"weird_map", 2u, "map", true, false, false},
@@ -57,6 +69,12 @@ namespace test::ultimate {
             {"oneof_int32", 27u, "scalar", false, true, false},
             {"oneof_msg", 28u, "message", false, true, false},
             {"oneof_bytes", 29u, "bytes", false, true, false},
+            {"crazy_plain_bytes", 49u, "bytes", false, true, false},
+            {"crazy_bounded_bytes", 50u, "bytes", false, true, false},
+            {"crazy_fixed_bytes", 51u, "bytes", false, true, false},
+            {"crazy_repeated_bytes", 52u, "message", false, true, false},
+            {"crazy_bounded_repeated_bytes", 53u, "message", false, true, false},
+            {"crazy_fixed_repeated_bytes", 54u, "message", false, true, false},
             {"map_str_int32", 30u, "map", true, false, false},
             {"map_int32_str", 31u, "map", true, false, false},
             {"map_bool_bytes", 32u, "map", true, false, false},
@@ -73,6 +91,9 @@ namespace test::ultimate {
             {"byte_array", 43u, "bytes", false, false, false},
             {"fixed_integer_array", 44u, "scalar", true, false, true},
             {"float_expr_array", 45u, "bytes", false, false, false},
+            {"repeated_byte_array", 46u, "bytes", true, false, false},
+            {"bounded_repeated_byte_array", 47u, "bytes", true, false, false},
+            {"fixed_repeated_byte_array", 48u, "bytes", true, false, false},
         };
 
         static const FieldInfo UltimateComplexMessage_LevelA_fields[] = {};

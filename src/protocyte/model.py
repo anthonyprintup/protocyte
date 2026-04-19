@@ -333,11 +333,11 @@ class FieldModel:
 
     @property
     def fixed_bytes(self) -> bool:
-        return self.kind == "bytes" and self.array_enabled and self.array_fixed
+        return self.kind == "bytes" and not self.repeated and self.array_enabled and self.array_fixed
 
     @property
     def dynamic_bytes(self) -> bool:
-        return self.kind == "bytes" and self.array_enabled and not self.array_fixed
+        return self.kind == "bytes" and not self.repeated and self.array_enabled and not self.array_fixed
 
     @property
     def repeated_array(self) -> bool:
