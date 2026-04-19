@@ -20,10 +20,35 @@ def get_cmake_generator() -> tuple[str, str | None]:
     return "Unix Makefiles", None
 
 
+def find_python(roots: list[Path]) -> Path | None:
+    suffixes = [
+        Path("Scripts/python.exe"),
+        Path("bin/python"),
+        Path("bin/python3"),
+    ]
+    for root in roots:
+        for suffix in suffixes:
+            candidate = root / suffix
+            if candidate.is_file():
+                return candidate.resolve()
+    return None
+
+
 def get_repo_python(repo_root: Path) -> Path:
+    roots: list[Path] = []
+    virtual_env = os.environ.get("VIRTUAL_ENV")
+    if virtual_env:
+        roots.append(Path(virtual_env))
+    roots.append(repo_root / ".venv")
+
+    python_path = find_python(roots)
+    if python_path is not None:
+        return python_path
+
     candidates = [
         repo_root / ".venv" / "Scripts" / "python.exe",
         repo_root / ".venv" / "bin" / "python",
+        repo_root / ".venv" / "bin" / "python3",
     ]
     for candidate in candidates:
         if candidate.is_file():
@@ -90,6 +115,7 @@ def main() -> int:
     hell_env = os.environ.copy()
     python_executable = get_repo_python(repo_root)
     cmake_generator, build_config = get_cmake_generator()
+    print(f"Using Python interpreter for CMake: {python_executable}", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="protocyte-hell-") as temp_dir:
         temp_root = Path(temp_dir)
