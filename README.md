@@ -4,6 +4,20 @@ Protocyte is a Python `protoc` plugin that generates C++20 protobuf code for
 freestanding, embedded, or kernel-style environments. The generated C++ avoids
 the STL, exceptions, RTTI, iostreams, and implicit global allocation.
 
+## AI Disclosure
+
+This repository contains a mix of human-written and AI-assisted work. Some
+source code, documentation, and generated artifacts were drafted or produced
+with the help of AI tools and then reviewed, edited, and accepted by human
+maintainers.
+
+Because this project generates code intended for downstream use, users should
+treat all generated output as needing normal engineering review, testing, and
+validation before production use.
+
+Responsibility for the contents of this repository and its releases remains
+with the human maintainers and contributors.
+
 ## What It Supports
 
 Protocyte currently targets `proto3` schemas and advertises
