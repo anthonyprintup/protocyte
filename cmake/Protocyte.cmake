@@ -25,6 +25,41 @@ set(
     "protocyte generator source files"
 )
 
+function(_protocyte_verify_git_commit source_dir expected_commit repo_name)
+    if("${expected_commit}" STREQUAL "")
+        return()
+    endif()
+
+    if(NOT EXISTS "${source_dir}/.git")
+        message(
+            FATAL_ERROR
+            "Cannot verify ${repo_name} commit '${expected_commit}' because '${source_dir}' has no .git directory. "
+            "Either supply a git checkout or clear/update the expected commit explicitly."
+        )
+    endif()
+
+    find_package(Git REQUIRED)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${source_dir}"
+        OUTPUT_VARIABLE actual_commit
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE git_result
+    )
+
+    if(NOT git_result EQUAL 0)
+        message(FATAL_ERROR "Failed to resolve ${repo_name} commit in '${source_dir}'")
+    endif()
+
+    if(NOT actual_commit STREQUAL expected_commit)
+        message(
+            FATAL_ERROR
+            "Resolved ${repo_name} commit '${actual_commit}' does not match expected commit '${expected_commit}' "
+            "for tag '${PROTOCYTE_PROTOBUF_GIT_TAG}'."
+        )
+    endif()
+endfunction()
+
 function(_protocyte_write_plugin_wrapper)
     if(DEFINED PROTOCYTE_PLUGIN_EXECUTABLE)
         return()
@@ -84,6 +119,12 @@ function(_protocyte_ensure_protobuf)
                 GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
             )
             FetchContent_MakeAvailable(protobuf)
+            FetchContent_GetProperties(protobuf SOURCE_DIR protobuf_source_dir)
+            _protocyte_verify_git_commit(
+                "${protobuf_source_dir}"
+                "${PROTOCYTE_PROTOBUF_GIT_COMMIT}"
+                "protobuf"
+            )
             set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
         else()
             find_program(protoc_executable protoc REQUIRED)

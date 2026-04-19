@@ -13,6 +13,11 @@ set(
     CACHE STRING
     "protobuf git tag used when PROTOCYTE_FETCH_PROTOBUF is enabled."
 )
+set(
+    PROTOCYTE_PROTOBUF_GIT_COMMIT
+    "74211c0dfc2777318ab53c2cd2c317a2ef9012de"
+    CACHE STRING
+    "protobuf commit expected for PROTOCYTE_PROTOBUF_GIT_TAG when PROTOCYTE_FETCH_PROTOBUF is enabled."
+)
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Protocyte.cmake")
-
