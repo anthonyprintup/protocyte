@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import os
 import shutil
 import subprocess
@@ -9,6 +7,8 @@ import tempfile
 from pathlib import Path
 
 import google.protobuf
+
+GATE_URI_ENV = "PROTOCYTE_HELL_GATE_URI"
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
@@ -116,17 +116,11 @@ def require_tool(name: str) -> str:
     return path
 
 
-def write_hell_config(project_dir: Path, gate_dir: Path) -> None:
-    config = {
-        "=": [
-            {
-                "source": gate_dir.resolve().as_uri(),
-                "version": "0.1.0",
-                "required": ["="],
-            }
-        ]
-    }
-    (project_dir / ".hell.json").write_text(f"{json.dumps(config, indent=2)}\n", encoding="utf-8")
+def get_rewriter_script(fixture_root: Path) -> Path:
+    rewriter_script = fixture_root / "rewrite_gate_source.js"
+    if not rewriter_script.is_file():
+        raise RuntimeError(f"required rewriter script was not found at {rewriter_script}")
+    return rewriter_script.resolve()
 
 
 def initialize_gate_repo(gate_dir: Path) -> None:
@@ -159,6 +153,7 @@ def main() -> int:
     fixture_root = Path(__file__).resolve().parent
     gate_template = fixture_root / "gate"
     project_template = fixture_root / "project"
+    rewriter_script = get_rewriter_script(fixture_root)
 
     require_tool("git")
     require_tool("cmake")
@@ -171,6 +166,7 @@ def main() -> int:
     python_package_root = get_python_package_root()
     cmake_generator, build_config = get_cmake_generator()
     prepend_env_path(hell_env, "PATH", node_executable.parent)
+    print(f"Using hell config rewriter: {rewriter_script}", flush=True)
     print(f"Using Node executable for hell: {node_executable}", flush=True)
     print(f"Using Python interpreter for CMake: {python_executable}", flush=True)
     print(f"Using Python package root for CMake: {python_package_root}", flush=True)
@@ -188,7 +184,7 @@ def main() -> int:
         shutil.copytree(project_template, project_dir)
 
         initialize_gate_repo(gate_dir)
-        write_hell_config(project_dir, gate_dir)
+        hell_env[GATE_URI_ENV] = gate_dir.resolve().as_uri()
 
         run(
             [
@@ -199,6 +195,8 @@ def main() -> int:
                 "--cmakeGenerator",
                 cmake_generator,
                 "--no-publish",
+                "--rewriteConfig",
+                str(rewriter_script),
                 "--inject",
                 f"PROTOCYTE_SOURCE_DIR={repo_root}",
             ],

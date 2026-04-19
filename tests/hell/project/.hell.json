@@ -1,0 +1,11 @@
+{
+  "=": [
+    {
+      "source": "__PROTOCYTE_HELL_GATE_URI__",
+      "version": "0.1.0",
+      "required": [
+        "="
+      ]
+    }
+  ]
+}
