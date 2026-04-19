@@ -69,10 +69,12 @@ add_executable(protocyte_host_smoke
     src/host_smoke.cpp
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
 )
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
+target_compile_definitions(protocyte_host_smoke PRIVATE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
-target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain protocyte::runtime_hosted)
+target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain)
 
 if(PROTOCYTE_SMOKE_REGENERATE)
     add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
@@ -95,11 +97,11 @@ if(PROTOCYTE_SMOKE_BUILD_DRIVER)
     wdk_add_driver(protocyte_kernel_smoke
         src/kernel_driver_smoke.cpp
         "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+        "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
     )
     target_include_directories(protocyte_kernel_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
     target_compile_features(protocyte_kernel_smoke PRIVATE cxx_std_20)
     target_compile_options(protocyte_kernel_smoke PRIVATE /std:c++20 /permissive- /W4)
-    target_link_libraries(protocyte_kernel_smoke PRIVATE protocyte::runtime)
 
     if(PROTOCYTE_SMOKE_REGENERATE)
         add_dependencies(protocyte_kernel_smoke protocyte_smoke_regenerate)
