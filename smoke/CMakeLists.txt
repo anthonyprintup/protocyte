@@ -16,19 +16,7 @@ set(PROTOCYTE_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
 set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
 set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
-set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto/protocyte/options.proto")
-set(PROTOCYTE_OPTIONS_ROOT "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
-set(PROTOCYTE_GENERATOR_SOURCES
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/__init__.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/cpp.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/errors.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/main.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/model.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/parameters.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/plugin.py"
-    "${PROTOCYTE_REPO_ROOT}/src/protocyte/runtime.py"
-)
 set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
@@ -38,84 +26,36 @@ set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
 )
 
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+if(PROTOCYTE_SMOKE_REGENERATE)
+    set(PROTOCYTE_FETCH_PROTOBUF "${PROTOCYTE_SMOKE_FETCH_PROTOBUF}")
+else()
+    set(PROTOCYTE_FETCH_PROTOBUF OFF)
+endif()
+add_subdirectory("${PROTOCYTE_REPO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/protocyte")
 
 if(PROTOCYTE_SMOKE_REGENERATE)
-    find_program(PROTOC_EXECUTABLE protoc)
-
-    if(NOT PROTOC_EXECUTABLE AND PROTOCYTE_SMOKE_FETCH_PROTOBUF)
-        set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
-        set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        set(protobuf_BUILD_PROTOBUF_BINARIES ON CACHE BOOL "" FORCE)
-        FetchContent_Declare(
-            protobuf
-            GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-            GIT_TAG v31.1
-        )
-        FetchContent_MakeAvailable(protobuf)
-        set(PROTOC_EXECUTABLE "$<TARGET_FILE:protoc>")
-    endif()
-
-    if(NOT PROTOC_EXECUTABLE)
-        message(FATAL_ERROR "protoc was not found. Enable PROTOCYTE_SMOKE_FETCH_PROTOBUF or install protoc.")
-    endif()
-
-    if(WIN32)
-        set(PROTOCYTE_PLUGIN_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte.cmd")
-        file(WRITE "${PROTOCYTE_PLUGIN_WRAPPER}"
-            "@echo off\r\n"
-            "set PYTHONPATH=${PROTOCYTE_REPO_ROOT}/src;%PYTHONPATH%\r\n"
-            "\"${Python3_EXECUTABLE}\" -m protocyte.main\r\n"
-        )
-    else()
-        set(PROTOCYTE_PLUGIN_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte")
-        file(WRITE "${PROTOCYTE_PLUGIN_WRAPPER}"
-            "#!/usr/bin/env sh\n"
-            "PYTHONPATH='${PROTOCYTE_REPO_ROOT}/src':$PYTHONPATH exec '${Python3_EXECUTABLE}' -m protocyte.main\n"
-        )
-        file(CHMOD "${PROTOCYTE_PLUGIN_WRAPPER}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-    endif()
-
-    add_custom_command(
-        OUTPUT
-            "${PROTOCYTE_GENERATED_DIR}/example.protocyte.hpp"
-            "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
-            "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
-            "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_GENERATED_DIR}"
-        COMMAND "${PROTOC_EXECUTABLE}"
-            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
-            "--proto_path=${PROTOCYTE_OPTIONS_ROOT}"
-            "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
-            "--protocyte_out=runtime=emit:${PROTOCYTE_GENERATED_DIR}"
-            "${PROTOCYTE_EXAMPLE_PROTO}"
-        DEPENDS
-            "${PROTOCYTE_EXAMPLE_PROTO}"
-            "${PROTOCYTE_OPTIONS_PROTO}"
-            ${PROTOCYTE_GENERATOR_SOURCES}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
-        VERBATIM
+    protocyte_generate(
+        TARGET protocyte_smoke_example_codegen
+        PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
+        OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
+        PROTOS "${PROTOCYTE_EXAMPLE_PROTO}"
+        EMIT_RUNTIME
     )
 
-    add_custom_command(
-        OUTPUT
-            "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.hpp"
-            "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_GENERATED_DIR}"
-        COMMAND "${PROTOC_EXECUTABLE}"
-            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
-            "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
-            "--protocyte_out=namespace_prefix=protocyte_smoke:${PROTOCYTE_GENERATED_DIR}"
-            "${PROTOCYTE_COMPAT_PROTO}"
-        DEPENDS
-            "${PROTOCYTE_COMPAT_PROTO}"
-            ${PROTOCYTE_GENERATOR_SOURCES}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
-        VERBATIM
+    protocyte_generate(
+        TARGET protocyte_smoke_compat_codegen
+        PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
+        OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
+        PROTOS "${PROTOCYTE_COMPAT_PROTO}"
+        OPTIONS "namespace_prefix=protocyte_smoke"
     )
 
-    add_custom_target(protocyte_smoke_regenerate DEPENDS ${PROTOCYTE_GENERATED_FILES})
+    add_custom_target(protocyte_smoke_regenerate)
+    add_dependencies(
+        protocyte_smoke_regenerate
+        protocyte_smoke_example_codegen
+        protocyte_smoke_compat_codegen
+    )
 endif()
 
 FetchContent_Declare(

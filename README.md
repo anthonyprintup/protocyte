@@ -73,6 +73,39 @@ The plugin emits:
 - `foo.protocyte.cpp`
 - `protocyte/runtime/runtime.hpp` and `runtime.cpp` when runtime emission is enabled
 
+## CMake FetchContent
+
+Protocyte also ships a CMake integration layer for downstream projects that use
+`FetchContent`.
+
+Minimal setup:
+
+```cmake
+include(FetchContent)
+
+FetchContent_Declare(
+    protocyte
+    GIT_REPOSITORY https://github.com/anthonyprintup/protocyte.git
+    GIT_TAG main
+)
+FetchContent_MakeAvailable(protocyte)
+
+protocyte_generate(
+    TARGET demo_proto_codegen
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    DISCOVER
+    EMIT_RUNTIME
+)
+```
+
+By default, the protocyte CMake project fetches protobuf when protobuf CMake
+targets are not already available, then exposes the `protocyte_generate(...)`
+helper for wiring generated outputs into your own targets.
+
+The full end-to-end example, including creating a static library from generated
+translation units, is in [smoke/README.md](smoke/README.md).
+
 ## Plugin Parameters
 
 Supported `--protocyte_out=` parameters:
