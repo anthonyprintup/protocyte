@@ -73,6 +73,9 @@ namespace test::ultimate {
             {"byte_array", 43u, "bytes", false, false, false},
             {"fixed_integer_array", 44u, "scalar", true, false, true},
             {"float_expr_array", 45u, "bytes", false, false, false},
+            {"repeated_byte_array", 46u, "bytes", true, false, false},
+            {"bounded_repeated_byte_array", 47u, "bytes", true, false, false},
+            {"fixed_repeated_byte_array", 48u, "bytes", true, false, false},
         };
 
         static const FieldInfo UltimateComplexMessage_LevelA_fields[] = {};

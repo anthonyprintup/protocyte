@@ -188,6 +188,9 @@ message UltimateComplexMessage {
   bytes byte_array = 43 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
   repeated uint32 fixed_integer_array = 44 [(protocyte.array) = { expr: "FIXED_INTEGER_ARRAY_CAP" }, (protocyte.fixed) = true];
   bytes float_expr_array = 45 [(protocyte.array) = { expr: "FLOATISH_BOUND" }];
+  repeated bytes repeated_byte_array = 46;
+  repeated bytes bounded_repeated_byte_array = 47 [(protocyte.array) = { max: 3 }];
+  repeated bytes fixed_repeated_byte_array = 48 [(protocyte.array) = { max: 3 }, (protocyte.fixed) = true];
 }
 
 // -----------------------------------------------------------------------------

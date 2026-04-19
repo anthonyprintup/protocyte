@@ -312,6 +312,12 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     fixed_integer_array.options.ParseFromString(array_option_bytes(expr="FIXED_INTEGER_ARRAY_CAP", fixed=True))
     float_expr_array = add_field(msg, "float_expr_array", 45, F.TYPE_BYTES)
     float_expr_array.options.ParseFromString(array_option_bytes(expr="FLOATISH_BOUND"))
+    add_field(msg, "repeated_byte_array", 46, F.TYPE_BYTES, label=F.LABEL_REPEATED)
+    bounded_repeated_byte_array = add_field(msg, "bounded_repeated_byte_array", 47, F.TYPE_BYTES,
+                                            label=F.LABEL_REPEATED)
+    bounded_repeated_byte_array.options.ParseFromString(array_option_bytes(max_value=3))
+    fixed_repeated_byte_array = add_field(msg, "fixed_repeated_byte_array", 48, F.TYPE_BYTES, label=F.LABEL_REPEATED)
+    fixed_repeated_byte_array.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
 
     extra = file.message_type.add()
     extra.name = "ExtraMessage"
