@@ -20,6 +20,17 @@ def get_cmake_generator() -> tuple[str, str | None]:
     return "Unix Makefiles", None
 
 
+def get_repo_python(repo_root: Path) -> Path:
+    candidates = [
+        repo_root / ".venv" / "Scripts" / "python.exe",
+        repo_root / ".venv" / "bin" / "python",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return Path(sys.executable).resolve()
+
+
 def require_tool(name: str) -> str:
     path = shutil.which(name)
     if path is None:
@@ -77,7 +88,7 @@ def main() -> int:
     require_tool("hell")
 
     hell_env = os.environ.copy()
-    python_executable = Path(sys.executable).resolve()
+    python_executable = get_repo_python(repo_root)
     cmake_generator, build_config = get_cmake_generator()
 
     with tempfile.TemporaryDirectory(prefix="protocyte-hell-") as temp_dir:
