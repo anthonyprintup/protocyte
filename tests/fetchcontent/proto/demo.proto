@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package fetchcontent.demo;
+
+import "common.proto";
+import "protocyte/options.proto";
+
+message Envelope {
+  fetchcontent.common.Header header = 1;
+  uint32 id = 2;
+  bytes payload = 3 [(protocyte.array) = { max: 3 }];
+}
+
