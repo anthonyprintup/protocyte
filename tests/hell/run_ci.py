@@ -8,6 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import google.protobuf
+
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
     print(f"+ ({cwd}) {' '.join(command)}", flush=True)
@@ -18,6 +20,14 @@ def get_cmake_generator() -> tuple[str, str | None]:
     if os.name == "nt":
         return "Visual Studio 17 2022", "Release"
     return "Unix Makefiles", None
+
+
+def prepend_env_path(env: dict[str, str], key: str, value: Path) -> None:
+    current = env.get(key)
+    if current:
+        env[key] = f"{value}{os.pathsep}{current}"
+    else:
+        env[key] = str(value)
 
 
 def find_python(roots: list[Path]) -> Path | None:
@@ -39,6 +49,8 @@ def get_repo_python(repo_root: Path) -> Path:
     virtual_env = os.environ.get("VIRTUAL_ENV")
     if virtual_env:
         roots.append(Path(virtual_env))
+    if sys.prefix != sys.base_prefix:
+        roots.append(Path(sys.prefix))
     roots.append(repo_root / ".venv")
 
     python_path = find_python(roots)
@@ -54,6 +66,47 @@ def get_repo_python(repo_root: Path) -> Path:
         if candidate.is_file():
             return candidate.resolve()
     return Path(sys.executable).resolve()
+
+
+def get_python_package_root() -> Path:
+    return Path(google.protobuf.__file__).resolve().parents[2]
+
+
+def get_hell_command() -> str:
+    candidates: list[str | Path] = ["hell"]
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        candidates = ["hell.cmd", "hell"]
+        if appdata:
+            candidates.insert(0, Path(appdata) / "npm" / "hell.cmd")
+    for candidate in candidates:
+        path = shutil.which(candidate)
+        if path is not None:
+            return path
+        if isinstance(candidate, Path) and candidate.is_file():
+            return str(candidate.resolve())
+    raise RuntimeError("required tool 'hell' was not found on PATH")
+
+
+def get_node_executable() -> Path:
+    path = shutil.which("node")
+    if path is not None:
+        return Path(path).resolve()
+
+    if os.name == "nt":
+        candidates: list[Path] = []
+        for env_name in ("NVM_SYMLINK", "ProgramFiles", "ProgramFiles(x86)"):
+            root = os.environ.get(env_name)
+            if root:
+                candidates.append(Path(root) / "nodejs" / "node.exe")
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            candidates.append(Path(local_appdata) / "Programs" / "nodejs" / "node.exe")
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate.resolve()
+
+    raise RuntimeError("required tool 'node' was not found on PATH")
 
 
 def require_tool(name: str) -> str:
@@ -110,12 +163,20 @@ def main() -> int:
     require_tool("git")
     require_tool("cmake")
     require_tool("ctest")
-    require_tool("hell")
+    hell_command = get_hell_command()
+    node_executable = get_node_executable()
 
     hell_env = os.environ.copy()
     python_executable = get_repo_python(repo_root)
+    python_package_root = get_python_package_root()
     cmake_generator, build_config = get_cmake_generator()
+    prepend_env_path(hell_env, "PATH", node_executable.parent)
+    print(f"Using Node executable for hell: {node_executable}", flush=True)
     print(f"Using Python interpreter for CMake: {python_executable}", flush=True)
+    print(f"Using Python package root for CMake: {python_package_root}", flush=True)
+
+    build_env = os.environ.copy()
+    prepend_env_path(build_env, "PYTHONPATH", python_package_root)
 
     with tempfile.TemporaryDirectory(prefix="protocyte-hell-") as temp_dir:
         temp_root = Path(temp_dir)
@@ -131,7 +192,7 @@ def main() -> int:
 
         run(
             [
-                "hell",
+                hell_command,
                 "--install",
                 "--required",
                 "=",
@@ -162,16 +223,17 @@ def main() -> int:
                 "-DPROTOCYTE_FETCH_PROTOBUF=ON",
             ],
             cwd=repo_root,
+            env=build_env,
         )
         build_command = ["cmake", "--build", str(build_dir)]
         if build_config is not None:
             build_command.extend(["--config", build_config])
-        run(build_command, cwd=repo_root)
+        run(build_command, cwd=repo_root, env=build_env)
 
         ctest_command = ["ctest", "--test-dir", str(build_dir), "--output-on-failure"]
         if build_config is not None:
             ctest_command.extend(["-C", build_config])
-        run(ctest_command, cwd=repo_root)
+        run(ctest_command, cwd=repo_root, env=build_env)
 
     return 0
 
