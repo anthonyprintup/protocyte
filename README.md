@@ -84,6 +84,7 @@ Protocyte ships custom protobuf options in
 
 Available extensions:
 
+- `option (protocyte.package_constant) = { ... };` on files.
 - `option (protocyte.constant) = { ... };` on messages.
 - `(protocyte.array) = { max: ... }` or `(protocyte.array) = { expr: ... }` on fields.
 - `(protocyte.fixed) = true` on fields that also use `protocyte.array`.
@@ -101,14 +102,26 @@ This is not valid protobuf extension syntax:
 bytes sha256 = 1 [protocyte.array = { max: 32 }];
 ```
 
+### Package Constants
+
+Package constants are declared as repeated file options and are emitted as
+namespace-scope `inline constexpr` declarations in the generated C++:
+
+```proto
+option (protocyte.package_constant) = { name: "CAP", kind: UINT32, literal: "32" };
+option (protocyte.package_constant) = { name: "LABEL", kind: STRING, literal: "pkt" };
+```
+
+Package constants can reference other package constants from the same package.
+
 ### Message Constants
 
 Message constants are declared as repeated message options:
 
 ```proto
 message Packet {
-  option (protocyte.constant) = { name: "CAP", kind: UINT32, literal: "32" };
-  option (protocyte.constant) = { name: "LABEL", kind: STRING, literal: "pkt" };
+  option (protocyte.constant) = { name: "DOUBLE_CAP", kind: UINT32, expr: "CAP * 2" };
+  option (protocyte.constant) = { name: "FULL_LABEL", kind: STRING, expr: "LABEL + \"-frame\"" };
 }
 ```
 
@@ -127,8 +140,10 @@ Constants can be referenced from `array.expr`. Resolution works:
 
 - Within the current message.
 - Through enclosing messages.
+- Through package constants from the current package.
 - Across messages with qualified root-relative names such as
   `Outer.Inner.CAPACITY`.
+- Through package-qualified constants such as `my.pkg.CAPACITY`.
 
 Supported expression features:
 
@@ -161,8 +176,10 @@ message Digest {
 ```
 
 ```proto
+option (protocyte.package_constant) = { name: "CAP", kind: UINT32, literal: "16" };
+
 message Samples {
-  option (protocyte.constant) = { name: "CAP", kind: UINT32, literal: "16" };
+  option (protocyte.constant) = { name: "DOUBLE_CAP", kind: UINT32, expr: "CAP * 2" };
   repeated int32 values = 1 [(protocyte.array) = { expr: "CAP" }];
   repeated uint32 lanes = 2 [(protocyte.array) = { expr: "4" }, (protocyte.fixed) = true];
 }

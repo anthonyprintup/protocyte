@@ -4,6 +4,7 @@
 #define PROTOCYTE_GENERATED_EXAMPLE_PROTO_HPP
 
 #include <protocyte/runtime/runtime.hpp>
+
 #include <string_view>
 
 namespace test::ultimate {
@@ -21,6 +22,10 @@ namespace test::ultimate {
         B = 2,
         C = 3,
     };
+
+    inline constexpr ::protocyte::i32 BASE_COUNT {5};
+    inline constexpr ::std::string_view PREFIX {"proto", 5u};
+    inline constexpr ::protocyte::u32 BYTE_ARRAY_CAP {4u};
 
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1_NestedLevel2;
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1;
@@ -1024,7 +1029,6 @@ namespace test::ultimate {
         template<typename NestedConfig = Config> using NestedLevel1 = UltimateComplexMessage_NestedLevel1<NestedConfig>;
         template<typename NestedConfig = Config> using LevelA = UltimateComplexMessage_LevelA<NestedConfig>;
 
-        static constexpr ::protocyte::i32 BASE_COUNT {5};
         static constexpr ::protocyte::i64 SHIFTED_COUNT {5000000000};
         static constexpr ::protocyte::u64 MASK_BITS {1234567890123456789ull};
         static constexpr ::protocyte::f32 FLOAT_SCALE {1.25f};
@@ -1033,14 +1037,12 @@ namespace test::ultimate {
         static constexpr ::protocyte::u32 HEX_LITERAL {32u};
         static constexpr ::protocyte::u32 HEX_SUM {24u};
         static constexpr ::protocyte::u32 INTEGER_ARRAY_CAP {8u};
-        static constexpr ::std::string_view PREFIX {"proto", 5u};
         static constexpr ::std::string_view LABEL {"proto-demo", 10u};
         static constexpr ::std::string_view UNICODE_LABEL {"\xc4"
                                                            "\x80"
                                                            "\xc3"
                                                            "\xa9",
                                                            4u};
-        static constexpr ::protocyte::u32 BYTE_ARRAY_CAP {4u};
         static constexpr ::protocyte::u32 FIXED_INTEGER_ARRAY_CAP {3u};
         static constexpr ::protocyte::u32 FLOATISH_BOUND {2u};
         static constexpr bool GT_CHECK {true};
@@ -4993,7 +4995,7 @@ namespace test::ultimate {
 
         ::protocyte::ByteView external_bytes() const noexcept { return external_bytes_.view(); }
         ::protocyte::usize external_bytes_size() const noexcept { return external_bytes_.size(); }
-        static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return 4u + 2u; }
+        static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return BYTE_ARRAY_CAP + 2u; }
         ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
             if (const auto st = external_bytes_.resize(size); !st) {
                 return st;
@@ -5064,7 +5066,7 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
-                        if (len.value() > 4u + 2u) {
+                        if (len.value() > BYTE_ARRAY_CAP + 2u) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
@@ -5249,7 +5251,7 @@ namespace test::ultimate {
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<4u + 2u> external_bytes_;
+        ::protocyte::ByteArray<BYTE_ARRAY_CAP + 2u> external_bytes_;
         ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> mirrored_values_;
         typename Config::template Optional<::test::ultimate::CrossMessageConstants_Nested<Config>> nested_;
     };

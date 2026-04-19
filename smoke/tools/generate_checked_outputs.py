@@ -101,13 +101,21 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     file.syntax = "proto3"
     file.options.optimize_for = descriptor_pb2.FileOptions.SPEED
     file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        package_constant_options_bytes(
+            [
+                ("BASE_COUNT", 2, "5", None),
+                ("PREFIX", 8, None, 'substr("protocyte", 0, 5)'),
+                ("BYTE_ARRAY_CAP", 4, None, "len(PREFIX) - 1"),
+            ]
+        )
+    )
 
     msg = file.message_type.add()
     msg.name = "UltimateComplexMessage"
     msg.options.ParseFromString(
         constant_options_bytes(
             [
-                ("BASE_COUNT", 2, "5", None),
                 ("SHIFTED_COUNT", 3, None, "BASE_COUNT * 1000000000"),
                 ("MASK_BITS", 5, "1234567890123456789", None),
                 ("FLOAT_SCALE", 6, "1.25", None),
@@ -116,10 +124,8 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
                 ("HEX_LITERAL", 4, "0x20", None),
                 ("HEX_SUM", 4, None, "0x10 + 0x8"),
                 ("INTEGER_ARRAY_CAP", 4, None, "(BASE_COUNT * 2) - 2"),
-                ("PREFIX", 8, None, 'substr("protocyte", 0, 5)'),
                 ("LABEL", 8, None, 'PREFIX + "-demo"'),
                 ("UNICODE_LABEL", 8, chr(0x0100) + chr(0x00E9), None),
-                ("BYTE_ARRAY_CAP", 4, None, "len(PREFIX) - 1"),
                 ("FIXED_INTEGER_ARRAY_CAP", 4, None, "BASE_COUNT - 2"),
                 ("FLOATISH_BOUND", 4, None, "4 / 2.0"),
                 ("GT_CHECK", 1, None, "BASE_COUNT > 4"),
@@ -318,13 +324,13 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
         constant_options_bytes(
             [
                 ("ROOT_MIRROR", 4, None, "UltimateComplexMessage.INTEGER_ARRAY_CAP + 2"),
-                ("LABEL_COPY", 8, None, 'UltimateComplexMessage.PREFIX + "-cross"'),
+                ("LABEL_COPY", 8, None, 'PREFIX + "-cross"'),
                 ("READY", 1, None, "UltimateComplexMessage.HAS_PREFIX && (ROOT_MIRROR == 10)"),
             ]
         )
     )
     external_bytes = add_field(cross, "external_bytes", 1, F.TYPE_BYTES)
-    external_bytes.options.ParseFromString(array_option_bytes(expr="UltimateComplexMessage.BYTE_ARRAY_CAP + 2"))
+    external_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP + 2"))
     mirrored_values = add_field(cross, "mirrored_values", 2, F.TYPE_INT32, label=F.LABEL_REPEATED)
     mirrored_values.options.ParseFromString(array_option_bytes(expr="ROOT_MIRROR"))
 
@@ -333,7 +339,7 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     nested_cross.options.ParseFromString(
         constant_options_bytes(
             [
-                ("EXTERNAL_CAP", 4, None, "UltimateComplexMessage.BASE_COUNT + 3"),
+                ("EXTERNAL_CAP", 4, None, "BASE_COUNT + 3"),
             ]
         )
     )
@@ -547,6 +553,14 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.extendee = ".google.protobuf.MessageOptions"
 
     ext = file.extension.add()
+    ext.name = "package_constant"
+    ext.number = 50002
+    ext.label = F.LABEL_REPEATED
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.StructConstant"
+    ext.extendee = ".google.protobuf.FileOptions"
+
+    ext = file.extension.add()
     ext.name = "array"
     ext.number = 50000
     ext.label = F.LABEL_OPTIONAL
@@ -618,6 +632,26 @@ def constant_options_bytes(constants: list[tuple[str, int, str | None, str | Non
     constant_ext = pool.FindExtensionByName("protocyte.constant")
 
     options = message_options_cls()
+    for name, kind, literal, expr in constants:
+        item = options.Extensions[constant_ext].add()
+        item.name = name
+        item.kind = kind
+        if literal is not None:
+            item.literal = literal
+        if expr is not None:
+            item.expr = expr
+    return options.SerializeToString()
+
+
+def package_constant_options_bytes(constants: list[tuple[str, int, str | None, str | None]]) -> bytes:
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(options_file())
+    file_options_desc = pool.FindMessageTypeByName("google.protobuf.FileOptions")
+    file_options_cls = message_factory.GetMessageClass(file_options_desc)
+    constant_ext = pool.FindExtensionByName("protocyte.package_constant")
+
+    options = file_options_cls()
     for name, kind, literal, expr in constants:
         item = options.Extensions[constant_ext].add()
         item.name = name

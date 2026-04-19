@@ -31,7 +31,7 @@ namespace {
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
 
-    static_assert(Message::BASE_COUNT == 5);
+    static_assert(test::ultimate::BASE_COUNT == 5);
     static_assert(Message::SHIFTED_COUNT == 5000000000ll);
     static_assert(Message::MASK_BITS == 1234567890123456789ull);
     static_assert(Message::FLOAT_SCALE == 1.25f);
@@ -40,7 +40,7 @@ namespace {
     static_assert(Message::HEX_LITERAL == 32u);
     static_assert(Message::HEX_SUM == 24u);
     static_assert(Message::INTEGER_ARRAY_CAP == 8u);
-    static_assert(Message::BYTE_ARRAY_CAP == 4u);
+    static_assert(test::ultimate::BYTE_ARRAY_CAP == 4u);
     static_assert(Message::FIXED_INTEGER_ARRAY_CAP == 3u);
     static_assert(Message::FLOATISH_BOUND == 2u);
     static_assert(Message::GT_CHECK);
@@ -50,7 +50,7 @@ namespace {
     static_assert(Message::HAS_PREFIX);
     static_assert(Message::MOD_CHECK == 1);
     static_assert(Message::OR_CHECK);
-    static_assert(Message::PREFIX == std::string_view {"proto", 5u});
+    static_assert(test::ultimate::PREFIX == std::string_view {"proto", 5u});
     static_assert(Message::LABEL == std::string_view {"proto-demo", 10u});
     static_assert(Message::UNICODE_LABEL == std::string_view {"\xc4"
                                                               "\x80"
@@ -93,9 +93,9 @@ namespace {
     constexpr uint32_t kFixedIntegerArray[] = {901u, 902u, 903u};
     constexpr uint8_t kShortSha256[31] = {};
 
-    static_assert(sizeof(kByteArray) == Message::BYTE_ARRAY_CAP);
+    static_assert(sizeof(kByteArray) == test::ultimate::BYTE_ARRAY_CAP);
     static_assert(sizeof(kFloatExprArray) == Message::FLOATISH_BOUND);
-    static_assert(sizeof(kExternalBytes) == Message::BYTE_ARRAY_CAP + 2u);
+    static_assert(sizeof(kExternalBytes) == test::ultimate::BYTE_ARRAY_CAP + 2u);
     static_assert(sizeof(kNestedBytes) == CrossNested::EXTERNAL_CAP);
     static_assert(sizeof(kIntegerArray) / sizeof(kIntegerArray[0]) == Message::INTEGER_ARRAY_CAP);
     static_assert(sizeof(kMirroredValues) / sizeof(kMirroredValues[0]) == Cross::ROOT_MIRROR);
@@ -454,7 +454,7 @@ namespace {
 
         CHECK(view_equal(parsed.sha256(), view_of(kSha256)));
         CHECK(view_equal(parsed.byte_array(), view_of(kByteArray)));
-        CHECK(parsed.byte_array_size() == Message::BYTE_ARRAY_CAP);
+        CHECK(parsed.byte_array_size() == test::ultimate::BYTE_ARRAY_CAP);
         CHECK(view_equal(parsed.float_expr_array(), view_of(kFloatExprArray)));
         CHECK(parsed.float_expr_array_size() == Message::FLOATISH_BOUND);
 
@@ -583,7 +583,7 @@ namespace {
             require_success(parsed.merge_from(reader));
             REQUIRE(parsed.has_oneof_bytes());
             CHECK(view_equal(parsed.oneof_bytes(), view_of(kOneofBytes)));
-            CHECK(parsed.oneof_bytes().size == Message::BYTE_ARRAY_CAP);
+            CHECK(parsed.oneof_bytes().size == test::ultimate::BYTE_ARRAY_CAP);
         }
 
         SECTION("deep oneof alternative round trips") {
@@ -759,17 +759,18 @@ namespace {
         SECTION("byte array capacity is enforced") {
             Message message(ctx);
             CHECK(message.byte_array_size() == 0u);
-            CHECK(Message::byte_array_max_size() == Message::BYTE_ARRAY_CAP);
+            CHECK(Message::byte_array_max_size() == test::ultimate::BYTE_ARRAY_CAP);
             CHECK(Message::float_expr_array_max_size() == Message::FLOATISH_BOUND);
 
-            require_success(message.resize_byte_array(Message::BYTE_ARRAY_CAP));
-            REQUIRE(message.byte_array_size() == Message::BYTE_ARRAY_CAP);
+            require_success(message.resize_byte_array(test::ultimate::BYTE_ARRAY_CAP));
+            REQUIRE(message.byte_array_size() == test::ultimate::BYTE_ARRAY_CAP);
             for (size_t i = 0; i < message.byte_array().size; ++i) { CHECK(message.byte_array().data[i] == 0u); }
 
             message.clear_byte_array();
             CHECK(message.byte_array_size() == 0u);
 
-            require_failure(message.resize_byte_array(Message::BYTE_ARRAY_CAP + 1u), protocyte::ErrorCode::count_limit);
+            require_failure(message.resize_byte_array(test::ultimate::BYTE_ARRAY_CAP + 1u),
+                            protocyte::ErrorCode::count_limit);
             require_failure(message.set_byte_array(view_of(kLargeByteArray)), protocyte::ErrorCode::count_limit);
             require_success(message.set_float_expr_array(view_of(kFloatExprArray)));
             require_failure(message.set_float_expr_array(view_of(kByteArray)), protocyte::ErrorCode::count_limit);

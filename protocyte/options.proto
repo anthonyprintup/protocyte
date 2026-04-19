@@ -36,6 +36,10 @@ extend google.protobuf.MessageOptions {
   repeated StructConstant constant = 50000;
 }
 
+extend google.protobuf.FileOptions {
+  repeated StructConstant package_constant = 50002;
+}
+
 extend google.protobuf.FieldOptions {
   ArrayOptions array = 50000;
   bool fixed = 50001;

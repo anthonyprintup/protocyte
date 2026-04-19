@@ -161,14 +161,20 @@ def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
     w.line(f"#ifndef {guard}")
     w.line(f"#define {guard}")
     w.line()
-    if _file_uses_string_view(file_model):
-        w.line("#include <string_view>")
     w.line(f"#include <{options.runtime_prefix}/runtime.hpp>")
+    extra_includes: list[str] = []
+    if _file_uses_string_view(file_model):
+        extra_includes.append("#include <string_view>")
     for dependency in sorted(file_model.dependencies):
-        w.line(f'#include "{_include_path(dependency, options)}"')
+        extra_includes.append(f'#include "{_include_path(dependency, options)}"')
+    if extra_includes:
+        w.line()
+        for include in extra_includes:
+            w.line(include)
     w.line()
     _open_namespace(w, _namespace_parts(file_model, options))
     _emit_enums(w, file_model)
+    _emit_file_constants(w, file_model)
     for message in _ordered_messages(file_model):
         w.line("template <typename Config = ::protocyte::DefaultConfig>")
         w.line(f"struct {message.cpp_name};")
@@ -231,6 +237,14 @@ def _emit_constants(w: CppWriter, message: MessageModel) -> None:
         return
     for constant in message.constants:
         w.line(f"static constexpr {constant.cpp_type} {constant.cpp_name} {{{constant.cpp_value}}};")
+    w.line()
+
+
+def _emit_file_constants(w: CppWriter, file_model: FileModel) -> None:
+    if not file_model.constants:
+        return
+    for constant in file_model.constants:
+        w.line(f"inline constexpr {constant.cpp_type} {constant.cpp_name} {{{constant.cpp_value}}};")
     w.line()
 
 
@@ -1732,6 +1746,8 @@ def _runtime_scalar_type(cpp_type: str) -> str:
 
 
 def _file_uses_string_view(file_model: FileModel) -> bool:
+    if any(constant.kind == CONSTANT_KIND_STRING for constant in file_model.constants):
+        return True
     for message in _walk_messages(file_model.messages):
         if any(constant.kind == CONSTANT_KIND_STRING for constant in message.constants):
             return True

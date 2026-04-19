@@ -211,6 +211,7 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
 def test_model_decodes_constants_and_array_options() -> None:
     model = build_model(_constant_array_request())
 
+    file_constants = {constant.name: constant for constant in model.files["arrays.proto"].constants}
     holder = model.messages["demo.Holder"]
     nested = model.messages["demo.Holder.Nested"]
     constants = {constant.name: constant for constant in holder.constants}
@@ -218,6 +219,9 @@ def test_model_decodes_constants_and_array_options() -> None:
     fields = {field.name: field for field in holder.fields}
     nested_fields = {field.name: field for field in nested.fields}
 
+    assert file_constants["FILE_CAP"].value == 16
+    assert file_constants["FILE_LABEL"].value == "ell"
+    assert file_constants["FILE_READY"].value is True
     assert constants["MAGIC_NUMBER"].value == 16
     assert constants["DOUBLE_MAGIC"].value == 32
     assert constants["HEX_MAGIC"].value == 32
@@ -227,11 +231,13 @@ def test_model_decodes_constants_and_array_options() -> None:
     assert fields["digest"].array_max == 32
     assert fields["digest"].array_fixed is True
     assert fields["blob"].array_max == 16
+    assert fields["blob"].array_cpp_max == "FILE_CAP"
     assert fields["hex_blob"].array_max == 16
     assert fields["hex_blob"].array_cpp_max == "0x8u + 0x8u"
     assert fields["values"].array_max == 4
     assert fields["values"].repeated_array is True
-    assert nested_fields["payload"].array_max == 32
+    assert nested_fields["payload"].array_max == 16
+    assert nested_fields["payload"].array_cpp_max == "FILE_CAP"
 
 
 def test_generated_header_emits_constants_and_array_storage() -> None:
@@ -242,7 +248,11 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     header = files["arrays.protocyte.hpp"]
     runtime_header = files["protocyte/runtime/runtime.hpp"]
 
+    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
     assert "#include <string_view>" in header
+    assert "inline constexpr ::protocyte::u32 FILE_CAP {16u};" in header
+    assert 'inline constexpr ::std::string_view FILE_LABEL {"ell", 3u};' in header
+    assert "inline constexpr bool FILE_READY {true};" in header
     assert "static constexpr ::protocyte::i32 MAGIC_NUMBER {16};" in header
     assert "static constexpr ::protocyte::i32 DOUBLE_MAGIC {32};" in header
     assert "static constexpr ::protocyte::u32 HEX_MAGIC {32u};" in header
@@ -250,7 +260,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert 'static constexpr ::std::string_view LABEL {"ell", 3u};' in header
     assert "static constexpr bool HAS_PREFIX {true};" in header
     assert "::protocyte::FixedByteArray<DOUBLE_MAGIC> digest_;" in header
-    assert "::protocyte::ByteArray<16u> blob_;" in header
+    assert "::protocyte::ByteArray<FILE_CAP> blob_;" in header
     assert "::protocyte::ByteArray<0x8u + 0x8u> hex_blob_;" in header
     assert "::protocyte::Array<::protocyte::i32, 4u> values_;" in header
     assert "bool has_digest() const noexcept { return digest_.has_value(); }" in header
@@ -453,6 +463,7 @@ def test_generated_header_emits_utf8_string_constants() -> None:
 
     assert not response.error
     header = next(file.content for file in response.file if file.name == "unicode.protocyte.hpp")
+    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
     assert '#include <string_view>' in header
     assert 'static constexpr ::std::string_view NAME {"\\xc4"' in header
     assert '"\\x80"' in header
@@ -841,6 +852,14 @@ def _options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.extendee = ".google.protobuf.MessageOptions"
 
     ext = file.extension.add()
+    ext.name = "package_constant"
+    ext.number = 50002
+    ext.label = F.LABEL_REPEATED
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.StructConstant"
+    ext.extendee = ".google.protobuf.FileOptions"
+
+    ext = file.extension.add()
     ext.name = "array"
     ext.number = 50000
     ext.label = F.LABEL_OPTIONAL
@@ -864,17 +883,26 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     file.package = "demo"
     file.syntax = "proto3"
     file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        _package_constant_options_bytes(
+            [
+                ("FILE_CAP", 4, "16", None),
+                ("FILE_LABEL", 8, None, 'substr("hello", 1, 3)'),
+                ("FILE_READY", 1, None, 'starts_with(FILE_LABEL, "e")'),
+            ]
+        )
+    )
 
     message = file.message_type.add()
     message.name = "Holder"
     message.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("MAGIC_NUMBER", 2, "16", None),
+                ("MAGIC_NUMBER", 2, None, "FILE_CAP"),
                 ("DOUBLE_MAGIC", 2, None, "MAGIC_NUMBER * 2"),
                 ("HEX_MAGIC", 4, "0x20", None),
                 ("HEX_EXPR", 2, None, "0x10 + 0x8"),
-                ("LABEL", 8, None, 'substr("hello", 1, 3)'),
+                ("LABEL", 8, None, "demo.FILE_LABEL"),
             ]
         )
     )
@@ -891,7 +919,7 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     field.number = 2
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_BYTES
-    field.options.ParseFromString(_array_option_bytes(max_value=16))
+    field.options.ParseFromString(_array_option_bytes(expr="FILE_CAP"))
 
     field = message.field.add()
     field.name = "hex_blob"
@@ -912,7 +940,7 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     nested.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("HAS_PREFIX", 1, None, 'starts_with(LABEL, "e")'),
+                ("HAS_PREFIX", 1, None, 'starts_with(FILE_LABEL, "e")'),
             ]
         )
     )
@@ -921,7 +949,7 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     field.number = 1
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_BYTES
-    field.options.ParseFromString(_array_option_bytes(expr="Holder.DOUBLE_MAGIC"))
+    field.options.ParseFromString(_array_option_bytes(expr="demo.FILE_CAP"))
 
     field = message.field.add()
     field.name = "nested"
@@ -1488,6 +1516,28 @@ def _constant_options_bytes(
     constant_ext = pool.FindExtensionByName("protocyte.constant")
 
     options = message_options_cls()
+    for name, kind, literal, expr in constants:
+        item = options.Extensions[constant_ext].add()
+        item.name = name
+        item.kind = kind
+        if literal is not None:
+            item.literal = literal
+        if expr is not None:
+            item.expr = expr
+    return options.SerializeToString()
+
+
+def _package_constant_options_bytes(
+    constants: list[tuple[str, int, str | None, str | None]],
+) -> bytes:
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(_options_file())
+    file_options_desc = pool.FindMessageTypeByName("google.protobuf.FileOptions")
+    file_options_cls = message_factory.GetMessageClass(file_options_desc)
+    constant_ext = pool.FindExtensionByName("protocyte.package_constant")
+
+    options = file_options_cls()
     for name, kind, literal, expr in constants:
         item = options.Extensions[constant_ext].add()
         item.name = name

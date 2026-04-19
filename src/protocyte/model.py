@@ -149,6 +149,7 @@ PACKABLE_TYPES = set(SCALAR_CPP_TYPES) | {FieldDescriptorProto.TYPE_ENUM}
 ARRAY_OPTION_NAME = "protocyte.array"
 FIXED_OPTION_NAME = "protocyte.fixed"
 CONSTANT_OPTION_NAME = "protocyte.constant"
+PACKAGE_CONSTANT_OPTION_NAME = "protocyte.package_constant"
 CONSTANT_KIND_BOOL = "bool"
 CONSTANT_KIND_INT32 = "int32"
 CONSTANT_KIND_INT64 = "int64"
@@ -181,10 +182,12 @@ class _RawConstantOption:
 @dataclass(slots=True)
 class _CustomOptions:
     field_options_cls: type[object] | None = None
+    file_options_cls: type[object] | None = None
     message_options_cls: type[object] | None = None
     array_extension: object | None = None
     fixed_extension: object | None = None
     constant_extension: object | None = None
+    package_constant_extension: object | None = None
 
     def field_array(
         self,
@@ -218,13 +221,27 @@ class _CustomOptions:
         self,
         options: descriptor_pb2.MessageOptions,
     ) -> list[_RawConstantOption]:
-        if self.message_options_cls is None or self.constant_extension is None:
+        return self._constant_options(options, self.message_options_cls, self.constant_extension)
+
+    def file_constants(
+        self,
+        options: descriptor_pb2.FileOptions,
+    ) -> list[_RawConstantOption]:
+        return self._constant_options(options, self.file_options_cls, self.package_constant_extension)
+
+    def _constant_options(
+        self,
+        options: object,
+        options_cls: type[object] | None,
+        extension: object | None,
+    ) -> list[_RawConstantOption]:
+        if options_cls is None or extension is None:
             return []
-        parsed = self.message_options_cls()
+        parsed = options_cls()
         parsed.ParseFromString(options.SerializeToString())
         out: list[_RawConstantOption] = []
         try:
-            for item in parsed.Extensions[self.constant_extension]:
+            for item in parsed.Extensions[extension]:
                 literal = str(item.literal) if item.HasField("literal") else None
                 expr = str(item.expr) if item.HasField("expr") else None
                 out.append(
@@ -269,6 +286,7 @@ class OneofModel:
 class ConstantModel:
     name: str
     cpp_name: str
+    full_name: str
     kind: str
     literal: str | None
     expr: str | None
@@ -357,6 +375,7 @@ class FileModel:
     package: str
     syntax: str
     descriptor: descriptor_pb2.FileDescriptorProto
+    constants: list[ConstantModel] = field(default_factory=list)
     messages: list[MessageModel] = field(default_factory=list)
     enums: list[EnumModel] = field(default_factory=list)
     dependencies: set[str] = field(default_factory=set)
@@ -650,12 +669,15 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
             message_model = _build_message_skeleton(file, message, None, message.name)
             file_model.messages.append(message_model)
             _register_message_tree(message_model, messages, enums)
+        file_model.constants = _build_file_constants(file_model, custom_options)
+        _validate_package_constant_collisions(file_model)
 
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
             _fill_message_details(message, files, messages, enums, custom_options)
 
-    _resolve_constants_and_arrays(messages)
+    _validate_package_constant_namespace(files)
+    _resolve_constants_and_arrays(files, messages)
     _validate_references(file_to_generate, files, messages, enums)
     _compute_file_dependencies(file_to_generate, files)
     _mark_recursive_boxes(messages)
@@ -690,19 +712,23 @@ def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -
         pending = next_pending
 
     try:
+        file_options_desc = pool.FindMessageTypeByName("google.protobuf.FileOptions")
         field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
         message_options_desc = pool.FindMessageTypeByName("google.protobuf.MessageOptions")
+        file_options_cls = message_factory.GetMessageClass(file_options_desc)
         field_options_cls = message_factory.GetMessageClass(field_options_desc)
         message_options_cls = message_factory.GetMessageClass(message_options_desc)
     except Exception:
         return _CustomOptions()
 
     return _CustomOptions(
+        file_options_cls=file_options_cls,
         field_options_cls=field_options_cls,
         message_options_cls=message_options_cls,
         array_extension=_find_extension(pool, ARRAY_OPTION_NAME),
         fixed_extension=_find_extension(pool, FIXED_OPTION_NAME),
         constant_extension=_find_extension(pool, CONSTANT_OPTION_NAME),
+        package_constant_extension=_find_extension(pool, PACKAGE_CONSTANT_OPTION_NAME),
     )
 
 
@@ -849,22 +875,32 @@ def _fill_message_details(
                 _require_proto3(files[referenced_file].descriptor, f"{message.full_name}.{field_model.name}")
 
 
+def _build_file_constants(file_model: FileModel, custom_options: _CustomOptions) -> list[ConstantModel]:
+    owner = file_model.package or file_model.name
+    return _build_raw_constants(owner, custom_options.file_constants(file_model.descriptor.options))
+
+
 def _build_constants(message: MessageModel, custom_options: _CustomOptions) -> list[ConstantModel]:
+    return _build_raw_constants(message.full_name, custom_options.message_constants(message.descriptor.options))
+
+
+def _build_raw_constants(owner: str, raw_constants: list[_RawConstantOption]) -> list[ConstantModel]:
     constants: list[ConstantModel] = []
-    for raw in custom_options.message_constants(message.descriptor.options):
+    for raw in raw_constants:
         kind = _CONSTANT_KIND_MAP.get(raw.kind)
         if kind is None:
-            raise ProtocyteError(f"{message.full_name}: unsupported constant kind {raw.kind}")
+            raise ProtocyteError(f"{owner}: unsupported constant kind {raw.kind}")
         if not raw.name:
-            raise ProtocyteError(f"{message.full_name}: constant name must not be empty")
+            raise ProtocyteError(f"{owner}: constant name must not be empty")
         if raw.literal is not None and raw.expr is not None:
-            raise ProtocyteError(f"{message.full_name}.{raw.name}: exactly one of literal or expr must be set")
+            raise ProtocyteError(f"{owner}.{raw.name}: exactly one of literal or expr must be set")
         if raw.literal is None and raw.expr is None:
-            raise ProtocyteError(f"{message.full_name}.{raw.name}: exactly one of literal or expr must be set")
+            raise ProtocyteError(f"{owner}.{raw.name}: exactly one of literal or expr must be set")
         constants.append(
             ConstantModel(
                 name=raw.name,
                 cpp_name=cpp_identifier(raw.name),
+                full_name=f"{owner}.{raw.name}" if owner else raw.name,
                 kind=kind,
                 literal=raw.literal,
                 expr=raw.expr,
@@ -916,6 +952,44 @@ def _validate_constant_collisions(message: MessageModel) -> None:
         if constant.cpp_name in reserved:
             raise ProtocyteError(f"{message.full_name}.{constant.name}: constant collides with generated API")
         seen_cpp_names.add(constant.cpp_name)
+
+
+def _validate_package_constant_collisions(file_model: FileModel) -> None:
+    seen_names: set[str] = set()
+    seen_cpp_names: set[str] = set()
+    for constant in file_model.constants:
+        if constant.name in seen_names:
+            raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
+        seen_names.add(constant.name)
+        if not constant.cpp_name or constant.cpp_name == "_":
+            raise ProtocyteError(f"{constant.full_name}: constant name is not a valid C++ identifier")
+        if constant.cpp_name in seen_cpp_names:
+            raise ProtocyteError(f"{constant.full_name}: constant collides after C++ identifier normalization")
+        seen_cpp_names.add(constant.cpp_name)
+
+
+def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
+    top_level_cpp_names: dict[str, set[str]] = {}
+    for file_model in files.values():
+        reserved = top_level_cpp_names.setdefault(file_model.package, {"protocyte_reflection"})
+        reserved.update(enum.cpp_name for enum in file_model.enums)
+        reserved.update(message.cpp_name for message in file_model.messages if not message.is_map_entry)
+
+    seen_names: dict[str, set[str]] = {}
+    seen_cpp_names: dict[str, set[str]] = {}
+    for file_model in files.values():
+        names = seen_names.setdefault(file_model.package, set())
+        cpp_names = seen_cpp_names.setdefault(file_model.package, set())
+        reserved = top_level_cpp_names[file_model.package]
+        for constant in file_model.constants:
+            if constant.name in names:
+                raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
+            names.add(constant.name)
+            if constant.cpp_name in cpp_names:
+                raise ProtocyteError(f"{constant.full_name}: constant collides after C++ identifier normalization")
+            if constant.cpp_name in reserved:
+                raise ProtocyteError(f"{constant.full_name}: constant collides with generated API")
+            cpp_names.add(constant.cpp_name)
 
 
 def _build_field(
@@ -1038,18 +1112,27 @@ def _is_packed(proto: descriptor_pb2.FieldDescriptorProto) -> bool:
     return True
 
 
-def _resolve_constants_and_arrays(messages: dict[str, MessageModel]) -> None:
+def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[str, MessageModel]) -> None:
     constants_by_message = {
         message.full_name: {constant.name: constant for constant in message.constants}
         for message in messages.values()
     }
-    states: dict[tuple[str, str], str] = {}
+    constants_by_package: dict[str, dict[str, ConstantModel]] = {}
+    for file_model in files.values():
+        package_constants = constants_by_package.setdefault(file_model.package, {})
+        for constant in file_model.constants:
+            package_constants[constant.name] = constant
+    states: dict[str, str] = {}
 
-    def find_constant(owner: MessageModel, name: str) -> tuple[MessageModel, ConstantModel]:
+    def find_constant(owner: MessageModel, name: str) -> tuple[MessageModel | None, ConstantModel]:
         if "." in name:
             parts = name.split(".")
             if len(parts) < 2:
                 raise ProtocyteError(f"{owner.full_name}: invalid constant reference {name!r}")
+            package_name = ".".join(parts[:-1])
+            target_constant = constants_by_package.get(package_name, {}).get(parts[-1])
+            if target_constant is not None:
+                return None, target_constant
             message_path = ".".join(parts[:-1])
             message_name = f"{owner.package}.{message_path}" if owner.package else message_path
             target_message = messages.get(message_name)
@@ -1066,48 +1149,89 @@ def _resolve_constants_and_arrays(messages: dict[str, MessageModel]) -> None:
             if target_constant is not None:
                 return current, target_constant
             current = current.parent
+        target_constant = constants_by_package.get(owner.package, {}).get(name)
+        if target_constant is not None:
+            return None, target_constant
         raise ProtocyteError(f"{owner.full_name}: unknown constant {name!r}")
 
-    def resolve_constant(owner: MessageModel, constant: ConstantModel) -> _TypedValue:
-        key = (owner.full_name, constant.name)
+    def resolve_constant(target: MessageModel, constant: ConstantModel, owner: MessageModel) -> _TypedValue:
+        key = constant.full_name
         state = states.get(key)
         if state == "visiting":
-            raise ProtocyteError(f"{owner.full_name}.{constant.name}: constant expression cycle detected")
+            raise ProtocyteError(f"{constant.full_name}: constant expression cycle detected")
         if state == "done":
-            return _TypedValue(constant.family, constant.value, cpp_expr=_inline_constant_cpp_expr(constant))
+            return _TypedValue(constant.family, constant.value, cpp_expr=_reference_cpp_expr(owner, target, constant))
         states[key] = "visiting"
         if constant.literal is not None:
-            value = _coerce_literal(constant.kind, constant.literal, f"{owner.full_name}.{constant.name}")
+            value = _coerce_literal(constant.kind, constant.literal, constant.full_name)
         else:
             assert constant.expr is not None
             parsed = _ExprParser(
                 constant.expr,
-                lambda name: lookup_constant(owner, name),
-                f"{owner.full_name}.{constant.name}",
+                lambda name: lookup_constant(target, name),
+                constant.full_name,
             ).parse()
-            value = _coerce_expression_value(constant.kind, parsed, f"{owner.full_name}.{constant.name}")
+            value = _coerce_expression_value(constant.kind, parsed, constant.full_name)
         constant.family = _constant_family(constant.kind)
         constant.value = value
         constant.cpp_type = _cpp_constant_type(constant.kind)
         constant.cpp_value = _cpp_constant_value(constant.kind, value)
         states[key] = "done"
-        return _TypedValue(constant.family, constant.value, cpp_expr=_inline_constant_cpp_expr(constant))
+        return _TypedValue(constant.family, constant.value, cpp_expr=_reference_cpp_expr(owner, target, constant))
 
     def lookup_constant(owner: MessageModel, name: str) -> _TypedValue:
         target_message, target_constant = find_constant(owner, name)
-        return resolve_constant(target_message, target_constant)
+        if target_message is None:
+            return lookup_package_constant(owner.package, name)
+        return resolve_constant(target_message, target_constant, owner)
 
     def lookup_constant_for_array(owner: MessageModel, name: str) -> _TypedValue:
-        target_message, target_constant = find_constant(owner, name)
-        resolved = resolve_constant(target_message, target_constant)
-        cpp_expr = target_constant.cpp_name if target_message.full_name == owner.full_name else _inline_constant_cpp_expr(target_constant)
-        return _TypedValue(resolved.family, resolved.value, cpp_expr=cpp_expr)
+        return lookup_constant(owner, name)
+
+    def resolve_package_constant(package: str, constant: ConstantModel) -> None:
+        key = constant.full_name
+        state = states.get(key)
+        if state == "visiting":
+            raise ProtocyteError(f"{constant.full_name}: constant expression cycle detected")
+        if state == "done":
+            return
+        states[key] = "visiting"
+        if constant.literal is not None:
+            value = _coerce_literal(constant.kind, constant.literal, constant.full_name)
+        else:
+            assert constant.expr is not None
+            parsed = _ExprParser(
+                constant.expr,
+                lambda name: lookup_package_constant(package, name),
+                constant.full_name,
+            ).parse()
+            value = _coerce_expression_value(constant.kind, parsed, constant.full_name)
+        constant.family = _constant_family(constant.kind)
+        constant.value = value
+        constant.cpp_type = _cpp_constant_type(constant.kind)
+        constant.cpp_value = _cpp_constant_value(constant.kind, value)
+        states[key] = "done"
+
+    def lookup_package_constant(package: str, name: str) -> _TypedValue:
+        if "." in name:
+            parts = name.split(".")
+            target_constant = constants_by_package.get(".".join(parts[:-1]), {}).get(parts[-1])
+        else:
+            target_constant = constants_by_package.get(package, {}).get(name)
+        if target_constant is None:
+            raise ProtocyteError(f"{package or '<root>'}: unknown package constant {name!r}")
+        resolve_package_constant(package, target_constant)
+        return _TypedValue(target_constant.family, target_constant.value, cpp_expr=_constant_cpp_expr(package, target_constant))
+
+    for package, package_constants in constants_by_package.items():
+        for constant in package_constants.values():
+            resolve_package_constant(package, constant)
 
     for message in messages.values():
         if message.is_map_entry:
             continue
         for constant in message.constants:
-            resolve_constant(message, constant)
+            resolve_constant(message, constant, message)
         for field_model in message.fields:
             if field_model.array_expr is None:
                 continue
@@ -1528,6 +1652,19 @@ def _inline_constant_cpp_expr(constant: ConstantModel) -> str:
     if constant.kind == CONSTANT_KIND_STRING:
         return f"::std::string_view {{{constant.cpp_value}}}"
     return constant.cpp_value
+
+
+def _constant_cpp_expr(owner_package: str, constant: ConstantModel) -> str:
+    local_name = f"{owner_package}.{constant.name}" if owner_package else constant.name
+    if constant.full_name == local_name:
+        return constant.cpp_name
+    return _inline_constant_cpp_expr(constant)
+
+
+def _reference_cpp_expr(owner: MessageModel, target: MessageModel, constant: ConstantModel) -> str:
+    if target.full_name == owner.full_name:
+        return constant.cpp_name
+    return _inline_constant_cpp_expr(constant)
 
 
 def _cpp_string_literal(value: bytes) -> str:
