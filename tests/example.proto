@@ -123,6 +123,27 @@ message UltimateComplexMessage {
     bytes oneof_bytes   = 29 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
   }
 
+  message RepeatedBytesHolder {
+    repeated bytes values = 1;
+  }
+
+  message BoundedRepeatedBytesHolder {
+    repeated bytes values = 1 [(protocyte.array) = { max: 3 }];
+  }
+
+  message FixedRepeatedBytesHolder {
+    repeated bytes values = 1 [(protocyte.array) = { max: 3 }, (protocyte.fixed) = true];
+  }
+
+  oneof crazy_bytes_oneof {
+    bytes crazy_plain_bytes = 49;
+    bytes crazy_bounded_bytes = 50 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
+    bytes crazy_fixed_bytes = 51 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }, (protocyte.fixed) = true];
+    RepeatedBytesHolder crazy_repeated_bytes = 52;
+    BoundedRepeatedBytesHolder crazy_bounded_repeated_bytes = 53;
+    FixedRepeatedBytesHolder crazy_fixed_repeated_bytes = 54;
+  }
+
   // -------------------------------------------------------------------------
   // Maps (all legal map key types)
   // -------------------------------------------------------------------------

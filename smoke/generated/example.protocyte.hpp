@@ -29,6 +29,9 @@ namespace test::ultimate {
 
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1_NestedLevel2;
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1;
+    template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_RepeatedBytesHolder;
+    template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_BoundedRepeatedBytesHolder;
+    template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_FixedRepeatedBytesHolder;
     template<typename Config = ::protocyte::DefaultConfig>
     struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE;
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage;
@@ -538,6 +541,400 @@ namespace test::ultimate {
             inner_;
     };
 
+    template<typename Config> struct UltimateComplexMessage_RepeatedBytesHolder {
+        using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
+        enum struct FieldNumber : ::protocyte::u32 {
+            values = 1u,
+        };
+
+        explicit UltimateComplexMessage_RepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx}, values_ {&ctx} {}
+
+        static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder> create(Context &ctx) noexcept {
+            return ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>::ok(
+                UltimateComplexMessage_RepeatedBytesHolder {ctx});
+        }
+        UltimateComplexMessage_RepeatedBytesHolder(UltimateComplexMessage_RepeatedBytesHolder &&) noexcept = default;
+        UltimateComplexMessage_RepeatedBytesHolder &
+        operator=(UltimateComplexMessage_RepeatedBytesHolder &&) noexcept = default;
+        UltimateComplexMessage_RepeatedBytesHolder(const UltimateComplexMessage_RepeatedBytesHolder &) = delete;
+        UltimateComplexMessage_RepeatedBytesHolder &
+        operator=(const UltimateComplexMessage_RepeatedBytesHolder &) = delete;
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_RepeatedBytesHolder &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
+            clear_values();
+            for (::protocyte::usize i {}; i < other.values().size(); ++i) {
+                typename Config::Bytes value {ctx_};
+                if (const auto st = value.assign(other.values()[i].view()); !st) {
+                    return st;
+                }
+                if (const auto st = mutable_values().push_back(::protocyte::move(value)); !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder> clone() const noexcept {
+            auto out = UltimateComplexMessage_RepeatedBytesHolder::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().copy_from(*this); !st) {
+                return ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>::err(st.error());
+            }
+            return out;
+        }
+
+        const typename Config::template Vector<typename Config::Bytes> &values() const noexcept { return values_; }
+        typename Config::template Vector<typename Config::Bytes> &mutable_values() noexcept { return values_; }
+        void clear_values() noexcept { values_.clear(); }
+
+        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
+        parse(Context &ctx, Reader &reader) noexcept {
+            auto out = UltimateComplexMessage_RepeatedBytesHolder::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().merge_from(reader); !st) {
+                return ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>::err(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                auto tag = ::protocyte::read_varint(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
+                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::values: {
+                        typename Config::Bytes value {ctx_};
+                        if (const auto st =
+                                ::protocyte::read_bytes_field<Config>(*ctx_, reader, wire_type, field_number, value);
+                            !st) {
+                            return st;
+                        }
+                        if (const auto st = values_.push_back(::protocyte::move(value)); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::values), values_[i].view());
+                    !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            ::protocyte::usize total {};
+            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::values)) +
+                                    ::protocyte::varint_size(values_[i].size()) + values_[i].size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<::protocyte::usize>::ok(total);
+        }
+    protected:
+        Context *ctx_;
+        typename Config::template Vector<typename Config::Bytes> values_;
+    };
+
+    template<typename Config> struct UltimateComplexMessage_BoundedRepeatedBytesHolder {
+        using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
+        enum struct FieldNumber : ::protocyte::u32 {
+            values = 1u,
+        };
+
+        explicit UltimateComplexMessage_BoundedRepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx} {}
+
+        static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> create(Context &ctx) noexcept {
+            return ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>::ok(
+                UltimateComplexMessage_BoundedRepeatedBytesHolder {ctx});
+        }
+        UltimateComplexMessage_BoundedRepeatedBytesHolder(
+            UltimateComplexMessage_BoundedRepeatedBytesHolder &&) noexcept = default;
+        UltimateComplexMessage_BoundedRepeatedBytesHolder &
+        operator=(UltimateComplexMessage_BoundedRepeatedBytesHolder &&) noexcept = default;
+        UltimateComplexMessage_BoundedRepeatedBytesHolder(const UltimateComplexMessage_BoundedRepeatedBytesHolder &) =
+            delete;
+        UltimateComplexMessage_BoundedRepeatedBytesHolder &
+        operator=(const UltimateComplexMessage_BoundedRepeatedBytesHolder &) = delete;
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_BoundedRepeatedBytesHolder &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
+            clear_values();
+            for (::protocyte::usize i {}; i < other.values().size(); ++i) {
+                typename Config::Bytes value {ctx_};
+                if (const auto st = value.assign(other.values()[i].view()); !st) {
+                    return st;
+                }
+                if (const auto st = mutable_values().push_back(::protocyte::move(value)); !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> clone() const noexcept {
+            auto out = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().copy_from(*this); !st) {
+                return ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>::err(st.error());
+            }
+            return out;
+        }
+
+        const ::protocyte::Array<typename Config::Bytes, 3u> &values() const noexcept { return values_; }
+        ::protocyte::Array<typename Config::Bytes, 3u> &mutable_values() noexcept { return values_; }
+        void clear_values() noexcept { values_.clear(); }
+
+        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
+        parse(Context &ctx, Reader &reader) noexcept {
+            auto out = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().merge_from(reader); !st) {
+                return ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>::err(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                auto tag = ::protocyte::read_varint(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
+                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::values: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        typename Config::Bytes value {ctx_};
+                        if (const auto st = ::protocyte::read_bytes<Config>(*ctx_, reader, value); !st) {
+                            return st;
+                        }
+                        if (const auto st = values_.push_back(::protocyte::move(value)); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::values), values_[i].view());
+                    !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            ::protocyte::usize total {};
+            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::values)) +
+                                    ::protocyte::varint_size(values_[i].size()) + values_[i].size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<::protocyte::usize>::ok(total);
+        }
+    protected:
+        Context *ctx_;
+        ::protocyte::Array<typename Config::Bytes, 3u> values_;
+    };
+
+    template<typename Config> struct UltimateComplexMessage_FixedRepeatedBytesHolder {
+        using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
+        enum struct FieldNumber : ::protocyte::u32 {
+            values = 1u,
+        };
+
+        explicit UltimateComplexMessage_FixedRepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx} {}
+
+        static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> create(Context &ctx) noexcept {
+            return ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>::ok(
+                UltimateComplexMessage_FixedRepeatedBytesHolder {ctx});
+        }
+        UltimateComplexMessage_FixedRepeatedBytesHolder(UltimateComplexMessage_FixedRepeatedBytesHolder &&) noexcept =
+            default;
+        UltimateComplexMessage_FixedRepeatedBytesHolder &
+        operator=(UltimateComplexMessage_FixedRepeatedBytesHolder &&) noexcept = default;
+        UltimateComplexMessage_FixedRepeatedBytesHolder(const UltimateComplexMessage_FixedRepeatedBytesHolder &) =
+            delete;
+        UltimateComplexMessage_FixedRepeatedBytesHolder &
+        operator=(const UltimateComplexMessage_FixedRepeatedBytesHolder &) = delete;
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_FixedRepeatedBytesHolder &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
+            clear_values();
+            for (::protocyte::usize i {}; i < other.values().size(); ++i) {
+                typename Config::Bytes value {ctx_};
+                if (const auto st = value.assign(other.values()[i].view()); !st) {
+                    return st;
+                }
+                if (const auto st = mutable_values().push_back(::protocyte::move(value)); !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> clone() const noexcept {
+            auto out = UltimateComplexMessage_FixedRepeatedBytesHolder::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().copy_from(*this); !st) {
+                return ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>::err(st.error());
+            }
+            return out;
+        }
+
+        const ::protocyte::Array<typename Config::Bytes, 3u> &values() const noexcept { return values_; }
+        ::protocyte::Array<typename Config::Bytes, 3u> &mutable_values() noexcept { return values_; }
+        void clear_values() noexcept { values_.clear(); }
+
+        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
+        parse(Context &ctx, Reader &reader) noexcept {
+            auto out = UltimateComplexMessage_FixedRepeatedBytesHolder::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().merge_from(reader); !st) {
+                return ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>::err(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                auto tag = ::protocyte::read_varint(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
+                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::values: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        typename Config::Bytes value {ctx_};
+                        if (const auto st = ::protocyte::read_bytes<Config>(*ctx_, reader, value); !st) {
+                            return st;
+                        }
+                        if (const auto st = values_.push_back(::protocyte::move(value)); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (values_.size() != 3u) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
+                                                  static_cast<::protocyte::u32>(FieldNumber::values));
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+            if (values_.size() != 3u) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
+                                                  static_cast<::protocyte::u32>(FieldNumber::values));
+            }
+            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::values), values_[i].view());
+                    !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (values_.size() != 3u) {
+                return ::protocyte::Result<::protocyte::usize>::err(
+                    ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
+                                               static_cast<::protocyte::u32>(FieldNumber::values))
+                        .error());
+            }
+            ::protocyte::usize total {};
+            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::values)) +
+                                    ::protocyte::varint_size(values_[i].size()) + values_[i].size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<::protocyte::usize>::ok(total);
+        }
+    protected:
+        Context *ctx_;
+        ::protocyte::Array<typename Config::Bytes, 3u> values_;
+    };
+
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {
         using Context = typename Config::Context;
         using RuntimeStatus = ::protocyte::Status;
@@ -1027,6 +1424,12 @@ namespace test::ultimate {
         using RuntimeStatus = ::protocyte::Status;
         using Color = UltimateComplexMessage_Color;
         template<typename NestedConfig = Config> using NestedLevel1 = UltimateComplexMessage_NestedLevel1<NestedConfig>;
+        template<typename NestedConfig = Config> using RepeatedBytesHolder =
+            UltimateComplexMessage_RepeatedBytesHolder<NestedConfig>;
+        template<typename NestedConfig = Config> using BoundedRepeatedBytesHolder =
+            UltimateComplexMessage_BoundedRepeatedBytesHolder<NestedConfig>;
+        template<typename NestedConfig = Config> using FixedRepeatedBytesHolder =
+            UltimateComplexMessage_FixedRepeatedBytesHolder<NestedConfig>;
         template<typename NestedConfig = Config> using LevelA = UltimateComplexMessage_LevelA<NestedConfig>;
 
         static constexpr ::protocyte::i64 SHIFTED_COUNT {5000000000};
@@ -1059,6 +1462,16 @@ namespace test::ultimate {
             oneof_int32 = 27u,
             oneof_msg = 28u,
             oneof_bytes = 29u,
+        };
+
+        enum struct Crazy_bytes_oneofCase : ::protocyte::u32 {
+            none = 0u,
+            crazy_plain_bytes = 49u,
+            crazy_bounded_bytes = 50u,
+            crazy_fixed_bytes = 51u,
+            crazy_repeated_bytes = 52u,
+            crazy_bounded_repeated_bytes = 53u,
+            crazy_fixed_repeated_bytes = 54u,
         };
 
         enum struct FieldNumber : ::protocyte::u32 {
@@ -1105,6 +1518,12 @@ namespace test::ultimate {
             repeated_byte_array = 46u,
             bounded_repeated_byte_array = 47u,
             fixed_repeated_byte_array = 48u,
+            crazy_plain_bytes = 49u,
+            crazy_bounded_bytes = 50u,
+            crazy_fixed_bytes = 51u,
+            crazy_repeated_bytes = 52u,
+            crazy_bounded_repeated_bytes = 53u,
+            crazy_fixed_repeated_bytes = 54u,
         };
 
         explicit UltimateComplexMessage(Context &ctx) noexcept:
@@ -1202,12 +1621,59 @@ namespace test::ultimate {
                 }
             }
             other.clear_special_oneof();
+            switch (other.crazy_bytes_oneof_case_) {
+                case Crazy_bytes_oneofCase::crazy_plain_bytes: {
+                    new (&crazy_bytes_oneof.crazy_plain_bytes)
+                        typename Config::Bytes {::protocyte::move(other.crazy_bytes_oneof.crazy_plain_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_plain_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
+                    new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_bounded_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
+                    new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_fixed_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_repeated_bytes: {
+                    new (&crazy_bytes_oneof.crazy_repeated_bytes) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_repeated_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_repeated_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes: {
+                    new (&crazy_bytes_oneof.crazy_bounded_repeated_bytes) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_bounded_repeated_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes: {
+                    new (&crazy_bytes_oneof.crazy_fixed_repeated_bytes) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_fixed_repeated_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_crazy_bytes_oneof();
         }
         UltimateComplexMessage &operator=(UltimateComplexMessage &&other) noexcept {
             if (this == &other) {
                 return *this;
             }
             clear_special_oneof();
+            clear_crazy_bytes_oneof();
             ctx_ = other.ctx_;
             f_double_ = other.f_double_;
             f_float_ = other.f_float_;
@@ -1281,9 +1747,58 @@ namespace test::ultimate {
                 }
             }
             other.clear_special_oneof();
+            switch (other.crazy_bytes_oneof_case_) {
+                case Crazy_bytes_oneofCase::crazy_plain_bytes: {
+                    new (&crazy_bytes_oneof.crazy_plain_bytes)
+                        typename Config::Bytes {::protocyte::move(other.crazy_bytes_oneof.crazy_plain_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_plain_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
+                    new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_bounded_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
+                    new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_fixed_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_repeated_bytes: {
+                    new (&crazy_bytes_oneof.crazy_repeated_bytes) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_repeated_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_repeated_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes: {
+                    new (&crazy_bytes_oneof.crazy_bounded_repeated_bytes) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_bounded_repeated_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes: {
+                    new (&crazy_bytes_oneof.crazy_fixed_repeated_bytes) typename Config::template Optional<
+                        ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
+                        ::protocyte::move(other.crazy_bytes_oneof.crazy_fixed_repeated_bytes)};
+                    crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes;
+                    break;
+                }
+                case Crazy_bytes_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_crazy_bytes_oneof();
             return *this;
         }
-        ~UltimateComplexMessage() noexcept { clear_special_oneof(); }
+        ~UltimateComplexMessage() noexcept {
+            clear_special_oneof();
+            clear_crazy_bytes_oneof();
+        }
         UltimateComplexMessage(const UltimateComplexMessage &) = delete;
         UltimateComplexMessage &operator=(const UltimateComplexMessage &) = delete;
 
@@ -1592,6 +2107,57 @@ namespace test::ultimate {
                     break;
                 }
             }
+            switch (other.crazy_bytes_oneof_case_) {
+                case Crazy_bytes_oneofCase::crazy_plain_bytes: {
+                    if (const auto st = set_crazy_plain_bytes(other.crazy_plain_bytes()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
+                    if (const auto st = set_crazy_bounded_bytes(other.crazy_bounded_bytes()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
+                    if (const auto st = set_crazy_fixed_bytes(other.crazy_fixed_bytes()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_repeated_bytes: {
+                    if (auto ensured = ensure_crazy_repeated_bytes(); !ensured) {
+                        return ensured.status();
+                    } else if (const auto st = ensured.value().get().copy_from(*other.crazy_repeated_bytes()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes: {
+                    if (auto ensured = ensure_crazy_bounded_repeated_bytes(); !ensured) {
+                        return ensured.status();
+                    } else if (const auto st = ensured.value().get().copy_from(*other.crazy_bounded_repeated_bytes());
+                               !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes: {
+                    if (auto ensured = ensure_crazy_fixed_repeated_bytes(); !ensured) {
+                        return ensured.status();
+                    } else if (const auto st = ensured.value().get().copy_from(*other.crazy_fixed_repeated_bytes());
+                               !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Crazy_bytes_oneofCase::none:
+                default: {
+                    clear_crazy_bytes_oneof();
+                    break;
+                }
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -1630,6 +2196,41 @@ namespace test::ultimate {
                 }
             }
             special_oneof_case_ = Special_oneofCase::none;
+        }
+
+        constexpr Crazy_bytes_oneofCase crazy_bytes_oneof_case() const noexcept { return crazy_bytes_oneof_case_; }
+        void clear_crazy_bytes_oneof() noexcept {
+            switch (crazy_bytes_oneof_case_) {
+                case Crazy_bytes_oneofCase::crazy_plain_bytes: {
+                    destroy_at_(&crazy_bytes_oneof.crazy_plain_bytes);
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
+                    destroy_at_(&crazy_bytes_oneof.crazy_bounded_bytes);
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
+                    destroy_at_(&crazy_bytes_oneof.crazy_fixed_bytes);
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_repeated_bytes: {
+                    destroy_at_(&crazy_bytes_oneof.crazy_repeated_bytes);
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes: {
+                    destroy_at_(&crazy_bytes_oneof.crazy_bounded_repeated_bytes);
+                    break;
+                }
+                case Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes: {
+                    destroy_at_(&crazy_bytes_oneof.crazy_fixed_repeated_bytes);
+                    break;
+                }
+                case Crazy_bytes_oneofCase::none:
+                default: {
+                    break;
+                }
+            }
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::none;
         }
 
         constexpr ::protocyte::f64 f_double() const noexcept { return f_double_; }
@@ -1869,6 +2470,147 @@ namespace test::ultimate {
             new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {::protocyte::move(temp)};
             special_oneof_case_ = Special_oneofCase::oneof_bytes;
             return ::protocyte::Status::ok();
+        }
+
+        constexpr bool has_crazy_plain_bytes() const noexcept {
+            return crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_plain_bytes;
+        }
+        ::protocyte::ByteView crazy_plain_bytes() const noexcept {
+            return has_crazy_plain_bytes() ? crazy_bytes_oneof.crazy_plain_bytes.view() : ::protocyte::ByteView {};
+        }
+        ::protocyte::Status set_crazy_plain_bytes(const ::protocyte::ByteView value) noexcept {
+            typename Config::Bytes temp {ctx_};
+            if (const auto st = temp.assign(value); !st) {
+                return st;
+            }
+            clear_crazy_bytes_oneof();
+            new (&crazy_bytes_oneof.crazy_plain_bytes) typename Config::Bytes {::protocyte::move(temp)};
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_plain_bytes;
+            return ::protocyte::Status::ok();
+        }
+
+        constexpr bool has_crazy_bounded_bytes() const noexcept {
+            return crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_bytes;
+        }
+        ::protocyte::ByteView crazy_bounded_bytes() const noexcept {
+            return has_crazy_bounded_bytes() ? crazy_bytes_oneof.crazy_bounded_bytes.view() : ::protocyte::ByteView {};
+        }
+        ::protocyte::Status set_crazy_bounded_bytes(const ::protocyte::ByteView value) noexcept {
+            ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
+            if (const auto st = temp.assign(value); !st) {
+                return st;
+            }
+            clear_crazy_bytes_oneof();
+            new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                ::protocyte::move(temp)};
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
+            return ::protocyte::Status::ok();
+        }
+
+        constexpr bool has_crazy_fixed_bytes() const noexcept {
+            return crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_bytes;
+        }
+        ::protocyte::ByteView crazy_fixed_bytes() const noexcept {
+            return has_crazy_fixed_bytes() ? crazy_bytes_oneof.crazy_fixed_bytes.view() : ::protocyte::ByteView {};
+        }
+        ::protocyte::Status set_crazy_fixed_bytes(const ::protocyte::ByteView value) noexcept {
+            ::protocyte::FixedByteArray<BYTE_ARRAY_CAP> temp {};
+            if (const auto st = temp.assign(value); !st) {
+                return st;
+            }
+            clear_crazy_bytes_oneof();
+            new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {
+                ::protocyte::move(temp)};
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
+            return ::protocyte::Status::ok();
+        }
+
+        constexpr bool has_crazy_repeated_bytes() const noexcept {
+            return crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_repeated_bytes;
+        }
+        const ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config> *
+        crazy_repeated_bytes() const noexcept {
+            return has_crazy_repeated_bytes() && crazy_bytes_oneof.crazy_repeated_bytes.has_value() ?
+                       &crazy_bytes_oneof.crazy_repeated_bytes.value() :
+                       nullptr;
+        }
+        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>>
+        ensure_crazy_repeated_bytes() noexcept {
+            if (!has_crazy_repeated_bytes()) {
+                clear_crazy_bytes_oneof();
+                new (&crazy_bytes_oneof.crazy_repeated_bytes) typename Config::template Optional<
+                    ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {};
+            }
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_repeated_bytes;
+            if (!crazy_bytes_oneof.crazy_repeated_bytes.has_value()) {
+                if (const auto st = crazy_bytes_oneof.crazy_repeated_bytes.emplace(*ctx_); !st) {
+                    return ::protocyte::Result<::protocyte::Ref<
+                        ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>>::err(st.error());
+                }
+            }
+            return ::protocyte::
+                Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>>::ok(
+                    ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
+                        crazy_bytes_oneof.crazy_repeated_bytes.value()});
+        }
+
+        constexpr bool has_crazy_bounded_repeated_bytes() const noexcept {
+            return crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes;
+        }
+        const ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config> *
+        crazy_bounded_repeated_bytes() const noexcept {
+            return has_crazy_bounded_repeated_bytes() && crazy_bytes_oneof.crazy_bounded_repeated_bytes.has_value() ?
+                       &crazy_bytes_oneof.crazy_bounded_repeated_bytes.value() :
+                       nullptr;
+        }
+        ::protocyte::Result<
+            ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>>>
+        ensure_crazy_bounded_repeated_bytes() noexcept {
+            if (!has_crazy_bounded_repeated_bytes()) {
+                clear_crazy_bytes_oneof();
+                new (&crazy_bytes_oneof.crazy_bounded_repeated_bytes) typename Config::template Optional<
+                    ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {};
+            }
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes;
+            if (!crazy_bytes_oneof.crazy_bounded_repeated_bytes.has_value()) {
+                if (const auto st = crazy_bytes_oneof.crazy_bounded_repeated_bytes.emplace(*ctx_); !st) {
+                    return ::protocyte::Result<::protocyte::Ref<
+                        ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>>>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<
+                ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>>>::
+                ok(::protocyte::Ref<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
+                    crazy_bytes_oneof.crazy_bounded_repeated_bytes.value()});
+        }
+
+        constexpr bool has_crazy_fixed_repeated_bytes() const noexcept {
+            return crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes;
+        }
+        const ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config> *
+        crazy_fixed_repeated_bytes() const noexcept {
+            return has_crazy_fixed_repeated_bytes() && crazy_bytes_oneof.crazy_fixed_repeated_bytes.has_value() ?
+                       &crazy_bytes_oneof.crazy_fixed_repeated_bytes.value() :
+                       nullptr;
+        }
+        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>>
+        ensure_crazy_fixed_repeated_bytes() noexcept {
+            if (!has_crazy_fixed_repeated_bytes()) {
+                clear_crazy_bytes_oneof();
+                new (&crazy_bytes_oneof.crazy_fixed_repeated_bytes) typename Config::template Optional<
+                    ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {};
+            }
+            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes;
+            if (!crazy_bytes_oneof.crazy_fixed_repeated_bytes.has_value()) {
+                if (const auto st = crazy_bytes_oneof.crazy_fixed_repeated_bytes.emplace(*ctx_); !st) {
+                    return ::protocyte::Result<::protocyte::Ref<
+                        ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>>::err(st.error());
+                }
+            }
+            return ::protocyte::
+                Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>>::ok(
+                    ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
+                        crazy_bytes_oneof.crazy_fixed_repeated_bytes.value()});
         }
 
         const typename Config::template Map<typename Config::String, ::protocyte::i32> &map_str_int32() const noexcept {
@@ -3086,6 +3828,136 @@ namespace test::ultimate {
                         }
                         break;
                     }
+                    case FieldNumber::crazy_plain_bytes: {
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_plain_bytes) typename Config::Bytes {ctx_};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_plain_bytes;
+                        if (const auto st = ::protocyte::read_bytes_field<Config>(
+                                *ctx_, reader, wire_type, field_number, crazy_bytes_oneof.crazy_plain_bytes);
+                            !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::crazy_bounded_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (len.value() > BYTE_ARRAY_CAP) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                              field_number);
+                        }
+                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize(
+                                static_cast<::protocyte::usize>(len.value()));
+                            !st) {
+                            return st;
+                        }
+                        if (const auto st = reader.read(crazy_bytes_oneof.crazy_bounded_bytes.data(),
+                                                        crazy_bytes_oneof.crazy_bounded_bytes.size());
+                            !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::crazy_fixed_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (len.value() != BYTE_ARRAY_CAP) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument,
+                                                              reader.position(), field_number);
+                        }
+                        auto view = crazy_bytes_oneof.crazy_fixed_bytes.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::crazy_repeated_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        auto ensured = ensure_crazy_repeated_bytes();
+                        if (!ensured) {
+                            return ensured.status();
+                        }
+                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
+                        ::protocyte::ReaderRef sub_reader {sub};
+                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
+                            return st;
+                        }
+                        if (const auto st = sub.finish(); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::crazy_bounded_repeated_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        auto ensured = ensure_crazy_bounded_repeated_bytes();
+                        if (!ensured) {
+                            return ensured.status();
+                        }
+                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
+                        ::protocyte::ReaderRef sub_reader {sub};
+                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
+                            return st;
+                        }
+                        if (const auto st = sub.finish(); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::crazy_fixed_repeated_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        auto ensured = ensure_crazy_fixed_repeated_bytes();
+                        if (!ensured) {
+                            return ensured.status();
+                        }
+                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
+                        ::protocyte::ReaderRef sub_reader {sub};
+                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
+                            return st;
+                        }
+                        if (const auto st = sub.finish(); !st) {
+                            return st;
+                        }
+                        break;
+                    }
                     default: {
                         if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
                             return st;
@@ -3850,6 +4722,87 @@ namespace test::ultimate {
                     return st;
                 }
             }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_plain_bytes) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::crazy_plain_bytes),
+                        crazy_bytes_oneof.crazy_plain_bytes.view());
+                    !st) {
+                    return st;
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_bytes) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::crazy_bounded_bytes),
+                        crazy_bytes_oneof.crazy_bounded_bytes.view());
+                    !st) {
+                    return st;
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_bytes) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_bytes),
+                        crazy_bytes_oneof.crazy_fixed_bytes.view());
+                    !st) {
+                    return st;
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_repeated_bytes) {
+                if (const auto st =
+                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::crazy_repeated_bytes),
+                                               ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                auto msg_size = crazy_bytes_oneof.crazy_repeated_bytes.value().encoded_size();
+                if (!msg_size) {
+                    return msg_size.status();
+                }
+                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
+                    !st) {
+                    return st;
+                }
+                if (const auto st = crazy_bytes_oneof.crazy_repeated_bytes.value().serialize(writer); !st) {
+                    return st;
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes) {
+                if (const auto st = ::protocyte::write_tag(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::crazy_bounded_repeated_bytes),
+                        ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                auto msg_size = crazy_bytes_oneof.crazy_bounded_repeated_bytes.value().encoded_size();
+                if (!msg_size) {
+                    return msg_size.status();
+                }
+                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
+                    !st) {
+                    return st;
+                }
+                if (const auto st = crazy_bytes_oneof.crazy_bounded_repeated_bytes.value().serialize(writer); !st) {
+                    return st;
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes) {
+                if (const auto st = ::protocyte::write_tag(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_repeated_bytes),
+                        ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                auto msg_size = crazy_bytes_oneof.crazy_fixed_repeated_bytes.value().encoded_size();
+                if (!msg_size) {
+                    return msg_size.status();
+                }
+                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
+                    !st) {
+                    return st;
+                }
+                if (const auto st = crazy_bytes_oneof.crazy_fixed_repeated_bytes.value().serialize(writer); !st) {
+                    return st;
+                }
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -4413,6 +5366,72 @@ namespace test::ultimate {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_plain_bytes) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_plain_bytes)) +
+                                    ::protocyte::varint_size(crazy_bytes_oneof.crazy_plain_bytes.size()) +
+                                    crazy_bytes_oneof.crazy_plain_bytes.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_bytes) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_bounded_bytes)) +
+                                    ::protocyte::varint_size(crazy_bytes_oneof.crazy_bounded_bytes.size()) +
+                                    crazy_bytes_oneof.crazy_bounded_bytes.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_bytes) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_bytes)) +
+                                    ::protocyte::varint_size(crazy_bytes_oneof.crazy_fixed_bytes.size()) +
+                                    crazy_bytes_oneof.crazy_fixed_bytes.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_repeated_bytes) {
+                auto nested_size = crazy_bytes_oneof.crazy_repeated_bytes.value().encoded_size();
+                if (!nested_size) {
+                    return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
+                }
+                if (const auto st = ::protocyte::add_size(
+                        &total,
+                        ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_repeated_bytes)) +
+                            ::protocyte::varint_size(nested_size.value()) + nested_size.value());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes) {
+                auto nested_size = crazy_bytes_oneof.crazy_bounded_repeated_bytes.value().encoded_size();
+                if (!nested_size) {
+                    return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
+                }
+                if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size(static_cast<::protocyte::u32>(
+                                                                      FieldNumber::crazy_bounded_repeated_bytes)) +
+                                                                      ::protocyte::varint_size(nested_size.value()) +
+                                                                      nested_size.value());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes) {
+                auto nested_size = crazy_bytes_oneof.crazy_fixed_repeated_bytes.value().encoded_size();
+                if (!nested_size) {
+                    return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
+                }
+                if (const auto st = ::protocyte::add_size(
+                        &total,
+                        ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_repeated_bytes)) +
+                            ::protocyte::varint_size(nested_size.value()) + nested_size.value());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
             return ::protocyte::Result<::protocyte::usize>::ok(total);
         }
     protected:
@@ -4446,6 +5465,22 @@ namespace test::ultimate {
             typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> oneof_msg;
             ::protocyte::ByteArray<BYTE_ARRAY_CAP> oneof_bytes;
         } special_oneof;
+        Crazy_bytes_oneofCase crazy_bytes_oneof_case_ {Crazy_bytes_oneofCase::none};
+        union Crazy_bytes_oneofStorage {
+            Crazy_bytes_oneofStorage() noexcept {}
+            ~Crazy_bytes_oneofStorage() noexcept {}
+            typename Config::Bytes crazy_plain_bytes;
+            ::protocyte::ByteArray<BYTE_ARRAY_CAP> crazy_bounded_bytes;
+            ::protocyte::FixedByteArray<BYTE_ARRAY_CAP> crazy_fixed_bytes;
+            typename Config::template Optional<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>
+                crazy_repeated_bytes;
+            typename Config::template Optional<
+                ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>>
+                crazy_bounded_repeated_bytes;
+            typename Config::template Optional<
+                ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>
+                crazy_fixed_repeated_bytes;
+        } crazy_bytes_oneof;
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
         typename Config::template Map<bool, typename Config::Bytes> map_bool_bytes_;

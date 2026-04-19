@@ -225,6 +225,51 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     oneof_bytes = add_field(msg, "oneof_bytes", 29, F.TYPE_BYTES, oneof_index=0)
     oneof_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
 
+    repeated_bytes_holder = msg.nested_type.add()
+    repeated_bytes_holder.name = "RepeatedBytesHolder"
+    add_field(repeated_bytes_holder, "values", 1, F.TYPE_BYTES, label=F.LABEL_REPEATED)
+
+    bounded_repeated_bytes_holder = msg.nested_type.add()
+    bounded_repeated_bytes_holder.name = "BoundedRepeatedBytesHolder"
+    bounded_values = add_field(bounded_repeated_bytes_holder, "values", 1, F.TYPE_BYTES, label=F.LABEL_REPEATED)
+    bounded_values.options.ParseFromString(array_option_bytes(max_value=3))
+
+    fixed_repeated_bytes_holder = msg.nested_type.add()
+    fixed_repeated_bytes_holder.name = "FixedRepeatedBytesHolder"
+    fixed_values = add_field(fixed_repeated_bytes_holder, "values", 1, F.TYPE_BYTES, label=F.LABEL_REPEATED)
+    fixed_values.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
+
+    msg.oneof_decl.add().name = "crazy_bytes_oneof"
+    add_field(msg, "crazy_plain_bytes", 49, F.TYPE_BYTES, oneof_index=1)
+    crazy_bounded_bytes = add_field(msg, "crazy_bounded_bytes", 50, F.TYPE_BYTES, oneof_index=1)
+    crazy_bounded_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
+    crazy_fixed_bytes = add_field(msg, "crazy_fixed_bytes", 51, F.TYPE_BYTES, oneof_index=1)
+    crazy_fixed_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP", fixed=True))
+    add_field(
+        msg,
+        "crazy_repeated_bytes",
+        52,
+        F.TYPE_MESSAGE,
+        type_name=".test.ultimate.UltimateComplexMessage.RepeatedBytesHolder",
+        oneof_index=1,
+    )
+    add_field(
+        msg,
+        "crazy_bounded_repeated_bytes",
+        53,
+        F.TYPE_MESSAGE,
+        type_name=".test.ultimate.UltimateComplexMessage.BoundedRepeatedBytesHolder",
+        oneof_index=1,
+    )
+    add_field(
+        msg,
+        "crazy_fixed_repeated_bytes",
+        54,
+        F.TYPE_MESSAGE,
+        type_name=".test.ultimate.UltimateComplexMessage.FixedRepeatedBytesHolder",
+        oneof_index=1,
+    )
+
     map_str_int32 = add_map_entry(msg, "MapStrInt32Entry", F.TYPE_STRING, F.TYPE_INT32)
     map_int32_str = add_map_entry(msg, "MapInt32StrEntry", F.TYPE_INT32, F.TYPE_STRING)
     map_bool_bytes = add_map_entry(msg, "MapBoolBytesEntry", F.TYPE_BOOL, F.TYPE_BYTES)
