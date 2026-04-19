@@ -1,14 +1,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
+#include <string>
 #include <string_view>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "compat.protocyte.hpp"
+#include "compat_cases.hpp"
 #include "example.protocyte.hpp"
 #include "protocyte/runtime/runtime.hpp"
 
 namespace {
+
+    struct alignas(64) HostedOverAligned final {
+        uint8_t bytes[64];
+    };
 
     using Config = protocyte::DefaultConfig;
     using Message = test::ultimate::UltimateComplexMessage<>;
@@ -19,6 +27,9 @@ namespace {
     using CrossNested = test::ultimate::CrossMessageConstants_Nested<>;
     using Color = test::ultimate::UltimateComplexMessage_Color;
     using InnerMode = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum;
+    using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
+    using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
+    using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
 
     static_assert(Message::BASE_COUNT == 5);
     static_assert(Message::SHIFTED_COUNT == 5000000000ll);
@@ -109,6 +120,17 @@ namespace {
         return protocyte::ByteView {data, N};
     }
 
+    std::string hex_of(std::string_view bytes) {
+        static constexpr char kHex[] = "0123456789abcdef";
+        std::string out;
+        out.reserve(bytes.size() * 2u);
+        for (const unsigned char value : bytes) {
+            out.push_back(kHex[value >> 4u]);
+            out.push_back(kHex[value & 0x0fu]);
+        }
+        return out;
+    }
+
     template<class TStatusLike> void require_success(const TStatusLike &status_like) {
         const auto error = status_like.error();
         CAPTURE(static_cast<uint32_t>(error.code), error.offset, error.field_number);
@@ -125,6 +147,33 @@ namespace {
     void assign_string(Config::String &out, protocyte::ByteView view) { require_success(out.assign(view)); }
 
     void assign_bytes(Config::Bytes &out, protocyte::ByteView view) { require_success(out.assign(view)); }
+
+    std::string serialize_compat(const CompatMessage &message) {
+        auto encoded_size = message.encoded_size();
+        require_success(encoded_size);
+
+        std::string out(encoded_size.value(), '\0');
+        protocyte::SliceWriter writer(reinterpret_cast<uint8_t *>(out.data()), out.size());
+        require_success(message.serialize(writer));
+        REQUIRE(writer.position() == out.size());
+        return out;
+    }
+
+    template<size_t N> void require_same_compat_bytes(const char *label, const CompatMessage &protocyte_message,
+                                                      const std::array<unsigned char, N> &expected_bytes) {
+        const auto protocyte_bytes = serialize_compat(protocyte_message);
+        const auto expected = std::string(reinterpret_cast<const char *>(expected_bytes.data()), expected_bytes.size());
+
+        CAPTURE(label);
+        CAPTURE(hex_of(protocyte_bytes));
+        CAPTURE(hex_of(expected));
+        REQUIRE(protocyte_bytes == expected);
+    }
+
+    void populate_compat_nested(CompatNested &nested, const int32_t value, const protocyte::ByteView label) {
+        require_success(nested.set_value(value));
+        require_success(nested.set_label(label));
+    }
 
     void populate_required_fixed_array(Message &message) {
         for (size_t i = 0; i < sizeof(kFixedIntegerArray) / sizeof(kFixedIntegerArray[0]); ++i) {
@@ -947,4 +996,161 @@ TEST_CASE("Array bounds are enforced", "[smoke][array]") {
 TEST_CASE("Cross-message constants resolve into arrays", "[smoke][constants]") {
     auto ctx = make_context();
     round_trip_cross_message(ctx);
+}
+
+TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]") {
+    auto ctx = make_context();
+
+    SECTION("empty message") {
+        CompatMessage protocyte_message(ctx);
+        require_same_compat_bytes("empty", protocyte_message, compat_cases::kEmpty);
+    }
+
+    SECTION("varint scalars") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_f_int32(std::numeric_limits<int32_t>::min()));
+        require_success(protocyte_message.set_f_int64(std::numeric_limits<int64_t>::min()));
+        require_success(protocyte_message.set_f_uint32(std::numeric_limits<uint32_t>::max()));
+        require_success(protocyte_message.set_f_uint64(std::numeric_limits<uint64_t>::max()));
+        require_success(protocyte_message.set_f_sint32(-17));
+        require_success(protocyte_message.set_f_sint64(-17000000000ll));
+        require_success(protocyte_message.set_f_bool(true));
+        require_success(protocyte_message.set_mode(CompatMode::SECOND));
+
+        require_same_compat_bytes("varint", protocyte_message, compat_cases::kVarint);
+    }
+
+    SECTION("fixed scalars") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_f_fixed32(0x11223344u));
+        require_success(protocyte_message.set_f_fixed64(0x1122334455667788ull));
+        require_success(protocyte_message.set_f_sfixed32(-1234567));
+        require_success(protocyte_message.set_f_sfixed64(-1234567890123ll));
+        require_success(protocyte_message.set_f_float(-0.0f));
+        require_success(protocyte_message.set_f_double(123.5));
+
+        require_same_compat_bytes("fixed", protocyte_message, compat_cases::kFixed);
+    }
+
+    SECTION("length delimited fields") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_f_string(view_of(kString)));
+        require_success(protocyte_message.set_f_bytes(view_of(kBytes)));
+        if (auto nested = protocyte_message.ensure_nested(); nested) {
+            populate_compat_nested(nested.value().get(), 417, view_of(kNestedName));
+        } else {
+            require_success(nested);
+        }
+
+        require_same_compat_bytes("length-delimited", protocyte_message, compat_cases::kLengthDelimited);
+    }
+
+    SECTION("repeated fields") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.mutable_r_int32_unpacked().push_back(-1));
+        require_success(protocyte_message.mutable_r_int32_unpacked().push_back(0));
+        require_success(protocyte_message.mutable_r_int32_unpacked().push_back(150));
+        require_success(protocyte_message.mutable_r_int32_packed().push_back(-1));
+        require_success(protocyte_message.mutable_r_int32_packed().push_back(0));
+        require_success(protocyte_message.mutable_r_int32_packed().push_back(150));
+        require_success(protocyte_message.mutable_r_double().push_back(23.5));
+        require_success(protocyte_message.mutable_r_double().push_back(-0.0));
+
+        require_same_compat_bytes("repeated", protocyte_message, compat_cases::kRepeated);
+    }
+
+    SECTION("oneof string") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_oneof_string(view_of(kOneofString)));
+        require_same_compat_bytes("oneof-string", protocyte_message, compat_cases::kOneofString);
+    }
+
+    SECTION("oneof int32") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_oneof_int32(-2701));
+        require_same_compat_bytes("oneof-int32", protocyte_message, compat_cases::kOneofInt32);
+    }
+
+    SECTION("oneof nested") {
+        CompatMessage protocyte_message(ctx);
+
+        if (auto nested = protocyte_message.ensure_oneof_nested(); nested) {
+            populate_compat_nested(nested.value().get(), 90210, view_of(kNestedDescription));
+        } else {
+            require_success(nested);
+        }
+        require_same_compat_bytes("oneof-nested", protocyte_message, compat_cases::kOneofNested);
+    }
+
+    SECTION("oneof bytes") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_oneof_bytes(view_of(kOneofBytes)));
+        require_same_compat_bytes("oneof-bytes", protocyte_message, compat_cases::kOneofBytes);
+    }
+
+    SECTION("optional fields") {
+        CompatMessage protocyte_message(ctx);
+
+        require_success(protocyte_message.set_opt_int32(-99));
+        require_success(protocyte_message.set_opt_string(view_of(kOptionalString)));
+        require_same_compat_bytes("optional", protocyte_message, compat_cases::kOptional);
+    }
+}
+
+TEST_CASE("Hosted allocator honors requested alignment", "[smoke][allocator]") {
+    auto allocator = protocyte::hosted_allocator();
+    auto *raw = allocator.allocate(allocator.state, sizeof(HostedOverAligned), alignof(HostedOverAligned));
+    REQUIRE(raw != nullptr);
+    CHECK((reinterpret_cast<std::uintptr_t>(raw) % alignof(HostedOverAligned)) == 0u);
+    allocator.deallocate(allocator.state, raw, sizeof(HostedOverAligned), alignof(HostedOverAligned));
+}
+
+TEST_CASE("ZigZag encoding matches protobuf wire mapping", "[smoke][zigzag]") {
+    CHECK(protocyte::encode_zigzag32(0) == 0u);
+    CHECK(protocyte::encode_zigzag32(-1) == 1u);
+    CHECK(protocyte::encode_zigzag32(1) == 2u);
+    CHECK(protocyte::encode_zigzag32(-2) == 3u);
+    CHECK(protocyte::encode_zigzag32(std::numeric_limits<int32_t>::max()) == 0xfffffffeu);
+    CHECK(protocyte::encode_zigzag32(std::numeric_limits<int32_t>::min()) == 0xffffffffu);
+
+    CHECK(protocyte::encode_zigzag64(0) == 0u);
+    CHECK(protocyte::encode_zigzag64(-1) == 1u);
+    CHECK(protocyte::encode_zigzag64(1) == 2u);
+    CHECK(protocyte::encode_zigzag64(-2) == 3u);
+    CHECK(protocyte::encode_zigzag64(std::numeric_limits<int64_t>::max()) == 0xfffffffffffffffeull);
+    CHECK(protocyte::encode_zigzag64(std::numeric_limits<int64_t>::min()) == 0xffffffffffffffffull);
+
+    CHECK(protocyte::decode_zigzag32(0u) == 0);
+    CHECK(protocyte::decode_zigzag32(1u) == -1);
+    CHECK(protocyte::decode_zigzag32(2u) == 1);
+    CHECK(protocyte::decode_zigzag32(3u) == -2);
+    CHECK(protocyte::decode_zigzag32(0xfffffffeu) == std::numeric_limits<int32_t>::max());
+    CHECK(protocyte::decode_zigzag32(0xffffffffu) == std::numeric_limits<int32_t>::min());
+
+    CHECK(protocyte::decode_zigzag64(0u) == 0);
+    CHECK(protocyte::decode_zigzag64(1u) == -1);
+    CHECK(protocyte::decode_zigzag64(2u) == 1);
+    CHECK(protocyte::decode_zigzag64(3u) == -2);
+    CHECK(protocyte::decode_zigzag64(0xfffffffffffffffeull) == std::numeric_limits<int64_t>::max());
+    CHECK(protocyte::decode_zigzag64(0xffffffffffffffffull) == std::numeric_limits<int64_t>::min());
+}
+
+TEST_CASE("tag_size matches protobuf group sizing", "[smoke][runtime]") {
+    CHECK(protocyte::tag_size(1u) == 1u);
+    CHECK(protocyte::tag_size(1u, protocyte::WireType::VARINT) == 1u);
+    CHECK(protocyte::tag_size(1u, protocyte::WireType::LEN) == 1u);
+    CHECK(protocyte::tag_size(1u, protocyte::WireType::SGROUP) == 2u);
+
+    constexpr uint32_t kLargeFieldNumber = 2048u;
+    const auto single_tag_size = protocyte::varint_size((static_cast<protocyte::u64>(kLargeFieldNumber) << 3u) |
+                                                        static_cast<protocyte::u64>(protocyte::WireType::VARINT));
+    CHECK(protocyte::tag_size(kLargeFieldNumber, protocyte::WireType::VARINT) == single_tag_size);
+    CHECK(protocyte::tag_size(kLargeFieldNumber, protocyte::WireType::SGROUP) == single_tag_size * 2u);
 }

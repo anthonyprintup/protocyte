@@ -587,7 +587,7 @@ namespace protocyte {
         }
 
     protected:
-        u8 bytes_[Max] {};
+        u8 bytes_[Max];
         usize size_ {};
     };
 
@@ -616,6 +616,9 @@ namespace protocyte {
         static constexpr usize fixed_size() noexcept { return Max; }
         ByteView view() const noexcept { return has_ ? ByteView {.data = bytes_, .size = Max} : ByteView {}; }
         MutableByteView mutable_view() noexcept {
+            if (!has_) {
+                for (usize i {}; i < Max; ++i) { bytes_[i] = 0u; }
+            }
             has_ = true;
             return {.data = bytes_, .size = Max};
         }
@@ -636,7 +639,7 @@ namespace protocyte {
         }
 
     protected:
-        u8 bytes_[Max] {};
+        u8 bytes_[Max];
         bool has_ {};
     };
 
@@ -1111,9 +1114,15 @@ namespace protocyte {
         return size;
     }
 
-    constexpr u32 encode_zigzag32(const i32 value) noexcept { return static_cast<u32>((value << 1) ^ (value >> 31)); }
+    constexpr u32 encode_zigzag32(const i32 value) noexcept {
+        const auto bits = static_cast<u32>(value);
+        return (bits << 1u) ^ (static_cast<u32>(0u) - (bits >> 31u));
+    }
 
-    constexpr u64 encode_zigzag64(const i64 value) noexcept { return static_cast<u64>((value << 1) ^ (value >> 63)); }
+    constexpr u64 encode_zigzag64(const i64 value) noexcept {
+        const auto bits = static_cast<u64>(value);
+        return (bits << 1u) ^ (static_cast<u64>(0u) - (bits >> 63u));
+    }
 
     constexpr i32 decode_zigzag32(const u32 value) noexcept {
         return static_cast<i32>((value >> 1) ^ (~(value & 1u) + 1u));
@@ -1166,8 +1175,9 @@ namespace protocyte {
         return write_varint(writer, (static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
     }
 
-    constexpr usize tag_size(const u32 field_number) noexcept {
-        return varint_size(static_cast<u64>(field_number) << 3u);
+    constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept {
+        const auto size = varint_size((static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
+        return wire_type == WireType::SGROUP ? size * 2u : size;
     }
 
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;

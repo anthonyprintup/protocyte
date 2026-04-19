@@ -86,6 +86,11 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert (
+        "constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert "return wire_type == WireType::SGROUP ? size * 2u : size;" in files["protocyte/runtime/runtime.hpp"]
     assert "FEATURE_PROTO3_OPTIONAL" not in files["simple.protocyte.hpp"]
 
 
@@ -232,10 +237,12 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
     assert "::protocyte::ByteView digest() const noexcept { return digest_.view(); }" in header
     assert "if (len.value() != DOUBLE_MAGIC)" in header
-    assert "if (!(values_.size() == 4u)) {" in header
+    assert "if (values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
     assert "template<usize Max> struct ByteArray" in runtime_header
     assert "template<usize Max> struct FixedByteArray" in runtime_header
+    assert "u8 bytes_[Max];" in runtime_header
+    assert "u8 bytes_[Max] {};" not in runtime_header
 
 
 def test_generated_header_copies_and_moves_bounded_arrays() -> None:

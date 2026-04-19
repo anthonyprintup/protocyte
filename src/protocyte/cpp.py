@@ -915,7 +915,7 @@ def _emit_fixed_array_validation(w: CppWriter, message: MessageModel, *, for_siz
         if not item.array_fixed or item.array_max is None:
             continue
         if item.repeated:
-            condition = f"{_member(item)}.size() == {_array_max_literal(item)}"
+            condition = f"{_member(item)}.size() != {_array_max_literal(item)}"
         else:
             continue
         error = (
@@ -923,7 +923,7 @@ def _emit_fixed_array_validation(w: CppWriter, message: MessageModel, *, for_siz
             "::protocyte::ErrorCode::invalid_argument, {}, "
             f"{_field_number_u32(item)}).error())"
         )
-        w.line(f"if (!({condition})) {{")
+        w.line(f"if ({condition}) {{")
         w.push()
         if for_size:
             w.line(f"return {error};")
@@ -1195,6 +1195,13 @@ def _emit_serialize_statement(w: CppWriter, item: FieldModel, options: Generator
     if item.oneof_name:
         condition = f"{cpp_identifier(item.oneof_name)}_case_ == {item.oneof_name[0].upper() + item.oneof_name[1:]}Case::{item.cpp_name}"
     if item.repeated and item.kind != "map":
+        if item.packed:
+            w.line(f"if (!{_member(item)}.empty()) {{")
+            w.push()
+            _emit_write_packed_field(w, item, _member(item), options)
+            w.pop()
+            w.line("}")
+            return
         w.line(f"for (::protocyte::usize i {{}}; i < {_member(item)}.size(); ++i) {{")
         w.push()
         _emit_write_field(w, item, f"{_member(item)}[i]", options)
@@ -1271,6 +1278,35 @@ def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
     w.line(f"}}); !st_map_{item.cpp_name}) {{ return st_map_{item.cpp_name}; }}")
 
 
+def _emit_write_packed_field(
+    w: CppWriter,
+    item: FieldModel,
+    value: str,
+    options: GeneratorOptions,
+    *,
+    enum_type: str = "FieldNumber",
+) -> None:
+    del options
+    packed_name = f"packed_size_{item.cpp_name}"
+    w.line(f"::protocyte::usize {packed_name} {{}};")
+    w.line(f"for (::protocyte::usize i {{}}; i < {value}.size(); ++i) {{")
+    w.push()
+    _emit_add_packed_size_status(w, item, f"{value}[i]", packed_name)
+    w.pop()
+    w.line("}")
+    w.line(
+        f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item, enum_type)}, ::protocyte::WireType::LEN); !st) {{ return st; }}"
+    )
+    w.line(
+        f"if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>({packed_name})); !st) {{ return st; }}"
+    )
+    w.line(f"for (::protocyte::usize i {{}}; i < {value}.size(); ++i) {{")
+    w.push()
+    _emit_write_scalar(w, item, f"{value}[i]")
+    w.pop()
+    w.line("}")
+
+
 def _emit_write_scalar(w: CppWriter, item: FieldModel, value: str) -> None:
     t = item.proto_type
     if t in {
@@ -1305,6 +1341,22 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
     if item.oneof_name:
         condition = f"{cpp_identifier(item.oneof_name)}_case_ == {item.oneof_name[0].upper() + item.oneof_name[1:]}Case::{item.cpp_name}"
     if item.repeated and item.kind != "map":
+        if item.packed:
+            packed_name = f"packed_size_{item.cpp_name}"
+            w.line(f"if (!{_member(item)}.empty()) {{")
+            w.push()
+            w.line(f"::protocyte::usize {packed_name} {{}};")
+            w.line(f"for (::protocyte::usize i {{}}; i < {_member(item)}.size(); ++i) {{")
+            w.push()
+            _emit_add_packed_size_result(w, item, f"{_member(item)}[i]", packed_name)
+            w.pop()
+            w.line("}")
+            w.line(
+                f"if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size({_field_number_u32(item)}) + ::protocyte::varint_size({packed_name}) + {packed_name}); !st) {{ return ::protocyte::Result<::protocyte::usize>::err(st.error()); }}"
+            )
+            w.pop()
+            w.line("}")
+            return
         w.line(f"for (::protocyte::usize i {{}}; i < {_member(item)}.size(); ++i) {{")
         w.push()
         _emit_add_size(w, item, f"{_member(item)}[i]", options)
@@ -1396,6 +1448,26 @@ def _emit_add_size_status(
     else:
         value_size = f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + {_scalar_size(item, value)}"
     w.line(f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {value_size}); !st_size) {{ return st_size; }}")
+    w.pop()
+    w.line("}")
+
+
+def _emit_add_packed_size_status(w: CppWriter, item: FieldModel, value: str, total_name: str) -> None:
+    w.line("{")
+    w.push()
+    w.line(
+        f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {_scalar_size(item, value)}); !st_size) {{ return st_size; }}"
+    )
+    w.pop()
+    w.line("}")
+
+
+def _emit_add_packed_size_result(w: CppWriter, item: FieldModel, value: str, total_name: str) -> None:
+    w.line("{")
+    w.push()
+    w.line(
+        f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {_scalar_size(item, value)}); !st_size) {{ return ::protocyte::Result<::protocyte::usize>::err(st_size.error()); }}"
+    )
     w.pop()
     w.line("}")
 
@@ -1616,6 +1688,10 @@ def _presence(item: FieldModel) -> str:
         return f"{_member(item)} != 0"
     if item.proto_type == FieldDescriptorProto.TYPE_BOOL:
         return _member(item)
+    if item.proto_type == FieldDescriptorProto.TYPE_FLOAT:
+        return f"::std::bit_cast<::protocyte::u32>({_member(item)}) != 0u"
+    if item.proto_type == FieldDescriptorProto.TYPE_DOUBLE:
+        return f"::std::bit_cast<::protocyte::u64>({_member(item)}) != 0u"
     return f"{_member(item)} != {_default(item)}"
 
 

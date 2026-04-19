@@ -24,3 +24,15 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 protocyte = ["proto/**/*.proto"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    ".uv-cache",
+    "build",
+    "dist",
+    "smoke/build",
+    "smoke/cmake-build-debug",
+]

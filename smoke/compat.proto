@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package test.compat;
+
+option optimize_for = LITE_RUNTIME;
+
+message EncodingMatrix {
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    FIRST = 1;
+    SECOND = 2;
+  }
+
+  message Inner {
+    int32 value = 1;
+    string label = 2;
+  }
+
+  int32 f_int32 = 1;
+  int64 f_int64 = 2;
+  uint32 f_uint32 = 3;
+  uint64 f_uint64 = 4;
+  sint32 f_sint32 = 5;
+  sint64 f_sint64 = 6;
+  bool f_bool = 7;
+  Mode mode = 8;
+
+  fixed32 f_fixed32 = 9;
+  fixed64 f_fixed64 = 10;
+  sfixed32 f_sfixed32 = 11;
+  sfixed64 f_sfixed64 = 12;
+  float f_float = 13;
+  double f_double = 14;
+
+  string f_string = 15;
+  bytes f_bytes = 16;
+  Inner nested = 17;
+
+  repeated int32 r_int32_unpacked = 18 [packed = false];
+  repeated int32 r_int32_packed = 19 [packed = true];
+  repeated double r_double = 20;
+
+  oneof special_oneof {
+    string oneof_string = 21;
+    int32 oneof_int32 = 22;
+    Inner oneof_nested = 23;
+    bytes oneof_bytes = 24;
+  }
+
+  optional int32 opt_int32 = 25;
+  optional string opt_string = 26;
+}

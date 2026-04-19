@@ -18,20 +18,33 @@ def main() -> int:
     out_dir = Path(__file__).resolve().parents[1] / "generated"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    request = plugin_pb2.CodeGeneratorRequest()
-    request.file_to_generate.append("example.proto")
-    request.parameter = "runtime=emit"
-    request.proto_file.extend([options_file(), example_file()])
+    requests: list[plugin_pb2.CodeGeneratorRequest] = []
 
-    response = generate_response(request)
-    if response.error:
-        print(response.error, file=sys.stderr)
-        return 1
+    example_request = plugin_pb2.CodeGeneratorRequest()
+    example_request.file_to_generate.append("example.proto")
+    example_request.parameter = "runtime=emit"
+    example_request.proto_file.extend([options_file(), example_file()])
+    requests.append(example_request)
 
-    for item in response.file:
-        path = out_dir / item.name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(item.content, encoding="utf-8", newline="\n")
+    compat_request = plugin_pb2.CodeGeneratorRequest()
+    compat_request.file_to_generate.append("compat.proto")
+    compat_request.parameter = "namespace_prefix=protocyte_smoke"
+    compat_request.proto_file.append(compat_file())
+    requests.append(compat_request)
+
+    for request in requests:
+        response = generate_response(request)
+        if response.error:
+            print(response.error, file=sys.stderr)
+            return 1
+
+        for item in response.file:
+            path = out_dir / item.name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(item.content, encoding="utf-8", newline="\n")
+
+    compat_cases_path = out_dir / "compat_cases.hpp"
+    compat_cases_path.write_text(compat_cases_header(), encoding="utf-8", newline="\n")
 
     return 0
 
@@ -330,6 +343,154 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     add_field(cross, "nested", 3, F.TYPE_MESSAGE, type_name=".test.ultimate.CrossMessageConstants.Nested")
 
     return file
+
+
+def compat_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "compat.proto"
+    file.package = "test.compat"
+    file.syntax = "proto3"
+    file.options.optimize_for = descriptor_pb2.FileOptions.LITE_RUNTIME
+
+    msg = file.message_type.add()
+    msg.name = "EncodingMatrix"
+
+    mode = msg.enum_type.add()
+    mode.name = "Mode"
+    for name, number in [
+        ("MODE_UNSPECIFIED", 0),
+        ("FIRST", 1),
+        ("SECOND", 2),
+    ]:
+        value = mode.value.add()
+        value.name = name
+        value.number = number
+
+    inner = msg.nested_type.add()
+    inner.name = "Inner"
+    add_field(inner, "value", 1, F.TYPE_INT32)
+    add_field(inner, "label", 2, F.TYPE_STRING)
+
+    add_field(msg, "f_int32", 1, F.TYPE_INT32)
+    add_field(msg, "f_int64", 2, F.TYPE_INT64)
+    add_field(msg, "f_uint32", 3, F.TYPE_UINT32)
+    add_field(msg, "f_uint64", 4, F.TYPE_UINT64)
+    add_field(msg, "f_sint32", 5, F.TYPE_SINT32)
+    add_field(msg, "f_sint64", 6, F.TYPE_SINT64)
+    add_field(msg, "f_bool", 7, F.TYPE_BOOL)
+    add_field(msg, "mode", 8, F.TYPE_ENUM, type_name=".test.compat.EncodingMatrix.Mode")
+    add_field(msg, "f_fixed32", 9, F.TYPE_FIXED32)
+    add_field(msg, "f_fixed64", 10, F.TYPE_FIXED64)
+    add_field(msg, "f_sfixed32", 11, F.TYPE_SFIXED32)
+    add_field(msg, "f_sfixed64", 12, F.TYPE_SFIXED64)
+    add_field(msg, "f_float", 13, F.TYPE_FLOAT)
+    add_field(msg, "f_double", 14, F.TYPE_DOUBLE)
+    add_field(msg, "f_string", 15, F.TYPE_STRING)
+    add_field(msg, "f_bytes", 16, F.TYPE_BYTES)
+    add_field(msg, "nested", 17, F.TYPE_MESSAGE, type_name=".test.compat.EncodingMatrix.Inner")
+    add_field(msg, "r_int32_unpacked", 18, F.TYPE_INT32, label=F.LABEL_REPEATED, packed=False)
+    add_field(msg, "r_int32_packed", 19, F.TYPE_INT32, label=F.LABEL_REPEATED, packed=True)
+    add_field(msg, "r_double", 20, F.TYPE_DOUBLE, label=F.LABEL_REPEATED, packed=True)
+
+    msg.oneof_decl.add().name = "special_oneof"
+    add_field(msg, "oneof_string", 21, F.TYPE_STRING, oneof_index=0)
+    add_field(msg, "oneof_int32", 22, F.TYPE_INT32, oneof_index=0)
+    add_field(msg, "oneof_nested", 23, F.TYPE_MESSAGE, type_name=".test.compat.EncodingMatrix.Inner", oneof_index=0)
+    add_field(msg, "oneof_bytes", 24, F.TYPE_BYTES, oneof_index=0)
+
+    msg.oneof_decl.add().name = "_opt_int32"
+    msg.oneof_decl.add().name = "_opt_string"
+    add_field(msg, "opt_int32", 25, F.TYPE_INT32, oneof_index=1, proto3_optional=True)
+    add_field(msg, "opt_string", 26, F.TYPE_STRING, oneof_index=2, proto3_optional=True)
+
+    return file
+
+
+def compat_cases_header() -> str:
+    file = compat_file()
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(file)
+    message_desc = pool.FindMessageTypeByName("test.compat.EncodingMatrix")
+    message_cls = message_factory.GetMessageClass(message_desc)
+
+    cases: list[tuple[str, bytes]] = []
+
+    cases.append(("kEmpty", message_cls().SerializeToString()))
+
+    message = message_cls()
+    message.f_int32 = -(2**31)
+    message.f_int64 = -(2**63)
+    message.f_uint32 = (2**32) - 1
+    message.f_uint64 = (2**64) - 1
+    message.f_sint32 = -17
+    message.f_sint64 = -17000000000
+    message.f_bool = True
+    message.mode = 2
+    cases.append(("kVarint", message.SerializeToString()))
+
+    message = message_cls()
+    message.f_fixed32 = 0x11223344
+    message.f_fixed64 = 0x1122334455667788
+    message.f_sfixed32 = -1234567
+    message.f_sfixed64 = -1234567890123
+    message.f_float = -0.0
+    message.f_double = 123.5
+    cases.append(("kFixed", message.SerializeToString()))
+
+    message = message_cls()
+    message.f_string = "smoke"
+    message.f_bytes = bytes([0x00, 0x01, 0x7F, 0x80, 0xFF])
+    message.nested.value = 417
+    message.nested.label = "nested"
+    cases.append(("kLengthDelimited", message.SerializeToString()))
+
+    message = message_cls()
+    message.r_int32_unpacked.extend([-1, 0, 150])
+    message.r_int32_packed.extend([-1, 0, 150])
+    message.r_double.extend([23.5, -0.0])
+    cases.append(("kRepeated", message.SerializeToString()))
+
+    message = message_cls()
+    message.oneof_string = "oneof-str"
+    cases.append(("kOneofString", message.SerializeToString()))
+
+    message = message_cls()
+    message.oneof_int32 = -2701
+    cases.append(("kOneofInt32", message.SerializeToString()))
+
+    message = message_cls()
+    message.oneof_nested.value = 90210
+    message.oneof_nested.label = "inner"
+    cases.append(("kOneofNested", message.SerializeToString()))
+
+    message = message_cls()
+    message.oneof_bytes = bytes([0xDE, 0xAD, 0xBE, 0xEF])
+    cases.append(("kOneofBytes", message.SerializeToString()))
+
+    message = message_cls()
+    message.opt_int32 = -99
+    message.opt_string = "opt"
+    cases.append(("kOptional", message.SerializeToString()))
+
+    lines = [
+        "#pragma once",
+        "",
+        "#include <array>",
+        "#include <cstddef>",
+        "",
+        "namespace compat_cases {",
+        "",
+    ]
+    for name, payload in cases:
+        lines.append(f"inline constexpr ::std::array<unsigned char, {len(payload)}> {name} {{")
+        if payload:
+            row = ", ".join(f"0x{byte:02x}" for byte in payload)
+            lines.append(f"    {row},")
+        lines.append("};")
+        lines.append("")
+    lines.append("} // namespace compat_cases")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def options_file() -> descriptor_pb2.FileDescriptorProto:
