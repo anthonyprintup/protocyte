@@ -10,8 +10,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(FetchContent)
+
 set(PROTOCYTE_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
-set(PROTOCYTE_EXAMPLE_PROTO "${CMAKE_CURRENT_LIST_DIR}/example.proto")
+set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
+set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
+set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
 set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto/protocyte/options.proto")
 set(PROTOCYTE_OPTIONS_ROOT "${PROTOCYTE_REPO_ROOT}/src/protocyte/proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
@@ -28,6 +32,8 @@ set(PROTOCYTE_GENERATOR_SOURCES
 set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.hpp"
+    "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
 )
@@ -38,7 +44,6 @@ if(PROTOCYTE_SMOKE_REGENERATE)
     find_program(PROTOC_EXECUTABLE protoc)
 
     if(NOT PROTOC_EXECUTABLE AND PROTOCYTE_SMOKE_FETCH_PROTOBUF)
-        include(FetchContent)
         set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
         set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -73,10 +78,14 @@ if(PROTOCYTE_SMOKE_REGENERATE)
     endif()
 
     add_custom_command(
-        OUTPUT ${PROTOCYTE_GENERATED_FILES}
+        OUTPUT
+            "${PROTOCYTE_GENERATED_DIR}/example.protocyte.hpp"
+            "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+            "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
+            "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_GENERATED_DIR}"
         COMMAND "${PROTOC_EXECUTABLE}"
-            "--proto_path=${CMAKE_CURRENT_LIST_DIR}"
+            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
             "--proto_path=${PROTOCYTE_OPTIONS_ROOT}"
             "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
             "--protocyte_out=runtime=emit:${PROTOCYTE_GENERATED_DIR}"
@@ -89,17 +98,43 @@ if(PROTOCYTE_SMOKE_REGENERATE)
         VERBATIM
     )
 
+    add_custom_command(
+        OUTPUT
+            "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.hpp"
+            "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_GENERATED_DIR}"
+        COMMAND "${PROTOC_EXECUTABLE}"
+            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
+            "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_WRAPPER}"
+            "--protocyte_out=namespace_prefix=protocyte_smoke:${PROTOCYTE_GENERATED_DIR}"
+            "${PROTOCYTE_COMPAT_PROTO}"
+        DEPENDS
+            "${PROTOCYTE_COMPAT_PROTO}"
+            ${PROTOCYTE_GENERATOR_SOURCES}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
+        VERBATIM
+    )
+
     add_custom_target(protocyte_smoke_regenerate DEPENDS ${PROTOCYTE_GENERATED_FILES})
 endif()
+
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.7.1
+)
+FetchContent_MakeAvailable(Catch2)
 
 add_executable(protocyte_host_smoke
     src/host_smoke.cpp
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
 )
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
 target_compile_definitions(protocyte_host_smoke PRIVATE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
+target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain)
 
 if(PROTOCYTE_SMOKE_REGENERATE)
     add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
@@ -112,7 +147,8 @@ else()
 endif()
 
 enable_testing()
-add_test(NAME protocyte_host_smoke COMMAND protocyte_host_smoke)
+include(Catch)
+catch_discover_tests(protocyte_host_smoke)
 
 if(PROTOCYTE_SMOKE_BUILD_DRIVER)
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")

@@ -39,7 +39,7 @@ ObjCSpaceBeforeProtocolList: true
 PackConstructorInitializers: NextLine
 PointerAlignment: Right
 QualifierAlignment: Left
-ReflowComments: Always
+ReflowComments: true
 SpaceAfterCStyleCast: true
 SpaceAfterLogicalNot: false
 SpaceAfterTemplateKeyword: false

@@ -1,9 +1,11 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
-from protocyte.model import build_model
+from protocyte.model import ProtocyteError, _build_constants, _build_field, build_model
 from protocyte.plugin import generate_response
 
 
@@ -84,6 +86,29 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "Status expect_wire_type(Reader &reader, const WireType actual, const WireType expected," in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<usize> read_length_delimited_size(Reader &reader) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status read_string_field(typename Config::Context &ctx, Reader &reader," in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status write_bytes_field(Writer &writer, const u32 field_number, const ByteView view) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<f64> read_double_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status write_double_field(Writer &writer, const u32 field_number, const f64 value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert (
+        "constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert "return wire_type == WireType::SGROUP ? size * 2u : size;" in files["protocyte/runtime/runtime.hpp"]
     assert "FEATURE_PROTO3_OPTIONAL" not in files["simple.protocyte.hpp"]
 
 
@@ -144,61 +169,327 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "opt_name = 2u," in header
     assert "case FieldNumber::id: {" in header
     assert "case FieldNumber::opt_name: {" in header
-    assert "auto raw = ::protocyte::read_fixed32(packed);" in header
-    assert "auto value = ::protocyte::read_fixed32(packed);" not in header
-    assert "if (other.has_items())" not in header
-    assert "other.samples()" not in header
+    assert "auto decoded = ::protocyte::read_float(packed);" in header
+    assert "auto decoded = ::protocyte::read_fixed32(packed);" not in header
+    assert "::protocyte::read_int32_field(reader, wire_type, field_number);" in header
+    assert "::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);" in header
+    assert "::protocyte::read_string_field<Config>(*ctx_, reader, wire_type," in header
+    assert "::protocyte::write_string_field(" in header
+    assert "FieldNumber::opt_name), opt_name_.view());" in header
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
     assert "::protocyte::LimitedReader nested {entry_reader" in header
     assert "::protocyte::ReaderRef sub_reader {sub};" in header
     assert "merge_from(sub_reader);" in header
     assert "::protocyte::ReaderRef nested_reader {nested};" in header
+    assert "clear_items();" in header
+    assert "other.items().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "clear_samples();" in header
+    assert "mutable_samples().push_back(other.samples()[i])" in header
+    assert "clear_message_items();" in header
+    assert "copied_value.copy_from(value)" in header
 
 
-def test_model_decodes_fixed_size_bytes_option() -> None:
-    model = build_model(_fixed_size_request())
+def test_checked_smoke_output_reflects_copy_propagation() -> None:
+    header = (Path(__file__).resolve().parents[1] / "smoke" / "generated" / "example.protocyte.hpp").read_text(
+        encoding="utf-8"
+    )
 
-    sha256 = model.messages["demo.FixedBytes"].fields[0]
+    assert "copy_from(const UltimateComplexMessage &other) noexcept" in header
+    assert "if (this == &other) {" in header
+    assert "clear_r_int32_unpacked();" in header
+    assert "clear_r_int32_packed();" in header
+    assert "clear_r_double();" in header
+    assert "clear_map_str_int32();" in header
+    assert "other.map_str_int32().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "clear_map_uint64_msg();" in header
+    assert "other.map_uint64_msg().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "copied_value.copy_from(value)" in header
+    assert "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
+    assert "if (const auto st = out.value().copy_from(*this); !st) {" in header
 
-    assert sha256.kind == "bytes"
-    assert sha256.fixed_bytes is True
-    assert sha256.fixed_size == 32
+
+def test_model_decodes_constants_and_array_options() -> None:
+    model = build_model(_constant_array_request())
+
+    file_constants = {constant.name: constant for constant in model.files["arrays.proto"].constants}
+    holder = model.messages["demo.Holder"]
+    nested = model.messages["demo.Holder.Nested"]
+    constants = {constant.name: constant for constant in holder.constants}
+    nested_constants = {constant.name: constant for constant in nested.constants}
+    fields = {field.name: field for field in holder.fields}
+    nested_fields = {field.name: field for field in nested.fields}
+
+    assert file_constants["FILE_CAP"].value == 16
+    assert file_constants["FILE_LABEL"].value == "ell"
+    assert file_constants["FILE_READY"].value is True
+    assert constants["MAGIC_NUMBER"].value == 16
+    assert constants["DOUBLE_MAGIC"].value == 32
+    assert constants["HEX_MAGIC"].value == 32
+    assert constants["HEX_EXPR"].value == 24
+    assert constants["LABEL"].value == "ell"
+    assert nested_constants["HAS_PREFIX"].value is True
+    assert fields["digest"].array_max == 32
+    assert fields["digest"].array_fixed is True
+    assert fields["blob"].array_max == 16
+    assert fields["blob"].array_cpp_max == "FILE_CAP"
+    assert fields["hex_blob"].array_max == 16
+    assert fields["hex_blob"].array_cpp_max == "0x8u + 0x8u"
+    assert fields["values"].array_max == 4
+    assert fields["values"].repeated_array is True
+    assert nested_fields["payload"].array_max == 16
+    assert nested_fields["payload"].array_cpp_max == "FILE_CAP"
 
 
-def test_generated_header_uses_inline_fixed_size_bytes_storage() -> None:
-    response = generate_response(_fixed_size_request())
+def test_generated_header_emits_constants_and_array_storage() -> None:
+    response = generate_response(_constant_array_request())
 
     assert not response.error
     files = {item.name: item.content for item in response.file}
-    header = files["fixed.protocyte.hpp"]
+    header = files["arrays.protocyte.hpp"]
     runtime_header = files["protocyte/runtime/runtime.hpp"]
 
-    assert "::protocyte::ByteView sha256() const noexcept" in header
-    assert "::protocyte::MutableByteView mutable_sha256() noexcept" in header
-    assert "bool has_sha256() const noexcept" in header
-    assert "::protocyte::u8 sha256_[32u];" in header
-    assert "bool has_sha256_ {};" in header
-    assert "sha256_ {&ctx}" not in header
-    assert "return has_sha256_ ? ::protocyte::ByteView {.data = sha256_, .size = 32u} : ::protocyte::ByteView {};" in header
-    assert "if (!has_sha256_) {" in header
-    assert "has_sha256_ = true;" in header
-    assert "if (value.size != 32u)" in header
-    assert "len.value() == 32u" in header
-    assert "len.value() == 0u" not in header
-    assert "if (const auto st = writer.write(" in header
-    assert "::protocyte::bytes_zero(" not in header
-    assert "if (has_sha256_)" in header
-    assert "::protocyte::write_varint(writer, 32u)" in header
-    assert "void clear_sha256() noexcept { has_sha256_ = false; }" in header
-    assert "constexpr bool bytes_zero(const ByteView view) noexcept" in runtime_header
+    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
+    assert "#include <string_view>" in header
+    assert "inline constexpr ::protocyte::u32 FILE_CAP {16u};" in header
+    assert 'inline constexpr ::std::string_view FILE_LABEL {"ell", 3u};' in header
+    assert "inline constexpr bool FILE_READY {true};" in header
+    assert "static constexpr ::protocyte::i32 MAGIC_NUMBER {16};" in header
+    assert "static constexpr ::protocyte::i32 DOUBLE_MAGIC {32};" in header
+    assert "static constexpr ::protocyte::u32 HEX_MAGIC {32u};" in header
+    assert "static constexpr ::protocyte::i32 HEX_EXPR {24};" in header
+    assert 'static constexpr ::std::string_view LABEL {"ell", 3u};' in header
+    assert "static constexpr bool HAS_PREFIX {true};" in header
+    assert "::protocyte::FixedByteArray<DOUBLE_MAGIC> digest_;" in header
+    assert "::protocyte::ByteArray<FILE_CAP> blob_;" in header
+    assert "::protocyte::ByteArray<0x8u + 0x8u> hex_blob_;" in header
+    assert "::protocyte::Array<::protocyte::i32, 4u> values_;" in header
+    assert "bool has_digest() const noexcept { return digest_.has_value(); }" in header
+    assert "::protocyte::MutableByteView mutable_digest() noexcept { return digest_.mutable_view(); }" in header
+    assert "::protocyte::usize digest_size() const noexcept" not in header
+    assert "digest_max_size" not in header
+    assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
+    assert "::protocyte::ByteView digest() const noexcept { return digest_.view(); }" in header
+    assert "if (len.value() != DOUBLE_MAGIC)" in header
+    assert "if (values_.size() != 4u) {" in header
+    assert "template<class T, usize Max> struct Array" in runtime_header
+    assert "template<usize Max> struct ByteArray" in runtime_header
+    assert "template<usize Max> struct FixedByteArray" in runtime_header
+    assert "u8 bytes_[Max];" in runtime_header
+    assert "u8 bytes_[Max] {};" not in runtime_header
 
 
-def test_rejects_invalid_fixed_size_targets() -> None:
-    bad_type_response = generate_response(_fixed_size_request(field_type=F.TYPE_STRING))
-    repeated_response = generate_response(_fixed_size_request(label=F.LABEL_REPEATED))
+def test_generated_header_copies_and_moves_bounded_arrays() -> None:
+    response = generate_response(_constant_array_request())
 
-    assert "only supported on bytes fields" in bad_type_response.error
-    assert "does not support repeated fields" in repeated_response.error
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["arrays.protocyte.hpp"]
+    runtime_header = files["protocyte/runtime/runtime.hpp"]
+
+    assert "if (other.has_digest()) {" in header
+    assert "set_digest(other.digest())" in header
+    assert "set_blob(other.blob())" in header
+    assert "set_hex_blob(other.hex_blob())" in header
+    assert "clear_values();" in header
+    assert "for (::protocyte::usize i {}; i < other.values().size(); ++i) {" in header
+    assert "mutable_values().push_back(other.values()[i])" in header
+    assert "Array(Array &&other) noexcept" in runtime_header
+    assert "Array &operator=(Array &&other) noexcept" in runtime_header
+    assert "ByteArray(ByteArray &&other) noexcept" in runtime_header
+    assert "ByteArray &operator=(ByteArray &&other) noexcept" in runtime_header
+    assert "FixedByteArray(FixedByteArray &&other) noexcept" in runtime_header
+    assert "FixedByteArray &operator=(FixedByteArray &&other) noexcept" in runtime_header
+
+
+@pytest.mark.parametrize(
+    ("expected", "request_factory"),
+    [
+        ("unsupported constant kind", lambda: _unsupported_constant_kind_request()),
+        ("constant name must not be empty", lambda: _empty_constant_name_request()),
+        ("protocyte.fixed requires protocyte.array", lambda: _fixed_without_array_request()),
+        ("protocyte.array is not supported on map fields", lambda: _array_on_map_request()),
+        ("protocyte.array.max must be greater than zero", lambda: _zero_max_request()),
+        ("protocyte.array.expr must not be empty", lambda: _empty_expr_request()),
+    ],
+)
+def test_rejects_remaining_model_validator_branches(expected: str, request_factory) -> None:
+    response = generate_response(request_factory())
+
+    assert expected in response.error
+
+
+def test_rejects_constant_and_array_exclusivity_branches() -> None:
+    owner = SimpleNamespace(full_name="demo.Broken", descriptor=descriptor_pb2.DescriptorProto())
+
+    constant_options = SimpleNamespace(
+        message_constants=lambda options: [SimpleNamespace(name="BROKEN", kind=2, literal="1", expr="2")]
+    )
+    with pytest.raises(ProtocyteError, match="exactly one of literal or expr must be set"):
+        _build_constants(owner, constant_options)
+
+    array_field = descriptor_pb2.FieldDescriptorProto()
+    array_field.name = "digest"
+    array_field.number = 1
+    array_field.label = F.LABEL_OPTIONAL
+    array_field.type = F.TYPE_BYTES
+
+    array_options = SimpleNamespace(field_array=lambda options: (4, "2", False))
+    with pytest.raises(ProtocyteError, match="protocyte.array requires exactly one of max or expr"):
+        _build_field(owner, array_field, {}, {}, array_options)
+
+
+def test_rejects_invalid_constant_cpp_identifier() -> None:
+    response = generate_response(_invalid_cpp_identifier_request())
+
+    assert "constant name is not a valid C++ identifier" in response.error
+
+
+def test_generated_header_copies_oneof_state() -> None:
+    response = generate_response(_oneof_request())
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name == "oneof.protocyte.hpp")
+
+    assert "if (this == &other) {" in header
+    assert "return ::protocyte::Status::ok();" in header
+    assert "switch (other.choice_case_) {" in header
+    assert "case ChoiceCase::text: {" in header
+    assert "if (const auto st = set_text(other.text()); !st) {" in header
+    assert "return st;" in header
+    assert "if (auto ensured = ensure_inner(); !ensured) {" in header
+    assert "ensured.value().get().copy_from(*other.inner())" in header
+    assert "clear_choice();" in header
+
+
+def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
+    response = generate_response(_repeated_array_only_request())
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name == "repeated_array_only.protocyte.hpp")
+
+    assert "copy_from(const OnlyArrays &other) noexcept" in header
+    assert "if (this == &other) {" in header
+    assert "return ::protocyte::Status::ok();" in header
+    assert "clear_values();" in header
+    assert "for (::protocyte::usize i {}; i < other.values().size(); ++i) {" in header
+    assert "mutable_values().push_back(other.values()[i])" in header
+
+
+def test_generated_header_uses_real_other_for_map_only_copy() -> None:
+    response = generate_response(_map_only_request())
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name == "map_only.protocyte.hpp")
+
+    assert "copy_from(const OnlyMaps &other) noexcept" in header
+    assert "if (this == &other) {" in header
+    assert "const auto &source = other;" in header
+    assert "clear_items();" in header
+    assert "source.items().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "auto copied_value = value;" in header
+    assert "if (const auto st = out.value().copy_from(*this); !st) {" in header
+
+
+def test_rejects_invalid_hex_numeric_literals() -> None:
+    response = generate_response(_invalid_hex_request())
+
+    assert "invalid numeric literal '0x'" in response.error
+
+
+def test_resolves_constants_across_messages() -> None:
+    model = build_model(_cross_message_request())
+    source = model.messages["demo.Source"]
+    sink = model.messages["demo.Sink"]
+    nested = model.messages["demo.Sink.Nested"]
+
+    source_constants = {constant.name: constant for constant in source.constants}
+    sink_constants = {constant.name: constant for constant in sink.constants}
+    nested_constants = {constant.name: constant for constant in nested.constants}
+    sink_fields = {field.name: field for field in sink.fields}
+    nested_fields = {field.name: field for field in nested.fields}
+
+    assert source_constants["ROOT_CAP"].value == 6
+    assert source_constants["ROOT_LABEL"].value == "cross"
+    assert source_constants["ROOT_ENABLED"].value is True
+    assert sink_constants["MIRRORED_CAP"].value == 18
+    assert sink_constants["DIRECT_CAP"].value == 8
+    assert sink_constants["PREFIX"].value == "cross-sink"
+    assert sink_constants["READY"].value is True
+    assert nested_constants["NESTED_CAP"].value == 9
+    assert sink_fields["payload"].array_max == 8
+    assert sink_fields["values"].array_max == 18
+    assert sink_fields["values"].array_cpp_max == "MIRRORED_CAP"
+    assert nested_fields["nested_payload"].array_max == 9
+    assert nested_fields["nested_payload"].array_cpp_max == "NESTED_CAP"
+
+
+def test_generated_header_emits_cross_message_constant_arrays() -> None:
+    response = generate_response(_cross_message_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["cross.protocyte.hpp"]
+
+    assert "static constexpr ::protocyte::u32 ROOT_CAP {6u};" in header
+    assert 'static constexpr ::std::string_view ROOT_LABEL {"cross", 5u};' in header
+    assert "static constexpr bool ROOT_ENABLED {true};" in header
+    assert "static constexpr ::protocyte::u32 MIRRORED_CAP {18u};" in header
+    assert "static constexpr ::protocyte::u32 DIRECT_CAP {8u};" in header
+    assert 'static constexpr ::std::string_view PREFIX {"cross-sink", 10u};' in header
+    assert "static constexpr bool READY {true};" in header
+    assert "::protocyte::ByteArray<6u + 2u> payload_;" in header
+    assert "::protocyte::Array<::protocyte::i32, MIRRORED_CAP> values_;" in header
+    assert "::protocyte::ByteArray<NESTED_CAP> nested_payload_;" in header
+
+
+def test_canonicalizes_floatish_array_bounds() -> None:
+    model = build_model(_floatish_bound_request())
+    field = model.messages["demo.Sample"].fields[0]
+
+    assert field.array_max == 2
+    assert field.array_cpp_max == "2u"
+
+    response = generate_response(_floatish_bound_request())
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "float_bound.protocyte.hpp")
+    assert "::protocyte::ByteArray<2u> data_;" in header
+    assert "return 2u;" in header
+    assert "2.0" not in header
+
+
+def test_generated_header_emits_utf8_string_constants() -> None:
+    response = generate_response(_unicode_constant_request())
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "unicode.protocyte.hpp")
+    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
+    assert '#include <string_view>' in header
+    assert 'static constexpr ::std::string_view NAME {"\\xc4"' in header
+    assert '"\\x80"' in header
+    assert '"\\xc3"' in header
+    assert '"\\xa9",' in header
+    assert "4u};" in header
+
+
+def test_rejects_invalid_array_targets_and_constant_cycles() -> None:
+    bad_type_response = generate_response(_invalid_array_request())
+    cycle_response = generate_response(_constant_cycle_request())
+
+    assert "only supported on bytes or repeated fields" in bad_type_response.error
+    assert "cycle detected" in cycle_response.error
+
+
+def test_rejects_constant_name_collisions() -> None:
+    duplicate_response = generate_response(_constant_collision_request("duplicate.proto", [("dup", 2, "1", None), ("dup", 2, "2", None)]))
+    normalized_response = generate_response(
+        _constant_collision_request("normalized.proto", [("cap-value", 2, "1", None), ("cap_value", 2, "2", None)])
+    )
+    reserved_response = generate_response(_constant_collision_request("reserved.proto", [("create", 2, "1", None)]))
+
+    assert "constant cannot be redefined" in duplicate_response.error
+    assert "collides after C++ identifier normalization" in normalized_response.error
+    assert "collides with generated API" in reserved_response.error
 
 
 def test_generated_header_emits_tagged_union_oneofs() -> None:
@@ -238,6 +529,18 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert protected.index("ChoiceCase choice_case_ {ChoiceCase::none};") < protected.index("union ChoiceStorage {")
     assert protected.index("} choice;") < protected.index("::protocyte::i32 after_ {};")
     assert "typename Config::String text = " not in header
+
+
+def test_generated_header_parses_bounded_oneof_bytes() -> None:
+    response = generate_response(_oneof_array_request())
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "oneof_array.protocyte.hpp")
+    assert "new (&choice.data)::protocyte::ByteArray<8u> {};" in header
+    assert "choice_case_ = ChoiceCase::data;" in header
+    assert "if (const auto st = choice.data.resize(static_cast<::protocyte::usize>(len.value())); !st) {" in header
+    assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st) {" in header
+    assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 
 def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
@@ -364,15 +667,33 @@ def _simple_file() -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
-def _fixed_size_request(
-    *,
-    field_type: int = F.TYPE_BYTES,
-    label: int = F.LABEL_OPTIONAL,
-) -> plugin_pb2.CodeGeneratorRequest:
+def _constant_array_request() -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
-    request.file_to_generate.append("fixed.proto")
+    request.file_to_generate.append("arrays.proto")
     request.parameter = "runtime=emit"
-    request.proto_file.extend([_fixed_size_options_file(), _fixed_size_file(field_type=field_type, label=label)])
+    request.proto_file.extend([_options_file(), _constant_array_file()])
+    return request
+
+
+def _invalid_array_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("invalid_array.proto")
+    request.proto_file.extend([_options_file(), _invalid_array_file()])
+    return request
+
+
+def _constant_cycle_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("cycle.proto")
+    request.proto_file.extend([_options_file(), _constant_cycle_file()])
+    return request
+
+
+def _cross_message_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("cross.proto")
+    request.parameter = "runtime=emit"
+    request.proto_file.extend([_options_file(), _cross_message_file()])
     return request
 
 
@@ -383,48 +704,620 @@ def _oneof_request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
-def _fixed_size_options_file() -> descriptor_pb2.FileDescriptorProto:
+def _oneof_array_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("oneof_array.proto")
+    request.proto_file.extend([_options_file(), _oneof_file(array_bytes=True)])
+    return request
+
+
+def _repeated_array_only_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("repeated_array_only.proto")
+    request.proto_file.extend([_options_file(), _repeated_array_only_file()])
+    return request
+
+
+def _map_only_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("map_only.proto")
+    request.proto_file.extend([_options_file(), _map_only_file()])
+    return request
+
+
+def _unsupported_constant_kind_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("unsupported_constant_kind.proto")
+    request.proto_file.extend([_options_file(), _unsupported_constant_kind_file()])
+    return request
+
+
+def _empty_constant_name_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("empty_constant_name.proto")
+    request.proto_file.extend([_options_file(), _empty_constant_name_file()])
+    return request
+
+
+def _constant_literal_expr_conflict_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("constant_literal_expr_conflict.proto")
+    request.proto_file.extend([_options_file(), _constant_literal_expr_conflict_file()])
+    return request
+
+
+def _fixed_without_array_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("fixed_without_array.proto")
+    request.proto_file.extend([_options_file(), _fixed_without_array_file()])
+    return request
+
+
+def _array_with_max_and_expr_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("array_with_max_and_expr.proto")
+    request.proto_file.extend([_options_file(), _array_with_max_and_expr_file()])
+    return request
+
+
+def _array_on_map_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("array_on_map.proto")
+    request.proto_file.extend([_options_file(), _array_on_map_file()])
+    return request
+
+
+def _zero_max_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("zero_max.proto")
+    request.proto_file.extend([_options_file(), _zero_max_file()])
+    return request
+
+
+def _empty_expr_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("empty_expr.proto")
+    request.proto_file.extend([_options_file(), _empty_expr_file()])
+    return request
+
+
+def _constant_collision_request(
+    file_name: str,
+    constants: list[tuple[str, int, str | None, str | None]],
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append(file_name)
+    request.proto_file.extend([_options_file(), _constant_collision_file(file_name, constants)])
+    return request
+
+
+def _invalid_cpp_identifier_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("invalid_cpp_identifier.proto")
+    request.proto_file.extend([_options_file(), _invalid_cpp_identifier_file()])
+    return request
+
+
+def _options_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = "protocyte/options.proto"
     file.package = "protocyte"
     file.syntax = "proto3"
     file.dependency.append("google/protobuf/descriptor.proto")
 
+    enum = file.enum_type.add()
+    enum.name = "ConstantKind"
+    for number, name in [
+        (0, "KIND_UNSPECIFIED"),
+        (1, "BOOL"),
+        (2, "INT32"),
+        (3, "INT64"),
+        (4, "UINT32"),
+        (5, "UINT64"),
+        (6, "FLOAT"),
+        (7, "DOUBLE"),
+        (8, "STRING"),
+    ]:
+        value = enum.value.add()
+        value.name = name
+        value.number = number
+
+    struct_constant = file.message_type.add()
+    struct_constant.name = "StructConstant"
+    field = struct_constant.field.add()
+    field.name = "name"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field = struct_constant.field.add()
+    field.name = "kind"
+    field.number = 2
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_ENUM
+    field.type_name = ".protocyte.ConstantKind"
+    _add_oneof_field(struct_constant, "value", "literal", 3, F.TYPE_STRING)
+    _add_oneof_field(struct_constant, "value", "expr", 4, F.TYPE_STRING)
+
+    array_options = file.message_type.add()
+    array_options.name = "ArrayOptions"
+    _add_oneof_field(array_options, "bound", "max", 1, F.TYPE_UINT32)
+    _add_oneof_field(array_options, "bound", "expr", 2, F.TYPE_STRING)
+
     ext = file.extension.add()
-    ext.name = "fixed_size"
+    ext.name = "constant"
+    ext.number = 50000
+    ext.label = F.LABEL_REPEATED
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.StructConstant"
+    ext.extendee = ".google.protobuf.MessageOptions"
+
+    ext = file.extension.add()
+    ext.name = "package_constant"
+    ext.number = 50002
+    ext.label = F.LABEL_REPEATED
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.StructConstant"
+    ext.extendee = ".google.protobuf.FileOptions"
+
+    ext = file.extension.add()
+    ext.name = "array"
     ext.number = 50000
     ext.label = F.LABEL_OPTIONAL
-    ext.type = F.TYPE_UINT32
+    ext.type = F.TYPE_MESSAGE
+    ext.type_name = ".protocyte.ArrayOptions"
+    ext.extendee = ".google.protobuf.FieldOptions"
+
+    ext = file.extension.add()
+    ext.name = "fixed"
+    ext.number = 50001
+    ext.label = F.LABEL_OPTIONAL
+    ext.type = F.TYPE_BOOL
     ext.extendee = ".google.protobuf.FieldOptions"
 
     return file
 
 
-def _fixed_size_file(*, field_type: int, label: int) -> descriptor_pb2.FileDescriptorProto:
+def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
-    file.name = "fixed.proto"
+    file.name = "arrays.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        _package_constant_options_bytes(
+            [
+                ("FILE_CAP", 4, "16", None),
+                ("FILE_LABEL", 8, None, 'substr("hello", 1, 3)'),
+                ("FILE_READY", 1, None, 'starts_with(FILE_LABEL, "e")'),
+            ]
+        )
+    )
+
+    message = file.message_type.add()
+    message.name = "Holder"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("MAGIC_NUMBER", 2, None, "FILE_CAP"),
+                ("DOUBLE_MAGIC", 2, None, "MAGIC_NUMBER * 2"),
+                ("HEX_MAGIC", 4, "0x20", None),
+                ("HEX_EXPR", 2, None, "0x10 + 0x8"),
+                ("LABEL", 8, None, "demo.FILE_LABEL"),
+            ]
+        )
+    )
+
+    field = message.field.add()
+    field.name = "digest"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="DOUBLE_MAGIC", fixed=True))
+
+    field = message.field.add()
+    field.name = "blob"
+    field.number = 2
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="FILE_CAP"))
+
+    field = message.field.add()
+    field.name = "hex_blob"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="0x8 + 0x8"))
+
+    field = message.field.add()
+    field.name = "values"
+    field.number = 4
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+    field.options.ParseFromString(_array_option_bytes(max_value=4, fixed=True))
+
+    nested = message.nested_type.add()
+    nested.name = "Nested"
+    nested.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("HAS_PREFIX", 1, None, 'starts_with(FILE_LABEL, "e")'),
+            ]
+        )
+    )
+    field = nested.field.add()
+    field.name = "payload"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="demo.FILE_CAP"))
+
+    field = message.field.add()
+    field.name = "nested"
+    field.number = 5
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Holder.Nested"
+
+    return file
+
+
+def _repeated_array_only_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "repeated_array_only.proto"
     file.package = "demo"
     file.syntax = "proto3"
     file.dependency.append("protocyte/options.proto")
 
     message = file.message_type.add()
-    message.name = "FixedBytes"
+    message.name = "OnlyArrays"
 
     field = message.field.add()
-    field.name = "sha256"
+    field.name = "values"
     field.number = 1
-    field.label = label
-    field.type = field_type
-    field.options.ParseFromString(_fixed_size_option_bytes(32))
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+    field.options.ParseFromString(_array_option_bytes(max_value=4, fixed=True))
 
     return file
 
 
-def _oneof_file() -> descriptor_pb2.FileDescriptorProto:
+def _map_only_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
-    file.name = "oneof.proto"
+    file.name = "map_only.proto"
     file.package = "demo"
     file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "OnlyMaps"
+
+    entry = message.nested_type.add()
+    entry.name = "ItemsEntry"
+    entry.options.map_entry = True
+
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "items"
+    field.number = 1
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.OnlyMaps.ItemsEntry"
+
+    return file
+
+
+def _unsupported_constant_kind_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "unsupported_constant_kind.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.options.ParseFromString(_constant_options_bytes([("BROKEN", 99, "1", None)]))
+    return file
+
+
+def _empty_constant_name_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "empty_constant_name.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.options.ParseFromString(_constant_options_bytes([("", 2, "1", None)]))
+    return file
+
+
+def _constant_literal_expr_conflict_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "constant_literal_expr_conflict.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.options.ParseFromString(_constant_options_bytes([("BROKEN", 2, "1", "2")]))
+    return file
+
+
+def _fixed_without_array_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "fixed_without_array.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    field = message.field.add()
+    field.name = "digest"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(fixed=True))
+    return file
+
+
+def _array_with_max_and_expr_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "array_with_max_and_expr.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    field = message.field.add()
+    field.name = "digest"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(max_value=4, expr="2"))
+    return file
+
+
+def _array_on_map_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "array_on_map.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    entry = message.nested_type.add()
+    entry.name = "ItemsEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "items"
+    field.number = 1
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Broken.ItemsEntry"
+    field.options.ParseFromString(_array_option_bytes(max_value=4))
+    return file
+
+
+def _zero_max_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "zero_max.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    field = message.field.add()
+    field.name = "digest"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(max_value=0))
+    return file
+
+
+def _empty_expr_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "empty_expr.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    field = message.field.add()
+    field.name = "digest"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr=""))
+    return file
+
+
+def _invalid_array_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "invalid_array.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.options.ParseFromString(_array_option_bytes(max_value=8))
+    return file
+
+
+def _constant_collision_file(
+    file_name: str,
+    constants: list[tuple[str, int, str | None, str | None]],
+) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = file_name
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.options.ParseFromString(_constant_options_bytes(constants))
+    return file
+
+
+def _invalid_cpp_identifier_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "invalid_cpp_identifier.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.options.ParseFromString(_constant_options_bytes([("1", 2, "1", None)]))
+    return file
+
+
+def _constant_cycle_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "cycle.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Cycle"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("A", 2, None, "B + 1"),
+                ("B", 2, None, "A + 1"),
+            ]
+        )
+    )
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="A"))
+    return file
+
+
+def _invalid_hex_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("invalid_hex.proto")
+    request.proto_file.extend([_options_file(), _invalid_hex_file()])
+    return request
+
+
+def _floatish_bound_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("float_bound.proto")
+    request.proto_file.extend([_options_file(), _floatish_bound_file()])
+    return request
+
+
+def _unicode_constant_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("unicode.proto")
+    request.proto_file.extend([_options_file(), _unicode_constant_file()])
+    return request
+
+
+def _invalid_hex_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "invalid_hex.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "InvalidHex"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("BROKEN", 2, None, "0x + 1"),
+            ]
+        )
+    )
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="BROKEN"))
+    return file
+
+
+def _floatish_bound_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "float_bound.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Sample"
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="4 / 2.0"))
+    return file
+
+
+def _unicode_constant_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "unicode.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Words"
+    message.options.ParseFromString(_constant_options_bytes([("NAME", 8, chr(0x0100) + chr(0x00E9), None)]))
+    return file
+
+
+def _oneof_file(*, array_bytes: bool = False) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "oneof_array.proto" if array_bytes else "oneof.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    if array_bytes:
+        file.dependency.append("protocyte/options.proto")
 
     message = file.message_type.add()
     message.name = "Carrier"
@@ -473,6 +1366,15 @@ def _oneof_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_INT32
 
+    if array_bytes:
+        field = message.field.add()
+        field.name = "data"
+        field.number = 6
+        field.label = F.LABEL_OPTIONAL
+        field.type = F.TYPE_BYTES
+        field.oneof_index = 0
+        field.options.ParseFromString(_array_option_bytes(max_value=8))
+
     return file
 
 
@@ -506,14 +1408,167 @@ def _protocyte_package_file() -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
-def _fixed_size_option_bytes(size: int) -> bytes:
+def _cross_message_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "cross.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    source = file.message_type.add()
+    source.name = "Source"
+    source.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("ROOT_CAP", 4, "6", None),
+                ("ROOT_LABEL", 8, None, 'substr("crossing", 0, 5)'),
+                ("ROOT_ENABLED", 1, None, 'starts_with(ROOT_LABEL, "cr")'),
+            ]
+        )
+    )
+
+    sink = file.message_type.add()
+    sink.name = "Sink"
+    sink.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("MIRRORED_CAP", 4, None, "Source.ROOT_CAP * 3"),
+                ("DIRECT_CAP", 4, None, "Source.ROOT_CAP + 2"),
+                ("PREFIX", 8, None, 'Source.ROOT_LABEL + "-sink"'),
+                ("READY", 1, None, "Source.ROOT_ENABLED && (MIRRORED_CAP == 18)"),
+            ]
+        )
+    )
+
+    field = sink.field.add()
+    field.name = "payload"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="Source.ROOT_CAP + 2"))
+
+    field = sink.field.add()
+    field.name = "values"
+    field.number = 2
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+    field.options.ParseFromString(_array_option_bytes(expr="MIRRORED_CAP"))
+
+    nested = sink.nested_type.add()
+    nested.name = "Nested"
+    nested.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("NESTED_CAP", 4, None, "Source.ROOT_CAP + 3"),
+            ]
+        )
+    )
+    field = nested.field.add()
+    field.name = "nested_payload"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="NESTED_CAP"))
+
+    field = sink.field.add()
+    field.name = "nested"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Sink.Nested"
+
+    return file
+
+
+def _add_oneof_field(
+    message: descriptor_pb2.DescriptorProto,
+    oneof_name: str,
+    name: str,
+    number: int,
+    field_type: int,
+) -> None:
+    oneof_index: int | None = None
+    for index, oneof in enumerate(message.oneof_decl):
+        if oneof.name == oneof_name:
+            oneof_index = index
+            break
+    if oneof_index is None:
+        oneof = message.oneof_decl.add()
+        oneof.name = oneof_name
+        oneof_index = len(message.oneof_decl) - 1
+
+    field = message.field.add()
+    field.name = name
+    field.number = number
+    field.label = F.LABEL_OPTIONAL
+    field.type = field_type
+    field.oneof_index = oneof_index
+
+
+def _constant_options_bytes(
+    constants: list[tuple[str, int, str | None, str | None]],
+) -> bytes:
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(_fixed_size_options_file())
+    pool.Add(_options_file())
+    message_options_desc = pool.FindMessageTypeByName("google.protobuf.MessageOptions")
+    message_options_cls = message_factory.GetMessageClass(message_options_desc)
+    constant_ext = pool.FindExtensionByName("protocyte.constant")
+
+    options = message_options_cls()
+    for name, kind, literal, expr in constants:
+        item = options.Extensions[constant_ext].add()
+        item.name = name
+        item.kind = kind
+        if literal is not None:
+            item.literal = literal
+        if expr is not None:
+            item.expr = expr
+    return options.SerializeToString()
+
+
+def _package_constant_options_bytes(
+    constants: list[tuple[str, int, str | None, str | None]],
+) -> bytes:
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(_options_file())
+    file_options_desc = pool.FindMessageTypeByName("google.protobuf.FileOptions")
+    file_options_cls = message_factory.GetMessageClass(file_options_desc)
+    constant_ext = pool.FindExtensionByName("protocyte.package_constant")
+
+    options = file_options_cls()
+    for name, kind, literal, expr in constants:
+        item = options.Extensions[constant_ext].add()
+        item.name = name
+        item.kind = kind
+        if literal is not None:
+            item.literal = literal
+        if expr is not None:
+            item.expr = expr
+    return options.SerializeToString()
+
+
+def _array_option_bytes(
+    *,
+    max_value: int | None = None,
+    expr: str | None = None,
+    fixed: bool = False,
+) -> bytes:
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(_options_file())
     field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
     field_options_cls = message_factory.GetMessageClass(field_options_desc)
-    fixed_size = pool.FindExtensionByName("protocyte.fixed_size")
+    array_ext = pool.FindExtensionByName("protocyte.array")
+    fixed_ext = pool.FindExtensionByName("protocyte.fixed")
 
     options = field_options_cls()
-    options.Extensions[fixed_size] = size
+    array_options = options.Extensions[array_ext]
+    if max_value is not None:
+        array_options.max = max_value
+    if expr is not None:
+        array_options.expr = expr
+    if fixed:
+        options.Extensions[fixed_ext] = True
     return options.SerializeToString()

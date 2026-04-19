@@ -12,6 +12,7 @@ protoc-gen-protocyte = "protocyte.main:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
+    "ruff>=0.11.0",
 ]
 
 [build-system]
@@ -23,3 +24,15 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 protocyte = ["proto/**/*.proto"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+    ".git",
+    ".venv",
+    ".uv-cache",
+    "build",
+    "dist",
+    "smoke/build",
+    "smoke/cmake-build-debug",
+]

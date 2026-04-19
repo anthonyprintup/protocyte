@@ -246,6 +246,12 @@ namespace protocyte {
 
     template<class T, class Config> struct Vector;
 
+    template<class T, usize Max> struct Array;
+
+    template<usize Max> struct ByteArray;
+
+    template<usize Max> struct FixedByteArray;
+
     template<class Config> struct Bytes;
 
     template<class Config> struct String;
@@ -471,6 +477,170 @@ namespace protocyte {
         T *data_ {};
         usize size_ {};
         usize capacity_ {};
+    };
+
+    template<class T, usize Max> struct Array {
+        Array() noexcept = default;
+        Array(Array &&other) noexcept {
+            for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
+            size_ = other.size_;
+            other.clear();
+        }
+        Array &operator=(Array &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            clear();
+            for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
+            size_ = other.size_;
+            other.clear();
+            return *this;
+        }
+        Array(const Array &) = delete;
+        Array &operator=(const Array &) = delete;
+        ~Array() noexcept { clear(); }
+
+        static constexpr usize max_size() noexcept { return Max; }
+        constexpr usize capacity() const noexcept { return Max; }
+        usize size() const noexcept { return size_; }
+        bool empty() const noexcept { return !size_; }
+        T *data() noexcept { return size_ ? ptr(0u) : nullptr; }
+        const T *data() const noexcept { return size_ ? ptr(0u) : nullptr; }
+        T &operator[](const usize index) noexcept { return *ptr(index); }
+        const T &operator[](const usize index) const noexcept { return *ptr(index); }
+
+        void clear() noexcept {
+            while (size_) {
+                --size_;
+                ptr(size_)->~T();
+            }
+        }
+
+        template<class... Args> Result<Ref<T>> emplace_back(Args &&...args) noexcept {
+            if (size_ >= Max) {
+                return Result<Ref<T>>::err(ErrorCode::count_limit);
+            }
+            new (ptr(size_)) T {protocyte::forward<Args>(args)...};
+            Ref<T> ref {*ptr(size_)};
+            ++size_;
+            return Result<Ref<T>>::ok(ref);
+        }
+
+        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
+        Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
+
+    protected:
+        T *ptr(const usize index) noexcept { return reinterpret_cast<T *>(&storage_[index * sizeof(T)]); }
+        const T *ptr(const usize index) const noexcept {
+            return reinterpret_cast<const T *>(&storage_[index * sizeof(T)]);
+        }
+
+        alignas(T) unsigned char storage_[sizeof(T) * Max];
+        usize size_ {};
+    };
+
+    template<usize Max> struct ByteArray {
+        ByteArray() noexcept = default;
+        ByteArray(ByteArray &&other) noexcept: size_ {other.size_} {
+            for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
+            other.size_ = {};
+        }
+        ByteArray &operator=(ByteArray &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            size_ = other.size_;
+            for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
+            other.size_ = {};
+            return *this;
+        }
+        ByteArray(const ByteArray &) = delete;
+        ByteArray &operator=(const ByteArray &) = delete;
+
+        static constexpr usize max_size() noexcept { return Max; }
+        ByteView view() const noexcept { return {.data = bytes_, .size = size_}; }
+        MutableByteView mutable_view() noexcept { return {.data = bytes_, .size = size_}; }
+        u8 *data() noexcept { return bytes_; }
+        const u8 *data() const noexcept { return bytes_; }
+        usize size() const noexcept { return size_; }
+        bool empty() const noexcept { return !size_; }
+        void clear() noexcept { size_ = {}; }
+
+        Status resize(const usize count) noexcept {
+            if (count > Max) {
+                return Status::error(ErrorCode::count_limit);
+            }
+            if (count > size_) {
+                for (usize i {size_}; i < count; ++i) { bytes_[i] = 0u; }
+            }
+            size_ = count;
+            return {};
+        }
+
+        Status assign(const ByteView view) noexcept {
+            if (view.size > Max) {
+                return Status::error(ErrorCode::count_limit);
+            }
+            for (usize i {}; i < view.size; ++i) { bytes_[i] = view.data[i]; }
+            size_ = view.size;
+            return {};
+        }
+
+    protected:
+        u8 bytes_[Max];
+        usize size_ {};
+    };
+
+    template<usize Max> struct FixedByteArray {
+        FixedByteArray() noexcept = default;
+        FixedByteArray(FixedByteArray &&other) noexcept: has_ {other.has_} {
+            if (other.has_) {
+                for (usize i {}; i < Max; ++i) { bytes_[i] = other.bytes_[i]; }
+            }
+            other.has_ = false;
+        }
+        FixedByteArray &operator=(FixedByteArray &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            has_ = other.has_;
+            if (other.has_) {
+                for (usize i {}; i < Max; ++i) { bytes_[i] = other.bytes_[i]; }
+            }
+            other.has_ = false;
+            return *this;
+        }
+        FixedByteArray(const FixedByteArray &) = delete;
+        FixedByteArray &operator=(const FixedByteArray &) = delete;
+
+        static constexpr usize fixed_size() noexcept { return Max; }
+        ByteView view() const noexcept { return has_ ? ByteView {.data = bytes_, .size = Max} : ByteView {}; }
+        MutableByteView mutable_view() noexcept {
+            if (!has_) {
+                for (usize i {}; i < Max; ++i) { bytes_[i] = 0u; }
+            }
+            has_ = true;
+            return {.data = bytes_, .size = Max};
+        }
+        u8 *data() noexcept { return bytes_; }
+        const u8 *data() const noexcept { return bytes_; }
+        usize size() const noexcept { return has_ ? Max : 0u; }
+        bool empty() const noexcept { return !has_; }
+        bool has_value() const noexcept { return has_; }
+        void clear() noexcept { has_ = false; }
+
+        Status assign(const ByteView view) noexcept {
+            if (view.size != Max) {
+                return Status::error(ErrorCode::invalid_argument);
+            }
+            for (usize i {}; i < Max; ++i) { bytes_[i] = view.data[i]; }
+            has_ = true;
+            return {};
+        }
+
+    protected:
+        u8 bytes_[Max];
+        bool has_ {};
     };
 
     template<class Config> struct Bytes {
@@ -944,9 +1114,15 @@ namespace protocyte {
         return size;
     }
 
-    constexpr u32 encode_zigzag32(const i32 value) noexcept { return static_cast<u32>((value << 1) ^ (value >> 31)); }
+    constexpr u32 encode_zigzag32(const i32 value) noexcept {
+        const auto bits = static_cast<u32>(value);
+        return (bits << 1u) ^ (static_cast<u32>(0u) - (bits >> 31u));
+    }
 
-    constexpr u64 encode_zigzag64(const i64 value) noexcept { return static_cast<u64>((value << 1) ^ (value >> 63)); }
+    constexpr u64 encode_zigzag64(const i64 value) noexcept {
+        const auto bits = static_cast<u64>(value);
+        return (bits << 1u) ^ (static_cast<u64>(0u) - (bits >> 63u));
+    }
 
     constexpr i32 decode_zigzag32(const u32 value) noexcept {
         return static_cast<i32>((value >> 1) ^ (~(value & 1u) + 1u));
@@ -995,12 +1171,401 @@ namespace protocyte {
         return writer.write(bytes, 8u);
     }
 
+    template<class Reader> Status expect_wire_type(Reader &reader, const WireType actual, const WireType expected,
+                                                   const u32 field_number) noexcept {
+        if (actual != expected) {
+            return Status::error(ErrorCode::invalid_wire_type, reader.position(), field_number);
+        }
+        return {};
+    }
+
+    template<class T, class Reader> Result<T> read_varint_scalar(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(raw.value()));
+    }
+
+    template<class T, class Reader> Result<T> read_zigzag32_scalar(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(decode_zigzag32(static_cast<u32>(raw.value()))));
+    }
+
+    template<class T, class Reader> Result<T> read_zigzag64_scalar(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(decode_zigzag64(raw.value())));
+    }
+
+    template<class T, class Reader> Result<T> read_fixed32_scalar(Reader &reader) noexcept {
+        auto raw = read_fixed32(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(raw.value()));
+    }
+
+    template<class T, class Reader> Result<T> read_fixed64_scalar(Reader &reader) noexcept {
+        auto raw = read_fixed64(reader);
+        if (!raw) {
+            return Result<T>::err(raw.error());
+        }
+        return Result<T>::ok(static_cast<T>(raw.value()));
+    }
+
+    template<class Reader> Result<i32> read_int32(Reader &reader) noexcept { return read_varint_scalar<i32>(reader); }
+
+    template<class Reader> Result<i64> read_int64(Reader &reader) noexcept { return read_varint_scalar<i64>(reader); }
+
+    template<class Reader> Result<u32> read_uint32(Reader &reader) noexcept { return read_varint_scalar<u32>(reader); }
+
+    template<class Reader> Result<u64> read_uint64(Reader &reader) noexcept { return read_varint_scalar<u64>(reader); }
+
+    template<class Reader> Result<bool> read_bool(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<bool>::err(raw.error());
+        }
+        return Result<bool>::ok(raw.value() != 0u);
+    }
+
+    template<class Reader> Result<i32> read_enum(Reader &reader) noexcept { return read_varint_scalar<i32>(reader); }
+
+    template<class Reader> Result<i32> read_sint32(Reader &reader) noexcept {
+        return read_zigzag32_scalar<i32>(reader);
+    }
+
+    template<class Reader> Result<i64> read_sint64(Reader &reader) noexcept {
+        return read_zigzag64_scalar<i64>(reader);
+    }
+
+    template<class Reader> Result<u32> read_fixed32_value(Reader &reader) noexcept {
+        return read_fixed32_scalar<u32>(reader);
+    }
+
+    template<class Reader> Result<u64> read_fixed64_value(Reader &reader) noexcept {
+        return read_fixed64_scalar<u64>(reader);
+    }
+
+    template<class Reader> Result<i32> read_sfixed32(Reader &reader) noexcept {
+        return read_fixed32_scalar<i32>(reader);
+    }
+
+    template<class Reader> Result<i64> read_sfixed64(Reader &reader) noexcept {
+        return read_fixed64_scalar<i64>(reader);
+    }
+
+    template<class Reader> Result<f32> read_float(Reader &reader) noexcept {
+        auto raw = read_fixed32(reader);
+        if (!raw) {
+            return Result<f32>::err(raw.error());
+        }
+        return Result<f32>::ok(::std::bit_cast<f32>(raw.value()));
+    }
+
+    template<class Reader> Result<f64> read_double(Reader &reader) noexcept {
+        auto raw = read_fixed64(reader);
+        if (!raw) {
+            return Result<f64>::err(raw.error());
+        }
+        return Result<f64>::ok(::std::bit_cast<f64>(raw.value()));
+    }
+
+    template<class Writer, class T> Status write_varint_scalar(Writer &writer, const T value) noexcept {
+        return write_varint(writer, static_cast<u64>(value));
+    }
+
+    template<class Writer> Status write_int32(Writer &writer, const i32 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_int64(Writer &writer, const i64 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_uint32(Writer &writer, const u32 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_uint64(Writer &writer, const u64 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_bool(Writer &writer, const bool value) noexcept {
+        return write_varint(writer, value ? 1u : 0u);
+    }
+
+    template<class Writer> Status write_enum(Writer &writer, const i32 value) noexcept {
+        return write_varint_scalar(writer, value);
+    }
+
+    template<class Writer> Status write_sint32(Writer &writer, const i32 value) noexcept {
+        return write_varint(writer, encode_zigzag32(value));
+    }
+
+    template<class Writer> Status write_sint64(Writer &writer, const i64 value) noexcept {
+        return write_varint(writer, encode_zigzag64(value));
+    }
+
+    template<class Writer> Status write_fixed32_value(Writer &writer, const u32 value) noexcept {
+        return write_fixed32(writer, value);
+    }
+
+    template<class Writer> Status write_fixed64_value(Writer &writer, const u64 value) noexcept {
+        return write_fixed64(writer, value);
+    }
+
+    template<class Writer> Status write_sfixed32(Writer &writer, const i32 value) noexcept {
+        return write_fixed32(writer, static_cast<u32>(value));
+    }
+
+    template<class Writer> Status write_sfixed64(Writer &writer, const i64 value) noexcept {
+        return write_fixed64(writer, static_cast<u64>(value));
+    }
+
+    template<class Writer> Status write_float(Writer &writer, const f32 value) noexcept {
+        return write_fixed32(writer, ::std::bit_cast<u32>(value));
+    }
+
+    template<class Writer> Status write_double(Writer &writer, const f64 value) noexcept {
+        return write_fixed64(writer, ::std::bit_cast<u64>(value));
+    }
+
     template<class Writer> Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept {
         return write_varint(writer, (static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
     }
 
-    constexpr usize tag_size(const u32 field_number) noexcept {
-        return varint_size(static_cast<u64>(field_number) << 3u);
+    constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept {
+        const auto size = varint_size((static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
+        return wire_type == WireType::SGROUP ? size * 2u : size;
+    }
+
+    template<class Reader>
+    Result<i32> read_int32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_int32(reader);
+    }
+
+    template<class Reader>
+    Result<i64> read_int64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i64>::err(st.error());
+        }
+        return read_int64(reader);
+    }
+
+    template<class Reader>
+    Result<u32> read_uint32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<u32>::err(st.error());
+        }
+        return read_uint32(reader);
+    }
+
+    template<class Reader>
+    Result<u64> read_uint64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<u64>::err(st.error());
+        }
+        return read_uint64(reader);
+    }
+
+    template<class Reader>
+    Result<bool> read_bool_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<bool>::err(st.error());
+        }
+        return read_bool(reader);
+    }
+
+    template<class Reader>
+    Result<i32> read_enum_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_enum(reader);
+    }
+
+    template<class Reader>
+    Result<i32> read_sint32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_sint32(reader);
+    }
+
+    template<class Reader>
+    Result<i64> read_sint64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
+            return Result<i64>::err(st.error());
+        }
+        return read_sint64(reader);
+    }
+
+    template<class Reader>
+    Result<u32> read_fixed32_value_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
+            return Result<u32>::err(st.error());
+        }
+        return read_fixed32_value(reader);
+    }
+
+    template<class Reader>
+    Result<u64> read_fixed64_value_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
+            return Result<u64>::err(st.error());
+        }
+        return read_fixed64_value(reader);
+    }
+
+    template<class Reader>
+    Result<i32> read_sfixed32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
+            return Result<i32>::err(st.error());
+        }
+        return read_sfixed32(reader);
+    }
+
+    template<class Reader>
+    Result<i64> read_sfixed64_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
+            return Result<i64>::err(st.error());
+        }
+        return read_sfixed64(reader);
+    }
+
+    template<class Reader>
+    Result<f32> read_float_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
+            return Result<f32>::err(st.error());
+        }
+        return read_float(reader);
+    }
+
+    template<class Reader>
+    Result<f64> read_double_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
+            return Result<f64>::err(st.error());
+        }
+        return read_double(reader);
+    }
+
+    template<class Writer> Status write_int32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_int32(writer, value);
+    }
+
+    template<class Writer> Status write_int64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_int64(writer, value);
+    }
+
+    template<class Writer> Status write_uint32_field(Writer &writer, const u32 field_number, const u32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_uint32(writer, value);
+    }
+
+    template<class Writer> Status write_uint64_field(Writer &writer, const u32 field_number, const u64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_uint64(writer, value);
+    }
+
+    template<class Writer> Status write_bool_field(Writer &writer, const u32 field_number, const bool value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_bool(writer, value);
+    }
+
+    template<class Writer> Status write_enum_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_enum(writer, value);
+    }
+
+    template<class Writer> Status write_sint32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_sint32(writer, value);
+    }
+
+    template<class Writer> Status write_sint64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
+            return st;
+        }
+        return write_sint64(writer, value);
+    }
+
+    template<class Writer>
+    Status write_fixed32_value_field(Writer &writer, const u32 field_number, const u32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
+            return st;
+        }
+        return write_fixed32_value(writer, value);
+    }
+
+    template<class Writer>
+    Status write_fixed64_value_field(Writer &writer, const u32 field_number, const u64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
+            return st;
+        }
+        return write_fixed64_value(writer, value);
+    }
+
+    template<class Writer>
+    Status write_sfixed32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
+            return st;
+        }
+        return write_sfixed32(writer, value);
+    }
+
+    template<class Writer>
+    Status write_sfixed64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
+            return st;
+        }
+        return write_sfixed64(writer, value);
+    }
+
+    template<class Writer> Status write_float_field(Writer &writer, const u32 field_number, const f32 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
+            return st;
+        }
+        return write_float(writer, value);
+    }
+
+    template<class Writer> Status write_double_field(Writer &writer, const u32 field_number, const f64 value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
+            return st;
+        }
+        return write_double(writer, value);
+    }
+
+    template<class Reader> Result<usize> read_length_delimited_size(Reader &reader) noexcept {
+        auto len = read_varint(reader);
+        if (!len) {
+            return Result<usize>::err(len.error());
+        }
+        return Result<usize>::ok(static_cast<usize>(len.value()));
     }
 
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;
@@ -1047,8 +1612,9 @@ namespace protocyte {
         }
     }
 
-    template<class Config, class Reader> Status read_bytes(typename Config::Context &ctx, Reader &reader,
-                                                           const usize size, typename Config::Bytes &out) noexcept {
+    template<class Config, class Reader> Status read_bytes_sized(typename Config::Context &ctx, Reader &reader,
+                                                                 const usize size,
+                                                                 typename Config::Bytes &out) noexcept {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
@@ -1076,8 +1642,27 @@ namespace protocyte {
         return {};
     }
 
-    template<class Config, class Reader> Status read_string(typename Config::Context &ctx, Reader &reader,
-                                                            const usize size, typename Config::String &out) noexcept {
+    template<class Config, class Reader>
+    Status read_bytes(typename Config::Context &ctx, Reader &reader, typename Config::Bytes &out) noexcept {
+        auto size = read_length_delimited_size(reader);
+        if (!size) {
+            return size.status();
+        }
+        return read_bytes_sized<Config>(ctx, reader, size.value(), out);
+    }
+
+    template<class Config, class Reader> Status read_bytes_field(typename Config::Context &ctx, Reader &reader,
+                                                                 const WireType wire_type, const u32 field_number,
+                                                                 typename Config::Bytes &out) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number); !st) {
+            return st;
+        }
+        return read_bytes<Config>(ctx, reader, out);
+    }
+
+    template<class Config, class Reader> Status read_string_sized(typename Config::Context &ctx, Reader &reader,
+                                                                  const usize size,
+                                                                  typename Config::String &out) noexcept {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
@@ -1102,11 +1687,42 @@ namespace protocyte {
         return {};
     }
 
+    template<class Config, class Reader>
+    Status read_string(typename Config::Context &ctx, Reader &reader, typename Config::String &out) noexcept {
+        auto size = read_length_delimited_size(reader);
+        if (!size) {
+            return size.status();
+        }
+        return read_string_sized<Config>(ctx, reader, size.value(), out);
+    }
+
+    template<class Config, class Reader> Status read_string_field(typename Config::Context &ctx, Reader &reader,
+                                                                  const WireType wire_type, const u32 field_number,
+                                                                  typename Config::String &out) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number); !st) {
+            return st;
+        }
+        return read_string<Config>(ctx, reader, out);
+    }
+
     template<class Writer> Status write_bytes(Writer &writer, const ByteView view) noexcept {
         if (const auto st = write_varint(writer, static_cast<u64>(view.size)); !st) {
             return st;
         }
         return writer.write(view.data, view.size);
+    }
+
+    template<class Writer>
+    Status write_bytes_field(Writer &writer, const u32 field_number, const ByteView view) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::LEN); !st) {
+            return st;
+        }
+        return write_bytes(writer, view);
+    }
+
+    template<class Writer>
+    Status write_string_field(Writer &writer, const u32 field_number, const ByteView view) noexcept {
+        return write_bytes_field(writer, field_number, view);
     }
 
     inline Status add_size(usize *total, const usize value) noexcept { return checked_add(*total, value, total); }

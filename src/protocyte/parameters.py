@@ -11,7 +11,6 @@ class GeneratorOptions:
     runtime_prefix: str = "protocyte/runtime"
     include_prefix: str = ""
     namespace_prefix: str = ""
-    explicit_default_instantiations: bool = False
 
 
 def parse_parameter(parameter: str) -> GeneratorOptions:
@@ -40,7 +39,6 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "include_prefix",
         "namespace",
         "namespace_prefix",
-        "explicit_default_instantiations",
     }
     if unknown:
         joined = ", ".join(sorted(unknown))
@@ -62,20 +60,12 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
 
     namespace_prefix = values.get("namespace_prefix", values.get("namespace", "")).strip(":")
     include_prefix = values.get("include_prefix", "").strip("/")
-    explicit_default_instantiations = _parse_bool(
-        values.get("explicit_default_instantiations", "false"),
-        "explicit_default_instantiations",
-    )
-
-    if "explicit_default_instantiations" in flags:
-        explicit_default_instantiations = True
 
     return GeneratorOptions(
         emit_runtime=emit_runtime,
         runtime_prefix=runtime_prefix or "protocyte/runtime",
         include_prefix=include_prefix,
         namespace_prefix=namespace_prefix,
-        explicit_default_instantiations=explicit_default_instantiations,
     )
 
 
@@ -86,4 +76,3 @@ def _parse_bool(value: str, name: str) -> bool:
     if lowered in {"0", "false", "no", "off"}:
         return False
     raise ProtocyteError(f"{name} must be a boolean value")
-

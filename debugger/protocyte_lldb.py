@@ -31,7 +31,7 @@ if __name__ == "__main__":
     sys.exit(0)
 
 
-import lldb
+import lldb  # noqa: E402
 
 
 MAX_INLINE_BYTES = 64

@@ -6,12 +6,42 @@ import "protocyte/options.proto";
 
 // File-level options
 option optimize_for = SPEED;
+option (protocyte.package_constant) = { name: "BASE_COUNT" kind: INT32 literal: "5" };
+option (protocyte.package_constant) = { name: "PREFIX" kind: STRING expr: "substr(\"protocyte\", 0, 5)" };
+option (protocyte.package_constant) = { name: "BYTE_ARRAY_CAP" kind: UINT32 expr: "len(PREFIX) - 1" };
 
 // -----------------------------------------------------------------------------
 //                      The Most Annoying Proto3 Message
 // -----------------------------------------------------------------------------
 
 message UltimateComplexMessage {
+  // -------------------------------------------------------------------------
+  // Message constants
+  // -------------------------------------------------------------------------
+  option (protocyte.constant) = { name: "SHIFTED_COUNT" kind: INT64 expr: "BASE_COUNT * 1000000000" };
+  option (protocyte.constant) = { name: "MASK_BITS" kind: UINT64 literal: "1234567890123456789" };
+  option (protocyte.constant) = { name: "FLOAT_SCALE" kind: FLOAT literal: "1.25" };
+  option (protocyte.constant) = { name: "DOUBLE_SCALE" kind: DOUBLE expr: "FLOAT_SCALE + 2.5" };
+  option (protocyte.constant) = { name: "FLAG_LITERAL" kind: BOOL literal: "true" };
+  option (protocyte.constant) = { name: "HEX_LITERAL" kind: UINT32 literal: "0x20" };
+  option (protocyte.constant) = { name: "HEX_SUM" kind: UINT32 expr: "0x10 + 0x8" };
+  option (protocyte.constant) = { name: "INTEGER_ARRAY_CAP" kind: UINT32 expr: "(BASE_COUNT * 2) - 2" };
+  option (protocyte.constant) = { name: "LABEL" kind: STRING expr: "PREFIX + \"-demo\"" };
+  option (protocyte.constant) = { name: "UNICODE_LABEL" kind: STRING literal: "Āé" };
+  option (protocyte.constant) = { name: "FIXED_INTEGER_ARRAY_CAP" kind: UINT32 expr: "BASE_COUNT - 2" };
+  option (protocyte.constant) = { name: "FLOATISH_BOUND" kind: UINT32 expr: "4 / 2.0" };
+  option (protocyte.constant) = { name: "GT_CHECK" kind: BOOL expr: "BASE_COUNT > 4" };
+  option (protocyte.constant) = { name: "LE_CHECK" kind: BOOL expr: "BYTE_ARRAY_CAP <= INTEGER_ARRAY_CAP" };
+  option (protocyte.constant) = { name: "EQ_CHECK" kind: BOOL expr: "PREFIX == \"proto\"" };
+  option (protocyte.constant) = { name: "NE_CHECK" kind: BOOL expr: "LABEL != \"proto\"" };
+  option (protocyte.constant) = {
+    name: "HAS_PREFIX"
+    kind: BOOL
+    expr: "starts_with(LABEL, PREFIX) && !starts_with(LABEL, \"zzz\")"
+  };
+  option (protocyte.constant) = { name: "MOD_CHECK" kind: INT32 expr: "BASE_COUNT % 2" };
+  option (protocyte.constant) = { name: "OR_CHECK" kind: BOOL expr: "HAS_PREFIX || false" };
+
   // -------------------------------------------------------------------------
   // Reserved slots (ensure your generator correctly handles “holes”)
   // -------------------------------------------------------------------------
@@ -90,7 +120,7 @@ message UltimateComplexMessage {
     string oneof_string = 26;
     int32  oneof_int32  = 27;
     NestedLevel1 oneof_msg = 28;
-    bytes oneof_bytes   = 29;
+    bytes oneof_bytes   = 29 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
   }
 
   // -------------------------------------------------------------------------
@@ -152,8 +182,12 @@ message UltimateComplexMessage {
   // -------------------------------------------------------------------------
   // Fixed-size binary fields
   // -------------------------------------------------------------------------
-  // SHA-256 digest stored inline as exactly 32 bytes.
-  bytes sha256 = 41 [(protocyte.fixed_size) = 32];
+  // SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+  bytes sha256 = 41 [(protocyte.array) = { expr: "INTEGER_ARRAY_CAP * 4" }, (protocyte.fixed) = true];
+  repeated int32 integer_array = 42 [(protocyte.array) = { expr: "INTEGER_ARRAY_CAP" }];
+  bytes byte_array = 43 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
+  repeated uint32 fixed_integer_array = 44 [(protocyte.array) = { expr: "FIXED_INTEGER_ARRAY_CAP" }, (protocyte.fixed) = true];
+  bytes float_expr_array = 45 [(protocyte.array) = { expr: "FLOATISH_BOUND" }];
 }
 
 // -----------------------------------------------------------------------------
@@ -163,4 +197,37 @@ message UltimateComplexMessage {
 message ExtraMessage {
   string tag = 1;
   UltimateComplexMessage ref = 2;
+}
+
+message CrossMessageConstants {
+  option (protocyte.constant) = {
+    name: "ROOT_MIRROR"
+    kind: UINT32
+    expr: "UltimateComplexMessage.INTEGER_ARRAY_CAP + 2"
+  };
+  option (protocyte.constant) = {
+    name: "LABEL_COPY"
+    kind: STRING
+    expr: "PREFIX + \"-cross\""
+  };
+  option (protocyte.constant) = {
+    name: "READY"
+    kind: BOOL
+    expr: "UltimateComplexMessage.HAS_PREFIX && (ROOT_MIRROR == 10)"
+  };
+
+  bytes external_bytes = 1 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP + 2" }];
+  repeated int32 mirrored_values = 2 [(protocyte.array) = { expr: "ROOT_MIRROR" }];
+
+  message Nested {
+    option (protocyte.constant) = {
+      name: "EXTERNAL_CAP"
+      kind: UINT32
+      expr: "BASE_COUNT + 3"
+    };
+
+    bytes nested_bytes = 1 [(protocyte.array) = { expr: "EXTERNAL_CAP" }];
+  }
+
+  Nested nested = 3;
 }

@@ -5,6 +5,8 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#include <string_view>
+
 namespace test::ultimate {
 
     enum struct UltimateComplexMessage_Color : ::protocyte::i32 {
@@ -21,6 +23,10 @@ namespace test::ultimate {
         C = 3,
     };
 
+    inline constexpr ::protocyte::i32 BASE_COUNT {5};
+    inline constexpr ::std::string_view PREFIX {"proto", 5u};
+    inline constexpr ::protocyte::u32 BYTE_ARRAY_CAP {4u};
+
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1_NestedLevel2;
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1;
     template<typename Config = ::protocyte::DefaultConfig>
@@ -31,9 +37,12 @@ namespace test::ultimate {
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_LevelA_LevelB_LevelC;
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD;
     template<typename Config = ::protocyte::DefaultConfig> struct ExtraMessage;
+    template<typename Config = ::protocyte::DefaultConfig> struct CrossMessageConstants_Nested;
+    template<typename Config = ::protocyte::DefaultConfig> struct CrossMessageConstants;
 
     template<typename Config> struct UltimateComplexMessage_NestedLevel1_NestedLevel2 {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         using InnerEnum = UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum;
 
         enum struct FieldNumber : ::protocyte::u32 {
@@ -59,13 +68,21 @@ namespace test::ultimate {
         operator=(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &) = delete;
 
         ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             if (const auto st = set_description(other.description()); !st) {
                 return st;
+            }
+            clear_values();
+            for (::protocyte::usize i {}; i < other.values().size(); ++i) {
+                if (const auto st = mutable_values().push_back(other.values()[i]); !st) {
+                    return st;
+                }
             }
             if (const auto st = set_mode_raw(other.mode_raw()); !st) {
                 return st;
             }
-            // Full deep copy for repeated, map, and oneof storage is reserved for the next conformance pass.
             return ::protocyte::Status::ok();
         }
 
@@ -122,7 +139,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -132,16 +149,8 @@ namespace test::ultimate {
                 const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::description: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), description_);
+                        if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
+                                                                                   field_number, description_);
                             !st) {
                             return st;
                         }
@@ -157,11 +166,11 @@ namespace test::ultimate {
                                                                        static_cast<::protocyte::usize>(len.value())};
                             while (!packed.eof()) {
                                 ::protocyte::f32 value {};
-                                auto raw = ::protocyte::read_fixed32(packed);
-                                if (!raw) {
-                                    return raw.status();
+                                auto decoded = ::protocyte::read_float(packed);
+                                if (!decoded) {
+                                    return decoded.status();
                                 }
-                                value = ::std::bit_cast<::protocyte::f32>(raw.value());
+                                value = decoded.value();
                                 if (const auto st = values_.push_back(value); !st) {
                                     return st;
                                 }
@@ -171,31 +180,23 @@ namespace test::ultimate {
                             }
                             break;
                         }
-                        if (wire_type != ::protocyte::WireType::I32) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         ::protocyte::f32 value {};
-                        auto raw = ::protocyte::read_fixed32(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_float_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        value = ::std::bit_cast<::protocyte::f32>(raw.value());
+                        value = decoded.value();
                         if (const auto st = values_.push_back(value); !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::mode: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_enum_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        mode_ = static_cast<::protocyte::i32>(raw.value());
+                        mode_ = decoded.value();
                         break;
                     }
                     default: {
@@ -209,35 +210,43 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer &writer) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
             if (!description_.empty()) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::description), ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::description), description_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, description_.view()); !st) {
                     return st;
                 }
             }
-            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+            if (!values_.empty()) {
+                ::protocyte::usize packed_size_values {};
+                for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(&packed_size_values, 4u); !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::values),
-                                                           ::protocyte::WireType::I32);
+                                                           ::protocyte::WireType::LEN);
                     !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_fixed32(writer, ::std::bit_cast<::protocyte::u32>(values_[i]));
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_values));
                     !st) {
                     return st;
+                }
+                for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_float(writer, values_[i]); !st) {
+                        return st;
+                    }
                 }
             }
             if (mode_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::mode),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st =
+                        ::protocyte::write_enum_field(writer, static_cast<::protocyte::u32>(FieldNumber::mode), mode_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(mode_)); !st) {
                     return st;
                 }
             }
@@ -254,9 +263,18 @@ namespace test::ultimate {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            for (::protocyte::usize i {}; i < values_.size(); ++i) {
+            if (!values_.empty()) {
+                ::protocyte::usize packed_size_values {};
+                for (::protocyte::usize i {}; i < values_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(&packed_size_values, 4u); !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::values)) + 4u);
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::values)) +
+                                    ::protocyte::varint_size(packed_size_values) + packed_size_values);
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -280,6 +298,7 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_NestedLevel1 {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using NestedLevel2 =
             UltimateComplexMessage_NestedLevel1_NestedLevel2<NestedConfig>;
 
@@ -301,6 +320,9 @@ namespace test::ultimate {
         UltimateComplexMessage_NestedLevel1 &operator=(const UltimateComplexMessage_NestedLevel1 &) = delete;
 
         ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1 &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             if (const auto st = set_name(other.name()); !st) {
                 return st;
             }
@@ -381,7 +403,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -391,31 +413,19 @@ namespace test::ultimate {
                 const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::name: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), name_);
+                        if (const auto st =
+                                ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type, field_number, name_);
                             !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::id: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        id_ = static_cast<::protocyte::i32>(raw.value());
+                        id_ = decoded.value();
                         break;
                     }
                     case FieldNumber::inner: {
@@ -452,24 +462,18 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer &writer) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
             if (!name_.empty()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::name),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::name), name_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, name_.view()); !st) {
                     return st;
                 }
             }
             if (id_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::id),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st =
+                        ::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(id_)); !st) {
                     return st;
                 }
             }
@@ -536,6 +540,7 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
 
         enum struct Deep_oneofCase : ::protocyte::u32 {
             none = 0u,
@@ -618,10 +623,48 @@ namespace test::ultimate {
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
         ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             if (const auto st = set_extreme(other.extreme()); !st) {
                 return st;
             }
-            // Full deep copy for repeated, map, and oneof storage is reserved for the next conformance pass.
+            clear_weird_map();
+            if (const auto st = other.weird_map().for_each([&](const auto &key, const auto &value) noexcept {
+                    auto copied_key = key;
+                    typename Config::String copied_value {ctx_};
+                    if (const auto st = copied_value.assign(value.view()); !st) {
+                        return st;
+                    }
+                    if (const auto insert = mutable_weird_map().insert_or_assign(::protocyte::move(copied_key),
+                                                                                 ::protocyte::move(copied_value));
+                        !insert) {
+                        return insert;
+                    }
+                    return ::protocyte::Status::ok();
+                });
+                !st) {
+                return st;
+            }
+            switch (other.deep_oneof_case_) {
+                case Deep_oneofCase::val: {
+                    if (const auto st = set_val(other.val()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Deep_oneofCase::text: {
+                    if (const auto st = set_text(other.text()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Deep_oneofCase::none:
+                default: {
+                    clear_deep_oneof();
+                    break;
+                }
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -710,7 +753,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -720,16 +763,8 @@ namespace test::ultimate {
                 const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::extreme: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), extreme_);
+                        if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
+                                                                                   field_number, extreme_);
                             !st) {
                             return st;
                         }
@@ -766,11 +801,11 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::key));
                                     }
-                                    auto raw = ::protocyte::read_varint(entry_reader);
-                                    if (!raw) {
-                                        return raw.status();
+                                    auto decoded = ::protocyte::read_int32(entry_reader);
+                                    if (!decoded) {
+                                        return decoded.status();
                                     }
-                                    key = static_cast<::protocyte::i32>(raw.value());
+                                    key = decoded.value();
                                     break;
                                 }
                                 case EntryFieldNumber::value: {
@@ -779,12 +814,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    if (const auto st = ::protocyte::read_string<Config>(
-                                            *ctx_, entry_reader, static_cast<::protocyte::usize>(len.value()), value);
+                                    if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, value);
                                         !st) {
                                         return st;
                                     }
@@ -810,34 +840,22 @@ namespace test::ultimate {
                         break;
                     }
                     case FieldNumber::val: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         clear_deep_oneof();
                         new (&deep_oneof.val)::protocyte::i64 {0};
                         deep_oneof_case_ = Deep_oneofCase::val;
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_int64_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        deep_oneof.val = static_cast<::protocyte::i64>(raw.value());
+                        deep_oneof.val = decoded.value();
                         break;
                     }
                     case FieldNumber::text: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         clear_deep_oneof();
                         new (&deep_oneof.text) typename Config::String {ctx_};
                         deep_oneof_case_ = Deep_oneofCase::text;
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), deep_oneof.text);
+                        if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
+                                                                                   field_number, deep_oneof.text);
                             !st) {
                             return st;
                         }
@@ -854,14 +872,11 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer &writer) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
             if (!extreme_.empty()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::extreme),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::extreme), extreme_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, extreme_.view()); !st) {
                     return st;
                 }
             }
@@ -899,25 +914,16 @@ namespace test::ultimate {
                         return st;
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::key),
-                                                       ::protocyte::WireType::VARINT);
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(key));
+                        if (const auto st = ::protocyte::write_int32_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), key);
                             !st) {
                             return st;
                         }
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::value),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_string_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), value.view());
                             !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_bytes(writer, value.view()); !st) {
                             return st;
                         }
                     }
@@ -927,23 +933,16 @@ namespace test::ultimate {
                 return st_map_weird_map;
             }
             if (deep_oneof_case_ == Deep_oneofCase::val) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::val),
-                                                           ::protocyte::WireType::VARINT);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(deep_oneof.val));
+                if (const auto st = ::protocyte::write_int64_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::val), deep_oneof.val);
                     !st) {
                     return st;
                 }
             }
             if (deep_oneof_case_ == Deep_oneofCase::text) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::text),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::text), deep_oneof.text.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, deep_oneof.text.view()); !st) {
                     return st;
                 }
             }
@@ -1025,9 +1024,34 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         using Color = UltimateComplexMessage_Color;
         template<typename NestedConfig = Config> using NestedLevel1 = UltimateComplexMessage_NestedLevel1<NestedConfig>;
         template<typename NestedConfig = Config> using LevelA = UltimateComplexMessage_LevelA<NestedConfig>;
+
+        static constexpr ::protocyte::i64 SHIFTED_COUNT {5000000000};
+        static constexpr ::protocyte::u64 MASK_BITS {1234567890123456789ull};
+        static constexpr ::protocyte::f32 FLOAT_SCALE {1.25f};
+        static constexpr ::protocyte::f64 DOUBLE_SCALE {3.75};
+        static constexpr bool FLAG_LITERAL {true};
+        static constexpr ::protocyte::u32 HEX_LITERAL {32u};
+        static constexpr ::protocyte::u32 HEX_SUM {24u};
+        static constexpr ::protocyte::u32 INTEGER_ARRAY_CAP {8u};
+        static constexpr ::std::string_view LABEL {"proto-demo", 10u};
+        static constexpr ::std::string_view UNICODE_LABEL {"\xc4"
+                                                           "\x80"
+                                                           "\xc3"
+                                                           "\xa9",
+                                                           4u};
+        static constexpr ::protocyte::u32 FIXED_INTEGER_ARRAY_CAP {3u};
+        static constexpr ::protocyte::u32 FLOATISH_BOUND {2u};
+        static constexpr bool GT_CHECK {true};
+        static constexpr bool LE_CHECK {true};
+        static constexpr bool EQ_CHECK {true};
+        static constexpr bool NE_CHECK {true};
+        static constexpr bool HAS_PREFIX {true};
+        static constexpr ::protocyte::i32 MOD_CHECK {1};
+        static constexpr bool OR_CHECK {true};
 
         enum struct Special_oneofCase : ::protocyte::u32 {
             none = 0u,
@@ -1074,6 +1098,10 @@ namespace test::ultimate {
             opt_string = 39u,
             extreme_nesting = 40u,
             sha256 = 41u,
+            integer_array = 42u,
+            byte_array = 43u,
+            fixed_integer_array = 44u,
+            float_expr_array = 45u,
         };
 
         explicit UltimateComplexMessage(Context &ctx) noexcept:
@@ -1128,13 +1156,14 @@ namespace test::ultimate {
             colors_ {::protocyte::move(other.colors_)},
             opt_int32_ {other.opt_int32_},
             opt_string_ {::protocyte::move(other.opt_string_)},
-            extreme_nesting_ {::protocyte::move(other.extreme_nesting_)} {
+            extreme_nesting_ {::protocyte::move(other.extreme_nesting_)},
+            sha256_ {::protocyte::move(other.sha256_)},
+            integer_array_ {::protocyte::move(other.integer_array_)},
+            byte_array_ {::protocyte::move(other.byte_array_)},
+            fixed_integer_array_ {::protocyte::move(other.fixed_integer_array_)},
+            float_expr_array_ {::protocyte::move(other.float_expr_array_)} {
             has_opt_int32_ = other.has_opt_int32_;
             has_opt_string_ = other.has_opt_string_;
-            has_sha256_ = other.has_sha256_;
-            if (other.has_sha256_) {
-                for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = other.sha256_[i]; }
-            }
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
                     new (&special_oneof.oneof_string)
@@ -1155,8 +1184,8 @@ namespace test::ultimate {
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&special_oneof.oneof_bytes)
-                        typename Config::Bytes {::protocyte::move(other.special_oneof.oneof_bytes)};
+                    new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                        ::protocyte::move(other.special_oneof.oneof_bytes)};
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
                 }
@@ -1206,10 +1235,11 @@ namespace test::ultimate {
             opt_string_ = ::protocyte::move(other.opt_string_);
             has_opt_string_ = other.has_opt_string_;
             extreme_nesting_ = ::protocyte::move(other.extreme_nesting_);
-            has_sha256_ = other.has_sha256_;
-            if (other.has_sha256_) {
-                for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = other.sha256_[i]; }
-            }
+            sha256_ = ::protocyte::move(other.sha256_);
+            integer_array_ = ::protocyte::move(other.integer_array_);
+            byte_array_ = ::protocyte::move(other.byte_array_);
+            fixed_integer_array_ = ::protocyte::move(other.fixed_integer_array_);
+            float_expr_array_ = ::protocyte::move(other.float_expr_array_);
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
                     new (&special_oneof.oneof_string)
@@ -1230,8 +1260,8 @@ namespace test::ultimate {
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&special_oneof.oneof_bytes)
-                        typename Config::Bytes {::protocyte::move(other.special_oneof.oneof_bytes)};
+                    new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                        ::protocyte::move(other.special_oneof.oneof_bytes)};
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
                 }
@@ -1250,6 +1280,9 @@ namespace test::ultimate {
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
         ::protocyte::Status copy_from(const UltimateComplexMessage &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             if (const auto st = set_f_double(other.f_double()); !st) {
                 return st;
             }
@@ -1295,6 +1328,24 @@ namespace test::ultimate {
             if (const auto st = set_f_bytes(other.f_bytes()); !st) {
                 return st;
             }
+            clear_r_int32_unpacked();
+            for (::protocyte::usize i {}; i < other.r_int32_unpacked().size(); ++i) {
+                if (const auto st = mutable_r_int32_unpacked().push_back(other.r_int32_unpacked()[i]); !st) {
+                    return st;
+                }
+            }
+            clear_r_int32_packed();
+            for (::protocyte::usize i {}; i < other.r_int32_packed().size(); ++i) {
+                if (const auto st = mutable_r_int32_packed().push_back(other.r_int32_packed()[i]); !st) {
+                    return st;
+                }
+            }
+            clear_r_double();
+            for (::protocyte::usize i {}; i < other.r_double().size(); ++i) {
+                if (const auto st = mutable_r_double().push_back(other.r_double()[i]); !st) {
+                    return st;
+                }
+            }
             if (const auto st = set_color_raw(other.color_raw()); !st) {
                 return st;
             }
@@ -1307,6 +1358,94 @@ namespace test::ultimate {
             } else {
                 clear_nested1();
             }
+            clear_map_str_int32();
+            if (const auto st = other.map_str_int32().for_each([&](const auto &key, const auto &value) noexcept {
+                    typename Config::String copied_key {ctx_};
+                    if (const auto st = copied_key.assign(key.view()); !st) {
+                        return st;
+                    }
+                    auto copied_value = value;
+                    if (const auto insert = mutable_map_str_int32().insert_or_assign(::protocyte::move(copied_key),
+                                                                                     ::protocyte::move(copied_value));
+                        !insert) {
+                        return insert;
+                    }
+                    return ::protocyte::Status::ok();
+                });
+                !st) {
+                return st;
+            }
+            clear_map_int32_str();
+            if (const auto st = other.map_int32_str().for_each([&](const auto &key, const auto &value) noexcept {
+                    auto copied_key = key;
+                    typename Config::String copied_value {ctx_};
+                    if (const auto st = copied_value.assign(value.view()); !st) {
+                        return st;
+                    }
+                    if (const auto insert = mutable_map_int32_str().insert_or_assign(::protocyte::move(copied_key),
+                                                                                     ::protocyte::move(copied_value));
+                        !insert) {
+                        return insert;
+                    }
+                    return ::protocyte::Status::ok();
+                });
+                !st) {
+                return st;
+            }
+            clear_map_bool_bytes();
+            if (const auto st = other.map_bool_bytes().for_each([&](const auto &key, const auto &value) noexcept {
+                    auto copied_key = key;
+                    typename Config::Bytes copied_value {ctx_};
+                    if (const auto st = copied_value.assign(value.view()); !st) {
+                        return st;
+                    }
+                    if (const auto insert = mutable_map_bool_bytes().insert_or_assign(::protocyte::move(copied_key),
+                                                                                      ::protocyte::move(copied_value));
+                        !insert) {
+                        return insert;
+                    }
+                    return ::protocyte::Status::ok();
+                });
+                !st) {
+                return st;
+            }
+            clear_map_uint64_msg();
+            if (const auto st = other.map_uint64_msg().for_each([&](const auto &key, const auto &value) noexcept {
+                    auto copied_key = key;
+                    ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> copied_value {*ctx_};
+                    if (const auto st = copied_value.copy_from(value); !st) {
+                        return st;
+                    }
+                    if (const auto insert = mutable_map_uint64_msg().insert_or_assign(::protocyte::move(copied_key),
+                                                                                      ::protocyte::move(copied_value));
+                        !insert) {
+                        return insert;
+                    }
+                    return ::protocyte::Status::ok();
+                });
+                !st) {
+                return st;
+            }
+            clear_very_nested_map();
+            if (const auto st = other.very_nested_map().for_each([&](const auto &key, const auto &value) noexcept {
+                    typename Config::String copied_key {ctx_};
+                    if (const auto st = copied_key.assign(key.view()); !st) {
+                        return st;
+                    }
+                    ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> copied_value {*ctx_};
+                    if (const auto st = copied_value.copy_from(value); !st) {
+                        return st;
+                    }
+                    if (const auto insert = mutable_very_nested_map().insert_or_assign(::protocyte::move(copied_key),
+                                                                                       ::protocyte::move(copied_value));
+                        !insert) {
+                        return insert;
+                    }
+                    return ::protocyte::Status::ok();
+                });
+                !st) {
+                return st;
+            }
             if (other.has_recursive_self()) {
                 if (auto ensured = ensure_recursive_self(); !ensured) {
                     return ensured.status();
@@ -1315,6 +1454,22 @@ namespace test::ultimate {
                 }
             } else {
                 clear_recursive_self();
+            }
+            clear_lots_of_nested();
+            for (::protocyte::usize i {}; i < other.lots_of_nested().size(); ++i) {
+                auto copied = mutable_lots_of_nested().emplace_back(*ctx_);
+                if (!copied) {
+                    return copied.status();
+                }
+                if (const auto st = copied.value().get().copy_from(other.lots_of_nested()[i]); !st) {
+                    return st;
+                }
+            }
+            clear_colors();
+            for (::protocyte::usize i {}; i < other.colors().size(); ++i) {
+                if (const auto st = mutable_colors().push_back(other.colors()[i]); !st) {
+                    return st;
+                }
             }
             if (other.has_opt_int32()) {
                 if (const auto st = set_opt_int32(other.opt_int32()); !st) {
@@ -1346,7 +1501,57 @@ namespace test::ultimate {
             } else {
                 clear_sha256();
             }
-            // Full deep copy for repeated, map, and oneof storage is reserved for the next conformance pass.
+            clear_integer_array();
+            for (::protocyte::usize i {}; i < other.integer_array().size(); ++i) {
+                if (const auto st = mutable_integer_array().push_back(other.integer_array()[i]); !st) {
+                    return st;
+                }
+            }
+            if (const auto st = set_byte_array(other.byte_array()); !st) {
+                return st;
+            }
+            clear_fixed_integer_array();
+            for (::protocyte::usize i {}; i < other.fixed_integer_array().size(); ++i) {
+                if (const auto st = mutable_fixed_integer_array().push_back(other.fixed_integer_array()[i]); !st) {
+                    return st;
+                }
+            }
+            if (const auto st = set_float_expr_array(other.float_expr_array()); !st) {
+                return st;
+            }
+            switch (other.special_oneof_case_) {
+                case Special_oneofCase::oneof_string: {
+                    if (const auto st = set_oneof_string(other.oneof_string()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Special_oneofCase::oneof_int32: {
+                    if (const auto st = set_oneof_int32(other.oneof_int32()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Special_oneofCase::oneof_msg: {
+                    if (auto ensured = ensure_oneof_msg(); !ensured) {
+                        return ensured.status();
+                    } else if (const auto st = ensured.value().get().copy_from(*other.oneof_msg()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Special_oneofCase::oneof_bytes: {
+                    if (const auto st = set_oneof_bytes(other.oneof_bytes()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case Special_oneofCase::none:
+                default: {
+                    clear_special_oneof();
+                    break;
+                }
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -1616,12 +1821,12 @@ namespace test::ultimate {
             return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::ByteView {};
         }
         ::protocyte::Status set_oneof_bytes(const ::protocyte::ByteView value) noexcept {
-            typename Config::Bytes temp {ctx_};
+            ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
                 return st;
             }
             clear_special_oneof();
-            new (&special_oneof.oneof_bytes) typename Config::Bytes {::protocyte::move(temp)};
+            new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {::protocyte::move(temp)};
             special_oneof_case_ = Special_oneofCase::oneof_bytes;
             return ::protocyte::Status::ok();
         }
@@ -1753,26 +1958,63 @@ namespace test::ultimate {
         }
         void clear_extreme_nesting() noexcept { extreme_nesting_.reset(); }
 
-        constexpr bool has_sha256() const noexcept { return has_sha256_; }
-        constexpr ::protocyte::ByteView sha256() const noexcept {
-            return has_sha256_ ? ::protocyte::ByteView {.data = sha256_, .size = 32u} : ::protocyte::ByteView {};
+        bool has_sha256() const noexcept { return sha256_.has_value(); }
+        ::protocyte::ByteView sha256() const noexcept { return sha256_.view(); }
+        ::protocyte::MutableByteView mutable_sha256() noexcept { return sha256_.mutable_view(); }
+        ::protocyte::Status set_sha256(const ::protocyte::ByteView value) noexcept { return sha256_.assign(value); }
+        void clear_sha256() noexcept { sha256_.clear(); }
+
+        const ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> &integer_array() const noexcept {
+            return integer_array_;
         }
-        ::protocyte::MutableByteView mutable_sha256() noexcept {
-            if (!has_sha256_) {
-                for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = 0u; }
-                has_sha256_ = true;
-            }
-            return ::protocyte::MutableByteView {.data = sha256_, .size = 32u};
+        ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> &mutable_integer_array() noexcept {
+            return integer_array_;
         }
-        ::protocyte::Status set_sha256(const ::protocyte::ByteView value) noexcept {
-            if (value.size != 32u) {
-                return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument);
+        void clear_integer_array() noexcept { integer_array_.clear(); }
+
+        ::protocyte::ByteView byte_array() const noexcept { return byte_array_.view(); }
+        ::protocyte::usize byte_array_size() const noexcept { return byte_array_.size(); }
+        static constexpr ::protocyte::usize byte_array_max_size() noexcept { return BYTE_ARRAY_CAP; }
+        ::protocyte::Status resize_byte_array(const ::protocyte::usize size) noexcept {
+            if (const auto st = byte_array_.resize(size); !st) {
+                return st;
             }
-            for (::protocyte::usize i {}; i < 32u; ++i) { sha256_[i] = value.data[i]; }
-            has_sha256_ = true;
             return ::protocyte::Status::ok();
         }
-        constexpr void clear_sha256() noexcept { has_sha256_ = false; }
+        ::protocyte::MutableByteView mutable_byte_array() noexcept { return byte_array_.mutable_view(); }
+        ::protocyte::Status set_byte_array(const ::protocyte::ByteView value) noexcept {
+            if (const auto st = byte_array_.assign(value); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        void clear_byte_array() noexcept { byte_array_.clear(); }
+
+        const ::protocyte::Array<::protocyte::u32, FIXED_INTEGER_ARRAY_CAP> &fixed_integer_array() const noexcept {
+            return fixed_integer_array_;
+        }
+        ::protocyte::Array<::protocyte::u32, FIXED_INTEGER_ARRAY_CAP> &mutable_fixed_integer_array() noexcept {
+            return fixed_integer_array_;
+        }
+        void clear_fixed_integer_array() noexcept { fixed_integer_array_.clear(); }
+
+        ::protocyte::ByteView float_expr_array() const noexcept { return float_expr_array_.view(); }
+        ::protocyte::usize float_expr_array_size() const noexcept { return float_expr_array_.size(); }
+        static constexpr ::protocyte::usize float_expr_array_max_size() noexcept { return FLOATISH_BOUND; }
+        ::protocyte::Status resize_float_expr_array(const ::protocyte::usize size) noexcept {
+            if (const auto st = float_expr_array_.resize(size); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        ::protocyte::MutableByteView mutable_float_expr_array() noexcept { return float_expr_array_.mutable_view(); }
+        ::protocyte::Status set_float_expr_array(const ::protocyte::ByteView value) noexcept {
+            if (const auto st = float_expr_array_.assign(value); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        void clear_float_expr_array() noexcept { float_expr_array_.clear(); }
 
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage> parse(Context &ctx, Reader &reader) noexcept {
@@ -1786,7 +2028,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -1796,188 +2038,120 @@ namespace test::ultimate {
                 const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::f_double: {
-                        if (wire_type != ::protocyte::WireType::I64) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_double_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_fixed64(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_double_ = ::std::bit_cast<::protocyte::f64>(raw.value());
+                        f_double_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_float: {
-                        if (wire_type != ::protocyte::WireType::I32) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_float_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_fixed32(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_float_ = ::std::bit_cast<::protocyte::f32>(raw.value());
+                        f_float_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_int32: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_int32_ = static_cast<::protocyte::i32>(raw.value());
+                        f_int32_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_int64: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_int64_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_int64_ = static_cast<::protocyte::i64>(raw.value());
+                        f_int64_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_uint32: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_uint32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_uint32_ = static_cast<::protocyte::u32>(raw.value());
+                        f_uint32_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_uint64: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_uint64_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_uint64_ = static_cast<::protocyte::u64>(raw.value());
+                        f_uint64_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_sint32: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_sint32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_sint32_ = ::protocyte::decode_zigzag32(static_cast<::protocyte::u32>(raw.value()));
+                        f_sint32_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_sint64: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_sint64_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_sint64_ = ::protocyte::decode_zigzag64(raw.value());
+                        f_sint64_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_fixed32: {
-                        if (wire_type != ::protocyte::WireType::I32) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_fixed32_value_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_fixed32(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_fixed32_ = static_cast<::protocyte::u32>(raw.value());
+                        f_fixed32_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_fixed64: {
-                        if (wire_type != ::protocyte::WireType::I64) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_fixed64_value_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_fixed64(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_fixed64_ = static_cast<::protocyte::u64>(raw.value());
+                        f_fixed64_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_sfixed32: {
-                        if (wire_type != ::protocyte::WireType::I32) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_sfixed32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_fixed32(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_sfixed32_ = static_cast<::protocyte::i32>(raw.value());
+                        f_sfixed32_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_sfixed64: {
-                        if (wire_type != ::protocyte::WireType::I64) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_sfixed64_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_fixed64(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_sfixed64_ = static_cast<::protocyte::i64>(raw.value());
+                        f_sfixed64_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_bool: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_bool_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        f_bool_ = raw.value() != 0u;
+                        f_bool_ = decoded.value();
                         break;
                     }
                     case FieldNumber::f_string: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), f_string_);
+                        if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
+                                                                                   field_number, f_string_);
                             !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::f_bytes: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_bytes<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), f_bytes_);
+                        if (const auto st =
+                                ::protocyte::read_bytes_field<Config>(*ctx_, reader, wire_type, field_number, f_bytes_);
                             !st) {
                             return st;
                         }
@@ -1993,11 +2167,11 @@ namespace test::ultimate {
                                                                        static_cast<::protocyte::usize>(len.value())};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
-                                auto raw = ::protocyte::read_varint(packed);
-                                if (!raw) {
-                                    return raw.status();
+                                auto decoded = ::protocyte::read_int32(packed);
+                                if (!decoded) {
+                                    return decoded.status();
                                 }
-                                value = static_cast<::protocyte::i32>(raw.value());
+                                value = decoded.value();
                                 if (const auto st = r_int32_unpacked_.push_back(value); !st) {
                                     return st;
                                 }
@@ -2007,16 +2181,12 @@ namespace test::ultimate {
                             }
                             break;
                         }
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         ::protocyte::i32 value {};
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        value = static_cast<::protocyte::i32>(raw.value());
+                        value = decoded.value();
                         if (const auto st = r_int32_unpacked_.push_back(value); !st) {
                             return st;
                         }
@@ -2032,11 +2202,11 @@ namespace test::ultimate {
                                                                        static_cast<::protocyte::usize>(len.value())};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
-                                auto raw = ::protocyte::read_varint(packed);
-                                if (!raw) {
-                                    return raw.status();
+                                auto decoded = ::protocyte::read_int32(packed);
+                                if (!decoded) {
+                                    return decoded.status();
                                 }
-                                value = static_cast<::protocyte::i32>(raw.value());
+                                value = decoded.value();
                                 if (const auto st = r_int32_packed_.push_back(value); !st) {
                                     return st;
                                 }
@@ -2046,16 +2216,12 @@ namespace test::ultimate {
                             }
                             break;
                         }
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         ::protocyte::i32 value {};
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        value = static_cast<::protocyte::i32>(raw.value());
+                        value = decoded.value();
                         if (const auto st = r_int32_packed_.push_back(value); !st) {
                             return st;
                         }
@@ -2071,11 +2237,11 @@ namespace test::ultimate {
                                                                        static_cast<::protocyte::usize>(len.value())};
                             while (!packed.eof()) {
                                 ::protocyte::f64 value {};
-                                auto raw = ::protocyte::read_fixed64(packed);
-                                if (!raw) {
-                                    return raw.status();
+                                auto decoded = ::protocyte::read_double(packed);
+                                if (!decoded) {
+                                    return decoded.status();
                                 }
-                                value = ::std::bit_cast<::protocyte::f64>(raw.value());
+                                value = decoded.value();
                                 if (const auto st = r_double_.push_back(value); !st) {
                                     return st;
                                 }
@@ -2085,31 +2251,23 @@ namespace test::ultimate {
                             }
                             break;
                         }
-                        if (wire_type != ::protocyte::WireType::I64) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         ::protocyte::f64 value {};
-                        auto raw = ::protocyte::read_fixed64(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_double_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        value = ::std::bit_cast<::protocyte::f64>(raw.value());
+                        value = decoded.value();
                         if (const auto st = r_double_.push_back(value); !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::color: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_enum_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        color_ = static_cast<::protocyte::i32>(raw.value());
+                        color_ = decoded.value();
                         break;
                     }
                     case FieldNumber::nested1: {
@@ -2136,38 +2294,25 @@ namespace test::ultimate {
                         break;
                     }
                     case FieldNumber::oneof_string: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         clear_special_oneof();
                         new (&special_oneof.oneof_string) typename Config::String {ctx_};
                         special_oneof_case_ = Special_oneofCase::oneof_string;
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()),
-                                special_oneof.oneof_string);
+                        if (const auto st = ::protocyte::read_string_field<Config>(
+                                *ctx_, reader, wire_type, field_number, special_oneof.oneof_string);
                             !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::oneof_int32: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         clear_special_oneof();
                         new (&special_oneof.oneof_int32)::protocyte::i32 {0};
                         special_oneof_case_ = Special_oneofCase::oneof_int32;
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        special_oneof.oneof_int32 = static_cast<::protocyte::i32>(raw.value());
+                        special_oneof.oneof_int32 = decoded.value();
                         break;
                     }
                     case FieldNumber::oneof_msg: {
@@ -2198,15 +2343,24 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
+                        clear_special_oneof();
+                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {};
+                        special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         auto len = ::protocyte::read_varint(reader);
                         if (!len) {
                             return len.status();
                         }
-                        clear_special_oneof();
-                        new (&special_oneof.oneof_bytes) typename Config::Bytes {ctx_};
-                        special_oneof_case_ = Special_oneofCase::oneof_bytes;
-                        if (const auto st = ::protocyte::read_bytes<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), special_oneof.oneof_bytes);
+                        if (len.value() > BYTE_ARRAY_CAP) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                              field_number);
+                        }
+                        if (const auto st =
+                                special_oneof.oneof_bytes.resize(static_cast<::protocyte::usize>(len.value()));
+                            !st) {
+                            return st;
+                        }
+                        if (const auto st =
+                                reader.read(special_oneof.oneof_bytes.data(), special_oneof.oneof_bytes.size());
                             !st) {
                             return st;
                         }
@@ -2243,12 +2397,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::key));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    if (const auto st = ::protocyte::read_string<Config>(
-                                            *ctx_, entry_reader, static_cast<::protocyte::usize>(len.value()), key);
+                                    if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, key);
                                         !st) {
                                         return st;
                                     }
@@ -2260,11 +2409,11 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    auto raw = ::protocyte::read_varint(entry_reader);
-                                    if (!raw) {
-                                        return raw.status();
+                                    auto decoded = ::protocyte::read_int32(entry_reader);
+                                    if (!decoded) {
+                                        return decoded.status();
                                     }
-                                    value = static_cast<::protocyte::i32>(raw.value());
+                                    value = decoded.value();
                                     break;
                                 }
                                 default: {
@@ -2317,11 +2466,11 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::key));
                                     }
-                                    auto raw = ::protocyte::read_varint(entry_reader);
-                                    if (!raw) {
-                                        return raw.status();
+                                    auto decoded = ::protocyte::read_int32(entry_reader);
+                                    if (!decoded) {
+                                        return decoded.status();
                                     }
-                                    key = static_cast<::protocyte::i32>(raw.value());
+                                    key = decoded.value();
                                     break;
                                 }
                                 case EntryFieldNumber::value: {
@@ -2330,12 +2479,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    if (const auto st = ::protocyte::read_string<Config>(
-                                            *ctx_, entry_reader, static_cast<::protocyte::usize>(len.value()), value);
+                                    if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, value);
                                         !st) {
                                         return st;
                                     }
@@ -2391,11 +2535,11 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::key));
                                     }
-                                    auto raw = ::protocyte::read_varint(entry_reader);
-                                    if (!raw) {
-                                        return raw.status();
+                                    auto decoded = ::protocyte::read_bool(entry_reader);
+                                    if (!decoded) {
+                                        return decoded.status();
                                     }
-                                    key = raw.value() != 0u;
+                                    key = decoded.value();
                                     break;
                                 }
                                 case EntryFieldNumber::value: {
@@ -2404,12 +2548,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    if (const auto st = ::protocyte::read_bytes<Config>(
-                                            *ctx_, entry_reader, static_cast<::protocyte::usize>(len.value()), value);
+                                    if (const auto st = ::protocyte::read_bytes<Config>(*ctx_, entry_reader, value);
                                         !st) {
                                         return st;
                                     }
@@ -2465,11 +2604,11 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::key));
                                     }
-                                    auto raw = ::protocyte::read_varint(entry_reader);
-                                    if (!raw) {
-                                        return raw.status();
+                                    auto decoded = ::protocyte::read_uint64(entry_reader);
+                                    if (!decoded) {
+                                        return decoded.status();
                                     }
-                                    key = static_cast<::protocyte::u64>(raw.value());
+                                    key = decoded.value();
                                     break;
                                 }
                                 case EntryFieldNumber::value: {
@@ -2543,12 +2682,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::key));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    if (const auto st = ::protocyte::read_string<Config>(
-                                            *ctx_, entry_reader, static_cast<::protocyte::usize>(len.value()), key);
+                                    if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, key);
                                         !st) {
                                         return st;
                                     }
@@ -2650,11 +2784,11 @@ namespace test::ultimate {
                                                                        static_cast<::protocyte::usize>(len.value())};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
-                                auto raw = ::protocyte::read_varint(packed);
-                                if (!raw) {
-                                    return raw.status();
+                                auto decoded = ::protocyte::read_enum(packed);
+                                if (!decoded) {
+                                    return decoded.status();
                                 }
-                                value = static_cast<::protocyte::i32>(raw.value());
+                                value = decoded.value();
                                 if (const auto st = colors_.push_back(value); !st) {
                                     return st;
                                 }
@@ -2664,45 +2798,29 @@ namespace test::ultimate {
                             }
                             break;
                         }
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
                         ::protocyte::i32 value {};
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
+                        auto decoded = ::protocyte::read_enum_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        value = static_cast<::protocyte::i32>(raw.value());
+                        value = decoded.value();
                         if (const auto st = colors_.push_back(value); !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::opt_int32: {
-                        if (wire_type != ::protocyte::WireType::VARINT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
                         }
-                        auto raw = ::protocyte::read_varint(reader);
-                        if (!raw) {
-                            return raw.status();
-                        }
-                        opt_int32_ = static_cast<::protocyte::i32>(raw.value());
+                        opt_int32_ = decoded.value();
                         has_opt_int32_ = true;
                         break;
                     }
                     case FieldNumber::opt_string: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), opt_string_);
+                        if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
+                                                                                   field_number, opt_string_);
                             !st) {
                             return st;
                         }
@@ -2741,14 +2859,126 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
-                        if (len.value() == 32u) {
-                            if (const auto st = reader.read(sha256_, 32u); !st) {
-                                return st;
-                            }
-                            has_sha256_ = true;
-                        } else {
+                        if (len.value() != INTEGER_ARRAY_CAP * 4u) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument,
                                                               reader.position(), field_number);
+                        }
+                        auto view = sha256_.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::integer_array: {
+                        if (wire_type == ::protocyte::WireType::LEN) {
+                            auto len = ::protocyte::read_varint(reader);
+                            if (!len) {
+                                return len.status();
+                            }
+                            ::protocyte::LimitedReader<Reader> packed {reader,
+                                                                       static_cast<::protocyte::usize>(len.value())};
+                            while (!packed.eof()) {
+                                ::protocyte::i32 value {};
+                                auto decoded = ::protocyte::read_int32(packed);
+                                if (!decoded) {
+                                    return decoded.status();
+                                }
+                                value = decoded.value();
+                                if (const auto st = integer_array_.push_back(value); !st) {
+                                    return st;
+                                }
+                            }
+                            if (const auto finish = packed.finish(); !finish) {
+                                return finish;
+                            }
+                            break;
+                        }
+                        ::protocyte::i32 value {};
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
+                        }
+                        value = decoded.value();
+                        if (const auto st = integer_array_.push_back(value); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::byte_array: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (len.value() > BYTE_ARRAY_CAP) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                              field_number);
+                        }
+                        if (const auto st = byte_array_.resize(static_cast<::protocyte::usize>(len.value())); !st) {
+                            return st;
+                        }
+                        if (const auto st = reader.read(byte_array_.data(), byte_array_.size()); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::fixed_integer_array: {
+                        if (wire_type == ::protocyte::WireType::LEN) {
+                            auto len = ::protocyte::read_varint(reader);
+                            if (!len) {
+                                return len.status();
+                            }
+                            ::protocyte::LimitedReader<Reader> packed {reader,
+                                                                       static_cast<::protocyte::usize>(len.value())};
+                            while (!packed.eof()) {
+                                ::protocyte::u32 value {};
+                                auto decoded = ::protocyte::read_uint32(packed);
+                                if (!decoded) {
+                                    return decoded.status();
+                                }
+                                value = decoded.value();
+                                if (const auto st = fixed_integer_array_.push_back(value); !st) {
+                                    return st;
+                                }
+                            }
+                            if (const auto finish = packed.finish(); !finish) {
+                                return finish;
+                            }
+                            break;
+                        }
+                        ::protocyte::u32 value {};
+                        auto decoded = ::protocyte::read_uint32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
+                        }
+                        value = decoded.value();
+                        if (const auto st = fixed_integer_array_.push_back(value); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::float_expr_array: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (len.value() > FLOATISH_BOUND) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                              field_number);
+                        }
+                        if (const auto st = float_expr_array_.resize(static_cast<::protocyte::usize>(len.value()));
+                            !st) {
+                            return st;
+                        }
+                        if (const auto st = reader.read(float_expr_array_.data(), float_expr_array_.size()); !st) {
+                            return st;
                         }
                         break;
                     }
@@ -2760,210 +2990,187 @@ namespace test::ultimate {
                     }
                 }
             }
+            if (fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
+                                                  static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
+            }
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer &writer) const noexcept {
-            if (f_double_ != 0.0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_double),
-                                                           ::protocyte::WireType::I64);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_fixed64(writer, ::std::bit_cast<::protocyte::u64>(f_double_));
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+            if (fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
+                                                  static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
+            }
+            if (::std::bit_cast<::protocyte::u64>(f_double_) != 0u) {
+                if (const auto st = ::protocyte::write_double_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_double), f_double_);
                     !st) {
                     return st;
                 }
             }
-            if (f_float_ != 0.0f) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_float),
-                                                           ::protocyte::WireType::I32);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_fixed32(writer, ::std::bit_cast<::protocyte::u32>(f_float_));
+            if (::std::bit_cast<::protocyte::u32>(f_float_) != 0u) {
+                if (const auto st = ::protocyte::write_float_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_float), f_float_);
                     !st) {
                     return st;
                 }
             }
             if (f_int32_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_int32),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_int32), f_int32_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(f_int32_)); !st) {
                     return st;
                 }
             }
             if (f_int64_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_int64),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_int64_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_int64), f_int64_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(f_int64_)); !st) {
                     return st;
                 }
             }
             if (f_uint32_ != 0u) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_uint32),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_uint32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_uint32), f_uint32_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(f_uint32_)); !st) {
                     return st;
                 }
             }
             if (f_uint64_ != 0u) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_uint64),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_uint64_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_uint64), f_uint64_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(f_uint64_)); !st) {
                     return st;
                 }
             }
             if (f_sint32_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_sint32),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_sint32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_sint32), f_sint32_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, ::protocyte::encode_zigzag32(f_sint32_)); !st) {
                     return st;
                 }
             }
             if (f_sint64_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_sint64),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_sint64_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_sint64), f_sint64_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, ::protocyte::encode_zigzag64(f_sint64_)); !st) {
                     return st;
                 }
             }
             if (f_fixed32_ != 0u) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::f_fixed32), ::protocyte::WireType::I32);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_fixed32(writer, static_cast<::protocyte::u32>(f_fixed32_));
+                if (const auto st = ::protocyte::write_fixed32_value_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_fixed32), f_fixed32_);
                     !st) {
                     return st;
                 }
             }
             if (f_fixed64_ != 0u) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::f_fixed64), ::protocyte::WireType::I64);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_fixed64(writer, static_cast<::protocyte::u64>(f_fixed64_));
+                if (const auto st = ::protocyte::write_fixed64_value_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_fixed64), f_fixed64_);
                     !st) {
                     return st;
                 }
             }
             if (f_sfixed32_ != 0) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::f_sfixed32), ::protocyte::WireType::I32);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_fixed32(writer, static_cast<::protocyte::u32>(f_sfixed32_));
+                if (const auto st = ::protocyte::write_sfixed32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_sfixed32), f_sfixed32_);
                     !st) {
                     return st;
                 }
             }
             if (f_sfixed64_ != 0) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::f_sfixed64), ::protocyte::WireType::I64);
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_fixed64(writer, static_cast<::protocyte::u64>(f_sfixed64_));
+                if (const auto st = ::protocyte::write_sfixed64_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_sfixed64), f_sfixed64_);
                     !st) {
                     return st;
                 }
             }
             if (f_bool_) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_bool),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_bool_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_bool), f_bool_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(f_bool_)); !st) {
                     return st;
                 }
             }
             if (!f_string_.empty()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_string),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_string), f_string_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, f_string_.view()); !st) {
                     return st;
                 }
             }
             if (!f_bytes_.empty()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::f_bytes),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::f_bytes), f_bytes_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, f_bytes_.view()); !st) {
                     return st;
                 }
             }
             for (::protocyte::usize i {}; i < r_int32_unpacked_.size(); ++i) {
-                if (const auto st =
-                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::r_int32_unpacked),
-                                               ::protocyte::WireType::VARINT);
-                    !st) {
-                    return st;
-                }
-                if (const auto st =
-                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(r_int32_unpacked_[i]));
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::r_int32_unpacked), r_int32_unpacked_[i]);
                     !st) {
                     return st;
                 }
             }
-            for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
-                if (const auto st =
-                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::r_int32_packed),
-                                               ::protocyte::WireType::VARINT);
+            if (!r_int32_packed_.empty()) {
+                ::protocyte::usize packed_size_r_int32_packed {};
+                for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_r_int32_packed,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_packed_[i])));
+                            !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
+                if (const auto st = ::protocyte::write_tag(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::r_int32_packed), ::protocyte::WireType::LEN);
                     !st) {
                     return st;
                 }
                 if (const auto st =
-                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(r_int32_packed_[i]));
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_r_int32_packed));
                     !st) {
                     return st;
+                }
+                for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_int32(writer, r_int32_packed_[i]); !st) {
+                        return st;
+                    }
                 }
             }
-            for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
+            if (!r_double_.empty()) {
+                ::protocyte::usize packed_size_r_double {};
+                for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(&packed_size_r_double, 8u); !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::r_double),
-                                                           ::protocyte::WireType::I64);
+                                                           ::protocyte::WireType::LEN);
                     !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_fixed64(writer, ::std::bit_cast<::protocyte::u64>(r_double_[i]));
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_r_double));
                     !st) {
                     return st;
+                }
+                for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_double(writer, r_double_[i]); !st) {
+                        return st;
+                    }
                 }
             }
             if (color_ != 0) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::color),
-                                                           ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_enum_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::color), color_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(color_)); !st) {
                     return st;
                 }
             }
@@ -2986,23 +3193,16 @@ namespace test::ultimate {
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_string) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_string), ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_string),
+                        special_oneof.oneof_string.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, special_oneof.oneof_string.view()); !st) {
                     return st;
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_int32) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_int32), ::protocyte::WireType::VARINT);
-                    !st) {
-                    return st;
-                }
-                if (const auto st =
-                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(special_oneof.oneof_int32));
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_int32), special_oneof.oneof_int32);
                     !st) {
                     return st;
                 }
@@ -3026,12 +3226,10 @@ namespace test::ultimate {
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_bytes) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_bytes), ::protocyte::WireType::LEN);
+                if (const auto st =
+                        ::protocyte::write_bytes_field(writer, static_cast<::protocyte::u32>(FieldNumber::oneof_bytes),
+                                                       special_oneof.oneof_bytes.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, special_oneof.oneof_bytes.view()); !st) {
                     return st;
                 }
             }
@@ -3071,24 +3269,15 @@ namespace test::ultimate {
                         return st;
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::key),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_string_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), key.view());
                             !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_bytes(writer, key.view()); !st) {
                             return st;
                         }
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::value),
-                                                       ::protocyte::WireType::VARINT);
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(value));
+                        if (const auto st = ::protocyte::write_int32_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
                             !st) {
                             return st;
                         }
@@ -3134,25 +3323,16 @@ namespace test::ultimate {
                         return st;
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::key),
-                                                       ::protocyte::WireType::VARINT);
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(key));
+                        if (const auto st = ::protocyte::write_int32_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), key);
                             !st) {
                             return st;
                         }
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::value),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_string_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), value.view());
                             !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_bytes(writer, value.view()); !st) {
                             return st;
                         }
                     }
@@ -3197,25 +3377,16 @@ namespace test::ultimate {
                         return st;
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::key),
-                                                       ::protocyte::WireType::VARINT);
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(key));
+                        if (const auto st = ::protocyte::write_bool_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), key);
                             !st) {
                             return st;
                         }
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::value),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_bytes_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), value.view());
                             !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_bytes(writer, value.view()); !st) {
                             return st;
                         }
                     }
@@ -3264,13 +3435,8 @@ namespace test::ultimate {
                         return st;
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::key),
-                                                       ::protocyte::WireType::VARINT);
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(key));
+                        if (const auto st = ::protocyte::write_uint64_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), key);
                             !st) {
                             return st;
                         }
@@ -3340,13 +3506,9 @@ namespace test::ultimate {
                         return st;
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::key),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_string_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), key.view());
                             !st) {
-                            return st;
-                        }
-                        if (const auto st = ::protocyte::write_bytes(writer, key.view()); !st) {
                             return st;
                         }
                     }
@@ -3411,33 +3573,45 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (::protocyte::usize i {}; i < colors_.size(); ++i) {
+            if (!colors_.empty()) {
+                ::protocyte::usize packed_size_colors {};
+                for (::protocyte::usize i {}; i < colors_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_colors,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(colors_[i])));
+                            !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::colors),
-                                                           ::protocyte::WireType::VARINT);
+                                                           ::protocyte::WireType::LEN);
                     !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(colors_[i])); !st) {
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_colors));
+                    !st) {
                     return st;
+                }
+                for (::protocyte::usize i {}; i < colors_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_enum(writer, colors_[i]); !st) {
+                        return st;
+                    }
                 }
             }
             if (has_opt_int32_) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::opt_int32), ::protocyte::WireType::VARINT);
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::opt_int32), opt_int32_);
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(opt_int32_)); !st) {
                     return st;
                 }
             }
             if (has_opt_string_) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::opt_string), ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::opt_string), opt_string_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, opt_string_.view()); !st) {
                     return st;
                 }
             }
@@ -3460,16 +3634,81 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            if (has_sha256_) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::sha256),
-                                                           ::protocyte::WireType::LEN);
+            if (sha256_.has_value()) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::sha256), sha256_.view());
                     !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_varint(writer, 32u); !st) {
+            }
+            if (!integer_array_.empty()) {
+                ::protocyte::usize packed_size_integer_array {};
+                for (::protocyte::usize i {}; i < integer_array_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_integer_array,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(integer_array_[i])));
+                            !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
+                if (const auto st = ::protocyte::write_tag(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::integer_array), ::protocyte::WireType::LEN);
+                    !st) {
                     return st;
                 }
-                if (const auto st = writer.write(sha256_, 32u); !st) {
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_integer_array));
+                    !st) {
+                    return st;
+                }
+                for (::protocyte::usize i {}; i < integer_array_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_int32(writer, integer_array_[i]); !st) {
+                        return st;
+                    }
+                }
+            }
+            if (!byte_array_.empty()) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::byte_array), byte_array_.view());
+                    !st) {
+                    return st;
+                }
+            }
+            if (!fixed_integer_array_.empty()) {
+                ::protocyte::usize packed_size_fixed_integer_array {};
+                for (::protocyte::usize i {}; i < fixed_integer_array_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_fixed_integer_array,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(fixed_integer_array_[i])));
+                            !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
+                if (const auto st =
+                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array),
+                                               ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                if (const auto st = ::protocyte::write_varint(
+                        writer, static_cast<::protocyte::u64>(packed_size_fixed_integer_array));
+                    !st) {
+                    return st;
+                }
+                for (::protocyte::usize i {}; i < fixed_integer_array_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_uint32(writer, fixed_integer_array_[i]); !st) {
+                        return st;
+                    }
+                }
+            }
+            if (!float_expr_array_.empty()) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::float_expr_array), float_expr_array_.view());
+                    !st) {
                     return st;
                 }
             }
@@ -3477,15 +3716,21 @@ namespace test::ultimate {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+                return ::protocyte::Result<::protocyte::usize>::err(
+                    ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
+                                               static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array))
+                        .error());
+            }
             ::protocyte::usize total {};
-            if (f_double_ != 0.0) {
+            if (::std::bit_cast<::protocyte::u64>(f_double_) != 0u) {
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::f_double)) + 8u);
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            if (f_float_ != 0.0f) {
+            if (::std::bit_cast<::protocyte::u32>(f_float_) != 0u) {
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::f_float)) + 4u);
                     !st) {
@@ -3600,17 +3845,37 @@ namespace test::ultimate {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
+            if (!r_int32_packed_.empty()) {
+                ::protocyte::usize packed_size_r_int32_packed {};
+                for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_r_int32_packed,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_packed_[i])));
+                            !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::r_int32_packed)) +
-                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_packed_[i])));
+                                    ::protocyte::varint_size(packed_size_r_int32_packed) + packed_size_r_int32_packed);
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
+            if (!r_double_.empty()) {
+                ::protocyte::usize packed_size_r_double {};
+                for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(&packed_size_r_double, 8u); !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::r_double)) + 8u);
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::r_double)) +
+                                    ::protocyte::varint_size(packed_size_r_double) + packed_size_r_double);
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -3865,10 +4130,21 @@ namespace test::ultimate {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            for (::protocyte::usize i {}; i < colors_.size(); ++i) {
+            if (!colors_.empty()) {
+                ::protocyte::usize packed_size_colors {};
+                for (::protocyte::usize i {}; i < colors_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_colors,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(colors_[i])));
+                            !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::colors)) +
-                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(colors_[i])));
+                                    ::protocyte::varint_size(packed_size_colors) + packed_size_colors);
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -3901,10 +4177,65 @@ namespace test::ultimate {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            if (has_sha256_) {
+            if (sha256_.has_value()) {
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::sha256)) +
-                                    ::protocyte::varint_size(32u) + 32u);
+                                    ::protocyte::varint_size(sha256_.size()) + sha256_.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (!integer_array_.empty()) {
+                ::protocyte::usize packed_size_integer_array {};
+                for (::protocyte::usize i {}; i < integer_array_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_integer_array,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(integer_array_[i])));
+                            !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::integer_array)) +
+                                    ::protocyte::varint_size(packed_size_integer_array) + packed_size_integer_array);
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (!byte_array_.empty()) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::byte_array)) +
+                                    ::protocyte::varint_size(byte_array_.size()) + byte_array_.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (!fixed_integer_array_.empty()) {
+                ::protocyte::usize packed_size_fixed_integer_array {};
+                for (::protocyte::usize i {}; i < fixed_integer_array_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_fixed_integer_array,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(fixed_integer_array_[i])));
+                            !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array)) +
+                                    ::protocyte::varint_size(packed_size_fixed_integer_array) +
+                                    packed_size_fixed_integer_array);
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (!float_expr_array_.empty()) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::float_expr_array)) +
+                                    ::protocyte::varint_size(float_expr_array_.size()) + float_expr_array_.size());
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
@@ -3940,7 +4271,7 @@ namespace test::ultimate {
             typename Config::String oneof_string;
             ::protocyte::i32 oneof_int32;
             typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> oneof_msg;
-            typename Config::Bytes oneof_bytes;
+            ::protocyte::ByteArray<BYTE_ARRAY_CAP> oneof_bytes;
         } special_oneof;
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
@@ -3961,12 +4292,16 @@ namespace test::ultimate {
         typename Config::template Optional<
             ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>>
             extreme_nesting_;
-        ::protocyte::u8 sha256_[32u];
-        bool has_sha256_ {};
+        ::protocyte::FixedByteArray<INTEGER_ARRAY_CAP * 4u> sha256_;
+        ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> integer_array_;
+        ::protocyte::ByteArray<BYTE_ARRAY_CAP> byte_array_;
+        ::protocyte::Array<::protocyte::u32, FIXED_INTEGER_ARRAY_CAP> fixed_integer_array_;
+        ::protocyte::ByteArray<FLOATISH_BOUND> float_expr_array_;
     };
 
     template<typename Config> struct UltimateComplexMessage_LevelA {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelB = UltimateComplexMessage_LevelA_LevelB<NestedConfig>;
 
         explicit UltimateComplexMessage_LevelA(Context &ctx) noexcept: ctx_ {&ctx} {}
@@ -3979,7 +4314,10 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA(const UltimateComplexMessage_LevelA &) = delete;
         UltimateComplexMessage_LevelA &operator=(const UltimateComplexMessage_LevelA &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA & /* other */) noexcept {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -4006,7 +4344,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -4021,7 +4359,7 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer & /* writer */) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept {
             return ::protocyte::Status::ok();
         }
 
@@ -4034,6 +4372,7 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelC =
             UltimateComplexMessage_LevelA_LevelB_LevelC<NestedConfig>;
 
@@ -4048,7 +4387,10 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA_LevelB(const UltimateComplexMessage_LevelA_LevelB &) = delete;
         UltimateComplexMessage_LevelA_LevelB &operator=(const UltimateComplexMessage_LevelA_LevelB &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB & /* other */) noexcept {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -4075,7 +4417,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -4090,7 +4432,7 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer & /* writer */) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept {
             return ::protocyte::Status::ok();
         }
 
@@ -4103,6 +4445,7 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelD =
             UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD<NestedConfig>;
 
@@ -4119,7 +4462,10 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA_LevelB_LevelC &
         operator=(const UltimateComplexMessage_LevelA_LevelB_LevelC &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC & /* other */) noexcept {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -4146,7 +4492,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -4161,7 +4507,7 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer & /* writer */) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept {
             return ::protocyte::Status::ok();
         }
 
@@ -4174,6 +4520,7 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelE =
             UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<NestedConfig>;
 
@@ -4192,7 +4539,10 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &
         operator=(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD & /* other */) noexcept {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             return ::protocyte::Status::ok();
         }
 
@@ -4219,7 +4569,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -4234,7 +4584,7 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer & /* writer */) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept {
             return ::protocyte::Status::ok();
         }
 
@@ -4247,6 +4597,7 @@ namespace test::ultimate {
 
     template<typename Config> struct ExtraMessage {
         using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
         enum struct FieldNumber : ::protocyte::u32 {
             tag = 1u,
             ref = 2u,
@@ -4263,6 +4614,9 @@ namespace test::ultimate {
         ExtraMessage &operator=(const ExtraMessage &) = delete;
 
         ::protocyte::Status copy_from(const ExtraMessage &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
             if (const auto st = set_tag(other.tag()); !st) {
                 return st;
             }
@@ -4329,7 +4683,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 auto tag = ::protocyte::read_varint(reader);
                 if (!tag) {
@@ -4339,16 +4693,8 @@ namespace test::ultimate {
                 const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::tag: {
-                        if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
-                        }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
-                        if (const auto st = ::protocyte::read_string<Config>(
-                                *ctx_, reader, static_cast<::protocyte::usize>(len.value()), tag_);
+                        if (const auto st =
+                                ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type, field_number, tag_);
                             !st) {
                             return st;
                         }
@@ -4388,14 +4734,11 @@ namespace test::ultimate {
             return ::protocyte::Status::ok();
         }
 
-        template<typename Writer> protocyte::Status serialize(Writer &writer) const noexcept {
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
             if (!tag_.empty()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::tag),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::tag), tag_.view());
                     !st) {
-                    return st;
-                }
-                if (const auto st = ::protocyte::write_bytes(writer, tag_.view()); !st) {
                     return st;
                 }
             }
@@ -4448,6 +4791,469 @@ namespace test::ultimate {
         Context *ctx_;
         typename Config::String tag_;
         typename Config::template Optional<::test::ultimate::UltimateComplexMessage<Config>> ref_;
+    };
+
+    template<typename Config> struct CrossMessageConstants_Nested {
+        using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
+        static constexpr ::protocyte::u32 EXTERNAL_CAP {8u};
+
+        enum struct FieldNumber : ::protocyte::u32 {
+            nested_bytes = 1u,
+        };
+
+        explicit CrossMessageConstants_Nested(Context &ctx) noexcept: ctx_ {&ctx} {}
+
+        static ::protocyte::Result<CrossMessageConstants_Nested> create(Context &ctx) noexcept {
+            return ::protocyte::Result<CrossMessageConstants_Nested>::ok(CrossMessageConstants_Nested {ctx});
+        }
+        CrossMessageConstants_Nested(CrossMessageConstants_Nested &&) noexcept = default;
+        CrossMessageConstants_Nested &operator=(CrossMessageConstants_Nested &&) noexcept = default;
+        CrossMessageConstants_Nested(const CrossMessageConstants_Nested &) = delete;
+        CrossMessageConstants_Nested &operator=(const CrossMessageConstants_Nested &) = delete;
+
+        ::protocyte::Status copy_from(const CrossMessageConstants_Nested &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
+            if (const auto st = set_nested_bytes(other.nested_bytes()); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<CrossMessageConstants_Nested> clone() const noexcept {
+            auto out = CrossMessageConstants_Nested::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().copy_from(*this); !st) {
+                return ::protocyte::Result<CrossMessageConstants_Nested>::err(st.error());
+            }
+            return out;
+        }
+
+        ::protocyte::ByteView nested_bytes() const noexcept { return nested_bytes_.view(); }
+        ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
+        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return EXTERNAL_CAP; }
+        ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
+            if (const auto st = nested_bytes_.resize(size); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
+        ::protocyte::Status set_nested_bytes(const ::protocyte::ByteView value) noexcept {
+            if (const auto st = nested_bytes_.assign(value); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        void clear_nested_bytes() noexcept { nested_bytes_.clear(); }
+
+        template<typename Reader>
+        static ::protocyte::Result<CrossMessageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
+            auto out = CrossMessageConstants_Nested::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().merge_from(reader); !st) {
+                return ::protocyte::Result<CrossMessageConstants_Nested>::err(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                auto tag = ::protocyte::read_varint(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
+                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::nested_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (len.value() > EXTERNAL_CAP) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                              field_number);
+                        }
+                        if (const auto st = nested_bytes_.resize(static_cast<::protocyte::usize>(len.value())); !st) {
+                            return st;
+                        }
+                        if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+            if (!nested_bytes_.empty()) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::nested_bytes), nested_bytes_.view());
+                    !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            ::protocyte::usize total {};
+            if (!nested_bytes_.empty()) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::nested_bytes)) +
+                                    ::protocyte::varint_size(nested_bytes_.size()) + nested_bytes_.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<::protocyte::usize>::ok(total);
+        }
+    protected:
+        Context *ctx_;
+        ::protocyte::ByteArray<EXTERNAL_CAP> nested_bytes_;
+    };
+
+    template<typename Config> struct CrossMessageConstants {
+        using Context = typename Config::Context;
+        using RuntimeStatus = ::protocyte::Status;
+        template<typename NestedConfig = Config> using Nested = CrossMessageConstants_Nested<NestedConfig>;
+
+        static constexpr ::protocyte::u32 ROOT_MIRROR {10u};
+        static constexpr ::std::string_view LABEL_COPY {"proto-cross", 11u};
+        static constexpr bool READY {true};
+
+        enum struct FieldNumber : ::protocyte::u32 {
+            external_bytes = 1u,
+            mirrored_values = 2u,
+            nested = 3u,
+        };
+
+        explicit CrossMessageConstants(Context &ctx) noexcept: ctx_ {&ctx} {}
+
+        static ::protocyte::Result<CrossMessageConstants> create(Context &ctx) noexcept {
+            return ::protocyte::Result<CrossMessageConstants>::ok(CrossMessageConstants {ctx});
+        }
+        CrossMessageConstants(CrossMessageConstants &&) noexcept = default;
+        CrossMessageConstants &operator=(CrossMessageConstants &&) noexcept = default;
+        CrossMessageConstants(const CrossMessageConstants &) = delete;
+        CrossMessageConstants &operator=(const CrossMessageConstants &) = delete;
+
+        ::protocyte::Status copy_from(const CrossMessageConstants &other) noexcept {
+            if (this == &other) {
+                return ::protocyte::Status::ok();
+            }
+            if (const auto st = set_external_bytes(other.external_bytes()); !st) {
+                return st;
+            }
+            clear_mirrored_values();
+            for (::protocyte::usize i {}; i < other.mirrored_values().size(); ++i) {
+                if (const auto st = mutable_mirrored_values().push_back(other.mirrored_values()[i]); !st) {
+                    return st;
+                }
+            }
+            if (other.has_nested()) {
+                if (auto ensured = ensure_nested(); !ensured) {
+                    return ensured.status();
+                } else if (const auto st = ensured.value().get().copy_from(*other.nested()); !st) {
+                    return st;
+                }
+            } else {
+                clear_nested();
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<CrossMessageConstants> clone() const noexcept {
+            auto out = CrossMessageConstants::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().copy_from(*this); !st) {
+                return ::protocyte::Result<CrossMessageConstants>::err(st.error());
+            }
+            return out;
+        }
+
+        ::protocyte::ByteView external_bytes() const noexcept { return external_bytes_.view(); }
+        ::protocyte::usize external_bytes_size() const noexcept { return external_bytes_.size(); }
+        static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return BYTE_ARRAY_CAP + 2u; }
+        ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
+            if (const auto st = external_bytes_.resize(size); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        ::protocyte::MutableByteView mutable_external_bytes() noexcept { return external_bytes_.mutable_view(); }
+        ::protocyte::Status set_external_bytes(const ::protocyte::ByteView value) noexcept {
+            if (const auto st = external_bytes_.assign(value); !st) {
+                return st;
+            }
+            return ::protocyte::Status::ok();
+        }
+        void clear_external_bytes() noexcept { external_bytes_.clear(); }
+
+        const ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> &mirrored_values() const noexcept {
+            return mirrored_values_;
+        }
+        ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> &mutable_mirrored_values() noexcept {
+            return mirrored_values_;
+        }
+        void clear_mirrored_values() noexcept { mirrored_values_.clear(); }
+
+        bool has_nested() const noexcept { return nested_.has_value(); }
+        const ::test::ultimate::CrossMessageConstants_Nested<Config> *nested() const noexcept {
+            return has_nested() ? &nested_.value() : nullptr;
+        }
+        ::protocyte::Result<::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>>>
+        ensure_nested() noexcept {
+            if (!nested_.has_value()) {
+                if (const auto st = nested_.emplace(*ctx_); !st) {
+                    return ::protocyte::Result<
+                        ::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>>>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>>>::ok(
+                ::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>> {nested_.value()});
+        }
+        void clear_nested() noexcept { nested_.reset(); }
+
+        template<typename Reader>
+        static ::protocyte::Result<CrossMessageConstants> parse(Context &ctx, Reader &reader) noexcept {
+            auto out = CrossMessageConstants::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out.value().merge_from(reader); !st) {
+                return ::protocyte::Result<CrossMessageConstants>::err(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                auto tag = ::protocyte::read_varint(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
+                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::external_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (len.value() > BYTE_ARRAY_CAP + 2u) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                              field_number);
+                        }
+                        if (const auto st = external_bytes_.resize(static_cast<::protocyte::usize>(len.value())); !st) {
+                            return st;
+                        }
+                        if (const auto st = reader.read(external_bytes_.data(), external_bytes_.size()); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::mirrored_values: {
+                        if (wire_type == ::protocyte::WireType::LEN) {
+                            auto len = ::protocyte::read_varint(reader);
+                            if (!len) {
+                                return len.status();
+                            }
+                            ::protocyte::LimitedReader<Reader> packed {reader,
+                                                                       static_cast<::protocyte::usize>(len.value())};
+                            while (!packed.eof()) {
+                                ::protocyte::i32 value {};
+                                auto decoded = ::protocyte::read_int32(packed);
+                                if (!decoded) {
+                                    return decoded.status();
+                                }
+                                value = decoded.value();
+                                if (const auto st = mirrored_values_.push_back(value); !st) {
+                                    return st;
+                                }
+                            }
+                            if (const auto finish = packed.finish(); !finish) {
+                                return finish;
+                            }
+                            break;
+                        }
+                        ::protocyte::i32 value {};
+                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded) {
+                            return decoded.status();
+                        }
+                        value = decoded.value();
+                        if (const auto st = mirrored_values_.push_back(value); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::nested: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
+                                                              reader.position(), field_number);
+                        }
+                        auto len = ::protocyte::read_varint(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        auto ensured = ensure_nested();
+                        if (!ensured) {
+                            return ensured.status();
+                        }
+                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
+                        ::protocyte::ReaderRef sub_reader {sub};
+                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
+                            return st;
+                        }
+                        if (const auto st = sub.finish(); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+            if (!external_bytes_.empty()) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::external_bytes), external_bytes_.view());
+                    !st) {
+                    return st;
+                }
+            }
+            if (!mirrored_values_.empty()) {
+                ::protocyte::usize packed_size_mirrored_values {};
+                for (::protocyte::usize i {}; i < mirrored_values_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_mirrored_values,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(mirrored_values_[i])));
+                            !st_size) {
+                            return st_size;
+                        }
+                    }
+                }
+                if (const auto st =
+                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::mirrored_values),
+                                               ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_mirrored_values));
+                    !st) {
+                    return st;
+                }
+                for (::protocyte::usize i {}; i < mirrored_values_.size(); ++i) {
+                    if (const auto st = ::protocyte::write_int32(writer, mirrored_values_[i]); !st) {
+                        return st;
+                    }
+                }
+            }
+            if (nested_.has_value()) {
+                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::nested),
+                                                           ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                auto msg_size = nested_.value().encoded_size();
+                if (!msg_size) {
+                    return msg_size.status();
+                }
+                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
+                    !st) {
+                    return st;
+                }
+                if (const auto st = nested_.value().serialize(writer); !st) {
+                    return st;
+                }
+            }
+            return ::protocyte::Status::ok();
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            ::protocyte::usize total {};
+            if (!external_bytes_.empty()) {
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::external_bytes)) +
+                                    ::protocyte::varint_size(external_bytes_.size()) + external_bytes_.size());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (!mirrored_values_.empty()) {
+                ::protocyte::usize packed_size_mirrored_values {};
+                for (::protocyte::usize i {}; i < mirrored_values_.size(); ++i) {
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &packed_size_mirrored_values,
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(mirrored_values_[i])));
+                            !st_size) {
+                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                        }
+                    }
+                }
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::mirrored_values)) +
+                                    ::protocyte::varint_size(packed_size_mirrored_values) +
+                                    packed_size_mirrored_values);
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            if (nested_.has_value()) {
+                auto nested_size = nested_.value().encoded_size();
+                if (!nested_size) {
+                    return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
+                }
+                if (const auto st = ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::nested)) +
+                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
+                    !st) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                }
+            }
+            return ::protocyte::Result<::protocyte::usize>::ok(total);
+        }
+    protected:
+        Context *ctx_;
+        ::protocyte::ByteArray<BYTE_ARRAY_CAP + 2u> external_bytes_;
+        ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> mirrored_values_;
+        typename Config::template Optional<::test::ultimate::CrossMessageConstants_Nested<Config>> nested_;
     };
 
 

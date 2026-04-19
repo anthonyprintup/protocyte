@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin:
+    name: Plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Lint Python sources
+        run: uv run ruff check src tests smoke/tools debugger
+
+      - name: Build plugin package
+        run: uv build
+
+      - name: Run plugin tests
+        run: uv run pytest -q
+
+  smoke-host:
+    name: Smoke Host
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Verify checked smoke outputs
+        run: |
+          uv run python smoke/tools/generate_checked_outputs.py
+          git diff --exit-code -- smoke/generated
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure non-kernel smoke tests
+        working-directory: smoke
+        run: cmake --preset windows-clangcl-ninja
+
+      - name: Build non-kernel smoke tests
+        working-directory: smoke
+        run: cmake --build --preset windows-clangcl-ninja
+
+      - name: Run non-kernel smoke tests
+        working-directory: smoke
+        run: ctest --preset windows-clangcl-ninja

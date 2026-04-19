@@ -68,7 +68,11 @@ namespace test::ultimate {
             {"opt_int32", 38u, "scalar", false, true, false},
             {"opt_string", 39u, "string", false, true, false},
             {"extreme_nesting", 40u, "message", false, true, false},
-            {"sha256", 41u, "bytes", false, true, false},
+            {"sha256", 41u, "bytes", false, false, false},
+            {"integer_array", 42u, "scalar", true, false, true},
+            {"byte_array", 43u, "bytes", false, false, false},
+            {"fixed_integer_array", 44u, "scalar", true, false, true},
+            {"float_expr_array", 45u, "bytes", false, false, false},
         };
 
         static const FieldInfo UltimateComplexMessage_LevelA_fields[] = {};
@@ -82,6 +86,16 @@ namespace test::ultimate {
         static const FieldInfo ExtraMessage_fields[] = {
             {"tag", 1u, "string", false, false, false},
             {"ref", 2u, "message", false, true, false},
+        };
+
+        static const FieldInfo CrossMessageConstants_Nested_fields[] = {
+            {"nested_bytes", 1u, "bytes", false, false, false},
+        };
+
+        static const FieldInfo CrossMessageConstants_fields[] = {
+            {"external_bytes", 1u, "bytes", false, false, false},
+            {"mirrored_values", 2u, "scalar", true, false, true},
+            {"nested", 3u, "message", false, true, false},
         };
 
     } // namespace protocyte_reflection
