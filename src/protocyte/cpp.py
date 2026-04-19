@@ -986,7 +986,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
             w.line("break;")
             w.pop()
             w.line("}")
-        if _is_scalar_field(item):
+        if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
             _emit_read_repeated_value(w, item, "reader", options, checked=True)
         else:
             w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
@@ -995,7 +995,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
     if item.kind == "map":
         _emit_read_map(w, item, options)
         return
-    if _is_scalar_field(item):
+    if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
         _emit_read_single_value(w, item, "reader", options)
         return
     w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
@@ -1007,11 +1007,10 @@ def _emit_read_repeated_value(
 ) -> None:
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
-        helper = "read_string" if item.kind == "string" else "read_bytes"
-        w.line(f"auto len = ::protocyte::read_varint({reader});")
-        w.line("if (!len) { return len.status(); }")
         w.line(f"{typ} value{{ctx_}};")
-        w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, static_cast<::protocyte::usize>(len.value()), value); !st) {{ return st; }}")
+        helper = _length_delimited_read_helper(item, checked=checked)
+        args = f"*ctx_, {reader}, wire_type, field_number, value" if checked else f"*ctx_, {reader}, value"
+        w.line(f"if (const auto st = ::protocyte::{helper}<Config>({args}); !st) {{ return st; }}")
         w.line(f"if (const auto st = {_member(item)}.push_back(::protocyte::move(value)); !st) {{ return st; }}")
         return
     if item.kind == "message":
@@ -1052,7 +1051,6 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str) -> Non
 
 def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
     if item.oneof_name and item.kind in {"string", "bytes"}:
-        helper = "read_string" if item.kind == "string" else "read_bytes"
         case_type = _oneof_case_type(item.oneof_name)
         case_member = _oneof_case_member(item.oneof_name)
         if item.kind == "bytes" and item.array_enabled:
@@ -1061,23 +1059,18 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
             w.line(f"{case_member} = {case_type}::{item.cpp_name};")
             _emit_read_bounded_bytes(w, item, reader)
         else:
-            w.line(f"auto len = ::protocyte::read_varint({reader});")
-            w.line("if (!len) { return len.status(); }")
             w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
             w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
             w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-            w.line(
-                f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, static_cast<::protocyte::usize>(len.value()), {_member(item)}); !st) {{ return st; }}"
-            )
+            helper = _length_delimited_read_helper(item, checked=True)
+            w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {_member(item)}); !st) {{ return st; }}")
         return
     if item.kind == "bytes" and item.array_enabled:
         _emit_read_bounded_bytes(w, item, reader)
         return
     if item.kind in {"string", "bytes"}:
-        helper = "read_string" if item.kind == "string" else "read_bytes"
-        w.line(f"auto len = ::protocyte::read_varint({reader});")
-        w.line("if (!len) { return len.status(); }")
-        w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, static_cast<::protocyte::usize>(len.value()), {_member(item)}); !st) {{ return st; }}")
+        helper = _length_delimited_read_helper(item, checked=True)
+        w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {_member(item)}); !st) {{ return st; }}")
         if _has_presence_flag(item):
             w.line(f"has_{item.cpp_name}_ = true;")
         return
@@ -1172,10 +1165,8 @@ def _emit_temp_decl(w: CppWriter, item: FieldModel, name: str, options: Generato
 
 def _emit_read_named_value(w: CppWriter, item: FieldModel, reader: str, target: str, options: GeneratorOptions) -> None:
     if item.kind in {"string", "bytes"}:
-        helper = "read_string" if item.kind == "string" else "read_bytes"
-        w.line(f"auto len = ::protocyte::read_varint({reader});")
-        w.line("if (!len) { return len.status(); }")
-        w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, static_cast<::protocyte::usize>(len.value()), {target}); !st) {{ return st; }}")
+        helper = _length_delimited_read_helper(item, checked=False)
+        w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, {target}); !st) {{ return st; }}")
     elif item.kind == "message":
         w.line(f"auto len = ::protocyte::read_varint({reader});")
         w.line("if (!len) { return len.status(); }")
@@ -1241,12 +1232,16 @@ def _emit_write_field(
             f"if (const auto st = ::protocyte::{helper}(writer, {_field_number_u32(item, enum_type)}, {value}); !st) {{ return st; }}"
         )
         return
+    if item.kind in {"string", "bytes"}:
+        helper = _length_delimited_write_helper(item)
+        w.line(
+            f"if (const auto st = ::protocyte::{helper}(writer, {_field_number_u32(item, enum_type)}, {value}.view()); !st) {{ return st; }}"
+        )
+        return
     w.line(
         f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item, enum_type)}, {_wire(item)}); !st) {{ return st; }}"
     )
-    if item.kind in {"string", "bytes"}:
-        w.line(f"if (const auto st = ::protocyte::write_bytes(writer, {value}.view()); !st) {{ return st; }}")
-    elif item.kind == "message":
+    if item.kind == "message":
         expr = f"{value}.value()" if value == _member(item) else value
         w.line(f"auto msg_size = {expr}.encoded_size();")
         w.line("if (!msg_size) { return msg_size.status(); }")
@@ -1707,6 +1702,19 @@ def _scalar_size(item: FieldModel, value: str) -> str:
 
 def _is_scalar_field(item: FieldModel) -> bool:
     return item.kind not in {"string", "bytes", "message", "map"}
+
+
+def _uses_runtime_len_field_helper(item: FieldModel) -> bool:
+    return item.kind in {"string", "bytes"} and not (item.kind == "bytes" and item.array_enabled)
+
+
+def _length_delimited_read_helper(item: FieldModel, *, checked: bool) -> str:
+    base = "read_string" if item.kind == "string" else "read_bytes"
+    return f"{base}_field" if checked else base
+
+
+def _length_delimited_write_helper(item: FieldModel) -> str:
+    return "write_string_field" if item.kind == "string" else "write_bytes_field"
 
 
 def _scalar_read_helper(item: FieldModel, *, checked: bool) -> str:

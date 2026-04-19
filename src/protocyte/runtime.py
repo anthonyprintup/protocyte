@@ -1592,6 +1592,14 @@ namespace protocyte {
         return write_double(writer, value);
     }
 
+    template<class Reader> Result<usize> read_length_delimited_size(Reader &reader) noexcept {
+        auto len = read_varint(reader);
+        if (!len) {
+            return Result<usize>::err(len.error());
+        }
+        return Result<usize>::ok(static_cast<usize>(len.value()));
+    }
+
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;
 
     template<class Reader>
@@ -1636,8 +1644,9 @@ namespace protocyte {
         }
     }
 
-    template<class Config, class Reader> Status read_bytes(typename Config::Context &ctx, Reader &reader,
-                                                           const usize size, typename Config::Bytes &out) noexcept {
+    template<class Config, class Reader>
+    Status read_bytes_sized(typename Config::Context &ctx, Reader &reader, const usize size,
+                            typename Config::Bytes &out) noexcept {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
@@ -1665,8 +1674,27 @@ namespace protocyte {
         return {};
     }
 
-    template<class Config, class Reader> Status read_string(typename Config::Context &ctx, Reader &reader,
-                                                            const usize size, typename Config::String &out) noexcept {
+    template<class Config, class Reader>
+    Status read_bytes(typename Config::Context &ctx, Reader &reader, typename Config::Bytes &out) noexcept {
+        auto size = read_length_delimited_size(reader);
+        if (!size) {
+            return size.status();
+        }
+        return read_bytes_sized<Config>(ctx, reader, size.value(), out);
+    }
+
+    template<class Config, class Reader>
+    Status read_bytes_field(typename Config::Context &ctx, Reader &reader, const WireType wire_type,
+                            const u32 field_number, typename Config::Bytes &out) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number); !st) {
+            return st;
+        }
+        return read_bytes<Config>(ctx, reader, out);
+    }
+
+    template<class Config, class Reader>
+    Status read_string_sized(typename Config::Context &ctx, Reader &reader, const usize size,
+                             typename Config::String &out) noexcept {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
@@ -1691,11 +1719,41 @@ namespace protocyte {
         return {};
     }
 
+    template<class Config, class Reader>
+    Status read_string(typename Config::Context &ctx, Reader &reader, typename Config::String &out) noexcept {
+        auto size = read_length_delimited_size(reader);
+        if (!size) {
+            return size.status();
+        }
+        return read_string_sized<Config>(ctx, reader, size.value(), out);
+    }
+
+    template<class Config, class Reader>
+    Status read_string_field(typename Config::Context &ctx, Reader &reader, const WireType wire_type,
+                             const u32 field_number, typename Config::String &out) noexcept {
+        if (const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number); !st) {
+            return st;
+        }
+        return read_string<Config>(ctx, reader, out);
+    }
+
     template<class Writer> Status write_bytes(Writer &writer, const ByteView view) noexcept {
         if (const auto st = write_varint(writer, static_cast<u64>(view.size)); !st) {
             return st;
         }
         return writer.write(view.data, view.size);
+    }
+
+    template<class Writer> Status write_bytes_field(Writer &writer, const u32 field_number, const ByteView view) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::LEN); !st) {
+            return st;
+        }
+        return write_bytes(writer, view);
+    }
+
+    template<class Writer>
+    Status write_string_field(Writer &writer, const u32 field_number, const ByteView view) noexcept {
+        return write_bytes_field(writer, field_number, view);
     }
 
     inline Status add_size(usize *total, const usize value) noexcept { return checked_add(*total, value, total); }

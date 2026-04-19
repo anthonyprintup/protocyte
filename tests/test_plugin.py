@@ -89,6 +89,15 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Status expect_wire_type(Reader &reader, const WireType actual, const WireType expected," in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "Result<usize> read_length_delimited_size(Reader &reader) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status read_string_field(typename Config::Context &ctx, Reader &reader," in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status write_bytes_field(Writer &writer, const u32 field_number, const ByteView view) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
     assert "Result<f64> read_double_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
@@ -164,6 +173,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "auto decoded = ::protocyte::read_fixed32(packed);" not in header
     assert "::protocyte::read_int32_field(reader, wire_type, field_number);" in header
     assert "::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);" in header
+    assert "::protocyte::read_string_field<Config>(*ctx_, reader, wire_type," in header
+    assert "::protocyte::write_string_field(" in header
+    assert "FieldNumber::opt_name), opt_name_.view());" in header
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
     assert "::protocyte::LimitedReader nested {entry_reader" in header
     assert "::protocyte::ReaderRef sub_reader {sub};" in header
