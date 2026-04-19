@@ -13,21 +13,13 @@ FetchContent_MakeAvailable(protocyte)
 set(FETCHCONTENT_PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(FETCHCONTENT_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-protocyte_generate(
-    TARGET fetchcontent_proto_codegen
+protocyte_add_proto_library(
+    TARGET fetchcontent_proto
     PROTO_ROOT "${FETCHCONTENT_PROTO_ROOT}"
     OUT_DIR "${FETCHCONTENT_GENERATED_DIR}"
     DISCOVER
-    EMIT_RUNTIME
-    GENERATED_SOURCES_VAR FETCHCONTENT_GENERATED_SOURCES
+    HOSTED_ALLOCATOR
 )
-
-add_library(fetchcontent_proto STATIC)
-target_sources(fetchcontent_proto PRIVATE ${FETCHCONTENT_GENERATED_SOURCES})
-add_dependencies(fetchcontent_proto fetchcontent_proto_codegen)
-target_include_directories(fetchcontent_proto PUBLIC "${FETCHCONTENT_GENERATED_DIR}")
-target_compile_definitions(fetchcontent_proto PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
-target_compile_features(fetchcontent_proto PUBLIC cxx_std_20)
 
 if(MSVC)
     target_compile_options(fetchcontent_proto PRIVATE /W4 /permissive-)

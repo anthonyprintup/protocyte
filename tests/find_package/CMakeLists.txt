@@ -7,21 +7,13 @@ find_package(protocyte CONFIG REQUIRED)
 set(FIND_PACKAGE_PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(FIND_PACKAGE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-protocyte_generate(
-    TARGET find_package_proto_codegen
+protocyte_add_proto_library(
+    TARGET find_package_proto
     PROTO_ROOT "${FIND_PACKAGE_PROTO_ROOT}"
     OUT_DIR "${FIND_PACKAGE_GENERATED_DIR}"
     DISCOVER
-    EMIT_RUNTIME
-    GENERATED_SOURCES_VAR FIND_PACKAGE_GENERATED_SOURCES
+    HOSTED_ALLOCATOR
 )
-
-add_library(find_package_proto STATIC)
-target_sources(find_package_proto PRIVATE ${FIND_PACKAGE_GENERATED_SOURCES})
-add_dependencies(find_package_proto find_package_proto_codegen)
-target_include_directories(find_package_proto PUBLIC "${FIND_PACKAGE_GENERATED_DIR}")
-target_compile_definitions(find_package_proto PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
-target_compile_features(find_package_proto PUBLIC cxx_std_20)
 
 if(MSVC)
     target_compile_options(find_package_proto PRIVATE /W4 /permissive-)
