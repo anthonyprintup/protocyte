@@ -144,7 +144,7 @@ The installed CMake package installs:
 - the `protocyte_add_proto_library(...)` and `protocyte_generate(...)` CMake integration
 - the exported `protocyte::codegen`, `protocyte::runtime`, and `protocyte::runtime_hosted` targets
 - the protocyte Python sources used by the plugin wrapper
-- the reusable C++ runtime headers and libraries
+- the reusable C++ runtime headers and targets
 - `protocyte/options.proto`
 
 The installed package does not embed Python or protobuf. Consumers still need a

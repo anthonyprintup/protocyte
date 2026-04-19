@@ -31,7 +31,6 @@ set(PROTOCYTE_INSTALL_PROTODIR "${CMAKE_INSTALL_DATADIR}/protocyte/proto")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Protocyte.cmake")
 
 set(PROTOCYTE_RUNTIME_HEADER "${CMAKE_CURRENT_LIST_DIR}/include/protocyte/runtime/runtime.hpp")
-set(PROTOCYTE_RUNTIME_SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/runtime/runtime.cpp")
 
 add_library(protocyte_codegen INTERFACE)
 add_library(protocyte::codegen ALIAS protocyte_codegen)
@@ -39,23 +38,22 @@ set_target_properties(protocyte_codegen PROPERTIES EXPORT_NAME codegen)
 target_compile_features(protocyte_codegen INTERFACE cxx_std_20)
 
 function(protocyte_configure_runtime_target target_name export_name)
-    add_library("${target_name}" STATIC "${PROTOCYTE_RUNTIME_SOURCE}")
+    add_library("${target_name}" INTERFACE)
     set_target_properties(
         "${target_name}"
         PROPERTIES
             EXPORT_NAME "${export_name}"
-            OUTPUT_NAME "${target_name}"
     )
-    target_compile_features("${target_name}" PUBLIC cxx_std_20)
+    target_compile_features("${target_name}" INTERFACE cxx_std_20)
     target_include_directories(
         "${target_name}"
-        PUBLIC
+        INTERFACE
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
     )
     target_sources(
         "${target_name}"
-        PUBLIC
+        INTERFACE
             FILE_SET HEADERS
             BASE_DIRS "${CMAKE_CURRENT_LIST_DIR}/include"
             FILES "${PROTOCYTE_RUNTIME_HEADER}"
@@ -67,7 +65,7 @@ add_library(protocyte::runtime ALIAS protocyte_runtime)
 
 protocyte_configure_runtime_target(protocyte_runtime_hosted runtime_hosted)
 add_library(protocyte::runtime_hosted ALIAS protocyte_runtime_hosted)
-target_compile_definitions(protocyte_runtime_hosted PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
+target_compile_definitions(protocyte_runtime_hosted INTERFACE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
 
 configure_package_config_file(
     "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfig.cmake.in"
@@ -87,9 +85,6 @@ install(
         protocyte_runtime_hosted
     EXPORT protocyteTargets
     FILE_SET HEADERS DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 install(TARGETS protocyte_codegen EXPORT protocyteTargets)
 install(

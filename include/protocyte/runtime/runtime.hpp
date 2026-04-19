@@ -1728,8 +1728,12 @@ namespace protocyte {
     inline Status add_size(usize *total, const usize value) noexcept { return checked_add(*total, value, total); }
 
 #ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
-    void *hosted_allocate(void *state, usize size, usize alignment) noexcept;
-    void hosted_deallocate(void *state, void *ptr, usize size, usize alignment) noexcept;
+    inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {
+        return ::operator new(size, static_cast<::std::align_val_t>(alignment), ::std::nothrow);
+    }
+    inline void hosted_deallocate(void *, void *ptr, const usize, const usize alignment) noexcept {
+        ::operator delete(ptr, static_cast<::std::align_val_t>(alignment));
+    }
     inline Allocator hosted_allocator() noexcept {
         return {.state = nullptr, .allocate = hosted_allocate, .deallocate = hosted_deallocate};
     }
