@@ -185,10 +185,13 @@ namespace {
         require_success(nested.set_label(label));
     }
 
-    void populate_required_fixed_array(Message &message) {
+    void populate_required_fixed_array(Message &message, Config::Context &ctx) {
         for (size_t i = 0; i < sizeof(kFixedIntegerArray) / sizeof(kFixedIntegerArray[0]); ++i) {
             require_success(message.mutable_fixed_integer_array().push_back(kFixedIntegerArray[i]));
         }
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes0));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes2));
+        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes3));
     }
 
     bool nested2_matches(const Nested2 &value, protocyte::ByteView description, float first, float second,
@@ -317,7 +320,7 @@ namespace {
         require_success(recursive);
         require_success(recursive.value().get().set_f_string(view_of(kRecursiveString)));
         require_success(recursive.value().get().set_f_int32(350));
-        populate_required_fixed_array(recursive.value().get());
+        populate_required_fixed_array(recursive.value().get(), ctx);
 
         auto nested_item = message.mutable_lots_of_nested().emplace_back(ctx);
         require_success(nested_item);
@@ -556,7 +559,7 @@ namespace {
         SECTION("string alternative round trips") {
             Message message(ctx);
             require_success(message.set_oneof_string(view_of(kOneofString)));
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -572,7 +575,7 @@ namespace {
         SECTION("int32 alternative round trips") {
             Message message(ctx);
             require_success(message.set_oneof_int32(2700));
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -590,7 +593,7 @@ namespace {
             auto oneof_msg = message.ensure_oneof_msg();
             require_success(oneof_msg);
             populate_nested1(oneof_msg.value().get(), view_of(kNestedName), 2800);
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -606,7 +609,7 @@ namespace {
         SECTION("bytes alternative round trips") {
             Message message(ctx);
             require_success(message.set_oneof_bytes(view_of(kOneofBytes)));
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -638,7 +641,7 @@ namespace {
         SECTION("new oneof assignment replaces old case") {
             Message first(ctx);
             require_success(first.set_oneof_string(view_of(kOneofString)));
-            populate_required_fixed_array(first);
+            populate_required_fixed_array(first, ctx);
             require_success(first.set_oneof_int32(2701));
 
             uint8_t encoded[256] = {};
@@ -658,7 +661,7 @@ namespace {
             auto first_oneof = first.ensure_oneof_msg();
             require_success(first_oneof);
             require_success(first_oneof.value().get().set_name(view_of(kNestedName)));
-            populate_required_fixed_array(first);
+            populate_required_fixed_array(first, ctx);
             require_success(first.set_oneof_bytes(view_of(kOneofBytes)));
 
             uint8_t encoded[512] = {};
@@ -736,7 +739,7 @@ namespace {
             Message message(ctx);
             CHECK_FALSE(message.has_sha256());
             CHECK(message.sha256().size == 0u);
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             auto encoded_size = message.encoded_size();
             require_success(encoded_size);
@@ -770,7 +773,7 @@ namespace {
             constexpr uint8_t kZeroSha256[32] = {};
             require_success(message.set_sha256(view_of(kZeroSha256)));
             REQUIRE(message.has_sha256());
-            populate_required_fixed_array(message);
+            populate_required_fixed_array(message, ctx);
 
             auto encoded_size = message.encoded_size();
             require_success(encoded_size);
