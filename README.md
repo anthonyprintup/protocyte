@@ -56,6 +56,11 @@ script:
 uv sync
 ```
 
+For a ground-zero walkthrough that covers getting `protoc`, building and
+installing the protocyte package, running `protoc` with the plugin, wiring the
+generated files into a CMake target, and setting up automatic regeneration, see
+[smoke/README.md](smoke/README.md).
+
 Generate code:
 
 ```powershell
@@ -67,6 +72,95 @@ The plugin emits:
 - `foo.protocyte.hpp`
 - `foo.protocyte.cpp`
 - `protocyte/runtime/runtime.hpp` and `runtime.cpp` when runtime emission is enabled
+
+## CMake Integration
+
+Protocyte supports two CMake consumption modes:
+
+- Source consumption with `FetchContent`
+- Installed-package consumption with `find_package(protocyte CONFIG REQUIRED)`
+
+### FetchContent
+
+Minimal source-consumption setup:
+
+```cmake
+include(FetchContent)
+
+FetchContent_Declare(
+    protocyte
+    GIT_REPOSITORY https://github.com/anthonyprintup/protocyte.git
+    GIT_TAG main
+)
+FetchContent_MakeAvailable(protocyte)
+
+protocyte_generate(
+    TARGET demo_proto_codegen
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    DISCOVER
+    EMIT_RUNTIME
+)
+```
+
+By default, the protocyte CMake project fetches protobuf when protobuf CMake
+targets are not already available, then exposes the `protocyte_generate(...)`
+helper for wiring generated outputs into your own targets.
+
+### Installed Package
+
+You can also install protocyte into a prefix and consume it later with
+`find_package`.
+
+Install protocyte:
+
+```powershell
+cmake -S . -B build/protocyte
+cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
+```
+
+Minimal consumer setup:
+
+```cmake
+find_package(protocyte CONFIG REQUIRED)
+
+protocyte_generate(
+    TARGET demo_proto_codegen
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    DISCOVER
+    EMIT_RUNTIME
+)
+```
+
+Configure the consumer with `-DCMAKE_PREFIX_PATH=<prefix>` so CMake can find
+`protocyteConfig.cmake`.
+
+The installed CMake package installs:
+
+- the `protocyte_generate(...)` CMake integration
+- the protocyte Python sources used by the plugin wrapper
+- `protocyte/options.proto`
+
+The installed package does not embed Python or protobuf. Consumers still need a
+working Python interpreter, and they either need protobuf/protoc available
+already or they can opt into the fetch fallback:
+
+```cmake
+set(PROTOCYTE_FETCH_PROTOBUF ON CACHE BOOL "" FORCE)
+find_package(protocyte CONFIG REQUIRED)
+```
+
+Public CMake variables exposed by the package:
+
+- `PROTOCYTE_PROTO_DIR`: the installed directory that contains `protocyte/options.proto`
+- `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
+- `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
+
+The full end-to-end examples, including building a static library from
+generated translation units, are in [smoke/README.md](smoke/README.md),
+[tests/fetchcontent/CMakeLists.txt](tests/fetchcontent/CMakeLists.txt), and
+[tests/find_package/CMakeLists.txt](tests/find_package/CMakeLists.txt).
 
 ## Plugin Parameters
 
