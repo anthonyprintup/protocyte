@@ -25,6 +25,81 @@ set(
     "protocyte generator source files"
 )
 
+function(_protocyte_set_protobuf_import_dir candidate_dir)
+    if("${candidate_dir}" STREQUAL "")
+        return()
+    endif()
+
+    if(NOT IS_DIRECTORY "${candidate_dir}")
+        return()
+    endif()
+
+    if(NOT EXISTS "${candidate_dir}/google/protobuf/descriptor.proto")
+        return()
+    endif()
+
+    set(
+        PROTOCYTE_PROTOBUF_IMPORT_DIR
+        "${candidate_dir}"
+        CACHE INTERNAL
+        "protobuf import root containing google/protobuf/descriptor.proto"
+    )
+endfunction()
+
+function(_protocyte_resolve_protobuf_import_dir)
+    if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+        return()
+    endif()
+
+    if(DEFINED protobuf_SOURCE_DIR AND EXISTS "${protobuf_SOURCE_DIR}/src/google/protobuf/descriptor.proto")
+        _protocyte_set_protobuf_import_dir("${protobuf_SOURCE_DIR}/src")
+        return()
+    endif()
+
+    if(DEFINED Protobuf_INCLUDE_DIRS)
+        foreach(include_dir IN LISTS Protobuf_INCLUDE_DIRS)
+            _protocyte_set_protobuf_import_dir("${include_dir}")
+            if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+                return()
+            endif()
+        endforeach()
+    endif()
+
+    foreach(target_name IN ITEMS protobuf::libprotobuf libprotobuf)
+        if(NOT TARGET "${target_name}")
+            continue()
+        endif()
+
+        get_target_property(target_include_dirs "${target_name}" INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT target_include_dirs)
+            continue()
+        endif()
+
+        foreach(include_dir IN LISTS target_include_dirs)
+            if(include_dir MATCHES "^\\$<")
+                continue()
+            endif()
+
+            _protocyte_set_protobuf_import_dir("${include_dir}")
+            if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+                return()
+            endif()
+        endforeach()
+    endforeach()
+
+    if(
+        DEFINED Protobuf_PROTOC_EXECUTABLE
+        AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
+        AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
+    )
+        cmake_path(GET Protobuf_PROTOC_EXECUTABLE PARENT_PATH protoc_bin_dir)
+        _protocyte_set_protobuf_import_dir("${protoc_bin_dir}/../include")
+        if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+            return()
+        endif()
+    endif()
+endfunction()
+
 function(_protocyte_verify_git_commit source_dir expected_commit repo_name)
     if("${expected_commit}" STREQUAL "")
         return()
@@ -125,6 +200,7 @@ function(_protocyte_ensure_protobuf)
                 "${PROTOCYTE_PROTOBUF_GIT_COMMIT}"
                 "protobuf"
             )
+            _protocyte_set_protobuf_import_dir("${protobuf_source_dir}/src")
             set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
         else()
             find_program(protoc_executable protoc REQUIRED)
@@ -132,6 +208,7 @@ function(_protocyte_ensure_protobuf)
     endif()
 
     set(PROTOCYTE_PROTOC_EXECUTABLE "${protoc_executable}" CACHE INTERNAL "protoc executable for protocyte")
+    _protocyte_resolve_protobuf_import_dir()
 endfunction()
 
 function(protocyte_generate)
@@ -243,8 +320,30 @@ function(protocyte_generate)
         ${protocyte_generated_sources}
     )
 
-    set(protocyte_import_dirs "${PROTOCYTE_PROTO_ROOT}" ${PROTOCYTE_IMPORT_DIRS} "${PROTOCYTE_PROTO_DIR}")
+    set(
+        protocyte_import_dirs
+        "${PROTOCYTE_PROTO_ROOT}"
+        ${PROTOCYTE_IMPORT_DIRS}
+        "${PROTOCYTE_PROTO_DIR}"
+        "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"
+    )
     list(REMOVE_DUPLICATES protocyte_import_dirs)
+
+    set(has_protobuf_descriptor_proto FALSE)
+    foreach(import_dir IN LISTS protocyte_import_dirs)
+        if(EXISTS "${import_dir}/google/protobuf/descriptor.proto")
+            set(has_protobuf_descriptor_proto TRUE)
+            break()
+        endif()
+    endforeach()
+
+    if(NOT has_protobuf_descriptor_proto)
+        message(
+            FATAL_ERROR
+            "protocyte_generate could not locate google/protobuf/descriptor.proto. "
+            "Install protobuf headers or configure a matching import root via PROTOCYTE_PROTOBUF_IMPORT_DIR/IMPORT_DIRS."
+        )
+    endif()
 
     set(protoc_proto_paths)
     foreach(import_dir IN LISTS protocyte_import_dirs)
