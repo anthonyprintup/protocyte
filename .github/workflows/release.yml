@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: Release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,6 +43,10 @@ jobs:
             echo "Release tags must start with 'v': $tag" >&2
             exit 1
           fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must use stable vX.Y.Z format: $tag" >&2
+            exit 1
+          fi
 
           package_version="$(grep -E '^__version__ = "[^"]+"' src/protocyte/__init__.py | sed -E 's/^__version__ = "([^"]+)"/\1/')"
           if [[ -z "$package_version" ]]; then
@@ -61,6 +65,8 @@ jobs:
   release-gate:
     name: Release Gate
     needs: validate-tag
+    permissions:
+      contents: read
     uses: ./.github/workflows/ci.yml
 
   publish:
