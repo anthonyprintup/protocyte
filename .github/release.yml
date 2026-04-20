@@ -1,0 +1,32 @@
+changelog:
+  exclude:
+    authors:
+      - dependabot[bot]
+      - github-actions[bot]
+    labels:
+      - ignore-for-release
+  categories:
+    - title: Breaking Changes
+      labels:
+        - breaking
+    - title: Features
+      labels:
+        - feature
+        - enhancement
+    - title: Fixes
+      labels:
+        - fix
+        - bug
+    - title: Documentation
+      labels:
+        - docs
+    - title: Maintenance
+      labels:
+        - chore
+        - ci
+        - build
+        - refactor
+        - test
+    - title: Other Changes
+      labels:
+        - "*"

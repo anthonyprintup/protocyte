@@ -90,7 +90,7 @@ include(FetchContent)
 FetchContent_Declare(
     protocyte
     GIT_REPOSITORY https://github.com/anthonyprintup/protocyte.git
-    GIT_TAG main
+    GIT_TAG vX.Y.Z
 )
 FetchContent_MakeAvailable(protocyte)
 
@@ -110,10 +110,17 @@ targets are not already available, then exposes:
 - `protocyte_generate(...)` as the lower-level codegen primitive
 - `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
 
+Pin a published release tag for downstream builds instead of tracking `main`.
+
 ### Installed Package
 
 You can also install protocyte into a prefix and consume it later with
 `find_package`.
+
+For published releases, download `protocyte-X.Y.Z-cmake-prefix.tar.gz` from
+GitHub Releases, unpack it, and point `CMAKE_PREFIX_PATH` at the extracted
+prefix directory. The release wheel and sdist are plugin-only artifacts for
+`protoc-gen-protocyte`; they do not install the CMake package.
 
 Install protocyte:
 

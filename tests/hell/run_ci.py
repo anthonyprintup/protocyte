@@ -139,7 +139,7 @@ def initialize_gate_repo(gate_dir: Path) -> None:
         ],
         cwd=gate_dir,
     )
-    run(["git", "tag", "0.1.0"], cwd=gate_dir)
+    run(["git", "tag", "v0.1.0"], cwd=gate_dir)
 
 
 def verify_install_prefix(install_prefix: Path) -> None:

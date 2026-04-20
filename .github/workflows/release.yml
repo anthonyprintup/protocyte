@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-tag:
+    name: Validate Release Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      archive_name: ${{ steps.version.outputs.archive_name }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure tag commit is reachable from main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/main"
+
+      - name: Compare tag and package version
+        id: version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          if [[ "$tag" == "$version" ]]; then
+            echo "Release tags must start with 'v': $tag" >&2
+            exit 1
+          fi
+
+          package_version="$(grep -E '^__version__ = "[^"]+"' src/protocyte/__init__.py | sed -E 's/^__version__ = "([^"]+)"/\1/')"
+          if [[ -z "$package_version" ]]; then
+            echo "Failed to read package version from src/protocyte/__init__.py" >&2
+            exit 1
+          fi
+
+          if [[ "$version" != "$package_version" ]]; then
+            echo "Tag version $version does not match package version $package_version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "archive_name=protocyte-${version}-cmake-prefix.tar.gz" >> "$GITHUB_OUTPUT"
+
+  release-gate:
+    name: Release Gate
+    needs: validate-tag
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Build And Publish Release
+    needs:
+      - validate-tag
+      - release-gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Build plugin package
+        run: uv build
+
+      - name: Configure release install tree
+        run: cmake -S . -B build/release-install
+
+      - name: Install and archive CMake package
+        shell: bash
+        run: |
+          version="${{ needs.validate-tag.outputs.version }}"
+          prefix_dir="staging/protocyte-${version}-cmake-prefix"
+          mkdir -p "$prefix_dir"
+          cmake --install build/release-install --prefix "$prefix_dir"
+          tar -C staging -czf "staging/${{ needs.validate-tag.outputs.archive_name }}" "protocyte-${version}-cmake-prefix"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            staging/${{ needs.validate-tag.outputs.archive_name }}

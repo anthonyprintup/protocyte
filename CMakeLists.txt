@@ -1,6 +1,24 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(protocyte VERSION 0.1.0 LANGUAGES CXX)
+file(
+    STRINGS "${CMAKE_CURRENT_LIST_DIR}/src/protocyte/__init__.py"
+    PROTOCYTE_VERSION_LINE
+    REGEX "^__version__ = \"[^\"]+\"$"
+)
+if(NOT PROTOCYTE_VERSION_LINE)
+    message(FATAL_ERROR "Failed to read protocyte version from src/protocyte/__init__.py")
+endif()
+string(
+    REGEX REPLACE "^__version__ = \"([^\"]+)\"$"
+    "\\1"
+    PROTOCYTE_VERSION
+    "${PROTOCYTE_VERSION_LINE}"
+)
+if(NOT PROTOCYTE_VERSION)
+    message(FATAL_ERROR "Failed to parse protocyte version from src/protocyte/__init__.py")
+endif()
+
+project(protocyte VERSION "${PROTOCYTE_VERSION}" LANGUAGES CXX)
 
 include(CMakePackageConfigHelpers)
 if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
