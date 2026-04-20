@@ -3,6 +3,17 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 
+function(_protocyte_get_internal out_var name)
+    get_property(value GLOBAL PROPERTY "PROTOCYTE_INTERNAL_${name}")
+    if(NOT DEFINED value OR value STREQUAL "")
+        set(fallback_var "PROTOCYTE_${name}")
+        if(DEFINED ${fallback_var})
+            set(value "${${fallback_var}}")
+        endif()
+    endif()
+    set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_set_protobuf_import_dir candidate_dir)
     if("${candidate_dir}" STREQUAL "")
         return()
@@ -83,7 +94,8 @@ function(_protocyte_write_plugin_wrapper)
         return()
     endif()
 
-    if(NOT DEFINED PROTOCYTE_PYTHON_SOURCE_ROOT)
+    _protocyte_get_internal(protocyte_python_source_root PYTHON_SOURCE_ROOT)
+    if("${protocyte_python_source_root}" STREQUAL "")
         message(FATAL_ERROR "protocyte is missing PROTOCYTE_PYTHON_SOURCE_ROOT")
     endif()
 
@@ -93,14 +105,14 @@ function(_protocyte_write_plugin_wrapper)
         set(wrapper "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte.cmd")
         file(WRITE "${wrapper}"
             "@echo off\r\n"
-            "set \"PYTHONPATH=${PROTOCYTE_PYTHON_SOURCE_ROOT};%PYTHONPATH%\"\r\n"
+            "set \"PYTHONPATH=${protocyte_python_source_root};%PYTHONPATH%\"\r\n"
             "\"${Python3_EXECUTABLE}\" -m protocyte.main\r\n"
         )
     else()
         set(wrapper "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte")
         file(WRITE "${wrapper}"
             "#!/usr/bin/env sh\n"
-            "PYTHONPATH='${PROTOCYTE_PYTHON_SOURCE_ROOT}':$PYTHONPATH exec '${Python3_EXECUTABLE}' -m protocyte.main\n"
+            "PYTHONPATH='${protocyte_python_source_root}':$PYTHONPATH exec '${Python3_EXECUTABLE}' -m protocyte.main\n"
         )
         file(
             CHMOD "${wrapper}"
@@ -120,7 +132,18 @@ function(_protocyte_ensure_protobuf)
     elseif(TARGET protoc)
         set(protoc_executable "$<TARGET_FILE:protoc>")
     else()
-        find_package(Protobuf QUIET)
+        find_package(Protobuf CONFIG QUIET)
+        if(
+            NOT TARGET protobuf::protoc
+            AND NOT TARGET protobuf::libprotobuf
+            AND (
+                NOT DEFINED Protobuf_PROTOC_EXECUTABLE
+                OR Protobuf_PROTOC_EXECUTABLE STREQUAL ""
+                OR Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
+            )
+        )
+            find_package(Protobuf MODULE QUIET)
+        endif()
 
         if(TARGET protobuf::protoc)
             set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
@@ -151,6 +174,11 @@ function(_protocyte_ensure_protobuf)
 
     set(PROTOCYTE_PROTOC_EXECUTABLE "${protoc_executable}" CACHE INTERNAL "protoc executable for protocyte")
     _protocyte_resolve_protobuf_import_dir()
+endfunction()
+
+function(protocyte_setup_codegen)
+    _protocyte_write_plugin_wrapper()
+    _protocyte_ensure_protobuf()
 endfunction()
 
 function(protocyte_generate)
@@ -192,8 +220,10 @@ function(protocyte_generate)
         message(FATAL_ERROR "protocyte_generate did not receive any .proto files")
     endif()
 
-    _protocyte_write_plugin_wrapper()
-    _protocyte_ensure_protobuf()
+    protocyte_setup_codegen()
+    _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
+    _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
+    _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
 
     set(normalized_proto_files)
     foreach(proto_file IN LISTS protocyte_proto_files)
@@ -269,7 +299,7 @@ function(protocyte_generate)
         protocyte_import_dirs
         "${PROTOCYTE_PROTO_ROOT}"
         ${PROTOCYTE_IMPORT_DIRS}
-        "${PROTOCYTE_PROTO_DIR}"
+        "${protocyte_proto_dir}"
         "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"
     )
     list(REMOVE_DUPLICATES protocyte_import_dirs)
@@ -312,8 +342,8 @@ function(protocyte_generate)
         DEPENDS
             ${normalized_proto_files}
             ${PROTOCYTE_DEPENDS}
-            "${PROTOCYTE_OPTIONS_PROTO}"
-            ${PROTOCYTE_GENERATOR_SOURCES}
+            "${protocyte_options_proto}"
+            ${protocyte_generator_sources}
         VERBATIM
         COMMAND_EXPAND_LISTS
     )
@@ -328,5 +358,146 @@ function(protocyte_generate)
     endif()
     if(PROTOCYTE_GENERATED_TARGET_VAR)
         set(${PROTOCYTE_GENERATED_TARGET_VAR} ${PROTOCYTE_TARGET} PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(protocyte_add_proto_library)
+    set(options DISCOVER EMIT_RUNTIME HOSTED_ALLOCATOR)
+    set(oneValueArgs
+        TARGET
+        TYPE
+        PROTO_ROOT
+        OUT_DIR
+        GENERATED_HEADERS_VAR
+        GENERATED_SOURCES_VAR
+        GENERATED_TARGET_VAR
+        RUNTIME_TARGET
+        RUNTIME_PREFIX
+        NAMESPACE_PREFIX
+        INCLUDE_PREFIX
+    )
+    set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
+    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(NOT PROTOCYTE_TARGET)
+        message(FATAL_ERROR "protocyte_add_proto_library requires TARGET")
+    endif()
+    if(NOT PROTOCYTE_PROTO_ROOT)
+        message(FATAL_ERROR "protocyte_add_proto_library requires PROTO_ROOT")
+    endif()
+    if(PROTOCYTE_EMIT_RUNTIME AND PROTOCYTE_RUNTIME_TARGET)
+        message(FATAL_ERROR "protocyte_add_proto_library accepts either EMIT_RUNTIME or RUNTIME_TARGET, not both")
+    endif()
+    if(PROTOCYTE_RUNTIME_PREFIX AND NOT PROTOCYTE_EMIT_RUNTIME AND NOT PROTOCYTE_RUNTIME_TARGET)
+        if(NOT PROTOCYTE_RUNTIME_PREFIX STREQUAL "protocyte/runtime")
+            message(
+                FATAL_ERROR
+                "protocyte_add_proto_library requires EMIT_RUNTIME or RUNTIME_TARGET when using a custom RUNTIME_PREFIX"
+            )
+        endif()
+    endif()
+
+    if(NOT PROTOCYTE_TYPE)
+        set(PROTOCYTE_TYPE STATIC)
+    endif()
+
+    set(valid_types STATIC SHARED MODULE OBJECT)
+    list(FIND valid_types "${PROTOCYTE_TYPE}" protocyte_type_index)
+    if(protocyte_type_index EQUAL -1)
+        message(FATAL_ERROR "protocyte_add_proto_library TYPE must be one of: STATIC, SHARED, MODULE, OBJECT")
+    endif()
+
+    if(PROTOCYTE_OUT_DIR)
+        if(IS_ABSOLUTE "${PROTOCYTE_OUT_DIR}")
+            set(protocyte_out_dir "${PROTOCYTE_OUT_DIR}")
+        else()
+            cmake_path(
+                ABSOLUTE_PATH PROTOCYTE_OUT_DIR
+                BASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+                OUTPUT_VARIABLE protocyte_out_dir
+            )
+        endif()
+    else()
+        set(protocyte_out_dir "${CMAKE_CURRENT_BINARY_DIR}/${PROTOCYTE_TARGET}_protocyte")
+    endif()
+
+    set(protocyte_codegen_target "${PROTOCYTE_TARGET}__protocyte_codegen")
+    set(protocyte_generate_args
+        TARGET "${protocyte_codegen_target}"
+        PROTO_ROOT "${PROTOCYTE_PROTO_ROOT}"
+        OUT_DIR "${protocyte_out_dir}"
+        GENERATED_HEADERS_VAR protocyte_generated_headers
+        GENERATED_SOURCES_VAR protocyte_generated_sources
+        GENERATED_TARGET_VAR protocyte_generated_target
+    )
+    if(PROTOCYTE_DISCOVER)
+        list(APPEND protocyte_generate_args DISCOVER)
+    else()
+        list(APPEND protocyte_generate_args PROTOS ${PROTOCYTE_PROTOS})
+    endif()
+    if(PROTOCYTE_EMIT_RUNTIME)
+        list(APPEND protocyte_generate_args EMIT_RUNTIME)
+    endif()
+    if(PROTOCYTE_IMPORT_DIRS)
+        list(APPEND protocyte_generate_args IMPORT_DIRS ${PROTOCYTE_IMPORT_DIRS})
+    endif()
+    if(PROTOCYTE_DEPENDS)
+        list(APPEND protocyte_generate_args DEPENDS ${PROTOCYTE_DEPENDS})
+    endif()
+    if(PROTOCYTE_OPTIONS)
+        list(APPEND protocyte_generate_args OPTIONS ${PROTOCYTE_OPTIONS})
+    endif()
+    if(PROTOCYTE_RUNTIME_PREFIX)
+        list(APPEND protocyte_generate_args RUNTIME_PREFIX "${PROTOCYTE_RUNTIME_PREFIX}")
+    endif()
+    if(PROTOCYTE_NAMESPACE_PREFIX)
+        list(APPEND protocyte_generate_args NAMESPACE_PREFIX "${PROTOCYTE_NAMESPACE_PREFIX}")
+    endif()
+    if(PROTOCYTE_INCLUDE_PREFIX)
+        list(APPEND protocyte_generate_args INCLUDE_PREFIX "${PROTOCYTE_INCLUDE_PREFIX}")
+    endif()
+
+    protocyte_generate(${protocyte_generate_args})
+
+    add_library("${PROTOCYTE_TARGET}" "${PROTOCYTE_TYPE}")
+    target_sources(
+        "${PROTOCYTE_TARGET}"
+        PRIVATE
+            ${protocyte_generated_sources}
+            ${protocyte_generated_headers}
+    )
+    add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_generated_target}")
+    target_compile_features("${PROTOCYTE_TARGET}" PUBLIC cxx_std_20)
+    target_include_directories("${PROTOCYTE_TARGET}" PUBLIC "${protocyte_out_dir}")
+    target_link_libraries("${PROTOCYTE_TARGET}" PUBLIC protocyte::codegen)
+
+    if(PROTOCYTE_EMIT_RUNTIME)
+        if(PROTOCYTE_HOSTED_ALLOCATOR)
+            target_compile_definitions("${PROTOCYTE_TARGET}" PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
+        endif()
+    else()
+        if(PROTOCYTE_RUNTIME_TARGET)
+            set(protocyte_runtime_target "${PROTOCYTE_RUNTIME_TARGET}")
+        elseif(PROTOCYTE_HOSTED_ALLOCATOR)
+            set(protocyte_runtime_target protocyte::runtime_hosted)
+        else()
+            set(protocyte_runtime_target protocyte::runtime)
+        endif()
+
+        if(NOT TARGET "${protocyte_runtime_target}")
+            message(FATAL_ERROR "protocyte_add_proto_library runtime target '${protocyte_runtime_target}' does not exist")
+        endif()
+
+        target_link_libraries("${PROTOCYTE_TARGET}" PUBLIC "${protocyte_runtime_target}")
+    endif()
+
+    if(PROTOCYTE_GENERATED_HEADERS_VAR)
+        set(${PROTOCYTE_GENERATED_HEADERS_VAR} ${protocyte_generated_headers} PARENT_SCOPE)
+    endif()
+    if(PROTOCYTE_GENERATED_SOURCES_VAR)
+        set(${PROTOCYTE_GENERATED_SOURCES_VAR} ${protocyte_generated_sources} PARENT_SCOPE)
+    endif()
+    if(PROTOCYTE_GENERATED_TARGET_VAR)
+        set(${PROTOCYTE_GENERATED_TARGET_VAR} ${protocyte_generated_target} PARENT_SCOPE)
     endif()
 endfunction()

@@ -94,18 +94,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(protocyte)
 
-protocyte_generate(
-    TARGET demo_proto_codegen
+protocyte_add_proto_library(
+    TARGET demo_proto
     PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
     OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
     DISCOVER
-    EMIT_RUNTIME
+    HOSTED_ALLOCATOR
 )
 ```
 
 By default, the protocyte CMake project fetches protobuf when protobuf CMake
-targets are not already available, then exposes the `protocyte_generate(...)`
-helper for wiring generated outputs into your own targets.
+targets are not already available, then exposes:
+
+- `protocyte_add_proto_library(...)` for the common target-oriented workflow
+- `protocyte_generate(...)` as the lower-level codegen primitive
+- `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
 
 ### Installed Package
 
@@ -124,12 +127,12 @@ Minimal consumer setup:
 ```cmake
 find_package(protocyte CONFIG REQUIRED)
 
-protocyte_generate(
-    TARGET demo_proto_codegen
+protocyte_add_proto_library(
+    TARGET demo_proto
     PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
     OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
     DISCOVER
-    EMIT_RUNTIME
+    HOSTED_ALLOCATOR
 )
 ```
 
@@ -138,8 +141,10 @@ Configure the consumer with `-DCMAKE_PREFIX_PATH=<prefix>` so CMake can find
 
 The installed CMake package installs:
 
-- the `protocyte_generate(...)` CMake integration
+- the `protocyte_add_proto_library(...)` and `protocyte_generate(...)` CMake integration
+- the exported `protocyte::codegen`, `protocyte::runtime`, and `protocyte::runtime_hosted` targets
 - the protocyte Python sources used by the plugin wrapper
+- the reusable C++ runtime headers and targets
 - `protocyte/options.proto`
 
 The installed package does not embed Python or protobuf. Consumers still need a
@@ -156,6 +161,12 @@ Public CMake variables exposed by the package:
 - `PROTOCYTE_PROTO_DIR`: the installed directory that contains `protocyte/options.proto`
 - `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
 - `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
+
+`protocyte_add_proto_library(...)` links generated code against
+`protocyte::runtime` by default, or `protocyte::runtime_hosted` when
+`HOSTED_ALLOCATOR` is enabled. Use `EMIT_RUNTIME` only when you explicitly want
+the runtime sources emitted into the generated output tree instead of reusing
+the installed/runtime target.
 
 The full end-to-end examples, including building a static library from
 generated translation units, are in [smoke/README.md](smoke/README.md),

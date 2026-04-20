@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(protocyte VERSION 0.1.0 LANGUAGES NONE)
+project(protocyte VERSION 0.1.0 LANGUAGES CXX)
 
 include(CMakePackageConfigHelpers)
 if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
@@ -30,6 +30,43 @@ set(PROTOCYTE_INSTALL_PROTODIR "${CMAKE_INSTALL_DATADIR}/protocyte/proto")
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Protocyte.cmake")
 
+set(PROTOCYTE_RUNTIME_HEADER "${CMAKE_CURRENT_LIST_DIR}/include/protocyte/runtime/runtime.hpp")
+
+add_library(protocyte_codegen INTERFACE)
+add_library(protocyte::codegen ALIAS protocyte_codegen)
+set_target_properties(protocyte_codegen PROPERTIES EXPORT_NAME codegen)
+target_compile_features(protocyte_codegen INTERFACE cxx_std_20)
+
+function(protocyte_configure_runtime_target target_name export_name)
+    add_library("${target_name}" INTERFACE)
+    set_target_properties(
+        "${target_name}"
+        PROPERTIES
+            EXPORT_NAME "${export_name}"
+    )
+    target_compile_features("${target_name}" INTERFACE cxx_std_20)
+    target_include_directories(
+        "${target_name}"
+        INTERFACE
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+            "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+    )
+    target_sources(
+        "${target_name}"
+        INTERFACE
+            FILE_SET HEADERS
+            BASE_DIRS "${CMAKE_CURRENT_LIST_DIR}/include"
+            FILES "${PROTOCYTE_RUNTIME_HEADER}"
+    )
+endfunction()
+
+protocyte_configure_runtime_target(protocyte_runtime runtime)
+add_library(protocyte::runtime ALIAS protocyte_runtime)
+
+protocyte_configure_runtime_target(protocyte_runtime_hosted runtime_hosted)
+add_library(protocyte::runtime_hosted ALIAS protocyte_runtime_hosted)
+target_compile_definitions(protocyte_runtime_hosted INTERFACE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
+
 configure_package_config_file(
     "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
@@ -43,6 +80,19 @@ write_basic_package_version_file(
 )
 
 install(
+    TARGETS
+        protocyte_runtime
+        protocyte_runtime_hosted
+    EXPORT protocyteTargets
+    FILE_SET HEADERS DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+install(TARGETS protocyte_codegen EXPORT protocyteTargets)
+install(
+    EXPORT protocyteTargets
+    NAMESPACE protocyte::
+    DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
+)
+install(
     FILES
         "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
@@ -54,7 +104,7 @@ install(
     DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"
     FILES_MATCHING
         PATTERN "*.py"
-        PATTERN "*.proto"
+        PATTERN "proto" EXCLUDE
         PATTERN "__pycache__" EXCLUDE
         PATTERN "*.pyc" EXCLUDE
 )
