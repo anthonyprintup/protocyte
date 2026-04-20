@@ -21,6 +21,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       archive_name: ${{ steps.version.outputs.archive_name }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
 
     steps:
       - name: Check out repository
@@ -43,8 +44,8 @@ jobs:
             echo "Release tags must start with 'v': $tag" >&2
             exit 1
           fi
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tags must use stable vX.Y.Z format: $tag" >&2
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "Release tags must use vX.Y.Z or prerelease vX.Y.Z-rcN format: $tag" >&2
             exit 1
           fi
 
@@ -54,13 +55,20 @@ jobs:
             exit 1
           fi
 
-          if [[ "$version" != "$package_version" ]]; then
+          expected_package_version="${version/-rc/rc}"
+          if [[ "$expected_package_version" != "$package_version" ]]; then
             echo "Tag version $version does not match package version $package_version" >&2
             exit 1
           fi
 
+          prerelease=false
+          if [[ "$version" == *-rc* ]]; then
+            prerelease=true
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "archive_name=protocyte-${version}-cmake-prefix.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   release-gate:
     name: Release Gate
@@ -113,6 +121,7 @@ jobs:
         with:
           fail_on_unmatched_files: true
           generate_release_notes: true
+          prerelease: ${{ needs.validate-tag.outputs.prerelease }}
           files: |
             dist/*.whl
             dist/*.tar.gz

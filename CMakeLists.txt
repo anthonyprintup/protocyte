@@ -17,8 +17,13 @@ string(
 if(NOT PROTOCYTE_VERSION)
     message(FATAL_ERROR "Failed to parse protocyte version from src/protocyte/__init__.py")
 endif()
+string(REGEX MATCH "^([0-9]+\\.[0-9]+\\.[0-9]+)(rc[0-9]+)?$" PROTOCYTE_VERSION_MATCH "${PROTOCYTE_VERSION}")
+if(NOT PROTOCYTE_VERSION_MATCH)
+    message(FATAL_ERROR "Unsupported protocyte version format: ${PROTOCYTE_VERSION}")
+endif()
+set(PROTOCYTE_PROJECT_VERSION "${CMAKE_MATCH_1}")
 
-project(protocyte VERSION "${PROTOCYTE_VERSION}" LANGUAGES CXX)
+project(protocyte VERSION "${PROTOCYTE_PROJECT_VERSION}" LANGUAGES CXX)
 
 include(CMakePackageConfigHelpers)
 if(NOT DEFINED CMAKE_INSTALL_LIBDIR)
