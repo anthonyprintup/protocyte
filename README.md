@@ -269,6 +269,8 @@ Constants can be referenced from `array.expr`. Resolution works:
 - Through package constants from the current package.
 - Across messages with qualified root-relative names such as
   `Outer.Inner.CAPACITY`.
+- Across messages in other packages with fully qualified names such as
+  `my.pkg.Outer.Inner.CAPACITY`.
 - Through package-qualified constants such as `my.pkg.CAPACITY`.
 
 Supported expression features:
