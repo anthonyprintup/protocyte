@@ -47,6 +47,7 @@ projects you should assume that `protoc` is an explicit tool dependency.
 
 Protocyte is a Python `protoc` plugin. `protoc` talks to it through the
 `protoc-gen-protocyte` executable script that the Python package installs.
+All of the Python packaging paths below require Python 3.14 or newer.
 
 You have two normal ways to work with it.
 
@@ -89,9 +90,22 @@ environment you want to use for code generation:
 python -m pip install dist\protocyte-<version>-py3-none-any.whl
 ```
 
-The wheel and sdist are plugin-only artifacts. They install
-`protoc-gen-protocyte`, but they do not provide the CMake package used by
-`find_package(protocyte CONFIG REQUIRED)`.
+`uv build` also produces a source distribution under `dist/`. Both the wheel
+and the sdist are plugin-only artifacts for `protoc-gen-protocyte`; they do
+not provide the CMake package used by `find_package(protocyte CONFIG REQUIRED)`.
+
+Published GitHub releases contain three different asset types:
+
+- `protocyte-X.Y.Z-py3-none-any.whl`: install this into Python 3.14+ when you
+  want the plugin executable.
+- `protocyte-X.Y.Z.tar.gz`: the Python source distribution for the same plugin
+  package. This is not the CMake package.
+- `protocyte-X.Y.Z-cmake-prefix.tar.gz`: a preinstalled CMake prefix for
+  `find_package(protocyte CONFIG REQUIRED)`.
+
+For prerelease tags `vX.Y.Z-rcN`, the wheel and sdist use the normalized Python
+package version `X.Y.ZrcN`, while the CMake prefix archive keeps the Git tag
+spelling `X.Y.Z-rcN`.
 
 ### Option C: Install The CMake Package
 
@@ -119,9 +133,11 @@ Downstream consumers then configure with
 `find_package(protocyte CONFIG REQUIRED)`.
 
 The installed package still expects a usable `Python3_EXECUTABLE` at configure
-time. Protobuf is caller-supplied by default. If you want the installed package
-to fetch protobuf as a fallback, set `PROTOCYTE_FETCH_PROTOBUF=ON` before
-calling `find_package(protocyte CONFIG REQUIRED)`.
+time, and that interpreter should be Python 3.14 or newer because the install
+tree ships the protocyte Python generator sources rather than bundling its own
+runtime. Protobuf is caller-supplied by default. If you want the installed
+package to fetch protobuf as a fallback, set `PROTOCYTE_FETCH_PROTOBUF=ON`
+before calling `find_package(protocyte CONFIG REQUIRED)`.
 
 ## 3. Find `protocyte/options.proto`
 
@@ -223,11 +239,10 @@ The generated layout mirrors the source-relative proto paths:
 - `generated/sensors/sensor.protocyte.hpp`
 - `generated/sensors/sensor.protocyte.cpp`
 - `generated/protocyte/runtime/runtime.hpp`
-- `generated/protocyte/runtime/runtime.cpp`
 
-`runtime=emit` tells protocyte to emit its runtime support files together with
+`runtime=emit` tells protocyte to emit its runtime support header together with
 the generated message code. For one generated-code bundle per build tree, that
-is usually the simplest setup.
+is usually the simplest setup for a header-only runtime.
 
 ## 6. Use The Generated Files In CMake
 
@@ -279,12 +294,10 @@ foreach(PROTO_FILE IN LISTS PROJECT_PROTO_FILES)
 endforeach()
 
 set(PROTOCYTE_RUNTIME_HEADER "${GENERATED_DIR}/protocyte/runtime/runtime.hpp")
-set(PROTOCYTE_RUNTIME_SOURCE "${GENERATED_DIR}/protocyte/runtime/runtime.cpp")
 set(PROTOCYTE_OUTPUTS
     ${PROTOCYTE_GENERATED_HEADERS}
     ${PROTOCYTE_GENERATED_SOURCES}
     "${PROTOCYTE_RUNTIME_HEADER}"
-    "${PROTOCYTE_RUNTIME_SOURCE}"
 )
 
 add_custom_command(
@@ -307,10 +320,7 @@ add_custom_command(
 add_custom_target(protocyte_codegen DEPENDS ${PROTOCYTE_OUTPUTS})
 
 add_library(sensor_proto STATIC)
-target_sources(sensor_proto PRIVATE
-    ${PROTOCYTE_GENERATED_SOURCES}
-    "${PROTOCYTE_RUNTIME_SOURCE}"
-)
+target_sources(sensor_proto PRIVATE ${PROTOCYTE_GENERATED_SOURCES})
 add_dependencies(sensor_proto protocyte_codegen)
 target_include_directories(sensor_proto PUBLIC "${GENERATED_DIR}")
 target_compile_features(sensor_proto PUBLIC cxx_std_20)
@@ -329,6 +339,13 @@ target_compile_definitions(sensor_proto PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
 If you are targeting a freestanding or kernel environment, do not define that
 macro. Instead, provide your own allocator callbacks through the runtime config
 you instantiate in your C++ code.
+
+If you provide a non-default runtime `Config`, protocyte now requires:
+
+- `Config::Context` with `allocator`, `limits`, and `recursion_depth`.
+
+That is a source-breaking change for custom configs; the default config already
+matches it.
 
 If protocyte was installed to a prefix instead of being consumed directly from a
 checkout, the manual `protoc`/custom-command pattern above can be replaced with
@@ -415,26 +432,41 @@ changes to protocyte itself also refresh the checked outputs.
 
 ## 9. Run The Smoke Project In This Repository
 
+The smoke presets live in `smoke/CMakePresets.json`, so run the preset-based
+configure, build, and test commands from the `smoke/` directory.
+
+On Windows, open a Visual Studio Developer PowerShell or otherwise initialize
+the MSVC developer environment first. The presets use the standard
+`VCINSTALLDIR`, `VSINSTALLDIR`, and `WindowsSdkVerBinPath` environment
+variables from that shell instead of hard-coding one specific Visual Studio
+edition or Windows SDK version.
+
 Build and run the hosted smoke test:
 
 ```powershell
-cmake --preset windows-clangcl-ninja -S smoke
+Push-Location smoke
+cmake --preset windows-clangcl-ninja
 cmake --build --preset windows-clangcl-ninja
 ctest --preset windows-clangcl-ninja
+Pop-Location
 ```
 
 Regenerate the checked-in smoke fixtures:
 
 ```powershell
-cmake --preset windows-clangcl-ninja -S smoke -DPROTOCYTE_SMOKE_REGENERATE=ON
-cmake --build smoke/build/clangcl --target protocyte_smoke_regenerate
+Push-Location smoke
+cmake --preset windows-clangcl-ninja -DPROTOCYTE_SMOKE_REGENERATE=ON
+cmake --build build/clangcl --target protocyte_smoke_regenerate
+Pop-Location
 ```
 
 Build the optional WDK driver smoke target:
 
 ```powershell
-cmake --preset windows-clangcl-ninja-driver -S smoke
+Push-Location smoke
+cmake --preset windows-clangcl-ninja-driver
 cmake --build --preset windows-clangcl-ninja-driver
+Pop-Location
 ```
 
 If you want a concrete reference, the smoke project is the best place to copy

@@ -159,23 +159,31 @@ CONSTANT_KIND_FLOAT = "float"
 CONSTANT_KIND_DOUBLE = "double"
 CONSTANT_KIND_STRING = "string"
 
-_CONSTANT_KIND_MAP = {
-    1: CONSTANT_KIND_BOOL,
-    2: CONSTANT_KIND_INT32,
-    3: CONSTANT_KIND_INT64,
-    4: CONSTANT_KIND_UINT32,
-    5: CONSTANT_KIND_UINT64,
-    6: CONSTANT_KIND_FLOAT,
-    7: CONSTANT_KIND_DOUBLE,
-    8: CONSTANT_KIND_STRING,
+_CONSTANT_OPTION_VALUE_FIELDS = {
+    "boolean": (CONSTANT_KIND_BOOL, False),
+    "boolean_expr": (CONSTANT_KIND_BOOL, True),
+    "i32": (CONSTANT_KIND_INT32, False),
+    "i32_expr": (CONSTANT_KIND_INT32, True),
+    "u32": (CONSTANT_KIND_UINT32, False),
+    "u32_expr": (CONSTANT_KIND_UINT32, True),
+    "i64": (CONSTANT_KIND_INT64, False),
+    "i64_expr": (CONSTANT_KIND_INT64, True),
+    "u64": (CONSTANT_KIND_UINT64, False),
+    "u64_expr": (CONSTANT_KIND_UINT64, True),
+    "f32": (CONSTANT_KIND_FLOAT, False),
+    "f32_expr": (CONSTANT_KIND_FLOAT, True),
+    "f64": (CONSTANT_KIND_DOUBLE, False),
+    "f64_expr": (CONSTANT_KIND_DOUBLE, True),
+    "str": (CONSTANT_KIND_STRING, False),
+    "str_expr": (CONSTANT_KIND_STRING, True),
 }
 
 
 @dataclass(slots=True)
 class _RawConstantOption:
     name: str
-    kind: int
-    literal: str | None
+    kind: str | None
+    literal: object | None
     expr: str | None
 
 
@@ -242,12 +250,24 @@ class _CustomOptions:
         out: list[_RawConstantOption] = []
         try:
             for item in parsed.Extensions[extension]:
-                literal = str(item.literal) if item.HasField("literal") else None
-                expr = str(item.expr) if item.HasField("expr") else None
+                value_field = item.WhichOneof("value")
+                kind: str | None = None
+                literal: object | None = None
+                expr: str | None = None
+                if value_field is not None:
+                    kind_info = _CONSTANT_OPTION_VALUE_FIELDS.get(value_field)
+                    if kind_info is None:
+                        raise ProtocyteError(f"unsupported typed constant value field {value_field!r}")
+                    kind, is_expr = kind_info
+                    value = getattr(item, value_field)
+                    if is_expr:
+                        expr = str(value)
+                    else:
+                        literal = value
                 out.append(
                     _RawConstantOption(
                         name=str(item.name),
-                        kind=int(item.kind),
+                        kind=kind,
                         literal=literal,
                         expr=expr,
                     )
@@ -288,7 +308,7 @@ class ConstantModel:
     cpp_name: str
     full_name: str
     kind: str
-    literal: str | None
+    literal: object | None
     expr: str | None
     value: object | None = None
     family: str = ""
@@ -887,21 +907,16 @@ def _build_constants(message: MessageModel, custom_options: _CustomOptions) -> l
 def _build_raw_constants(owner: str, raw_constants: list[_RawConstantOption]) -> list[ConstantModel]:
     constants: list[ConstantModel] = []
     for raw in raw_constants:
-        kind = _CONSTANT_KIND_MAP.get(raw.kind)
-        if kind is None:
-            raise ProtocyteError(f"{owner}: unsupported constant kind {raw.kind}")
         if not raw.name:
             raise ProtocyteError(f"{owner}: constant name must not be empty")
-        if raw.literal is not None and raw.expr is not None:
-            raise ProtocyteError(f"{owner}.{raw.name}: exactly one of literal or expr must be set")
-        if raw.literal is None and raw.expr is None:
-            raise ProtocyteError(f"{owner}.{raw.name}: exactly one of literal or expr must be set")
+        if raw.kind is None or (raw.literal is None) == (raw.expr is None):
+            raise ProtocyteError(f"{owner}.{raw.name}: exactly one typed constant value must be set")
         constants.append(
             ConstantModel(
                 name=raw.name,
                 cpp_name=cpp_identifier(raw.name),
                 full_name=f"{owner}.{raw.name}" if owner else raw.name,
-                kind=kind,
+                kind=raw.kind,
                 literal=raw.literal,
                 expr=raw.expr,
             )
@@ -1559,28 +1574,31 @@ def _evaluate_function(name: str, args: list[_TypedValue], label: str) -> _Typed
     raise ProtocyteError(f"{label}: unsupported function {name}()")
 
 
-def _coerce_literal(kind: str, literal: str, label: str) -> object:
+def _coerce_literal(kind: str, literal: object, label: str) -> object:
     family = _constant_family(kind)
     if family == CONSTANT_KIND_STRING:
+        if not isinstance(literal, str):
+            raise ProtocyteError(f"{label}: invalid string literal {literal!r}")
         return literal
     if family == CONSTANT_KIND_BOOL:
-        lowered = literal.lower()
-        if lowered in {"true", "1"}:
-            return True
-        if lowered in {"false", "0"}:
-            return False
-        raise ProtocyteError(f"{label}: invalid bool literal {literal!r}")
+        if not isinstance(literal, bool):
+            raise ProtocyteError(f"{label}: invalid bool literal {literal!r}")
+        return literal
     if kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
+        if isinstance(literal, bool) or not isinstance(literal, int | float):
+            raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}")
         try:
             value = float(literal)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}") from exc
         if not math.isfinite(value):
             raise ProtocyteError(f"{label}: numeric literal must be finite")
         return value
+    if isinstance(literal, bool) or not isinstance(literal, int):
+        raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}")
     try:
-        value = int(literal, 0)
-    except ValueError as exc:
+        value = int(literal)
+    except (TypeError, ValueError) as exc:
         raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}") from exc
     return _coerce_integer(kind, value, label)
 

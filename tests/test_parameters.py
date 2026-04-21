@@ -1,3 +1,6 @@
+import pytest
+
+from protocyte.errors import ProtocyteError
 from protocyte.parameters import parse_parameter
 
 
@@ -17,3 +20,22 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.runtime_prefix == "protocyte/runtime"
     assert options.namespace_prefix == ""
 
+
+def test_rejects_duplicate_parameters() -> None:
+    with pytest.raises(ProtocyteError, match="duplicate protocyte parameter: runtime"):
+        parse_parameter("runtime=emit,runtime=omit")
+
+
+def test_rejects_namespace_alias_conflicts() -> None:
+    with pytest.raises(ProtocyteError, match="namespace and namespace_prefix are aliases; specify only one"):
+        parse_parameter("namespace=left,namespace_prefix=right")
+
+
+def test_rejects_bare_tokens_without_equals() -> None:
+    with pytest.raises(ProtocyteError, match=r"invalid protocyte parameter 'runtime'; expected key=value"):
+        parse_parameter("runtime")
+
+
+def test_rejects_unknown_parameters() -> None:
+    with pytest.raises(ProtocyteError, match=r"unknown protocyte parameter\(s\): debug"):
+        parse_parameter("debug=true")

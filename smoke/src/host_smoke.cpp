@@ -19,6 +19,51 @@ namespace {
         uint8_t bytes[64];
     };
 
+    struct CustomConfig {
+        struct Context {
+            protocyte::Allocator allocator;
+            protocyte::Limits limits;
+            protocyte::usize recursion_depth {};
+        };
+
+        template<class T> using Vector = protocyte::Vector<T, CustomConfig>;
+        template<class K, class V> using Map = protocyte::HashMap<K, V, CustomConfig>;
+        template<class T> using Box = protocyte::Box<T, CustomConfig>;
+        template<class T> using Optional = protocyte::Optional<T>;
+        using Bytes = protocyte::Bytes<CustomConfig>;
+        using String = protocyte::String<CustomConfig>;
+
+        static void *allocate(Context &ctx, const protocyte::usize size, const protocyte::usize alignment) noexcept {
+            if (!size || ctx.allocator.allocate == nullptr) {
+                return nullptr;
+            }
+            return ctx.allocator.allocate(ctx.allocator.state, size, alignment);
+        }
+
+        static void deallocate(Context &ctx, void *ptr, const protocyte::usize size,
+                               const protocyte::usize alignment) noexcept {
+            if (ptr != nullptr && ctx.allocator.deallocate != nullptr) {
+                ctx.allocator.deallocate(ctx.allocator.state, ptr, size, alignment);
+            }
+        }
+
+        template<class T> static protocyte::u64 hash(const T &value) noexcept {
+            return protocyte::fnv1a(
+                protocyte::ByteView {.data = reinterpret_cast<const protocyte::u8 *>(&value), .size = sizeof(T)});
+        }
+
+        template<class T> static bool equal(const T &lhs, const T &rhs) noexcept { return lhs == rhs; }
+
+        static protocyte::u64 hash(const Bytes &value) noexcept { return protocyte::fnv1a(value.view()); }
+        static protocyte::u64 hash(const String &value) noexcept { return protocyte::fnv1a(value.view()); }
+        static bool equal(const Bytes &lhs, const Bytes &rhs) noexcept {
+            return protocyte::bytes_equal(lhs.view(), rhs.view());
+        }
+        static bool equal(const String &lhs, const String &rhs) noexcept {
+            return protocyte::bytes_equal(lhs.view(), rhs.view());
+        }
+    };
+
     using Config = protocyte::DefaultConfig;
     using Message = test::ultimate::UltimateComplexMessage<>;
     using Nested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<>;
@@ -36,6 +81,9 @@ namespace {
     using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
+    using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
+    using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
+    using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
 
     static_assert(test::ultimate::BASE_COUNT == 5);
     static_assert(Message::SHIFTED_COUNT == 5000000000ll);
@@ -135,6 +183,13 @@ namespace {
 
     Config::Context make_context() noexcept {
         return Config::Context {
+            protocyte::Allocator {nullptr, smoke_allocate, smoke_deallocate},
+            protocyte::Limits {},
+        };
+    }
+
+    CustomConfig::Context make_custom_context() noexcept {
+        return CustomConfig::Context {
             protocyte::Allocator {nullptr, smoke_allocate, smoke_deallocate},
             protocyte::Limits {},
         };
@@ -1056,7 +1111,20 @@ namespace {
                             protocyte::ErrorCode::count_limit);
         }
 
-        SECTION("required fixed repeated bytes must be fully populated before encoding") {
+        SECTION("empty fixed repeated arrays may stay absent before encoding") {
+            Message message(ctx);
+
+            auto encoded_size = message.encoded_size();
+            require_success(encoded_size);
+            CHECK(encoded_size.value() == 0u);
+
+            uint8_t encoded[64] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(message.serialize(writer));
+            CHECK(writer.position() == 0u);
+        }
+
+        SECTION("partially populated fixed repeated bytes are rejected before encoding") {
             Message message(ctx);
             auto &fixed_repeated_byte_array = message.mutable_fixed_repeated_byte_array();
             append_bytes(fixed_repeated_byte_array, ctx, view_of(kRepeatedBytes0));
@@ -1124,7 +1192,7 @@ namespace {
             CHECK(source.fixed_integer_array().size() == 0u);
         }
 
-        SECTION("required fixed arrays must be fully populated before encoding") {
+        SECTION("partially populated fixed arrays are rejected before encoding") {
             Message message(ctx);
             auto &fixed_integer_array = message.mutable_fixed_integer_array();
             require_success(fixed_integer_array.push_back(kFixedIntegerArray[0]));
@@ -1190,7 +1258,7 @@ namespace {
             require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
         }
 
-        SECTION("partial required fixed arrays are rejected while parsing") {
+        SECTION("partial fixed arrays are rejected while parsing") {
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
             require_success(protocyte::write_tag(
@@ -1226,7 +1294,7 @@ namespace {
             require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
         }
 
-        SECTION("partial required fixed repeated bytes are rejected while parsing") {
+        SECTION("partial fixed repeated bytes are rejected while parsing") {
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
             require_success(protocyte::write_bytes_field(
@@ -1529,4 +1597,178 @@ TEST_CASE("tag_size matches protobuf group sizing", "[smoke][runtime]") {
                                                         static_cast<protocyte::u64>(protocyte::WireType::VARINT));
     CHECK(protocyte::tag_size(kLargeFieldNumber, protocyte::WireType::VARINT) == single_tag_size);
     CHECK(protocyte::tag_size(kLargeFieldNumber, protocyte::WireType::SGROUP) == single_tag_size * 2u);
+}
+
+TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke][runtime]") {
+    if constexpr (sizeof(protocyte::usize) == sizeof(protocyte::u64)) {
+        SUCCEED("usize can represent every u64 length on this target");
+    } else {
+        constexpr uint8_t kOverflowLength[] = {0x80u, 0x80u, 0x80u, 0x80u, 0x10u};
+
+        protocyte::SliceReader size_reader(kOverflowLength, sizeof(kOverflowLength));
+        auto size = protocyte::read_length_delimited_size(size_reader);
+        require_failure(size, protocyte::ErrorCode::integer_overflow);
+
+        protocyte::SliceReader skip_reader(kOverflowLength, sizeof(kOverflowLength));
+        require_failure(protocyte::skip_field(skip_reader, protocyte::WireType::LEN),
+                        protocyte::ErrorCode::integer_overflow);
+    }
+}
+
+TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runtime][limits]") {
+    SECTION("string assignment respects max_string_bytes") {
+        auto ctx = make_context();
+        ctx.limits.max_string_bytes = 3u;
+
+        Message message(ctx);
+        require_failure(message.set_f_string(view_of(kString)), protocyte::ErrorCode::size_limit);
+
+        Config::Bytes bytes(&ctx);
+        require_failure(bytes.assign(view_of(kBytes)), protocyte::ErrorCode::size_limit);
+    }
+
+    SECTION("mutable fixed bytes respect max_string_bytes") {
+        auto ctx = make_context();
+        ctx.limits.max_string_bytes = sizeof(kSha256) - 1u;
+
+        Message message(ctx);
+        const auto view = message.mutable_sha256();
+        CHECK(view.data == nullptr);
+        CHECK(view.size == 0u);
+    }
+
+    SECTION("nested message fields respect max_message_bytes") {
+        auto build_ctx = make_context();
+        Nested1 nested(build_ctx);
+        populate_nested1(nested, view_of(kNestedName), 25);
+
+        auto nested_size = nested.encoded_size();
+        require_success(nested_size);
+        REQUIRE(nested_size.value() > 1u);
+
+        uint8_t encoded[256] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::nested1),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, static_cast<uint64_t>(nested_size.value())));
+        require_success(nested.serialize(writer));
+
+        auto parse_ctx = make_context();
+        parse_ctx.limits.max_message_bytes = nested_size.value() - 1u;
+
+        Message parsed(parse_ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::size_limit);
+        CHECK(parse_ctx.recursion_depth == 0u);
+    }
+
+    SECTION("map entries respect max_message_bytes") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+
+        uint8_t entry[64] = {};
+        protocyte::SliceWriter entry_writer(entry, sizeof(entry));
+        require_success(protocyte::write_bool_field(entry_writer, 1u, true));
+        require_success(protocyte::write_bytes_field(entry_writer, 2u, view_of(kBoolBytes)));
+
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_bool_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, static_cast<uint64_t>(entry_writer.position())));
+        require_success(writer.write(entry, entry_writer.position()));
+
+        auto parse_ctx = make_context();
+        parse_ctx.limits.max_message_bytes = 4u;
+
+        Message parsed(parse_ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::size_limit);
+        CHECK(parse_ctx.recursion_depth == 0u);
+    }
+
+    SECTION("nested messages respect max_recursion_depth") {
+        auto build_ctx = make_context();
+        Nested1 nested(build_ctx);
+        populate_nested1(nested, view_of(kNestedName), 25);
+
+        auto nested_size = nested.encoded_size();
+        require_success(nested_size);
+
+        uint8_t encoded[256] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::nested1),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, static_cast<uint64_t>(nested_size.value())));
+        require_success(nested.serialize(writer));
+
+        auto parse_ctx = make_context();
+        parse_ctx.limits.max_recursion_depth = 1u;
+
+        Message parsed(parse_ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::recursion_limit);
+        CHECK(parse_ctx.recursion_depth == 0u);
+    }
+
+    SECTION("group skipping respects max_recursion_depth") {
+        auto ctx = make_context();
+        ctx.limits.max_recursion_depth = 1u;
+
+        constexpr uint8_t kNestedGroups[] = {0x0bu, 0x13u, 0x14u, 0x0cu};
+        protocyte::SliceReader reader(kNestedGroups, sizeof(kNestedGroups));
+        require_failure(protocyte::skip_field<Config>(ctx, reader, protocyte::WireType::SGROUP, 1u),
+                        protocyte::ErrorCode::recursion_limit);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+}
+
+TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[smoke][runtime][custom-config]") {
+    auto build_ctx = make_custom_context();
+    CustomMessage message(build_ctx);
+
+    require_success(message.mutable_r_double().push_back(12.5));
+    require_success(message.mutable_r_double().push_back(13.5));
+
+    auto nested = message.ensure_nested1();
+    require_success(nested);
+    require_success(nested.value().get().set_name(view_of(kNestedName)));
+    require_success(nested.value().get().set_id(77));
+
+    auto inner = nested.value().get().ensure_inner();
+    require_success(inner);
+    require_success(inner.value().get().set_description(view_of(kNestedDescription)));
+    require_success(inner.value().get().mutable_values().push_back(4.5f));
+    require_success(inner.value().get().mutable_values().push_back(5.5f));
+    require_success(inner.value().get().set_mode(InnerMode::C));
+
+    auto encoded_size = message.encoded_size();
+    require_success(encoded_size);
+
+    uint8_t encoded[256] = {};
+    protocyte::SliceWriter writer(encoded, sizeof(encoded));
+    require_success(message.serialize(writer));
+    require_success(protocyte::write_int32_field(writer, 99u, 1234));
+
+    auto parse_ctx = make_custom_context();
+    CustomMessage parsed(parse_ctx);
+    protocyte::SliceReader reader(encoded, writer.position());
+    require_success(parsed.merge_from(reader));
+    REQUIRE(reader.eof());
+    CHECK(parse_ctx.recursion_depth == 0u);
+
+    const auto &doubles = parsed.r_double();
+    REQUIRE(doubles.size() == 2u);
+    CHECK(doubles[0] == 12.5);
+    CHECK(doubles[1] == 13.5);
+
+    REQUIRE(parsed.has_nested1());
+    const CustomNested1 &parsed_nested = *parsed.nested1();
+    CHECK(view_equal(parsed_nested.name(), view_of(kNestedName)));
+    CHECK(parsed_nested.id() == 77);
+    REQUIRE(parsed_nested.has_inner());
+    const CustomNested2 &parsed_inner = *parsed_nested.inner();
+    CHECK(view_equal(parsed_inner.description(), view_of(kNestedDescription)));
+    REQUIRE(parsed_inner.values().size() == 2u);
+    CHECK(parsed_inner.values()[0] == 4.5f);
+    CHECK(parsed_inner.values()[1] == 5.5f);
+    CHECK(parsed_inner.mode() == InnerMode::C);
 }

@@ -26,7 +26,8 @@ set(
     "${PROTOCYTE_PACKAGE_ROOT}/model.py"
     "${PROTOCYTE_PACKAGE_ROOT}/parameters.py"
     "${PROTOCYTE_PACKAGE_ROOT}/plugin.py"
-    "${PROTOCYTE_PACKAGE_ROOT}/runtime.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/runtime/__init__.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/runtime/runtime.hpp"
 )
 
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_SOURCE_ROOT "${PROTOCYTE_PYTHON_SOURCE_ROOT}")

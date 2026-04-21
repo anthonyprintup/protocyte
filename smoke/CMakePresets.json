@@ -2,17 +2,23 @@
   "version": 6,
   "configurePresets": [
     {
-      "name": "windows-clangcl-ninja",
-      "displayName": "Windows clang-cl + Ninja",
+      "name": "windows-clangcl-base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/clangcl",
+      "environment": {
+        "PATH": "$env{VCINSTALLDIR}Tools/Llvm/x64/bin;$env{VSINSTALLDIR}Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja;$env{WindowsSdkVerBinPath}x64;$penv{PATH}"
+      },
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/x64/bin/clang-cl.exe",
-        "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/x64/bin/clang-cl.exe",
-        "CMAKE_MAKE_PROGRAM": "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
-        "CMAKE_RC_COMPILER": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_RC_COMPILER": "rc",
         "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
       }
+    },
+    {
+      "name": "windows-clangcl-ninja",
+      "inherits": "windows-clangcl-base",
+      "displayName": "Windows clang-cl + Ninja",
+      "binaryDir": "${sourceDir}/build/clangcl"
     },
     {
       "name": "windows-clangcl-ninja-driver",

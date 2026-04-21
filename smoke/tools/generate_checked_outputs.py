@@ -17,6 +17,7 @@ F = descriptor_pb2.FieldDescriptorProto
 def main() -> int:
     out_dir = Path(__file__).resolve().parents[1] / "generated"
     out_dir.mkdir(parents=True, exist_ok=True)
+    written_paths: set[Path] = set()
 
     requests: list[plugin_pb2.CodeGeneratorRequest] = []
 
@@ -47,9 +48,15 @@ def main() -> int:
             path = out_dir / item.name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(item.content, encoding="utf-8", newline="\n")
+            written_paths.add(path)
 
     compat_cases_path = out_dir / "compat_cases.hpp"
     compat_cases_path.write_text(compat_cases_header(), encoding="utf-8", newline="\n")
+    written_paths.add(compat_cases_path)
+
+    stale_runtime_source = out_dir / "protocyte" / "runtime" / "runtime.cpp"
+    if stale_runtime_source not in written_paths and stale_runtime_source.exists():
+        stale_runtime_source.unlink()
 
     return 0
 
@@ -109,9 +116,9 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     file.options.ParseFromString(
         package_constant_options_bytes(
             [
-                ("BASE_COUNT", 2, "5", None),
-                ("PREFIX", 8, None, 'substr("protocyte", 0, 5)'),
-                ("BYTE_ARRAY_CAP", 4, None, "len(PREFIX) - 1"),
+                ("BASE_COUNT", "i32", 5),
+                ("PREFIX", "str_expr", 'substr("protocyte", 0, 5)'),
+                ("BYTE_ARRAY_CAP", "u32_expr", "len(PREFIX) - 1"),
             ]
         )
     )
@@ -121,25 +128,25 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     msg.options.ParseFromString(
         constant_options_bytes(
             [
-                ("SHIFTED_COUNT", 3, None, "BASE_COUNT * 1000000000"),
-                ("MASK_BITS", 5, "1234567890123456789", None),
-                ("FLOAT_SCALE", 6, "1.25", None),
-                ("DOUBLE_SCALE", 7, None, "FLOAT_SCALE + 2.5"),
-                ("FLAG_LITERAL", 1, "true", None),
-                ("HEX_LITERAL", 4, "0x20", None),
-                ("HEX_SUM", 4, None, "0x10 + 0x8"),
-                ("INTEGER_ARRAY_CAP", 4, None, "(BASE_COUNT * 2) - 2"),
-                ("LABEL", 8, None, 'PREFIX + "-demo"'),
-                ("UNICODE_LABEL", 8, chr(0x0100) + chr(0x00E9), None),
-                ("FIXED_INTEGER_ARRAY_CAP", 4, None, "BASE_COUNT - 2"),
-                ("FLOATISH_BOUND", 4, None, "4 / 2.0"),
-                ("GT_CHECK", 1, None, "BASE_COUNT > 4"),
-                ("LE_CHECK", 1, None, "BYTE_ARRAY_CAP <= INTEGER_ARRAY_CAP"),
-                ("EQ_CHECK", 1, None, 'PREFIX == "proto"'),
-                ("NE_CHECK", 1, None, 'LABEL != "proto"'),
-                ("HAS_PREFIX", 1, None, 'starts_with(LABEL, PREFIX) && !starts_with(LABEL, "zzz")'),
-                ("MOD_CHECK", 2, None, "BASE_COUNT % 2"),
-                ("OR_CHECK", 1, None, "HAS_PREFIX || false"),
+                ("SHIFTED_COUNT", "i64_expr", "BASE_COUNT * 1000000000"),
+                ("MASK_BITS", "u64", 1234567890123456789),
+                ("FLOAT_SCALE", "f32", 1.25),
+                ("DOUBLE_SCALE", "f64_expr", "FLOAT_SCALE + 2.5"),
+                ("FLAG_LITERAL", "boolean", True),
+                ("HEX_LITERAL", "u32", 0x20),
+                ("HEX_SUM", "u32_expr", "0x10 + 0x8"),
+                ("INTEGER_ARRAY_CAP", "u32_expr", "(BASE_COUNT * 2) - 2"),
+                ("LABEL", "str_expr", 'PREFIX + "-demo"'),
+                ("UNICODE_LABEL", "str", chr(0x0100) + chr(0x00E9)),
+                ("FIXED_INTEGER_ARRAY_CAP", "u32_expr", "BASE_COUNT - 2"),
+                ("FLOATISH_BOUND", "u32_expr", "4 / 2.0"),
+                ("GT_CHECK", "boolean_expr", "BASE_COUNT > 4"),
+                ("LE_CHECK", "boolean_expr", "BYTE_ARRAY_CAP <= INTEGER_ARRAY_CAP"),
+                ("EQ_CHECK", "boolean_expr", 'PREFIX == "proto"'),
+                ("NE_CHECK", "boolean_expr", 'LABEL != "proto"'),
+                ("HAS_PREFIX", "boolean_expr", 'starts_with(LABEL, PREFIX) && !starts_with(LABEL, "zzz")'),
+                ("MOD_CHECK", "i32_expr", "BASE_COUNT % 2"),
+                ("OR_CHECK", "boolean_expr", "HAS_PREFIX || false"),
             ]
         )
     )
@@ -379,9 +386,9 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     cross.options.ParseFromString(
         constant_options_bytes(
             [
-                ("ROOT_MIRROR", 4, None, "UltimateComplexMessage.INTEGER_ARRAY_CAP + 2"),
-                ("LABEL_COPY", 8, None, 'PREFIX + "-cross"'),
-                ("READY", 1, None, "UltimateComplexMessage.HAS_PREFIX && (ROOT_MIRROR == 10)"),
+                ("ROOT_MIRROR", "u32_expr", "UltimateComplexMessage.INTEGER_ARRAY_CAP + 2"),
+                ("LABEL_COPY", "str_expr", 'PREFIX + "-cross"'),
+                ("READY", "boolean_expr", "UltimateComplexMessage.HAS_PREFIX && (ROOT_MIRROR == 10)"),
             ]
         )
     )
@@ -395,7 +402,7 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     nested_cross.options.ParseFromString(
         constant_options_bytes(
             [
-                ("EXTERNAL_CAP", 4, None, "BASE_COUNT + 3"),
+                ("EXTERNAL_CAP", "u32_expr", "BASE_COUNT + 3"),
             ]
         )
     )
@@ -477,8 +484,8 @@ def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
     file.options.ParseFromString(
         package_constant_options_bytes(
             [
-                ("FOREIGN_BASE", 4, None, "test.ultimate.BASE_COUNT + 2"),
-                ("FOREIGN_LABEL", 8, None, 'test.ultimate.PREFIX + "-xpkg"'),
+                ("FOREIGN_BASE", "u32_expr", "test.ultimate.BASE_COUNT + 2"),
+                ("FOREIGN_LABEL", "str_expr", 'test.ultimate.PREFIX + "-xpkg"'),
             ]
         )
     )
@@ -488,15 +495,14 @@ def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
     msg.options.ParseFromString(
         constant_options_bytes(
             [
-                ("REMOTE_COUNT", 4, None, "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP * 2"),
-                ("REMOTE_LABEL", 8, None, 'test.ultimate.UltimateComplexMessage.LABEL + "-external"'),
+                ("REMOTE_COUNT", "u32_expr", "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP * 2"),
+                ("REMOTE_LABEL", "str_expr", 'test.ultimate.UltimateComplexMessage.LABEL + "-external"'),
                 (
                     "REMOTE_READY",
-                    1,
-                    None,
+                    "boolean_expr",
                     "test.ultimate.CrossMessageConstants.READY && test.ultimate.UltimateComplexMessage.HAS_PREFIX",
                 ),
-                ("NESTED_COUNT", 4, None, "test.ultimate.CrossMessageConstants.Nested.EXTERNAL_CAP + 1"),
+                ("NESTED_COUNT", "u32_expr", "test.ultimate.CrossMessageConstants.Nested.EXTERNAL_CAP + 1"),
             ]
         )
     )
@@ -513,7 +519,7 @@ def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
     nested.options.ParseFromString(
         constant_options_bytes(
             [
-                ("MIRRORED_COUNT", 4, None, "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + FOREIGN_BASE"),
+                ("MIRRORED_COUNT", "u32_expr", "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + FOREIGN_BASE"),
             ]
         )
     )
@@ -623,38 +629,35 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     file.syntax = "proto3"
     file.dependency.append("google/protobuf/descriptor.proto")
 
-    enum = file.enum_type.add()
-    enum.name = "ConstantKind"
-    for number, name in [
-        (0, "KIND_UNSPECIFIED"),
-        (1, "BOOL"),
-        (2, "INT32"),
-        (3, "INT64"),
-        (4, "UINT32"),
-        (5, "UINT64"),
-        (6, "FLOAT"),
-        (7, "DOUBLE"),
-        (8, "STRING"),
-    ]:
-        value = enum.value.add()
-        value.name = name
-        value.number = number
-
-    struct_constant = file.message_type.add()
-    struct_constant.name = "StructConstant"
-    field = struct_constant.field.add()
+    constant = file.message_type.add()
+    constant.name = "Constant"
+    field = constant.field.add()
     field.name = "name"
     field.number = 1
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_STRING
-    field = struct_constant.field.add()
-    field.name = "kind"
-    field.number = 2
-    field.label = F.LABEL_OPTIONAL
-    field.type = F.TYPE_ENUM
-    field.type_name = ".protocyte.ConstantKind"
-    add_oneof_field(struct_constant, "value", "literal", 3, F.TYPE_STRING)
-    add_oneof_field(struct_constant, "value", "expr", 4, F.TYPE_STRING)
+    for number, (field_name, field_type) in enumerate(
+        [
+            ("boolean", F.TYPE_BOOL),
+            ("boolean_expr", F.TYPE_STRING),
+            ("i32", F.TYPE_INT32),
+            ("i32_expr", F.TYPE_STRING),
+            ("u32", F.TYPE_UINT32),
+            ("u32_expr", F.TYPE_STRING),
+            ("i64", F.TYPE_INT64),
+            ("i64_expr", F.TYPE_STRING),
+            ("u64", F.TYPE_UINT64),
+            ("u64_expr", F.TYPE_STRING),
+            ("f32", F.TYPE_FLOAT),
+            ("f32_expr", F.TYPE_STRING),
+            ("f64", F.TYPE_DOUBLE),
+            ("f64_expr", F.TYPE_STRING),
+            ("str", F.TYPE_STRING),
+            ("str_expr", F.TYPE_STRING),
+        ],
+        start=2,
+    ):
+        add_oneof_field(constant, "value", field_name, number, field_type)
 
     array_options = file.message_type.add()
     array_options.name = "ArrayOptions"
@@ -666,7 +669,7 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.number = 50000
     ext.label = F.LABEL_REPEATED
     ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.StructConstant"
+    ext.type_name = ".protocyte.Constant"
     ext.extendee = ".google.protobuf.MessageOptions"
 
     ext = file.extension.add()
@@ -674,7 +677,7 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.number = 50002
     ext.label = F.LABEL_REPEATED
     ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.StructConstant"
+    ext.type_name = ".protocyte.Constant"
     ext.extendee = ".google.protobuf.FileOptions"
 
     ext = file.extension.add()
@@ -740,7 +743,7 @@ def array_option_bytes(*, max_value: int | None = None, expr: str | None = None,
     return options.SerializeToString()
 
 
-def constant_options_bytes(constants: list[tuple[str, int, str | None, str | None]]) -> bytes:
+def constant_options_bytes(constants: list[tuple[str, str, object]]) -> bytes:
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
     pool.Add(options_file())
@@ -749,18 +752,14 @@ def constant_options_bytes(constants: list[tuple[str, int, str | None, str | Non
     constant_ext = pool.FindExtensionByName("protocyte.constant")
 
     options = message_options_cls()
-    for name, kind, literal, expr in constants:
+    for name, value_field, value in constants:
         item = options.Extensions[constant_ext].add()
         item.name = name
-        item.kind = kind
-        if literal is not None:
-            item.literal = literal
-        if expr is not None:
-            item.expr = expr
+        setattr(item, value_field, value)
     return options.SerializeToString()
 
 
-def package_constant_options_bytes(constants: list[tuple[str, int, str | None, str | None]]) -> bytes:
+def package_constant_options_bytes(constants: list[tuple[str, str, object]]) -> bytes:
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
     pool.Add(options_file())
@@ -769,14 +768,10 @@ def package_constant_options_bytes(constants: list[tuple[str, int, str | None, s
     constant_ext = pool.FindExtensionByName("protocyte.package_constant")
 
     options = file_options_cls()
-    for name, kind, literal, expr in constants:
+    for name, value_field, value in constants:
         item = options.Extensions[constant_ext].add()
         item.name = name
-        item.kind = kind
-        if literal is not None:
-            item.literal = literal
-        if expr is not None:
-            item.expr = expr
+        setattr(item, value_field, value)
     return options.SerializeToString()
 
 

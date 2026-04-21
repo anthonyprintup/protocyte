@@ -3,6 +3,11 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 
+function(_protocyte_shell_single_quote out_var value)
+    string(REPLACE "'" "'\"'\"'" escaped "${value}")
+    set(${out_var} "'${escaped}'" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_get_internal out_var name)
     get_property(value GLOBAL PROPERTY "PROTOCYTE_INTERNAL_${name}")
     if(NOT DEFINED value OR value STREQUAL "")
@@ -110,9 +115,11 @@ function(_protocyte_write_plugin_wrapper)
         )
     else()
         set(wrapper "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte")
+        _protocyte_shell_single_quote(protocyte_python_source_root_shell "${protocyte_python_source_root}")
+        _protocyte_shell_single_quote(python3_executable_shell "${Python3_EXECUTABLE}")
         file(WRITE "${wrapper}"
             "#!/usr/bin/env sh\n"
-            "PYTHONPATH='${protocyte_python_source_root}':$PYTHONPATH exec '${Python3_EXECUTABLE}' -m protocyte.main\n"
+            "PYTHONPATH=${protocyte_python_source_root_shell}:$PYTHONPATH exec ${python3_executable_shell} -m protocyte.main\n"
         )
         file(
             CHMOD "${wrapper}"
@@ -287,7 +294,6 @@ function(protocyte_generate)
 
     if(PROTOCYTE_EMIT_RUNTIME)
         list(APPEND protocyte_generated_headers "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.hpp")
-        list(APPEND protocyte_generated_sources "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.cpp")
     endif()
 
     set(protocyte_outputs
