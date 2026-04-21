@@ -285,8 +285,7 @@ message Packet {
 }
 ```
 
-The old `kind: ...` plus `literal:` / `expr:` syntax is removed. Constants
-must now set exactly one typed value field. Supported fields are:
+Constants must set exactly one typed value field. Supported fields are:
 
 - `boolean`, `boolean_expr`
 - `i32`, `i32_expr`
