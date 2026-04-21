@@ -89,11 +89,19 @@ environment you want to use for code generation:
 python -m pip install dist\protocyte-<version>-py3-none-any.whl
 ```
 
+The wheel and sdist are plugin-only artifacts. They install
+`protoc-gen-protocyte`, but they do not provide the CMake package used by
+`find_package(protocyte CONFIG REQUIRED)`.
+
 ### Option C: Install The CMake Package
 
 If you want downstream CMake projects to consume protocyte through
 `find_package(protocyte CONFIG REQUIRED)`, install the CMake package into a
 prefix:
+
+For published releases, you can download
+`protocyte-X.Y.Z-cmake-prefix.tar.gz` from GitHub Releases, unpack it, and use
+the extracted directory as your `CMAKE_PREFIX_PATH`.
 
 ```powershell
 cmake -S . -B build/protocyte
