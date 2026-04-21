@@ -1124,6 +1124,17 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
             package_constants[constant.name] = constant
     states: dict[str, str] = {}
 
+    def find_message_constant(owner: MessageModel, scope: str, constant_name: str) -> tuple[MessageModel | None, ConstantModel | None]:
+        target_message = messages.get(scope)
+        if target_message is not None:
+            return target_message, constants_by_message.get(target_message.full_name, {}).get(constant_name)
+        relative_scope = f"{owner.package}.{scope}" if owner.package else scope
+        if relative_scope != scope:
+            target_message = messages.get(relative_scope)
+            if target_message is not None:
+                return target_message, constants_by_message.get(target_message.full_name, {}).get(constant_name)
+        return None, None
+
     def find_constant(owner: MessageModel, name: str) -> tuple[MessageModel | None, ConstantModel]:
         if "." in name:
             parts = name.split(".")
@@ -1134,11 +1145,9 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
             if target_constant is not None:
                 return None, target_constant
             message_path = ".".join(parts[:-1])
-            message_name = f"{owner.package}.{message_path}" if owner.package else message_path
-            target_message = messages.get(message_name)
+            target_message, target_constant = find_message_constant(owner, message_path, parts[-1])
             if target_message is None:
                 raise ProtocyteError(f"{owner.full_name}: unknown constant scope {message_path!r}")
-            target_constant = constants_by_message.get(target_message.full_name, {}).get(parts[-1])
             if target_constant is None:
                 raise ProtocyteError(f"{owner.full_name}: unknown constant {name!r}")
             return target_message, target_constant
@@ -1215,12 +1224,14 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
     def lookup_package_constant(package: str, name: str) -> _TypedValue:
         if "." in name:
             parts = name.split(".")
-            target_constant = constants_by_package.get(".".join(parts[:-1]), {}).get(parts[-1])
+            target_package = ".".join(parts[:-1])
+            target_constant = constants_by_package.get(target_package, {}).get(parts[-1])
         else:
+            target_package = package
             target_constant = constants_by_package.get(package, {}).get(name)
         if target_constant is None:
             raise ProtocyteError(f"{package or '<root>'}: unknown package constant {name!r}")
-        resolve_package_constant(package, target_constant)
+        resolve_package_constant(target_package, target_constant)
         return _TypedValue(target_constant.family, target_constant.value, cpp_expr=_constant_cpp_expr(package, target_constant))
 
     for package, package_constants in constants_by_package.items():

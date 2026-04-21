@@ -442,6 +442,63 @@ def test_generated_header_emits_cross_message_constant_arrays() -> None:
     assert "::protocyte::ByteArray<NESTED_CAP> nested_payload_;" in header
 
 
+def test_resolves_package_constants_across_packages() -> None:
+    model = build_model(_cross_package_package_constant_request())
+    file_constants = {constant.name: constant for constant in model.files["cross_package_package.proto"].constants}
+    message = model.messages["demo.UsesExternalPackage"]
+    message_constants = {constant.name: constant for constant in message.constants}
+    fields = {field.name: field for field in message.fields}
+
+    assert file_constants["FROM_EXTERNAL"].value == 15
+    assert message_constants["MIRROR"].value == 30
+    assert message_constants["NAME"].value == "pkg-label-ok"
+    assert fields["payload"].array_max == 8
+    assert fields["values"].array_max == 15
+    assert fields["values"].array_cpp_max == "FROM_EXTERNAL"
+
+
+def test_generated_header_emits_cross_package_package_constant_arrays() -> None:
+    response = generate_response(_cross_package_package_constant_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["cross_package_package.protocyte.hpp"]
+
+    assert "inline constexpr ::protocyte::u32 FROM_EXTERNAL {15u};" in header
+    assert "static constexpr ::protocyte::u32 MIRROR {30u};" in header
+    assert 'static constexpr ::std::string_view NAME {"pkg-label-ok", 12u};' in header
+    assert "::protocyte::ByteArray<7u + 1u> payload_;" in header
+    assert "::protocyte::Array<::protocyte::i32, FROM_EXTERNAL> values_;" in header
+
+
+def test_resolves_constants_across_packages_and_messages() -> None:
+    model = build_model(_cross_package_message_request())
+    message = model.messages["demo.UsesExternalMessage"]
+    message_constants = {constant.name: constant for constant in message.constants}
+    fields = {field.name: field for field in message.fields}
+
+    assert message_constants["MIRROR"].value == 32
+    assert message_constants["NAME"].value == "pkg-label-source-ok"
+    assert message_constants["NESTED"].value == 18
+    assert fields["payload"].array_max == 17
+    assert fields["values"].array_max == 18
+    assert fields["values"].array_cpp_max == "NESTED"
+
+
+def test_generated_header_emits_cross_package_message_constant_arrays() -> None:
+    response = generate_response(_cross_package_message_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["cross_package_message.protocyte.hpp"]
+
+    assert "static constexpr ::protocyte::u32 MIRROR {32u};" in header
+    assert 'static constexpr ::std::string_view NAME {"pkg-label-source-ok", 19u};' in header
+    assert "static constexpr ::protocyte::u32 NESTED {18u};" in header
+    assert "::protocyte::ByteArray<16u + 1u> payload_;" in header
+    assert "::protocyte::Array<::protocyte::i32, NESTED> values_;" in header
+
+
 def test_canonicalizes_floatish_array_bounds() -> None:
     model = build_model(_floatish_bound_request())
     field = model.messages["demo.Sample"].fields[0]
@@ -694,6 +751,24 @@ def _cross_message_request() -> plugin_pb2.CodeGeneratorRequest:
     request.file_to_generate.append("cross.proto")
     request.parameter = "runtime=emit"
     request.proto_file.extend([_options_file(), _cross_message_file()])
+    return request
+
+
+def _cross_package_package_constant_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("cross_package_package.proto")
+    request.parameter = "runtime=emit"
+    request.proto_file.extend(
+        [_options_file(), _external_constant_provider_file(), _cross_package_package_constant_file()]
+    )
+    return request
+
+
+def _cross_package_message_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("cross_package_message.proto")
+    request.parameter = "runtime=emit"
+    request.proto_file.extend([_options_file(), _external_constant_provider_file(), _cross_package_message_file()])
     return request
 
 
@@ -1476,6 +1551,124 @@ def _cross_message_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_MESSAGE
     field.type_name = ".demo.Sink.Nested"
+
+    return file
+
+
+def _external_constant_provider_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "external.proto"
+    file.package = "alpha.beta"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        _package_constant_options_bytes(
+            [
+                ("CAP", 4, "7", None),
+                ("DOUBLE_CAP", 4, None, "CAP * 2"),
+                ("LABEL", 8, None, '"pkg" + "-label"'),
+            ]
+        )
+    )
+
+    source = file.message_type.add()
+    source.name = "Source"
+    source.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("ROOT_CAP", 4, None, "DOUBLE_CAP + 2"),
+                ("ROOT_LABEL", 8, None, 'LABEL + "-source"'),
+            ]
+        )
+    )
+
+    nested = source.nested_type.add()
+    nested.name = "Inner"
+    nested.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("NESTED_CAP", 4, None, "ROOT_CAP + 1"),
+            ]
+        )
+    )
+
+    return file
+
+
+def _cross_package_package_constant_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "cross_package_package.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.extend(["protocyte/options.proto", "external.proto"])
+    file.options.ParseFromString(
+        _package_constant_options_bytes(
+            [
+                ("FROM_EXTERNAL", 4, None, "alpha.beta.DOUBLE_CAP + 1"),
+            ]
+        )
+    )
+
+    message = file.message_type.add()
+    message.name = "UsesExternalPackage"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("MIRROR", 4, None, "FROM_EXTERNAL * 2"),
+                ("NAME", 8, None, 'alpha.beta.LABEL + "-ok"'),
+            ]
+        )
+    )
+
+    field = message.field.add()
+    field.name = "payload"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="alpha.beta.CAP + 1"))
+
+    field = message.field.add()
+    field.name = "values"
+    field.number = 2
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+    field.options.ParseFromString(_array_option_bytes(expr="FROM_EXTERNAL"))
+
+    return file
+
+
+def _cross_package_message_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "cross_package_message.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.extend(["protocyte/options.proto", "external.proto"])
+
+    message = file.message_type.add()
+    message.name = "UsesExternalMessage"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("MIRROR", 4, None, "alpha.beta.Source.ROOT_CAP * 2"),
+                ("NAME", 8, None, 'alpha.beta.Source.ROOT_LABEL + "-ok"'),
+                ("NESTED", 4, None, "alpha.beta.Source.Inner.NESTED_CAP + 1"),
+            ]
+        )
+    )
+
+    field = message.field.add()
+    field.name = "payload"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="alpha.beta.Source.ROOT_CAP + 1"))
+
+    field = message.field.add()
+    field.name = "values"
+    field.number = 2
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+    field.options.ParseFromString(_array_option_bytes(expr="NESTED"))
 
     return file
 
