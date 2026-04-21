@@ -32,6 +32,11 @@ def main() -> int:
     compat_request.proto_file.append(compat_file())
     requests.append(compat_request)
 
+    cross_package_request = plugin_pb2.CodeGeneratorRequest()
+    cross_package_request.file_to_generate.append("cross_package.proto")
+    cross_package_request.proto_file.extend([options_file(), example_file(), cross_package_file()])
+    requests.append(cross_package_request)
+
     for request in requests:
         response = generate_response(request)
         if response.error:
@@ -460,6 +465,67 @@ def compat_file() -> descriptor_pb2.FileDescriptorProto:
     add_field(msg, "opt_int32", 25, F.TYPE_INT32, oneof_index=1, proto3_optional=True)
     add_field(msg, "opt_string", 26, F.TYPE_STRING, oneof_index=2, proto3_optional=True)
 
+    return file
+
+
+def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "cross_package.proto"
+    file.package = "test.crosspkg"
+    file.syntax = "proto3"
+    file.dependency.extend(["example.proto", "protocyte/options.proto"])
+    file.options.ParseFromString(
+        package_constant_options_bytes(
+            [
+                ("FOREIGN_BASE", 4, None, "test.ultimate.BASE_COUNT + 2"),
+                ("FOREIGN_LABEL", 8, None, 'test.ultimate.PREFIX + "-xpkg"'),
+            ]
+        )
+    )
+
+    msg = file.message_type.add()
+    msg.name = "CrossPackageConstants"
+    msg.options.ParseFromString(
+        constant_options_bytes(
+            [
+                ("REMOTE_COUNT", 4, None, "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP * 2"),
+                ("REMOTE_LABEL", 8, None, 'test.ultimate.UltimateComplexMessage.LABEL + "-external"'),
+                (
+                    "REMOTE_READY",
+                    1,
+                    None,
+                    "test.ultimate.CrossMessageConstants.READY && test.ultimate.UltimateComplexMessage.HAS_PREFIX",
+                ),
+                ("NESTED_COUNT", 4, None, "test.ultimate.CrossMessageConstants.Nested.EXTERNAL_CAP + 1"),
+            ]
+        )
+    )
+
+    remote_bytes = add_field(msg, "remote_bytes", 1, F.TYPE_BYTES)
+    remote_bytes.options.ParseFromString(
+        array_option_bytes(expr="test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + 1")
+    )
+    remote_values = add_field(msg, "remote_values", 2, F.TYPE_INT32, label=F.LABEL_REPEATED)
+    remote_values.options.ParseFromString(array_option_bytes(expr="NESTED_COUNT"))
+
+    nested = msg.nested_type.add()
+    nested.name = "Nested"
+    nested.options.ParseFromString(
+        constant_options_bytes(
+            [
+                ("MIRRORED_COUNT", 4, None, "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + FOREIGN_BASE"),
+            ]
+        )
+    )
+    nested_bytes = add_field(
+        nested,
+        "nested_bytes",
+        1,
+        F.TYPE_BYTES,
+    )
+    nested_bytes.options.ParseFromString(array_option_bytes(expr="MIRRORED_COUNT"))
+
+    add_field(msg, "nested", 3, F.TYPE_MESSAGE, type_name=".test.crosspkg.CrossPackageConstants.Nested")
     return file
 
 

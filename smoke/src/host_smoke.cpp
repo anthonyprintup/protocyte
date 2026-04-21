@@ -9,6 +9,7 @@
 
 #include "compat.protocyte.hpp"
 #include "compat_cases.hpp"
+#include "cross_package.protocyte.hpp"
 #include "example.protocyte.hpp"
 #include "protocyte/runtime/runtime.hpp"
 
@@ -28,6 +29,8 @@ namespace {
     using Deep = test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<>;
     using Cross = test::ultimate::CrossMessageConstants<>;
     using CrossNested = test::ultimate::CrossMessageConstants_Nested<>;
+    using CrossPackage = test::crosspkg::CrossPackageConstants<>;
+    using CrossPackageNested = test::crosspkg::CrossPackageConstants_Nested<>;
     using Color = test::ultimate::UltimateComplexMessage_Color;
     using InnerMode = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum;
     using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
@@ -65,6 +68,13 @@ namespace {
     static_assert(Cross::LABEL_COPY == std::string_view {"proto-cross", 11u});
     static_assert(Cross::READY);
     static_assert(CrossNested::EXTERNAL_CAP == 8u);
+    static_assert(test::crosspkg::FOREIGN_BASE == 7u);
+    static_assert(test::crosspkg::FOREIGN_LABEL == std::string_view {"proto-xpkg", 10u});
+    static_assert(CrossPackage::REMOTE_COUNT == 16u);
+    static_assert(CrossPackage::REMOTE_LABEL == std::string_view {"proto-demo-external", 19u});
+    static_assert(CrossPackage::REMOTE_READY);
+    static_assert(CrossPackage::NESTED_COUNT == 9u);
+    static_assert(CrossPackageNested::MIRRORED_COUNT == 15u);
 
     constexpr uint8_t kString[] = {'s', 'm', 'o', 'k', 'e'};
     constexpr uint8_t kBytes[] = {0x00u, 0x01u, 0x7fu, 0x80u, 0xffu};
@@ -88,6 +98,10 @@ namespace {
     constexpr uint8_t kFloatExprArray[] = {0x91u, 0x92u};
     constexpr uint8_t kExternalBytes[] = {0x11u, 0x22u, 0x33u, 0x44u, 0x55u, 0x66u};
     constexpr uint8_t kNestedBytes[] = {0x80u, 0x81u, 0x82u, 0x83u, 0x84u, 0x85u, 0x86u, 0x87u};
+    constexpr uint8_t kCrossPackageBytes[] = {0x91u, 0x92u, 0x93u, 0x94u, 0x95u, 0x96u, 0x97u, 0x98u, 0x99u};
+    constexpr uint8_t kCrossPackageNestedBytes[] = {
+        0xa0u, 0xa1u, 0xa2u, 0xa3u, 0xa4u, 0xa5u, 0xa6u, 0xa7u, 0xa8u, 0xa9u, 0xaau, 0xabu, 0xacu, 0xadu, 0xaeu,
+    };
     constexpr uint8_t kLargeByteArray[] = {0x01u, 0x02u, 0x03u, 0x04u, 0x05u};
     constexpr uint8_t kAlternateByteArray[] = {0x55u, 0x66u, 0x77u, 0x88u};
     constexpr uint8_t kRepeatedBytes0[] = {0x11u};
@@ -100,6 +114,7 @@ namespace {
     };
     constexpr int32_t kIntegerArray[] = {101, 102, 103, 104, 105, 106, 107, 108};
     constexpr int32_t kMirroredValues[] = {501, 502, 503, 504, 505, 506, 507, 508, 509, 510};
+    constexpr int32_t kCrossPackageValues[] = {601, 602, 603, 604, 605, 606, 607, 608, 609};
     constexpr uint32_t kFixedIntegerArray[] = {901u, 902u, 903u};
     constexpr uint8_t kShortSha256[31] = {};
 
@@ -107,8 +122,11 @@ namespace {
     static_assert(sizeof(kFloatExprArray) == Message::FLOATISH_BOUND);
     static_assert(sizeof(kExternalBytes) == test::ultimate::BYTE_ARRAY_CAP + 2u);
     static_assert(sizeof(kNestedBytes) == CrossNested::EXTERNAL_CAP);
+    static_assert(sizeof(kCrossPackageBytes) == Message::INTEGER_ARRAY_CAP + 1u);
+    static_assert(sizeof(kCrossPackageNestedBytes) == CrossPackageNested::MIRRORED_COUNT);
     static_assert(sizeof(kIntegerArray) / sizeof(kIntegerArray[0]) == Message::INTEGER_ARRAY_CAP);
     static_assert(sizeof(kMirroredValues) / sizeof(kMirroredValues[0]) == Cross::ROOT_MIRROR);
+    static_assert(sizeof(kCrossPackageValues) / sizeof(kCrossPackageValues[0]) == CrossPackage::NESTED_COUNT);
     static_assert(sizeof(kFixedIntegerArray) / sizeof(kFixedIntegerArray[0]) == Message::FIXED_INTEGER_ARRAY_CAP);
 
     void *smoke_allocate(void *, size_t size, size_t) noexcept { return malloc(size); }
@@ -1269,6 +1287,51 @@ namespace {
         check_cross_message(parsed);
     }
 
+    void populate_cross_package(CrossPackage &message) {
+        require_success(message.set_remote_bytes(view_of(kCrossPackageBytes)));
+        for (size_t i = 0; i < sizeof(kCrossPackageValues) / sizeof(kCrossPackageValues[0]); ++i) {
+            require_success(message.mutable_remote_values().push_back(kCrossPackageValues[i]));
+        }
+        auto nested = message.ensure_nested();
+        require_success(nested);
+        require_success(nested.value().get().set_nested_bytes(view_of(kCrossPackageNestedBytes)));
+    }
+
+    void check_cross_package(const CrossPackage &message) {
+        CHECK(view_equal(message.remote_bytes(), view_of(kCrossPackageBytes)));
+        CHECK(message.remote_bytes_size() == sizeof(kCrossPackageBytes));
+
+        const auto &remote_values = message.remote_values();
+        REQUIRE(remote_values.size() == CrossPackage::NESTED_COUNT);
+        for (size_t i = 0; i < sizeof(kCrossPackageValues) / sizeof(kCrossPackageValues[0]); ++i) {
+            CHECK(remote_values[i] == kCrossPackageValues[i]);
+        }
+
+        REQUIRE(message.has_nested());
+        CHECK(view_equal(message.nested()->nested_bytes(), view_of(kCrossPackageNestedBytes)));
+        CHECK(message.nested()->nested_bytes_size() == sizeof(kCrossPackageNestedBytes));
+    }
+
+    void round_trip_cross_package(Config::Context &ctx) {
+        CrossPackage message(ctx);
+        populate_cross_package(message);
+
+        auto encoded_size = message.encoded_size();
+        require_success(encoded_size);
+
+        uint8_t encoded[256] = {};
+        REQUIRE(encoded_size.value() <= sizeof(encoded));
+
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(message.serialize(writer));
+
+        CrossPackage parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_success(parsed.merge_from(reader));
+        REQUIRE(reader.eof());
+        check_cross_package(parsed);
+    }
+
 } // namespace
 
 TEST_CASE("UltimateComplexMessage round-trips", "[smoke][roundtrip]") {
@@ -1304,6 +1367,11 @@ TEST_CASE("Array bounds are enforced", "[smoke][array]") {
 TEST_CASE("Cross-message constants resolve into arrays", "[smoke][constants]") {
     auto ctx = make_context();
     round_trip_cross_message(ctx);
+}
+
+TEST_CASE("Cross-package constants resolve into arrays", "[smoke][constants]") {
+    auto ctx = make_context();
+    round_trip_cross_package(ctx);
 }
 
 TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]") {
