@@ -131,13 +131,13 @@ message UltimateComplexMessage {
   }
 
   message FixedRepeatedBytesHolder {
-    repeated bytes values = 1 [(protocyte.array) = { max: 3 }, (protocyte.fixed) = true];
+    repeated bytes values = 1 [(protocyte.array) = { max: 3, fixed: true }];
   }
 
   oneof crazy_bytes_oneof {
     bytes crazy_plain_bytes = 49;
     bytes crazy_bounded_bytes = 50 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
-    bytes crazy_fixed_bytes = 51 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }, (protocyte.fixed) = true];
+    bytes crazy_fixed_bytes = 51 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP", fixed: true }];
     RepeatedBytesHolder crazy_repeated_bytes = 52;
     BoundedRepeatedBytesHolder crazy_bounded_repeated_bytes = 53;
     FixedRepeatedBytesHolder crazy_fixed_repeated_bytes = 54;
@@ -203,14 +203,14 @@ message UltimateComplexMessage {
   // Fixed-size binary fields
   // -------------------------------------------------------------------------
   // SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
-  bytes sha256 = 41 [(protocyte.array) = { expr: "INTEGER_ARRAY_CAP * 4" }, (protocyte.fixed) = true];
+  bytes sha256 = 41 [(protocyte.array) = { expr: "INTEGER_ARRAY_CAP * 4", fixed: true }];
   repeated int32 integer_array = 42 [(protocyte.array) = { expr: "INTEGER_ARRAY_CAP" }];
   bytes byte_array = 43 [(protocyte.array) = { expr: "BYTE_ARRAY_CAP" }];
-  repeated uint32 fixed_integer_array = 44 [(protocyte.array) = { expr: "FIXED_INTEGER_ARRAY_CAP" }, (protocyte.fixed) = true];
+  repeated uint32 fixed_integer_array = 44 [(protocyte.array) = { expr: "FIXED_INTEGER_ARRAY_CAP", fixed: true }];
   bytes float_expr_array = 45 [(protocyte.array) = { expr: "FLOATISH_BOUND" }];
   repeated bytes repeated_byte_array = 46;
   repeated bytes bounded_repeated_byte_array = 47 [(protocyte.array) = { max: 3 }];
-  repeated bytes fixed_repeated_byte_array = 48 [(protocyte.array) = { max: 3 }, (protocyte.fixed) = true];
+  repeated bytes fixed_repeated_byte_array = 48 [(protocyte.array) = { max: 3, fixed: true }];
 }
 
 // -----------------------------------------------------------------------------

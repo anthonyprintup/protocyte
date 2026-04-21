@@ -31,6 +31,7 @@ message ArrayOptions {
     uint32 max = 1;
     string expr = 2;
   }
+  bool fixed = 3;
 }
 
 extend google.protobuf.MessageOptions {
@@ -43,5 +44,4 @@ extend google.protobuf.FileOptions {
 
 extend google.protobuf.FieldOptions {
   ArrayOptions array = 50000;
-  bool fixed = 50001;
 }

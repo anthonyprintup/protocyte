@@ -663,6 +663,11 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     array_options.name = "ArrayOptions"
     add_oneof_field(array_options, "bound", "max", 1, F.TYPE_UINT32)
     add_oneof_field(array_options, "bound", "expr", 2, F.TYPE_STRING)
+    field = array_options.field.add()
+    field.name = "fixed"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BOOL
 
     ext = file.extension.add()
     ext.name = "constant"
@@ -686,13 +691,6 @@ def options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.label = F.LABEL_OPTIONAL
     ext.type = F.TYPE_MESSAGE
     ext.type_name = ".protocyte.ArrayOptions"
-    ext.extendee = ".google.protobuf.FieldOptions"
-
-    ext = file.extension.add()
-    ext.name = "fixed"
-    ext.number = 50001
-    ext.label = F.LABEL_OPTIONAL
-    ext.type = F.TYPE_BOOL
     ext.extendee = ".google.protobuf.FieldOptions"
 
     return file
@@ -730,7 +728,6 @@ def array_option_bytes(*, max_value: int | None = None, expr: str | None = None,
     field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
     field_options_cls = message_factory.GetMessageClass(field_options_desc)
     array_ext = pool.FindExtensionByName("protocyte.array")
-    fixed_ext = pool.FindExtensionByName("protocyte.fixed")
 
     options = field_options_cls()
     array_options = options.Extensions[array_ext]
@@ -739,7 +736,7 @@ def array_option_bytes(*, max_value: int | None = None, expr: str | None = None,
     if expr is not None:
         array_options.expr = expr
     if fixed:
-        options.Extensions[fixed_ext] = True
+        array_options.fixed = True
     return options.SerializeToString()
 
 

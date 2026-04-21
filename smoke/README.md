@@ -198,7 +198,7 @@ import "protocyte/options.proto";
 
 message SensorSample {
   demo.common.SampleHeader header = 1;
-  bytes digest = 2 [(protocyte.array) = { max: 32 }, (protocyte.fixed) = true];
+  bytes digest = 2 [(protocyte.array) = { max: 32, fixed: true }];
   repeated uint32 values = 3 [(protocyte.array) = { max: 16 }];
 }
 ```

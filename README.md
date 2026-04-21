@@ -246,14 +246,14 @@ Available extensions:
 
 - `option (protocyte.package_constant) = { ... };` on files.
 - `option (protocyte.constant) = { ... };` on messages.
-- `(protocyte.array) = { max: ... }` or `(protocyte.array) = { expr: ... }` on fields.
-- `(protocyte.fixed) = true` on fields that also use `protocyte.array`.
+- `(protocyte.array) = { max: ... }`, `(protocyte.array) = { expr: ... }`, or
+  `(protocyte.array) = { ..., fixed: true }` on fields.
 
 Custom option extensions must use the parenthesized protobuf extension syntax.
 This is valid:
 
 ```proto
-bytes sha256 = 1 [(protocyte.array) = { max: 32 }, (protocyte.fixed) = true];
+bytes sha256 = 1 [(protocyte.array) = { max: 32, fixed: true }];
 ```
 
 This is not valid protobuf extension syntax:
@@ -324,7 +324,7 @@ Supported expression features:
 - On `bytes`, it generates inline bounded byte storage with a mutable size.
 - On repeated scalar fields, it generates bounded inline array storage.
 
-`protocyte.fixed` tightens that storage:
+`protocyte.array.fixed` tightens that storage:
 
 - On `bytes`, it generates fixed-size storage with presence semantics.
 - On repeated arrays, parse/serialize/size validation allows either zero
@@ -335,7 +335,7 @@ Examples:
 
 ```proto
 message Digest {
-  bytes sha256 = 1 [(protocyte.array) = { max: 32 }, (protocyte.fixed) = true];
+  bytes sha256 = 1 [(protocyte.array) = { max: 32, fixed: true }];
 }
 ```
 
@@ -345,7 +345,7 @@ option (protocyte.package_constant) = { name: "CAP", u32: 16 };
 message Samples {
   option (protocyte.constant) = { name: "DOUBLE_CAP", u32_expr: "CAP * 2" };
   repeated int32 values = 1 [(protocyte.array) = { expr: "CAP" }];
-  repeated uint32 lanes = 2 [(protocyte.array) = { expr: "4" }, (protocyte.fixed) = true];
+  repeated uint32 lanes = 2 [(protocyte.array) = { expr: "4", fixed: true }];
 }
 ```
 

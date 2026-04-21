@@ -367,7 +367,10 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
         ("exactly one typed constant value must be set", lambda: _missing_constant_value_request()),
         ("expression must evaluate to bool", lambda: _boolean_expr_type_error_request()),
         ("value 4294967296 is out of range for uint32", lambda: _typed_expr_overflow_request()),
-        ("protocyte.fixed requires protocyte.array", lambda: _fixed_without_array_request()),
+        (
+            "protocyte.array.fixed requires protocyte.array.max or protocyte.array.expr",
+            lambda: _fixed_without_array_request(),
+        ),
         ("protocyte.array is not supported on map fields", lambda: _array_on_map_request()),
         ("protocyte.array.max must be greater than zero", lambda: _zero_max_request()),
         ("protocyte.array.expr must not be empty", lambda: _empty_expr_request()),
@@ -988,6 +991,11 @@ def _options_file() -> descriptor_pb2.FileDescriptorProto:
     array_options.name = "ArrayOptions"
     _add_oneof_field(array_options, "bound", "max", 1, F.TYPE_UINT32)
     _add_oneof_field(array_options, "bound", "expr", 2, F.TYPE_STRING)
+    field = array_options.field.add()
+    field.name = "fixed"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BOOL
 
     ext = file.extension.add()
     ext.name = "constant"
@@ -1011,13 +1019,6 @@ def _options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.label = F.LABEL_OPTIONAL
     ext.type = F.TYPE_MESSAGE
     ext.type_name = ".protocyte.ArrayOptions"
-    ext.extendee = ".google.protobuf.FieldOptions"
-
-    ext = file.extension.add()
-    ext.name = "fixed"
-    ext.number = 50001
-    ext.label = F.LABEL_OPTIONAL
-    ext.type = F.TYPE_BOOL
     ext.extendee = ".google.protobuf.FieldOptions"
 
     return file
@@ -1836,7 +1837,6 @@ def _array_option_bytes(
     field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
     field_options_cls = message_factory.GetMessageClass(field_options_desc)
     array_ext = pool.FindExtensionByName("protocyte.array")
-    fixed_ext = pool.FindExtensionByName("protocyte.fixed")
 
     options = field_options_cls()
     array_options = options.Extensions[array_ext]
@@ -1845,5 +1845,5 @@ def _array_option_bytes(
     if expr is not None:
         array_options.expr = expr
     if fixed:
-        options.Extensions[fixed_ext] = True
+        array_options.fixed = True
     return options.SerializeToString()

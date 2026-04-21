@@ -6,5 +6,5 @@ import "protocyte/options.proto";
 
 message Header {
   uint32 version = 1;
-  bytes tag = 2 [(protocyte.array) = { max: 2 }, (protocyte.fixed) = true];
+  bytes tag = 2 [(protocyte.array) = { max: 2, fixed: true }];
 }

@@ -147,7 +147,6 @@ SCALAR_DEFAULTS = {
 
 PACKABLE_TYPES = set(SCALAR_CPP_TYPES) | {FieldDescriptorProto.TYPE_ENUM}
 ARRAY_OPTION_NAME = "protocyte.array"
-FIXED_OPTION_NAME = "protocyte.fixed"
 CONSTANT_OPTION_NAME = "protocyte.constant"
 PACKAGE_CONSTANT_OPTION_NAME = "protocyte.package_constant"
 CONSTANT_KIND_BOOL = "bool"
@@ -193,7 +192,6 @@ class _CustomOptions:
     file_options_cls: type[object] | None = None
     message_options_cls: type[object] | None = None
     array_extension: object | None = None
-    fixed_extension: object | None = None
     constant_extension: object | None = None
     package_constant_extension: object | None = None
 
@@ -201,11 +199,7 @@ class _CustomOptions:
         self,
         options: descriptor_pb2.FieldOptions,
     ) -> tuple[int | None, str | None, bool]:
-        if (
-            self.field_options_cls is None
-            or self.array_extension is None
-            or self.fixed_extension is None
-        ):
+        if self.field_options_cls is None or self.array_extension is None:
             return None, None, False
         parsed = self.field_options_cls()
         parsed.ParseFromString(options.SerializeToString())
@@ -219,8 +213,8 @@ class _CustomOptions:
                     max_value = int(array_options.max)
                 if array_options.HasField("expr"):
                     max_expr = str(array_options.expr)
-            if parsed.HasExtension(self.fixed_extension):
-                fixed = bool(parsed.Extensions[self.fixed_extension])
+                if hasattr(array_options, "fixed"):
+                    fixed = bool(array_options.fixed)
         except (AttributeError, KeyError, TypeError, ValueError):
             return None, None, False
         return max_value, max_expr, fixed
@@ -746,7 +740,6 @@ def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -
         field_options_cls=field_options_cls,
         message_options_cls=message_options_cls,
         array_extension=_find_extension(pool, ARRAY_OPTION_NAME),
-        fixed_extension=_find_extension(pool, FIXED_OPTION_NAME),
         constant_extension=_find_extension(pool, CONSTANT_OPTION_NAME),
         package_constant_extension=_find_extension(pool, PACKAGE_CONSTANT_OPTION_NAME),
     )
@@ -1059,7 +1052,9 @@ def _build_field(
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: unsupported field type {proto.type}")
 
     if array_fixed and array_max is None and array_expr is None:
-        raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.fixed requires protocyte.array")
+        raise ProtocyteError(
+            f"{owner.full_name}.{proto.name}: protocyte.array.fixed requires protocyte.array.max or protocyte.array.expr"
+        )
     if array_max is not None and array_expr is not None:
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array requires exactly one of max or expr")
     if array_max is not None or array_expr is not None:
