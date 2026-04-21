@@ -11,6 +11,26 @@ def _quote_path(path):
     return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _run_lldb_commands(debugger, commands, *, context, ignored_errors=None):
+    interpreter = debugger.GetCommandInterpreter()
+    result = lldb.SBCommandReturnObject()
+    ignored_errors = ignored_errors or {}
+    for command in commands:
+        result.Clear()
+        interpreter.HandleCommand(command, result)
+        if result.Succeeded():
+            continue
+
+        error = (result.GetError() or "").strip() or "unknown LLDB error"
+        lowered_error = error.lower()
+        ignored_fragments = ignored_errors.get(command, ())
+        if any(fragment in lowered_error for fragment in ignored_fragments):
+            continue
+
+        return f"{context} failed while running {command!r}: {error}"
+    return None
+
+
 def write_smoke_lldbinit():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     formatter_path = os.path.join(repo_root, "debugger", "protocyte_lldb.py")
@@ -624,20 +644,13 @@ def oneof_summary(value, _internal_dict):
 
 def register_oneof_formatters(debugger, regex):
     category = "protocyte-oneof"
-    interpreter = debugger.GetCommandInterpreter()
-    result = lldb.SBCommandReturnObject()
     commands = [
         f"type category define {category}",
         f"type summary add -w {category} -p -x -F protocyte_lldb.oneof_summary '{regex}'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.GeneratedMessageOneofSyntheticProvider '{regex}'",
         f"type category enable {category}",
     ]
-    for command in commands:
-        result.Clear()
-        interpreter.HandleCommand(command, result)
-        if not result.Succeeded():
-            return result.GetError()
-    return None
+    return _run_lldb_commands(debugger, commands, context="Protocyte oneof formatter registration")
 
 
 def protocyte_oneof(debugger, command, _exe_ctx, result, _internal_dict):
@@ -654,8 +667,9 @@ def protocyte_oneof(debugger, command, _exe_ctx, result, _internal_dict):
 
 def __lldb_init_module(debugger, _internal_dict):
     category = "protocyte"
+    delete_command = f"type category delete {category}"
     commands = [
-        f"type category delete {category}",
+        delete_command,
         f"type category define {category}",
         f"type summary add -w {category} -p -F protocyte_lldb.status_summary protocyte::Status",
         f"type summary add -w {category} -p -F protocyte_lldb.error_summary protocyte::Error",
@@ -685,8 +699,17 @@ def __lldb_init_module(debugger, _internal_dict):
         f"type category enable {category}",
         "command script add -f protocyte_lldb.protocyte_oneof protocyte-oneof",
     ]
-    interpreter = debugger.GetCommandInterpreter()
-    result = lldb.SBCommandReturnObject()
-    for command in commands:
-        result.Clear()
-        interpreter.HandleCommand(command, result)
+    error = _run_lldb_commands(
+        debugger,
+        commands,
+        context="Protocyte formatter registration",
+        ignored_errors={
+            delete_command: (
+                "does not exist",
+                "not found",
+                "invalid type category",
+            ),
+        },
+    )
+    if error:
+        raise RuntimeError(error)
