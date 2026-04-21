@@ -5,6 +5,7 @@ import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
+from protocyte.cpp import CppWriter
 from protocyte.model import CONSTANT_KIND_UINT32, ProtocyteError, _build_constants, _build_field, _coerce_literal, build_model
 from protocyte.plugin import generate_response
 from protocyte.runtime import runtime_files
@@ -18,6 +19,18 @@ def test_runtime_files_load_packaged_sources() -> None:
 
     assert set(files) == {"protocyte/runtime/runtime.hpp"}
     assert files["protocyte/runtime/runtime.hpp"].startswith("#pragma once\n")
+
+
+def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
+    writer = CppWriter()
+    writer.line("root")
+    with writer.indent():
+        writer.line("child")
+        with writer.indent(2):
+            writer.line("grandchild")
+    writer.line("tail")
+
+    assert writer.render() == "root\n  child\n      grandchild\ntail\n"
 
 
 def test_generates_proto3_files_and_runtime() -> None:
