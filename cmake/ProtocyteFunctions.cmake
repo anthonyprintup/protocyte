@@ -34,6 +34,8 @@ function(_protocyte_set_protobuf_import_dir candidate_dir)
         return()
     endif()
 
+    cmake_path(ABSOLUTE_PATH candidate_dir NORMALIZE OUTPUT_VARIABLE candidate_dir)
+
     if(NOT IS_DIRECTORY "${candidate_dir}")
         return()
     endif()

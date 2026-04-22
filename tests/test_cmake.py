@@ -27,6 +27,37 @@ def test_posix_wrapper_shell_quotes_single_quotes(tmp_path: Path) -> None:
     assert quoted_output.read_text(encoding="utf-8") == "'alpha'\"'\"'beta'"
 
 
+def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "resolve_protoc_import_dir.cmake"
+    resolved_output = tmp_path / "resolved.txt"
+    protoc = tmp_path / "toolchain" / "bin" / "protoc"
+    descriptor = tmp_path / "toolchain" / "include" / "google" / "protobuf" / "descriptor.proto"
+
+    protoc.parent.mkdir(parents=True, exist_ok=True)
+    protoc.write_text("", encoding="utf-8")
+    descriptor.parent.mkdir(parents=True, exist_ok=True)
+    descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "_protocyte_resolve_protobuf_import_dir()",
+                f'file(WRITE "{resolved_output.as_posix()}" "${{PROTOCYTE_PROTOBUF_IMPORT_DIR}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
+
+    assert resolved_output.read_text(encoding="utf-8") == (tmp_path / "toolchain" / "include").as_posix()
+
+
 def test_generator_parameter_encoding_uses_hex_transport(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cmake_script = tmp_path / "encode_test.cmake"

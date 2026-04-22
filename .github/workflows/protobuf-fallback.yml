@@ -1,0 +1,48 @@
+name: Protobuf Fallback
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  find-package-fallback-linux:
+    name: Find Package Fallback Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Configure protocyte install tree
+        run: cmake -S . -B build/protocyte-install
+
+      - name: Install protocyte package
+        run: cmake --install build/protocyte-install --prefix build/protocyte-prefix
+
+      - name: Configure find_package fallback integration test
+        run: >
+          cmake -S tests/find_package -B tests/find_package/build
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
+          -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
+          -DPROTOCYTE_FETCH_PROTOBUF=ON
+
+      - name: Build find_package fallback integration test
+        run: cmake --build tests/find_package/build
+
+      - name: Run find_package fallback integration test
+        run: ctest --test-dir tests/find_package/build --output-on-failure

@@ -39,6 +39,12 @@ option(
     "Fetch protobuf when protobuf CMake targets are unavailable."
     ON
 )
+set(
+    PROTOCYTE_PROTOBUF_VERSION
+    "34.1"
+    CACHE STRING
+    "protobuf release version used by CI prebuilt protoc installs."
+)
 # protobuf release v34.1
 set(
     PROTOCYTE_PROTOBUF_GIT_TAG
