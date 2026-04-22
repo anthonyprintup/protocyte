@@ -371,6 +371,7 @@ function(protocyte_add_proto_library)
     set(options DISCOVER EMIT_RUNTIME HOSTED_ALLOCATOR)
     set(oneValueArgs
         TARGET
+        ALIAS
         TYPE
         PROTO_ROOT
         OUT_DIR
@@ -388,11 +389,20 @@ function(protocyte_add_proto_library)
     if(NOT PROTOCYTE_TARGET)
         message(FATAL_ERROR "protocyte_add_proto_library requires TARGET")
     endif()
+    if(PROTOCYTE_TARGET MATCHES "::")
+        message(
+            FATAL_ERROR
+            "protocyte_add_proto_library TARGET must not contain '::'; use ALIAS to expose a namespaced target"
+        )
+    endif()
     if(NOT PROTOCYTE_PROTO_ROOT)
         message(FATAL_ERROR "protocyte_add_proto_library requires PROTO_ROOT")
     endif()
     if(PROTOCYTE_EMIT_RUNTIME AND PROTOCYTE_RUNTIME_TARGET)
         message(FATAL_ERROR "protocyte_add_proto_library accepts either EMIT_RUNTIME or RUNTIME_TARGET, not both")
+    endif()
+    if(PROTOCYTE_ALIAS AND NOT PROTOCYTE_ALIAS MATCHES "::")
+        message(FATAL_ERROR "protocyte_add_proto_library ALIAS must contain '::'")
     endif()
     if(PROTOCYTE_RUNTIME_PREFIX AND NOT PROTOCYTE_EMIT_RUNTIME AND NOT PROTOCYTE_RUNTIME_TARGET)
         if(NOT PROTOCYTE_RUNTIME_PREFIX STREQUAL "protocyte/runtime")
@@ -495,6 +505,13 @@ function(protocyte_add_proto_library)
         endif()
 
         target_link_libraries("${PROTOCYTE_TARGET}" PUBLIC "${protocyte_runtime_target}")
+    endif()
+
+    if(PROTOCYTE_ALIAS)
+        if(TARGET "${PROTOCYTE_ALIAS}")
+            message(FATAL_ERROR "protocyte_add_proto_library alias target '${PROTOCYTE_ALIAS}' already exists")
+        endif()
+        add_library("${PROTOCYTE_ALIAS}" ALIAS "${PROTOCYTE_TARGET}")
     endif()
 
     if(PROTOCYTE_GENERATED_HEADERS_VAR)
