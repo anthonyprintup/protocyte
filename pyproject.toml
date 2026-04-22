@@ -27,6 +27,7 @@ version = {attr = "protocyte.__version__"}
 
 [tool.setuptools.package-data]
 protocyte = ["proto/**/*.proto"]
+"protocyte.runtime" = ["*.hpp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

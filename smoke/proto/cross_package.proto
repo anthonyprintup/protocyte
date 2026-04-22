@@ -7,35 +7,29 @@ import "protocyte/options.proto";
 
 option (protocyte.package_constant) = {
   name: "FOREIGN_BASE"
-  kind: UINT32
-  expr: "test.ultimate.BASE_COUNT + 2"
+  u32_expr: "test.ultimate.BASE_COUNT + 2"
 };
 option (protocyte.package_constant) = {
   name: "FOREIGN_LABEL"
-  kind: STRING
-  expr: "test.ultimate.PREFIX + \"-xpkg\""
+  str_expr: "test.ultimate.PREFIX + \"-xpkg\""
 };
 
 message CrossPackageConstants {
   option (protocyte.constant) = {
     name: "REMOTE_COUNT"
-    kind: UINT32
-    expr: "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP * 2"
+    u32_expr: "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP * 2"
   };
   option (protocyte.constant) = {
     name: "REMOTE_LABEL"
-    kind: STRING
-    expr: "test.ultimate.UltimateComplexMessage.LABEL + \"-external\""
+    str_expr: "test.ultimate.UltimateComplexMessage.LABEL + \"-external\""
   };
   option (protocyte.constant) = {
     name: "REMOTE_READY"
-    kind: BOOL
-    expr: "test.ultimate.CrossMessageConstants.READY && test.ultimate.UltimateComplexMessage.HAS_PREFIX"
+    boolean_expr: "test.ultimate.CrossMessageConstants.READY && test.ultimate.UltimateComplexMessage.HAS_PREFIX"
   };
   option (protocyte.constant) = {
     name: "NESTED_COUNT"
-    kind: UINT32
-    expr: "test.ultimate.CrossMessageConstants.Nested.EXTERNAL_CAP + 1"
+    u32_expr: "test.ultimate.CrossMessageConstants.Nested.EXTERNAL_CAP + 1"
   };
 
   bytes remote_bytes = 1 [(protocyte.array) = { expr: "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + 1" }];
@@ -44,8 +38,7 @@ message CrossPackageConstants {
   message Nested {
     option (protocyte.constant) = {
       name: "MIRRORED_COUNT"
-      kind: UINT32
-      expr: "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + FOREIGN_BASE"
+      u32_expr: "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + FOREIGN_BASE"
     };
 
     bytes nested_bytes = 1 [(protocyte.array) = { expr: "MIRRORED_COUNT" }];

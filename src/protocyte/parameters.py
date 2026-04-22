@@ -16,7 +16,6 @@ class GeneratorOptions:
 def parse_parameter(parameter: str) -> GeneratorOptions:
     """Parse protoc's comma-separated plugin parameter string."""
     values: dict[str, str] = {}
-    flags: set[str] = set()
 
     if parameter:
         for raw_part in parameter.split(","):
@@ -29,11 +28,13 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
                 value = value.strip()
                 if not key:
                     raise ProtocyteError(f"invalid empty parameter name in {parameter!r}")
+                if key in values:
+                    raise ProtocyteError(f"duplicate protocyte parameter: {key}")
                 values[key] = value
             else:
-                flags.add(part.replace("-", "_"))
+                raise ProtocyteError(f"invalid protocyte parameter {part!r}; expected key=value")
 
-    unknown = (set(values) | flags) - {
+    unknown = set(values) - {
         "runtime",
         "runtime_prefix",
         "include_prefix",
@@ -57,6 +58,9 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         emit_runtime = False
     else:
         raise ProtocyteError("runtime must be one of: emit, omit, emit:<prefix>")
+
+    if "namespace" in values and "namespace_prefix" in values:
+        raise ProtocyteError("namespace and namespace_prefix are aliases; specify only one")
 
     namespace_prefix = values.get("namespace_prefix", values.get("namespace", "")).strip(":")
     include_prefix = values.get("include_prefix", "").strip("/")

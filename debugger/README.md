@@ -11,13 +11,13 @@ This directory contains LLDB visualizers for the generated Protocyte runtime:
 
 ## Plain LLDB
 
-From the repository root, load the project init file:
+This repository includes a project-local [`.lldbinit`](../.lldbinit) at the repo root. From the repository root, load that file:
 
 ```text
 (lldb) command source .lldbinit
 ```
 
-Or import the formatter module directly:
+That init file imports [debugger/protocyte_lldb.py](protocyte_lldb.py). If you prefer, import the formatter module directly:
 
 ```text
 (lldb) command script import debugger/protocyte_lldb.py
@@ -44,7 +44,7 @@ After that, generated messages in the matching namespace get a summary such as `
 
 ## CLion
 
-CLion can use project-local `.lldbinit` files, but execution is disabled by default for security. Enable it once in your user-level LLDB init file, then CLion will load this repository's `.lldbinit` when debugging from the project root.
+CLion can use project-local `.lldbinit` files, but execution is disabled by default for security. Enable it once in your user-level LLDB init file, then CLion will load this repository's [`.lldbinit`](../.lldbinit) when debugging from the project root.
 
 Add this to your user-level `.lldbinit`:
 

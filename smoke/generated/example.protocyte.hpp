@@ -144,12 +144,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::description: {
                         if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
@@ -161,12 +160,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::values: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::f32 value {};
                                 auto decoded = ::protocyte::read_float(packed);
@@ -203,7 +201,8 @@ namespace test::ultimate {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -408,12 +407,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::name: {
                         if (const auto st =
@@ -436,26 +434,20 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_inner();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -481,20 +473,9 @@ namespace test::ultimate {
                 }
             }
             if (inner_.has_value()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::inner),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::inner), inner_.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = inner_.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = inner_.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -520,14 +501,12 @@ namespace test::ultimate {
                 }
             }
             if (inner_.has_value()) {
-                auto nested_size = inner_.value().encoded_size();
+                auto nested_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::inner), inner_.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::inner)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -607,12 +586,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::values: {
                         typename Config::Bytes value {ctx_};
@@ -627,7 +605,8 @@ namespace test::ultimate {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -733,12 +712,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::values: {
                         if (wire_type != ::protocyte::WireType::LEN) {
@@ -755,7 +733,8 @@ namespace test::ultimate {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -861,12 +840,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::values: {
                         if (wire_type != ::protocyte::WireType::LEN) {
@@ -883,14 +861,15 @@ namespace test::ultimate {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
                     }
                 }
             }
-            if (values_.size() != 3u) {
+            if (values_.size() != 0u && values_.size() != 3u) {
                 return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                   static_cast<::protocyte::u32>(FieldNumber::values));
             }
@@ -898,7 +877,7 @@ namespace test::ultimate {
         }
 
         template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
-            if (values_.size() != 3u) {
+            if (values_.size() != 0u && values_.size() != 3u) {
                 return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                   static_cast<::protocyte::u32>(FieldNumber::values));
             }
@@ -913,7 +892,7 @@ namespace test::ultimate {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
-            if (values_.size() != 3u) {
+            if (values_.size() != 0u && values_.size() != 3u) {
                 return ::protocyte::Result<::protocyte::usize>::err(
                     ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::values))
@@ -1152,12 +1131,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::extreme: {
                         if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
@@ -1172,12 +1150,11 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto entry_len = ::protocyte::read_varint(reader);
-                        if (!entry_len) {
-                            return entry_len.status();
+                        auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                        if (!entry) {
+                            return entry.status();
                         }
-                        ::protocyte::LimitedReader<Reader> entry_reader {
-                            reader, static_cast<::protocyte::usize>(entry_len.value())};
+                        auto &entry_reader = entry.value().reader();
                         enum struct EntryFieldNumber : ::protocyte::u32 {
                             key = 1u,
                             value = 2u,
@@ -1185,12 +1162,11 @@ namespace test::ultimate {
                         ::protocyte::i32 key {};
                         typename Config::String value {ctx_};
                         while (!entry_reader.eof()) {
-                            auto entry_tag = ::protocyte::read_varint(entry_reader);
+                            const auto entry_tag = ::protocyte::read_tag(entry_reader);
                             if (!entry_tag) {
                                 return entry_tag.status();
                             }
-                            const auto entry_field = static_cast<::protocyte::u32>(entry_tag.value() >> 3u);
-                            const auto entry_wire = static_cast<::protocyte::WireType>(entry_tag.value() & 0x7u);
+                            const auto [entry_field, entry_wire] = entry_tag.value();
                             switch (static_cast<EntryFieldNumber>(entry_field)) {
                                 case EntryFieldNumber::key: {
                                     if (entry_wire != ::protocyte::WireType::VARINT) {
@@ -1218,7 +1194,8 @@ namespace test::ultimate {
                                     break;
                                 }
                                 default: {
-                                    if (const auto st = ::protocyte::skip_field(entry_reader, entry_wire, entry_field);
+                                    if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire,
+                                                                                        entry_field);
                                         !st) {
                                         return st;
                                     }
@@ -1226,8 +1203,8 @@ namespace test::ultimate {
                                 }
                             }
                         }
-                        if (const auto finish = entry_reader.finish(); !finish) {
-                            return finish;
+                        if (const auto st = entry.value().finish(); !st) {
+                            return st;
                         }
                         if (const auto insert =
                                 weird_map_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
@@ -1259,7 +1236,8 @@ namespace test::ultimate {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -2462,6 +2440,9 @@ namespace test::ultimate {
             return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::ByteView {};
         }
         ::protocyte::Status set_oneof_bytes(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
                 return st;
@@ -2496,6 +2477,9 @@ namespace test::ultimate {
             return has_crazy_bounded_bytes() ? crazy_bytes_oneof.crazy_bounded_bytes.view() : ::protocyte::ByteView {};
         }
         ::protocyte::Status set_crazy_bounded_bytes(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
                 return st;
@@ -2514,6 +2498,9 @@ namespace test::ultimate {
             return has_crazy_fixed_bytes() ? crazy_bytes_oneof.crazy_fixed_bytes.view() : ::protocyte::ByteView {};
         }
         ::protocyte::Status set_crazy_fixed_bytes(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             ::protocyte::FixedByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
                 return st;
@@ -2742,8 +2729,18 @@ namespace test::ultimate {
 
         bool has_sha256() const noexcept { return sha256_.has_value(); }
         ::protocyte::ByteView sha256() const noexcept { return sha256_.view(); }
-        ::protocyte::MutableByteView mutable_sha256() noexcept { return sha256_.mutable_view(); }
-        ::protocyte::Status set_sha256(const ::protocyte::ByteView value) noexcept { return sha256_.assign(value); }
+        ::protocyte::MutableByteView mutable_sha256() noexcept {
+            if (ctx_->limits.max_string_bytes < INTEGER_ARRAY_CAP * 4u) {
+                return ::protocyte::MutableByteView {};
+            }
+            return sha256_.mutable_view();
+        }
+        ::protocyte::Status set_sha256(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
+            return sha256_.assign(value);
+        }
         void clear_sha256() noexcept { sha256_.clear(); }
 
         const ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> &integer_array() const noexcept {
@@ -2758,6 +2755,9 @@ namespace test::ultimate {
         ::protocyte::usize byte_array_size() const noexcept { return byte_array_.size(); }
         static constexpr ::protocyte::usize byte_array_max_size() noexcept { return BYTE_ARRAY_CAP; }
         ::protocyte::Status resize_byte_array(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = byte_array_.resize(size); !st) {
                 return st;
             }
@@ -2765,6 +2765,9 @@ namespace test::ultimate {
         }
         ::protocyte::MutableByteView mutable_byte_array() noexcept { return byte_array_.mutable_view(); }
         ::protocyte::Status set_byte_array(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = byte_array_.assign(value); !st) {
                 return st;
             }
@@ -2784,6 +2787,9 @@ namespace test::ultimate {
         ::protocyte::usize float_expr_array_size() const noexcept { return float_expr_array_.size(); }
         static constexpr ::protocyte::usize float_expr_array_max_size() noexcept { return FLOATISH_BOUND; }
         ::protocyte::Status resize_float_expr_array(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = float_expr_array_.resize(size); !st) {
                 return st;
             }
@@ -2791,6 +2797,9 @@ namespace test::ultimate {
         }
         ::protocyte::MutableByteView mutable_float_expr_array() noexcept { return float_expr_array_.mutable_view(); }
         ::protocyte::Status set_float_expr_array(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = float_expr_array_.assign(value); !st) {
                 return st;
             }
@@ -2836,12 +2845,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::f_double: {
                         auto decoded = ::protocyte::read_double_field(reader, wire_type, field_number);
@@ -2965,12 +2973,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::r_int32_unpacked: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
@@ -3000,12 +3007,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::r_int32_packed: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
@@ -3035,12 +3041,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::r_double: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::f64 value {};
                                 auto decoded = ::protocyte::read_double(packed);
@@ -3081,20 +3086,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_nested1();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
@@ -3126,20 +3124,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_oneof_msg();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
@@ -3152,17 +3143,19 @@ namespace test::ultimate {
                         clear_special_oneof();
                         new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {};
                         special_oneof_case_ = Special_oneofCase::oneof_bytes;
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() > BYTE_ARRAY_CAP) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st =
-                                special_oneof.oneof_bytes.resize(static_cast<::protocyte::usize>(len.value()));
-                            !st) {
+                        if (const auto st = special_oneof.oneof_bytes.resize(len.value()); !st) {
                             return st;
                         }
                         if (const auto st =
@@ -3177,12 +3170,11 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto entry_len = ::protocyte::read_varint(reader);
-                        if (!entry_len) {
-                            return entry_len.status();
+                        auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                        if (!entry) {
+                            return entry.status();
                         }
-                        ::protocyte::LimitedReader<Reader> entry_reader {
-                            reader, static_cast<::protocyte::usize>(entry_len.value())};
+                        auto &entry_reader = entry.value().reader();
                         enum struct EntryFieldNumber : ::protocyte::u32 {
                             key = 1u,
                             value = 2u,
@@ -3190,12 +3182,11 @@ namespace test::ultimate {
                         typename Config::String key {ctx_};
                         ::protocyte::i32 value {};
                         while (!entry_reader.eof()) {
-                            auto entry_tag = ::protocyte::read_varint(entry_reader);
+                            const auto entry_tag = ::protocyte::read_tag(entry_reader);
                             if (!entry_tag) {
                                 return entry_tag.status();
                             }
-                            const auto entry_field = static_cast<::protocyte::u32>(entry_tag.value() >> 3u);
-                            const auto entry_wire = static_cast<::protocyte::WireType>(entry_tag.value() & 0x7u);
+                            const auto [entry_field, entry_wire] = entry_tag.value();
                             switch (static_cast<EntryFieldNumber>(entry_field)) {
                                 case EntryFieldNumber::key: {
                                     if (entry_wire != ::protocyte::WireType::LEN) {
@@ -3223,7 +3214,8 @@ namespace test::ultimate {
                                     break;
                                 }
                                 default: {
-                                    if (const auto st = ::protocyte::skip_field(entry_reader, entry_wire, entry_field);
+                                    if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire,
+                                                                                        entry_field);
                                         !st) {
                                         return st;
                                     }
@@ -3231,8 +3223,8 @@ namespace test::ultimate {
                                 }
                             }
                         }
-                        if (const auto finish = entry_reader.finish(); !finish) {
-                            return finish;
+                        if (const auto st = entry.value().finish(); !st) {
+                            return st;
                         }
                         if (const auto insert =
                                 map_str_int32_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
@@ -3246,12 +3238,11 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto entry_len = ::protocyte::read_varint(reader);
-                        if (!entry_len) {
-                            return entry_len.status();
+                        auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                        if (!entry) {
+                            return entry.status();
                         }
-                        ::protocyte::LimitedReader<Reader> entry_reader {
-                            reader, static_cast<::protocyte::usize>(entry_len.value())};
+                        auto &entry_reader = entry.value().reader();
                         enum struct EntryFieldNumber : ::protocyte::u32 {
                             key = 1u,
                             value = 2u,
@@ -3259,12 +3250,11 @@ namespace test::ultimate {
                         ::protocyte::i32 key {};
                         typename Config::String value {ctx_};
                         while (!entry_reader.eof()) {
-                            auto entry_tag = ::protocyte::read_varint(entry_reader);
+                            const auto entry_tag = ::protocyte::read_tag(entry_reader);
                             if (!entry_tag) {
                                 return entry_tag.status();
                             }
-                            const auto entry_field = static_cast<::protocyte::u32>(entry_tag.value() >> 3u);
-                            const auto entry_wire = static_cast<::protocyte::WireType>(entry_tag.value() & 0x7u);
+                            const auto [entry_field, entry_wire] = entry_tag.value();
                             switch (static_cast<EntryFieldNumber>(entry_field)) {
                                 case EntryFieldNumber::key: {
                                     if (entry_wire != ::protocyte::WireType::VARINT) {
@@ -3292,7 +3282,8 @@ namespace test::ultimate {
                                     break;
                                 }
                                 default: {
-                                    if (const auto st = ::protocyte::skip_field(entry_reader, entry_wire, entry_field);
+                                    if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire,
+                                                                                        entry_field);
                                         !st) {
                                         return st;
                                     }
@@ -3300,8 +3291,8 @@ namespace test::ultimate {
                                 }
                             }
                         }
-                        if (const auto finish = entry_reader.finish(); !finish) {
-                            return finish;
+                        if (const auto st = entry.value().finish(); !st) {
+                            return st;
                         }
                         if (const auto insert =
                                 map_int32_str_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
@@ -3315,12 +3306,11 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto entry_len = ::protocyte::read_varint(reader);
-                        if (!entry_len) {
-                            return entry_len.status();
+                        auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                        if (!entry) {
+                            return entry.status();
                         }
-                        ::protocyte::LimitedReader<Reader> entry_reader {
-                            reader, static_cast<::protocyte::usize>(entry_len.value())};
+                        auto &entry_reader = entry.value().reader();
                         enum struct EntryFieldNumber : ::protocyte::u32 {
                             key = 1u,
                             value = 2u,
@@ -3328,12 +3318,11 @@ namespace test::ultimate {
                         bool key {};
                         typename Config::Bytes value {ctx_};
                         while (!entry_reader.eof()) {
-                            auto entry_tag = ::protocyte::read_varint(entry_reader);
+                            const auto entry_tag = ::protocyte::read_tag(entry_reader);
                             if (!entry_tag) {
                                 return entry_tag.status();
                             }
-                            const auto entry_field = static_cast<::protocyte::u32>(entry_tag.value() >> 3u);
-                            const auto entry_wire = static_cast<::protocyte::WireType>(entry_tag.value() & 0x7u);
+                            const auto [entry_field, entry_wire] = entry_tag.value();
                             switch (static_cast<EntryFieldNumber>(entry_field)) {
                                 case EntryFieldNumber::key: {
                                     if (entry_wire != ::protocyte::WireType::VARINT) {
@@ -3361,7 +3350,8 @@ namespace test::ultimate {
                                     break;
                                 }
                                 default: {
-                                    if (const auto st = ::protocyte::skip_field(entry_reader, entry_wire, entry_field);
+                                    if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire,
+                                                                                        entry_field);
                                         !st) {
                                         return st;
                                     }
@@ -3369,8 +3359,8 @@ namespace test::ultimate {
                                 }
                             }
                         }
-                        if (const auto finish = entry_reader.finish(); !finish) {
-                            return finish;
+                        if (const auto st = entry.value().finish(); !st) {
+                            return st;
                         }
                         if (const auto insert =
                                 map_bool_bytes_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
@@ -3384,12 +3374,11 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto entry_len = ::protocyte::read_varint(reader);
-                        if (!entry_len) {
-                            return entry_len.status();
+                        auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                        if (!entry) {
+                            return entry.status();
                         }
-                        ::protocyte::LimitedReader<Reader> entry_reader {
-                            reader, static_cast<::protocyte::usize>(entry_len.value())};
+                        auto &entry_reader = entry.value().reader();
                         enum struct EntryFieldNumber : ::protocyte::u32 {
                             key = 1u,
                             value = 2u,
@@ -3397,12 +3386,11 @@ namespace test::ultimate {
                         ::protocyte::u64 key {};
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> value {*ctx_};
                         while (!entry_reader.eof()) {
-                            auto entry_tag = ::protocyte::read_varint(entry_reader);
+                            const auto entry_tag = ::protocyte::read_tag(entry_reader);
                             if (!entry_tag) {
                                 return entry_tag.status();
                             }
-                            const auto entry_field = static_cast<::protocyte::u32>(entry_tag.value() >> 3u);
-                            const auto entry_wire = static_cast<::protocyte::WireType>(entry_tag.value() & 0x7u);
+                            const auto [entry_field, entry_wire] = entry_tag.value();
                             switch (static_cast<EntryFieldNumber>(entry_field)) {
                                 case EntryFieldNumber::key: {
                                     if (entry_wire != ::protocyte::WireType::VARINT) {
@@ -3423,23 +3411,17 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    ::protocyte::LimitedReader nested {entry_reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
-                                    ::protocyte::ReaderRef nested_reader {nested};
-                                    if (const auto st = value.merge_from(nested_reader); !st) {
-                                        return st;
-                                    }
-                                    if (const auto st = nested.finish(); !st) {
+                                    if (const auto st = ::protocyte::read_message<Config>(
+                                            *ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value),
+                                            value);
+                                        !st) {
                                         return st;
                                     }
                                     break;
                                 }
                                 default: {
-                                    if (const auto st = ::protocyte::skip_field(entry_reader, entry_wire, entry_field);
+                                    if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire,
+                                                                                        entry_field);
                                         !st) {
                                         return st;
                                     }
@@ -3447,8 +3429,8 @@ namespace test::ultimate {
                                 }
                             }
                         }
-                        if (const auto finish = entry_reader.finish(); !finish) {
-                            return finish;
+                        if (const auto st = entry.value().finish(); !st) {
+                            return st;
                         }
                         if (const auto insert =
                                 map_uint64_msg_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
@@ -3462,12 +3444,11 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto entry_len = ::protocyte::read_varint(reader);
-                        if (!entry_len) {
-                            return entry_len.status();
+                        auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                        if (!entry) {
+                            return entry.status();
                         }
-                        ::protocyte::LimitedReader<Reader> entry_reader {
-                            reader, static_cast<::protocyte::usize>(entry_len.value())};
+                        auto &entry_reader = entry.value().reader();
                         enum struct EntryFieldNumber : ::protocyte::u32 {
                             key = 1u,
                             value = 2u,
@@ -3475,12 +3456,11 @@ namespace test::ultimate {
                         typename Config::String key {ctx_};
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> value {*ctx_};
                         while (!entry_reader.eof()) {
-                            auto entry_tag = ::protocyte::read_varint(entry_reader);
+                            const auto entry_tag = ::protocyte::read_tag(entry_reader);
                             if (!entry_tag) {
                                 return entry_tag.status();
                             }
-                            const auto entry_field = static_cast<::protocyte::u32>(entry_tag.value() >> 3u);
-                            const auto entry_wire = static_cast<::protocyte::WireType>(entry_tag.value() & 0x7u);
+                            const auto [entry_field, entry_wire] = entry_tag.value();
                             switch (static_cast<EntryFieldNumber>(entry_field)) {
                                 case EntryFieldNumber::key: {
                                     if (entry_wire != ::protocyte::WireType::LEN) {
@@ -3500,23 +3480,17 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    auto len = ::protocyte::read_varint(entry_reader);
-                                    if (!len) {
-                                        return len.status();
-                                    }
-                                    ::protocyte::LimitedReader nested {entry_reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
-                                    ::protocyte::ReaderRef nested_reader {nested};
-                                    if (const auto st = value.merge_from(nested_reader); !st) {
-                                        return st;
-                                    }
-                                    if (const auto st = nested.finish(); !st) {
+                                    if (const auto st = ::protocyte::read_message<Config>(
+                                            *ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value),
+                                            value);
+                                        !st) {
                                         return st;
                                     }
                                     break;
                                 }
                                 default: {
-                                    if (const auto st = ::protocyte::skip_field(entry_reader, entry_wire, entry_field);
+                                    if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire,
+                                                                                        entry_field);
                                         !st) {
                                         return st;
                                     }
@@ -3524,8 +3498,8 @@ namespace test::ultimate {
                                 }
                             }
                         }
-                        if (const auto finish = entry_reader.finish(); !finish) {
-                            return finish;
+                        if (const auto st = entry.value().finish(); !st) {
+                            return st;
                         }
                         if (const auto insert =
                                 very_nested_map_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
@@ -3539,20 +3513,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_recursive_self();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
@@ -3562,17 +3529,9 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> value {*ctx_};
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = value.merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, value);
+                            !st) {
                             return st;
                         }
                         if (const auto st = lots_of_nested_.push_back(::protocyte::move(value)); !st) {
@@ -3582,12 +3541,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::colors: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_enum(packed);
@@ -3638,20 +3596,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_extreme_nesting();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
@@ -3661,9 +3612,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() != INTEGER_ARRAY_CAP * 4u) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument,
@@ -3677,12 +3632,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::integer_array: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
@@ -3715,15 +3669,19 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() > BYTE_ARRAY_CAP) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = byte_array_.resize(static_cast<::protocyte::usize>(len.value())); !st) {
+                        if (const auto st = byte_array_.resize(len.value()); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(byte_array_.data(), byte_array_.size()); !st) {
@@ -3733,12 +3691,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::fixed_integer_array: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::u32 value {};
                                 auto decoded = ::protocyte::read_uint32(packed);
@@ -3771,16 +3728,19 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() > FLOATISH_BOUND) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = float_expr_array_.resize(static_cast<::protocyte::usize>(len.value()));
-                            !st) {
+                        if (const auto st = float_expr_array_.resize(len.value()); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(float_expr_array_.data(), float_expr_array_.size()); !st) {
@@ -3847,17 +3807,19 @@ namespace test::ultimate {
                         clear_crazy_bytes_oneof();
                         new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {};
                         crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() > BYTE_ARRAY_CAP) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize(
-                                static_cast<::protocyte::usize>(len.value()));
-                            !st) {
+                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize(len.value()); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(crazy_bytes_oneof.crazy_bounded_bytes.data(),
@@ -3875,9 +3837,13 @@ namespace test::ultimate {
                         clear_crazy_bytes_oneof();
                         new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {};
                         crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() != BYTE_ARRAY_CAP) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument,
@@ -3894,20 +3860,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_crazy_repeated_bytes();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
@@ -3917,20 +3876,13 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_crazy_bounded_repeated_bytes();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
@@ -3940,37 +3892,31 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_crazy_fixed_repeated_bytes();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
                     }
                 }
             }
-            if (fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
                 return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                   static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
-            if (fixed_repeated_byte_array_.size() != 3u) {
+            if (fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u) {
                 return ::protocyte::Status::error(
                     ::protocyte::ErrorCode::invalid_argument, {},
                     static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
@@ -3979,11 +3925,11 @@ namespace test::ultimate {
         }
 
         template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
-            if (fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
                 return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                   static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
-            if (fixed_repeated_byte_array_.size() != 3u) {
+            if (fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u) {
                 return ::protocyte::Status::error(
                     ::protocyte::ErrorCode::invalid_argument, {},
                     static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
@@ -4161,20 +4107,9 @@ namespace test::ultimate {
                 }
             }
             if (nested1_.has_value()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::nested1),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::nested1), nested1_.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = nested1_.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = nested1_.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -4194,20 +4129,9 @@ namespace test::ultimate {
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_msg) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_msg), ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_msg), special_oneof.oneof_msg.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = special_oneof.oneof_msg.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = special_oneof.oneof_msg.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -4398,15 +4322,12 @@ namespace test::ultimate {
                         }
                     }
                     {
-                        auto nested_size = value.encoded_size();
+                        auto nested_size = ::protocyte::message_field_size(
+                            static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
                         if (!nested_size) {
                             return nested_size.status();
                         }
-                        if (const auto st_size = ::protocyte::add_size(
-                                &entry_payload,
-                                ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                            !st_size) {
+                        if (const auto st_size = ::protocyte::add_size(&entry_payload, nested_size.value()); !st_size) {
                             return st_size;
                         }
                     }
@@ -4428,22 +4349,9 @@ namespace test::ultimate {
                         }
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::value),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_message_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
                             !st) {
-                            return st;
-                        }
-                        auto msg_size = value.encoded_size();
-                        if (!msg_size) {
-                            return msg_size.status();
-                        }
-                        if (const auto st =
-                                ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = value.serialize(writer); !st) {
                             return st;
                         }
                     }
@@ -4469,15 +4377,12 @@ namespace test::ultimate {
                         }
                     }
                     {
-                        auto nested_size = value.encoded_size();
+                        auto nested_size = ::protocyte::message_field_size(
+                            static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
                         if (!nested_size) {
                             return nested_size.status();
                         }
-                        if (const auto st_size = ::protocyte::add_size(
-                                &entry_payload,
-                                ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                            !st_size) {
+                        if (const auto st_size = ::protocyte::add_size(&entry_payload, nested_size.value()); !st_size) {
                             return st_size;
                         }
                     }
@@ -4499,22 +4404,9 @@ namespace test::ultimate {
                         }
                     }
                     {
-                        if (const auto st =
-                                ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(EntryFieldNumber::value),
-                                                       ::protocyte::WireType::LEN);
+                        if (const auto st = ::protocyte::write_message_field(
+                                writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
                             !st) {
-                            return st;
-                        }
-                        auto msg_size = value.encoded_size();
-                        if (!msg_size) {
-                            return msg_size.status();
-                        }
-                        if (const auto st =
-                                ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                            !st) {
-                            return st;
-                        }
-                        if (const auto st = value.serialize(writer); !st) {
                             return st;
                         }
                     }
@@ -4524,38 +4416,16 @@ namespace test::ultimate {
                 return st_map_very_nested_map;
             }
             if (recursive_self_.has_value()) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::recursive_self), ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::recursive_self), recursive_self_.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = recursive_self_.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = recursive_self_.value().serialize(writer); !st) {
                     return st;
                 }
             }
             for (::protocyte::usize i {}; i < lots_of_nested_.size(); ++i) {
-                if (const auto st = ::protocyte::write_tag(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::lots_of_nested), ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::lots_of_nested), lots_of_nested_[i]);
                     !st) {
-                    return st;
-                }
-                auto msg_size = lots_of_nested_[i].encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = lots_of_nested_[i].serialize(writer); !st) {
                     return st;
                 }
             }
@@ -4602,21 +4472,9 @@ namespace test::ultimate {
                 }
             }
             if (extreme_nesting_.has_value()) {
-                if (const auto st =
-                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::extreme_nesting),
-                                               ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::extreme_nesting), extreme_nesting_.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = extreme_nesting_.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = extreme_nesting_.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -4747,59 +4605,26 @@ namespace test::ultimate {
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_repeated_bytes) {
-                if (const auto st =
-                        ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::crazy_repeated_bytes),
-                                               ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::crazy_repeated_bytes),
+                        crazy_bytes_oneof.crazy_repeated_bytes.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = crazy_bytes_oneof.crazy_repeated_bytes.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = crazy_bytes_oneof.crazy_repeated_bytes.value().serialize(writer); !st) {
                     return st;
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes) {
-                if (const auto st = ::protocyte::write_tag(
+                if (const auto st = ::protocyte::write_message_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::crazy_bounded_repeated_bytes),
-                        ::protocyte::WireType::LEN);
+                        crazy_bytes_oneof.crazy_bounded_repeated_bytes.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = crazy_bytes_oneof.crazy_bounded_repeated_bytes.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = crazy_bytes_oneof.crazy_bounded_repeated_bytes.value().serialize(writer); !st) {
                     return st;
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes) {
-                if (const auto st = ::protocyte::write_tag(
+                if (const auto st = ::protocyte::write_message_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_repeated_bytes),
-                        ::protocyte::WireType::LEN);
+                        crazy_bytes_oneof.crazy_fixed_repeated_bytes.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = crazy_bytes_oneof.crazy_fixed_repeated_bytes.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = crazy_bytes_oneof.crazy_fixed_repeated_bytes.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -4807,13 +4632,13 @@ namespace test::ultimate {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
-            if (fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
                 return ::protocyte::Result<::protocyte::usize>::err(
                     ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array))
                         .error());
             }
-            if (fixed_repeated_byte_array_.size() != 3u) {
+            if (fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u) {
                 return ::protocyte::Result<::protocyte::usize>::err(
                     ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array))
@@ -4986,14 +4811,12 @@ namespace test::ultimate {
                 }
             }
             if (nested1_.has_value()) {
-                auto nested_size = nested1_.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested1),
+                                                                   nested1_.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::nested1)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -5015,14 +4838,12 @@ namespace test::ultimate {
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_msg) {
-                auto nested_size = special_oneof.oneof_msg.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::oneof_msg), special_oneof.oneof_msg.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::oneof_msg)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -5131,99 +4952,89 @@ namespace test::ultimate {
                 !st_map_size_map_bool_bytes) {
                 return ::protocyte::Result<::protocyte::usize>::err(st_map_size_map_bool_bytes.error());
             }
-            if (const auto st_map_size_map_uint64_msg =
-                    map_uint64_msg_.for_each([&](const auto &key, const auto &value) noexcept {
-                        enum struct EntryFieldNumber : ::protocyte::u32 {
-                            key = 1u,
-                            value = 2u,
-                        };
-                        ::protocyte::usize entry_payload {};
-                        {
-                            if (const auto st_size = ::protocyte::add_size(
-                                    &entry_payload,
-                                    ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                        ::protocyte::varint_size(static_cast<::protocyte::u64>(key)));
-                                !st_size) {
-                                return st_size;
-                            }
+            if (const auto st_map_size_map_uint64_msg = map_uint64_msg_.for_each([&](const auto &key,
+                                                                                     const auto &value) noexcept {
+                    enum struct EntryFieldNumber : ::protocyte::u32 {
+                        key = 1u,
+                        value = 2u,
+                    };
+                    ::protocyte::usize entry_payload {};
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &entry_payload,
+                                ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(key)));
+                            !st_size) {
+                            return st_size;
                         }
-                        {
-                            auto nested_size = value.encoded_size();
-                            if (!nested_size) {
-                                return nested_size.status();
-                            }
-                            if (const auto st_size = ::protocyte::add_size(
-                                    &entry_payload,
-                                    ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
-                                        ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                                !st_size) {
-                                return st_size;
-                            }
+                    }
+                    {
+                        auto nested_size = ::protocyte::message_field_size(
+                            static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
+                        if (!nested_size) {
+                            return nested_size.status();
                         }
-                        return ::protocyte::add_size(
-                            &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::map_uint64_msg)) +
-                                        ::protocyte::varint_size(entry_payload) + entry_payload);
-                    });
+                        if (const auto st_size = ::protocyte::add_size(&entry_payload, nested_size.value()); !st_size) {
+                            return st_size;
+                        }
+                    }
+                    return ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::map_uint64_msg)) +
+                                    ::protocyte::varint_size(entry_payload) + entry_payload);
+                });
                 !st_map_size_map_uint64_msg) {
                 return ::protocyte::Result<::protocyte::usize>::err(st_map_size_map_uint64_msg.error());
             }
-            if (const auto st_map_size_very_nested_map =
-                    very_nested_map_.for_each([&](const auto &key, const auto &value) noexcept {
-                        enum struct EntryFieldNumber : ::protocyte::u32 {
-                            key = 1u,
-                            value = 2u,
-                        };
-                        ::protocyte::usize entry_payload {};
-                        {
-                            if (const auto st_size = ::protocyte::add_size(
-                                    &entry_payload,
-                                    ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                        ::protocyte::varint_size(key.size()) + key.size());
-                                !st_size) {
-                                return st_size;
-                            }
+            if (const auto st_map_size_very_nested_map = very_nested_map_.for_each([&](const auto &key,
+                                                                                       const auto &value) noexcept {
+                    enum struct EntryFieldNumber : ::protocyte::u32 {
+                        key = 1u,
+                        value = 2u,
+                    };
+                    ::protocyte::usize entry_payload {};
+                    {
+                        if (const auto st_size = ::protocyte::add_size(
+                                &entry_payload,
+                                ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                    ::protocyte::varint_size(key.size()) + key.size());
+                            !st_size) {
+                            return st_size;
                         }
-                        {
-                            auto nested_size = value.encoded_size();
-                            if (!nested_size) {
-                                return nested_size.status();
-                            }
-                            if (const auto st_size = ::protocyte::add_size(
-                                    &entry_payload,
-                                    ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
-                                        ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                                !st_size) {
-                                return st_size;
-                            }
+                    }
+                    {
+                        auto nested_size = ::protocyte::message_field_size(
+                            static_cast<::protocyte::u32>(EntryFieldNumber::value), value);
+                        if (!nested_size) {
+                            return nested_size.status();
                         }
-                        return ::protocyte::add_size(
-                            &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::very_nested_map)) +
-                                        ::protocyte::varint_size(entry_payload) + entry_payload);
-                    });
+                        if (const auto st_size = ::protocyte::add_size(&entry_payload, nested_size.value()); !st_size) {
+                            return st_size;
+                        }
+                    }
+                    return ::protocyte::add_size(
+                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::very_nested_map)) +
+                                    ::protocyte::varint_size(entry_payload) + entry_payload);
+                });
                 !st_map_size_very_nested_map) {
                 return ::protocyte::Result<::protocyte::usize>::err(st_map_size_very_nested_map.error());
             }
             if (recursive_self_.has_value()) {
-                auto nested_size = recursive_self_.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::recursive_self), recursive_self_.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::recursive_self)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
             for (::protocyte::usize i {}; i < lots_of_nested_.size(); ++i) {
-                auto nested_size = lots_of_nested_[i].encoded_size();
+                auto nested_size = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::lots_of_nested), lots_of_nested_[i]);
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::lots_of_nested)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -5263,14 +5074,12 @@ namespace test::ultimate {
                 }
             }
             if (extreme_nesting_.has_value()) {
-                auto nested_size = extreme_nesting_.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::extreme_nesting), extreme_nesting_.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::extreme_nesting)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -5394,41 +5203,35 @@ namespace test::ultimate {
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_repeated_bytes) {
-                auto nested_size = crazy_bytes_oneof.crazy_repeated_bytes.value().encoded_size();
+                auto nested_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::crazy_repeated_bytes),
+                                                    crazy_bytes_oneof.crazy_repeated_bytes.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total,
-                        ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_repeated_bytes)) +
-                            ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes) {
-                auto nested_size = crazy_bytes_oneof.crazy_bounded_repeated_bytes.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::crazy_bounded_repeated_bytes),
+                    crazy_bytes_oneof.crazy_bounded_repeated_bytes.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size(static_cast<::protocyte::u32>(
-                                                                      FieldNumber::crazy_bounded_repeated_bytes)) +
-                                                                      ::protocyte::varint_size(nested_size.value()) +
-                                                                      nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes) {
-                auto nested_size = crazy_bytes_oneof.crazy_fixed_repeated_bytes.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_repeated_bytes),
+                    crazy_bytes_oneof.crazy_fixed_repeated_bytes.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total,
-                        ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::crazy_fixed_repeated_bytes)) +
-                            ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -5557,13 +5360,12 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
-                if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                const auto [field_number, wire_type] = tag.value();
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
                     return st;
                 }
             }
@@ -5630,13 +5432,12 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
-                if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                const auto [field_number, wire_type] = tag.value();
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
                     return st;
                 }
             }
@@ -5705,13 +5506,12 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
-                if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                const auto [field_number, wire_type] = tag.value();
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
                     return st;
                 }
             }
@@ -5782,13 +5582,12 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
-                if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                const auto [field_number, wire_type] = tag.value();
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
                     return st;
                 }
             }
@@ -5896,12 +5695,11 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::tag: {
                         if (const auto st =
@@ -5916,26 +5714,20 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_ref();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -5954,20 +5746,9 @@ namespace test::ultimate {
                 }
             }
             if (ref_.has_value()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::ref),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::ref), ref_.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = ref_.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = ref_.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -5985,14 +5766,12 @@ namespace test::ultimate {
                 }
             }
             if (ref_.has_value()) {
-                auto nested_size = ref_.value().encoded_size();
+                auto nested_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::ref), ref_.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::ref)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -6048,6 +5827,9 @@ namespace test::ultimate {
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
         static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return EXTERNAL_CAP; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
             }
@@ -6055,6 +5837,9 @@ namespace test::ultimate {
         }
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         ::protocyte::Status set_nested_bytes(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = nested_bytes_.assign(value); !st) {
                 return st;
             }
@@ -6076,27 +5861,30 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::nested_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() > EXTERNAL_CAP) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = nested_bytes_.resize(static_cast<::protocyte::usize>(len.value())); !st) {
+                        if (const auto st = nested_bytes_.resize(len.value()); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
@@ -6105,7 +5893,8 @@ namespace test::ultimate {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -6208,6 +5997,9 @@ namespace test::ultimate {
         ::protocyte::usize external_bytes_size() const noexcept { return external_bytes_.size(); }
         static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return BYTE_ARRAY_CAP + 2u; }
         ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = external_bytes_.resize(size); !st) {
                 return st;
             }
@@ -6215,6 +6007,9 @@ namespace test::ultimate {
         }
         ::protocyte::MutableByteView mutable_external_bytes() noexcept { return external_bytes_.mutable_view(); }
         ::protocyte::Status set_external_bytes(const ::protocyte::ByteView value) noexcept {
+            if (value.size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+            }
             if (const auto st = external_bytes_.assign(value); !st) {
                 return st;
             }
@@ -6261,27 +6056,30 @@ namespace test::ultimate {
 
         template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
-                auto tag = ::protocyte::read_varint(reader);
+                const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
                     return tag.status();
                 }
-                const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);
-                const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);
+                const auto [field_number, wire_type] = tag.value();
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::external_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
+                        auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
+                        }
+                        if (len.value() > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                              field_number);
                         }
                         if (len.value() > BYTE_ARRAY_CAP + 2u) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = external_bytes_.resize(static_cast<::protocyte::usize>(len.value())); !st) {
+                        if (const auto st = external_bytes_.resize(len.value()); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(external_bytes_.data(), external_bytes_.size()); !st) {
@@ -6291,12 +6089,11 @@ namespace test::ultimate {
                     }
                     case FieldNumber::mirrored_values: {
                         if (wire_type == ::protocyte::WireType::LEN) {
-                            auto len = ::protocyte::read_varint(reader);
+                            auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader,
-                                                                       static_cast<::protocyte::usize>(len.value())};
+                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
@@ -6329,26 +6126,20 @@ namespace test::ultimate {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
                                                               reader.position(), field_number);
                         }
-                        auto len = ::protocyte::read_varint(reader);
-                        if (!len) {
-                            return len.status();
-                        }
                         auto ensured = ensure_nested();
                         if (!ensured) {
                             return ensured.status();
                         }
-                        ::protocyte::LimitedReader<Reader> sub {reader, static_cast<::protocyte::usize>(len.value())};
-                        ::protocyte::ReaderRef sub_reader {sub};
-                        if (const auto st = ensured.value().get().merge_from(sub_reader); !st) {
-                            return st;
-                        }
-                        if (const auto st = sub.finish(); !st) {
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                            !st) {
                             return st;
                         }
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field(reader, wire_type, field_number); !st) {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
                             return st;
                         }
                         break;
@@ -6396,20 +6187,9 @@ namespace test::ultimate {
                 }
             }
             if (nested_.has_value()) {
-                if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::nested),
-                                                           ::protocyte::WireType::LEN);
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), nested_.value());
                     !st) {
-                    return st;
-                }
-                auto msg_size = nested_.value().encoded_size();
-                if (!msg_size) {
-                    return msg_size.status();
-                }
-                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(msg_size.value()));
-                    !st) {
-                    return st;
-                }
-                if (const auto st = nested_.value().serialize(writer); !st) {
                     return st;
                 }
             }
@@ -6447,14 +6227,12 @@ namespace test::ultimate {
                 }
             }
             if (nested_.has_value()) {
-                auto nested_size = nested_.value().encoded_size();
+                auto nested_size = ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested),
+                                                                   nested_.value());
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::nested)) +
-                                    ::protocyte::varint_size(nested_size.value()) + nested_size.value());
-                    !st) {
+                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -6466,7 +6244,6 @@ namespace test::ultimate {
         ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> mirrored_values_;
         typename Config::template Optional<::test::ultimate::CrossMessageConstants_Nested<Config>> nested_;
     };
-
 
 } // namespace test::ultimate
 

@@ -49,12 +49,20 @@ smaller while preserving protobuf wire behavior.
 
 ## Usage
 
-Install the project into an environment where `protoc` can find the console
-script:
+Protocyte's Python package requires Python 3.14 or newer. That applies to
+local `uv sync` development, published wheel and sdist installs, and any CMake
+workflow that runs the plugin through `Python3_EXECUTABLE`.
+
+Install the project and make the virtual environment's script directory
+discoverable to `protoc`:
 
 ```powershell
 uv sync
+$env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 ```
+
+On other shells, either activate `.venv` first or prepend the matching
+`.venv/bin` directory to `PATH`.
 
 For a ground-zero walkthrough that covers getting `protoc`, building and
 installing the protocyte package, running `protoc` with the plugin, wiring the
@@ -71,7 +79,7 @@ The plugin emits:
 
 - `foo.protocyte.hpp`
 - `foo.protocyte.cpp`
-- `protocyte/runtime/runtime.hpp` and `runtime.cpp` when runtime emission is enabled
+- `protocyte/runtime/runtime.hpp` when runtime emission is enabled
 
 ## CMake Integration
 
@@ -79,6 +87,31 @@ Protocyte supports two CMake consumption modes:
 
 - Source consumption with `FetchContent`
 - Installed-package consumption with `find_package(protocyte CONFIG REQUIRED)`
+
+### Release Assets
+
+Published GitHub releases contain three different asset types:
+
+- `protocyte-X.Y.Z-py3-none-any.whl`: the Python wheel for
+  `protoc-gen-protocyte`. Install it into a Python 3.14+ environment when you
+  want the plugin executable.
+- `protocyte-X.Y.Z.tar.gz`: the Python source distribution for the same plugin
+  package. It is also a Python 3.14+ artifact, not a CMake install tree.
+- `protocyte-X.Y.Z-cmake-prefix.tar.gz`: a preinstalled CMake prefix for
+  `find_package(protocyte CONFIG REQUIRED)`. Unpack it and add the extracted
+  directory to `CMAKE_PREFIX_PATH`.
+
+The CMake prefix archive includes the CMake files, C++ runtime headers, and
+the protocyte Python generator sources, but it does not bundle Python itself.
+Any downstream build that calls `protocyte_generate(...)` or
+`protocyte_add_proto_library(...)` still needs a local Python 3.14+ interpreter
+available to CMake through `Python3_EXECUTABLE` or the normal `find_package(Python3)`
+search path.
+
+For prerelease tags `vX.Y.Z-rcN`, the Python packaging artifacts use the
+normalized version spelling `X.Y.ZrcN` in the wheel and sdist filenames,
+while the CMake prefix archive keeps the Git tag spelling
+`protocyte-X.Y.Z-rcN-cmake-prefix.tar.gz`.
 
 ### FetchContent
 
@@ -117,10 +150,10 @@ Pin a published release tag for downstream builds instead of tracking `main`.
 You can also install protocyte into a prefix and consume it later with
 `find_package`.
 
-For published releases, download `protocyte-X.Y.Z-cmake-prefix.tar.gz` from
-GitHub Releases, unpack it, and point `CMAKE_PREFIX_PATH` at the extracted
-prefix directory. The release wheel and sdist are plugin-only artifacts for
-`protoc-gen-protocyte`; they do not install the CMake package.
+For published releases, use the `protocyte-X.Y.Z-cmake-prefix.tar.gz` asset
+described above, unpack it, and point `CMAKE_PREFIX_PATH` at the extracted
+prefix directory. Do not use the plain `protocyte-X.Y.Z.tar.gz` sdist here;
+that archive is only the Python plugin package source.
 
 Install protocyte:
 
@@ -154,9 +187,9 @@ The installed CMake package installs:
 - the reusable C++ runtime headers and targets
 - `protocyte/options.proto`
 
-The installed package does not embed Python or protobuf. Consumers still need a
-working Python interpreter, and they either need protobuf/protoc available
-already or they can opt into the fetch fallback:
+The installed package does not embed Python or protobuf. Consumers that run
+code generation still need a working Python 3.14+ interpreter, and they either
+need protobuf/protoc available already or they can opt into the fetch fallback:
 
 ```cmake
 set(PROTOCYTE_FETCH_PROTOBUF ON CACHE BOOL "" FORCE)
@@ -172,7 +205,7 @@ Public CMake variables exposed by the package:
 `protocyte_add_proto_library(...)` links generated code against
 `protocyte::runtime` by default, or `protocyte::runtime_hosted` when
 `HOSTED_ALLOCATOR` is enabled. Use `EMIT_RUNTIME` only when you explicitly want
-the runtime sources emitted into the generated output tree instead of reusing
+the runtime header emitted into the generated output tree instead of reusing
 the installed/runtime target.
 
 The full end-to-end examples, including building a static library from
@@ -184,14 +217,15 @@ generated translation units, are in [smoke/README.md](smoke/README.md),
 
 Supported `--protocyte_out=` parameters:
 
-- `runtime=emit`: emit runtime files under `protocyte/runtime`.
-- `runtime=emit:<prefix>`: emit runtime files under a custom prefix.
+- `runtime=emit`: emit `runtime.hpp` under `protocyte/runtime`.
+- `runtime=emit:<prefix>`: emit `runtime.hpp` under a custom prefix.
 - `runtime=omit`: do not emit runtime files.
 - `runtime_prefix=<path>`: override the runtime include/output prefix when
   runtime emission is enabled.
 - `namespace_prefix=<a::b>`: prepend additional C++ namespaces around the file
   package namespace.
-- `namespace=<a::b>`: accepted as an alias for `namespace_prefix`.
+- `namespace=<a::b>`: accepted as an alias for `namespace_prefix`; specify only
+  one of the two names.
 - `include_prefix=<path>`: prefix includes for imported generated headers.
 
 Example:
@@ -212,14 +246,14 @@ Available extensions:
 
 - `option (protocyte.package_constant) = { ... };` on files.
 - `option (protocyte.constant) = { ... };` on messages.
-- `(protocyte.array) = { max: ... }` or `(protocyte.array) = { expr: ... }` on fields.
-- `(protocyte.fixed) = true` on fields that also use `protocyte.array`.
+- `(protocyte.array) = { max: ... }`, `(protocyte.array) = { expr: ... }`, or
+  `(protocyte.array) = { ..., fixed: true }` on fields.
 
 Custom option extensions must use the parenthesized protobuf extension syntax.
 This is valid:
 
 ```proto
-bytes sha256 = 1 [(protocyte.array) = { max: 32 }, (protocyte.fixed) = true];
+bytes sha256 = 1 [(protocyte.array) = { max: 32, fixed: true }];
 ```
 
 This is not valid protobuf extension syntax:
@@ -234,8 +268,8 @@ Package constants are declared as repeated file options and are emitted as
 namespace-scope `inline constexpr` declarations in the generated C++:
 
 ```proto
-option (protocyte.package_constant) = { name: "CAP", kind: UINT32, literal: "32" };
-option (protocyte.package_constant) = { name: "LABEL", kind: STRING, literal: "pkt" };
+option (protocyte.package_constant) = { name: "CAP", u32: 32 };
+option (protocyte.package_constant) = { name: "LABEL", str: "pkt" };
 ```
 
 Package constants can reference other package constants from the same package.
@@ -246,21 +280,21 @@ Message constants are declared as repeated message options:
 
 ```proto
 message Packet {
-  option (protocyte.constant) = { name: "DOUBLE_CAP", kind: UINT32, expr: "CAP * 2" };
-  option (protocyte.constant) = { name: "FULL_LABEL", kind: STRING, expr: "LABEL + \"-frame\"" };
+  option (protocyte.constant) = { name: "DOUBLE_CAP", u32_expr: "CAP * 2" };
+  option (protocyte.constant) = { name: "FULL_LABEL", str_expr: "LABEL + \"-frame\"" };
 }
 ```
 
-Supported constant kinds are:
+Constants must set exactly one typed value field. Supported fields are:
 
-- `BOOL`
-- `INT32`
-- `INT64`
-- `UINT32`
-- `UINT64`
-- `FLOAT`
-- `DOUBLE`
-- `STRING`
+- `boolean`, `boolean_expr`
+- `i32`, `i32_expr`
+- `u32`, `u32_expr`
+- `i64`, `i64_expr`
+- `u64`, `u64_expr`
+- `f32`, `f32_expr`
+- `f64`, `f64_expr`
+- `str`, `str_expr`
 
 Constants can be referenced from `array.expr`. Resolution works:
 
@@ -289,27 +323,28 @@ Supported expression features:
 - On `bytes`, it generates inline bounded byte storage with a mutable size.
 - On repeated scalar fields, it generates bounded inline array storage.
 
-`protocyte.fixed` tightens that storage:
+`protocyte.array.fixed` tightens that storage:
 
 - On `bytes`, it generates fixed-size storage with presence semantics.
-- On repeated arrays, parse/serialize/size validation requires an exact element
-  count rather than allowing any count up to the bound.
+- On repeated arrays, parse/serialize/size validation allows either zero
+  elements or the exact element count, rather than allowing any count up to the
+  bound.
 
 Examples:
 
 ```proto
 message Digest {
-  bytes sha256 = 1 [(protocyte.array) = { max: 32 }, (protocyte.fixed) = true];
+  bytes sha256 = 1 [(protocyte.array) = { max: 32, fixed: true }];
 }
 ```
 
 ```proto
-option (protocyte.package_constant) = { name: "CAP", kind: UINT32, literal: "16" };
+option (protocyte.package_constant) = { name: "CAP", u32: 16 };
 
 message Samples {
-  option (protocyte.constant) = { name: "DOUBLE_CAP", kind: UINT32, expr: "CAP * 2" };
+  option (protocyte.constant) = { name: "DOUBLE_CAP", u32_expr: "CAP * 2" };
   repeated int32 values = 1 [(protocyte.array) = { expr: "CAP" }];
-  repeated uint32 lanes = 2 [(protocyte.array) = { expr: "4" }, (protocyte.fixed) = true];
+  repeated uint32 lanes = 2 [(protocyte.array) = { expr: "4", fixed: true }];
 }
 ```
 
@@ -330,6 +365,14 @@ non-allocating. Operations that may allocate return `::protocyte::Status` or
 protocyte::DefaultConfig::Context ctx{/* allocator */, /* limits */};
 auto msg = demo::Sample<>::create(ctx);
 ```
+
+If you provide a non-default `Config`, protocyte now treats that as a stricter
+public contract:
+
+- `Config::Context` must expose `allocator`, `limits`, and `recursion_depth`.
+
+This is a source-breaking change for custom configs. Default-config users are
+unaffected.
 
 Generated messages are move-only. Ordinary C++ copying is deleted because it
 cannot report allocation failure.

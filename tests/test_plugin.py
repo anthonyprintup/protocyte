@@ -5,11 +5,32 @@ import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
-from protocyte.model import ProtocyteError, _build_constants, _build_field, build_model
+from protocyte.cpp import CppWriter
+from protocyte.model import CONSTANT_KIND_UINT32, ProtocyteError, _build_constants, _build_field, _coerce_literal, build_model
 from protocyte.plugin import generate_response
+from protocyte.runtime import runtime_files
 
 
 F = descriptor_pb2.FieldDescriptorProto
+
+
+def test_runtime_files_load_packaged_sources() -> None:
+    files = runtime_files()
+
+    assert set(files) == {"protocyte/runtime/runtime.hpp"}
+    assert files["protocyte/runtime/runtime.hpp"].startswith("#pragma once\n")
+
+
+def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
+    writer = CppWriter()
+    writer.line("root")
+    with writer.indent():
+        writer.line("child")
+        with writer.indent(2):
+            writer.line("grandchild")
+    writer.line("tail")
+
+    assert writer.render() == "root\n  child\n      grandchild\ntail\n"
 
 
 def test_generates_proto3_files_and_runtime() -> None:
@@ -42,8 +63,10 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "kDefaultMaxRecursionDepth = 100u" in files["protocyte/runtime/runtime.hpp"]
     assert "kDefaultMaxMessageBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
     assert "kDefaultMaxStringBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
-    assert "kDefaultMaxRepeatedCount = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
-    assert "kDefaultMaxMapEntries = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
+    assert "usize recursion_depth {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "protocyte Config::Context must expose recursion_depth for recursion-limited parsing" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
     assert "template<typename Config = ::protocyte::DefaultConfig>" in files["simple.protocyte.hpp"]
     assert "class Status" not in files["protocyte/runtime/runtime.hpp"]
     assert "public:" not in files["protocyte/runtime/runtime.hpp"]
@@ -60,7 +83,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "constexpr explicit Status(const Error error) noexcept" in files["protocyte/runtime/runtime.hpp"]
     assert "static constexpr Status ok() noexcept { return {}; }" in files["protocyte/runtime/runtime.hpp"]
     assert "const usize offset = {}" in files["protocyte/runtime/runtime.hpp"]
-    assert "void *hosted_allocate(void *state, usize size, usize alignment) noexcept;" in files[
+    assert "inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {" in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert "return Status {Error {.code = code, .offset = offset, .field_number = field_number}};" in files[
@@ -77,9 +100,19 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "if (const auto st = checked_mul(requested, sizeof(T), &bytes); !st)" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "explicit Vector(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "void bind(Context *ctx) noexcept { ctx_ = ctx; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr usize capacity() const noexcept { return Max; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "if (ctx_ != nullptr && view.size > ctx_->limits.max_string_bytes) {" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
     assert "if (const Bucket &bucket = buckets_[i]; bucket.occupied)" in files["protocyte/runtime/runtime.hpp"]
-    assert "const auto field = static_cast<u32>(tag.value() >> 3u);" in files["protocyte/runtime/runtime.hpp"]
-    assert "const auto wire = static_cast<WireType>(tag.value() & 0x7u);" in files["protocyte/runtime/runtime.hpp"]
+    assert "struct Tag {" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Tag decode_tag(const u64 raw) noexcept" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class Reader> Result<Tag> read_tag(Reader &reader) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "const auto [field, wire] = tag.value();" in files["protocyte/runtime/runtime.hpp"]
     assert "Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
@@ -92,6 +125,20 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Result<usize> read_length_delimited_size(Reader &reader) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "if (len.value() > static_cast<u64>(~static_cast<usize>(0u))) {" in files["protocyte/runtime/runtime.hpp"]
+    assert "return Result<usize>::err(ErrorCode::integer_overflow, reader.position());" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "auto len = read_length_delimited_size(reader);" in files["protocyte/runtime/runtime.hpp"]
+    assert "open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status read_message(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "template<class Config, class Reader> Status skip_field(typename Config::Context &ctx, Reader &reader," in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
     assert "Status read_string_field(typename Config::Context &ctx, Reader &reader," in files[
         "protocyte/runtime/runtime.hpp"
     ]
@@ -102,6 +149,12 @@ def test_generates_proto3_files_and_runtime() -> None:
         "protocyte/runtime/runtime.hpp"
     ]
     assert "Status write_double_field(Writer &writer, const u32 field_number, const f64 value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Status write_message_field(Writer &writer, const u32 field_number, const Message &value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<usize> message_field_size(const u32 field_number, const Message &value) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert (
@@ -153,9 +206,10 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "typename Config::template Box<::demo::Sample<Config>> self_;" in header
     assert "ctx_ {&ctx}" in header
     assert "items_ {&ctx}" in header
+    assert "samples_ {&ctx}" in header
     assert "::protocyte::Status set_id(const ::protocyte::i32 value) noexcept" in header
-    assert "const auto field_number = static_cast<::protocyte::u32>(tag.value() >> 3u);" in header
-    assert "const auto wire_type = static_cast<::protocyte::WireType>(tag.value() & 0x7u);" in header
+    assert "const auto tag = ::protocyte::read_tag(reader);" in header
+    assert "const auto [field_number, wire_type] = tag.value();" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
     assert "using RuntimeStatus = ::protocyte::Status;" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
@@ -175,12 +229,14 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);" in header
     assert "::protocyte::read_string_field<Config>(*ctx_, reader, wire_type," in header
     assert "::protocyte::write_string_field(" in header
+    assert "::protocyte::write_message_field(" in header
+    assert "::protocyte::message_field_size(" in header
     assert "FieldNumber::opt_name), opt_name_.view());" in header
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
-    assert "::protocyte::LimitedReader nested {entry_reader" in header
-    assert "::protocyte::ReaderRef sub_reader {sub};" in header
-    assert "merge_from(sub_reader);" in header
-    assert "::protocyte::ReaderRef nested_reader {nested};" in header
+    assert "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);" in header
+    assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get())" in header
+    assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
+    assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
     assert "clear_items();" in header
     assert "other.items().for_each([&](const auto &key, const auto &value) noexcept {" in header
     assert "clear_samples();" in header
@@ -206,6 +262,8 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "copied_value.copy_from(value)" in header
     assert "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     assert "if (const auto st = out.value().copy_from(*this); !st) {" in header
+    assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP" in header
+    assert "fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u" in header
 
 
 def test_model_decodes_constants_and_array_options() -> None:
@@ -264,13 +322,14 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "::protocyte::ByteArray<0x8u + 0x8u> hex_blob_;" in header
     assert "::protocyte::Array<::protocyte::i32, 4u> values_;" in header
     assert "bool has_digest() const noexcept { return digest_.has_value(); }" in header
-    assert "::protocyte::MutableByteView mutable_digest() noexcept { return digest_.mutable_view(); }" in header
+    assert "::protocyte::MutableByteView mutable_digest() noexcept {" in header
+    assert "if (ctx_->limits.max_string_bytes < DOUBLE_MAGIC) {" in header
     assert "::protocyte::usize digest_size() const noexcept" not in header
     assert "digest_max_size" not in header
     assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
     assert "::protocyte::ByteView digest() const noexcept { return digest_.view(); }" in header
     assert "if (len.value() != DOUBLE_MAGIC)" in header
-    assert "if (values_.size() != 4u) {" in header
+    assert "if (values_.size() != 0u && values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
     assert "template<usize Max> struct ByteArray" in runtime_header
     assert "template<usize Max> struct FixedByteArray" in runtime_header
@@ -304,9 +363,14 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
 @pytest.mark.parametrize(
     ("expected", "request_factory"),
     [
-        ("unsupported constant kind", lambda: _unsupported_constant_kind_request()),
         ("constant name must not be empty", lambda: _empty_constant_name_request()),
-        ("protocyte.fixed requires protocyte.array", lambda: _fixed_without_array_request()),
+        ("exactly one typed constant value must be set", lambda: _missing_constant_value_request()),
+        ("expression must evaluate to bool", lambda: _boolean_expr_type_error_request()),
+        ("value 4294967296 is out of range for uint32", lambda: _typed_expr_overflow_request()),
+        (
+            "protocyte.array.fixed requires protocyte.array.max or protocyte.array.expr",
+            lambda: _fixed_without_array_request(),
+        ),
         ("protocyte.array is not supported on map fields", lambda: _array_on_map_request()),
         ("protocyte.array.max must be greater than zero", lambda: _zero_max_request()),
         ("protocyte.array.expr must not be empty", lambda: _empty_expr_request()),
@@ -318,14 +382,19 @@ def test_rejects_remaining_model_validator_branches(expected: str, request_facto
     assert expected in response.error
 
 
-def test_rejects_constant_and_array_exclusivity_branches() -> None:
+def test_rejects_internal_typed_constant_literal_overflow_and_array_exclusivity() -> None:
     owner = SimpleNamespace(full_name="demo.Broken", descriptor=descriptor_pb2.DescriptorProto())
 
-    constant_options = SimpleNamespace(
-        message_constants=lambda options: [SimpleNamespace(name="BROKEN", kind=2, literal="1", expr="2")]
-    )
-    with pytest.raises(ProtocyteError, match="exactly one of literal or expr must be set"):
-        _build_constants(owner, constant_options)
+    constant = _build_constants(
+        owner,
+        SimpleNamespace(
+            message_constants=lambda options: [
+                SimpleNamespace(name="BROKEN", kind=CONSTANT_KIND_UINT32, literal=4294967296, expr=None)
+            ]
+        ),
+    )[0]
+    with pytest.raises(ProtocyteError, match="value 4294967296 is out of range for uint32"):
+        _coerce_literal(constant.kind, constant.literal, constant.full_name)
 
     array_field = descriptor_pb2.FieldDescriptorProto()
     array_field.name = "digest"
@@ -538,11 +607,11 @@ def test_rejects_invalid_array_targets_and_constant_cycles() -> None:
 
 
 def test_rejects_constant_name_collisions() -> None:
-    duplicate_response = generate_response(_constant_collision_request("duplicate.proto", [("dup", 2, "1", None), ("dup", 2, "2", None)]))
+    duplicate_response = generate_response(_constant_collision_request("duplicate.proto", [("dup", "i32", 1), ("dup", "i32", 2)]))
     normalized_response = generate_response(
-        _constant_collision_request("normalized.proto", [("cap-value", 2, "1", None), ("cap_value", 2, "2", None)])
+        _constant_collision_request("normalized.proto", [("cap-value", "i32", 1), ("cap_value", "i32", 2)])
     )
-    reserved_response = generate_response(_constant_collision_request("reserved.proto", [("create", 2, "1", None)]))
+    reserved_response = generate_response(_constant_collision_request("reserved.proto", [("create", "i32", 1)]))
 
     assert "constant cannot be redefined" in duplicate_response.error
     assert "collides after C++ identifier normalization" in normalized_response.error
@@ -595,7 +664,8 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     header = next(file.content for file in response.file if file.name == "oneof_array.protocyte.hpp")
     assert "new (&choice.data)::protocyte::ByteArray<8u> {};" in header
     assert "choice_case_ = ChoiceCase::data;" in header
-    assert "if (const auto st = choice.data.resize(static_cast<::protocyte::usize>(len.value())); !st) {" in header
+    assert "if (const auto st = choice.data.resize(len.value()); !st) {" in header
+    assert "if (len.value() > ctx_->limits.max_string_bytes) {" in header
     assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st) {" in header
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 
@@ -800,10 +870,10 @@ def _map_only_request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
-def _unsupported_constant_kind_request() -> plugin_pb2.CodeGeneratorRequest:
+def _missing_constant_value_request() -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
-    request.file_to_generate.append("unsupported_constant_kind.proto")
-    request.proto_file.extend([_options_file(), _unsupported_constant_kind_file()])
+    request.file_to_generate.append("missing_constant_value.proto")
+    request.proto_file.extend([_options_file(), _missing_constant_value_file()])
     return request
 
 
@@ -814,10 +884,17 @@ def _empty_constant_name_request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
-def _constant_literal_expr_conflict_request() -> plugin_pb2.CodeGeneratorRequest:
+def _boolean_expr_type_error_request() -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
-    request.file_to_generate.append("constant_literal_expr_conflict.proto")
-    request.proto_file.extend([_options_file(), _constant_literal_expr_conflict_file()])
+    request.file_to_generate.append("boolean_expr_type_error.proto")
+    request.proto_file.extend([_options_file(), _boolean_expr_type_error_file()])
+    return request
+
+
+def _typed_expr_overflow_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("typed_expr_overflow.proto")
+    request.proto_file.extend([_options_file(), _typed_expr_overflow_file()])
     return request
 
 
@@ -858,7 +935,7 @@ def _empty_expr_request() -> plugin_pb2.CodeGeneratorRequest:
 
 def _constant_collision_request(
     file_name: str,
-    constants: list[tuple[str, int, str | None, str | None]],
+    constants: list[tuple[str, str, object]],
 ) -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append(file_name)
@@ -880,50 +957,52 @@ def _options_file() -> descriptor_pb2.FileDescriptorProto:
     file.syntax = "proto3"
     file.dependency.append("google/protobuf/descriptor.proto")
 
-    enum = file.enum_type.add()
-    enum.name = "ConstantKind"
-    for number, name in [
-        (0, "KIND_UNSPECIFIED"),
-        (1, "BOOL"),
-        (2, "INT32"),
-        (3, "INT64"),
-        (4, "UINT32"),
-        (5, "UINT64"),
-        (6, "FLOAT"),
-        (7, "DOUBLE"),
-        (8, "STRING"),
-    ]:
-        value = enum.value.add()
-        value.name = name
-        value.number = number
-
-    struct_constant = file.message_type.add()
-    struct_constant.name = "StructConstant"
-    field = struct_constant.field.add()
+    constant = file.message_type.add()
+    constant.name = "Constant"
+    field = constant.field.add()
     field.name = "name"
     field.number = 1
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_STRING
-    field = struct_constant.field.add()
-    field.name = "kind"
-    field.number = 2
-    field.label = F.LABEL_OPTIONAL
-    field.type = F.TYPE_ENUM
-    field.type_name = ".protocyte.ConstantKind"
-    _add_oneof_field(struct_constant, "value", "literal", 3, F.TYPE_STRING)
-    _add_oneof_field(struct_constant, "value", "expr", 4, F.TYPE_STRING)
+    for number, (field_name, field_type) in enumerate(
+        [
+            ("boolean", F.TYPE_BOOL),
+            ("boolean_expr", F.TYPE_STRING),
+            ("i32", F.TYPE_INT32),
+            ("i32_expr", F.TYPE_STRING),
+            ("u32", F.TYPE_UINT32),
+            ("u32_expr", F.TYPE_STRING),
+            ("i64", F.TYPE_INT64),
+            ("i64_expr", F.TYPE_STRING),
+            ("u64", F.TYPE_UINT64),
+            ("u64_expr", F.TYPE_STRING),
+            ("f32", F.TYPE_FLOAT),
+            ("f32_expr", F.TYPE_STRING),
+            ("f64", F.TYPE_DOUBLE),
+            ("f64_expr", F.TYPE_STRING),
+            ("str", F.TYPE_STRING),
+            ("str_expr", F.TYPE_STRING),
+        ],
+        start=2,
+    ):
+        _add_oneof_field(constant, "value", field_name, number, field_type)
 
     array_options = file.message_type.add()
     array_options.name = "ArrayOptions"
     _add_oneof_field(array_options, "bound", "max", 1, F.TYPE_UINT32)
     _add_oneof_field(array_options, "bound", "expr", 2, F.TYPE_STRING)
+    field = array_options.field.add()
+    field.name = "fixed"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BOOL
 
     ext = file.extension.add()
     ext.name = "constant"
     ext.number = 50000
     ext.label = F.LABEL_REPEATED
     ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.StructConstant"
+    ext.type_name = ".protocyte.Constant"
     ext.extendee = ".google.protobuf.MessageOptions"
 
     ext = file.extension.add()
@@ -931,7 +1010,7 @@ def _options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.number = 50002
     ext.label = F.LABEL_REPEATED
     ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.StructConstant"
+    ext.type_name = ".protocyte.Constant"
     ext.extendee = ".google.protobuf.FileOptions"
 
     ext = file.extension.add()
@@ -940,13 +1019,6 @@ def _options_file() -> descriptor_pb2.FileDescriptorProto:
     ext.label = F.LABEL_OPTIONAL
     ext.type = F.TYPE_MESSAGE
     ext.type_name = ".protocyte.ArrayOptions"
-    ext.extendee = ".google.protobuf.FieldOptions"
-
-    ext = file.extension.add()
-    ext.name = "fixed"
-    ext.number = 50001
-    ext.label = F.LABEL_OPTIONAL
-    ext.type = F.TYPE_BOOL
     ext.extendee = ".google.protobuf.FieldOptions"
 
     return file
@@ -961,9 +1033,9 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     file.options.ParseFromString(
         _package_constant_options_bytes(
             [
-                ("FILE_CAP", 4, "16", None),
-                ("FILE_LABEL", 8, None, 'substr("hello", 1, 3)'),
-                ("FILE_READY", 1, None, 'starts_with(FILE_LABEL, "e")'),
+                ("FILE_CAP", "u32", 16),
+                ("FILE_LABEL", "str_expr", 'substr("hello", 1, 3)'),
+                ("FILE_READY", "boolean_expr", 'starts_with(FILE_LABEL, "e")'),
             ]
         )
     )
@@ -973,11 +1045,11 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     message.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("MAGIC_NUMBER", 2, None, "FILE_CAP"),
-                ("DOUBLE_MAGIC", 2, None, "MAGIC_NUMBER * 2"),
-                ("HEX_MAGIC", 4, "0x20", None),
-                ("HEX_EXPR", 2, None, "0x10 + 0x8"),
-                ("LABEL", 8, None, "demo.FILE_LABEL"),
+                ("MAGIC_NUMBER", "i32_expr", "FILE_CAP"),
+                ("DOUBLE_MAGIC", "i32_expr", "MAGIC_NUMBER * 2"),
+                ("HEX_MAGIC", "u32", 0x20),
+                ("HEX_EXPR", "i32_expr", "0x10 + 0x8"),
+                ("LABEL", "str_expr", "demo.FILE_LABEL"),
             ]
         )
     )
@@ -1015,7 +1087,7 @@ def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     nested.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("HAS_PREFIX", 1, None, 'starts_with(FILE_LABEL, "e")'),
+                ("HAS_PREFIX", "boolean_expr", 'starts_with(FILE_LABEL, "e")'),
             ]
         )
     )
@@ -1092,16 +1164,26 @@ def _map_only_file() -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
-def _unsupported_constant_kind_file() -> descriptor_pb2.FileDescriptorProto:
+def _missing_constant_value_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
-    file.name = "unsupported_constant_kind.proto"
+    file.name = "missing_constant_value.proto"
     file.package = "demo"
     file.syntax = "proto3"
     file.dependency.append("protocyte/options.proto")
 
+    pool = descriptor_pool.DescriptorPool()
+    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
+    pool.Add(_options_file())
+    message_options_desc = pool.FindMessageTypeByName("google.protobuf.MessageOptions")
+    message_options_cls = message_factory.GetMessageClass(message_options_desc)
+    constant_ext = pool.FindExtensionByName("protocyte.constant")
+
     message = file.message_type.add()
     message.name = "Broken"
-    message.options.ParseFromString(_constant_options_bytes([("BROKEN", 99, "1", None)]))
+    options = message_options_cls()
+    item = options.Extensions[constant_ext].add()
+    item.name = "BROKEN"
+    message.options.ParseFromString(options.SerializeToString())
     return file
 
 
@@ -1114,20 +1196,33 @@ def _empty_constant_name_file() -> descriptor_pb2.FileDescriptorProto:
 
     message = file.message_type.add()
     message.name = "Broken"
-    message.options.ParseFromString(_constant_options_bytes([("", 2, "1", None)]))
+    message.options.ParseFromString(_constant_options_bytes([("", "i32", 1)]))
     return file
 
 
-def _constant_literal_expr_conflict_file() -> descriptor_pb2.FileDescriptorProto:
+def _boolean_expr_type_error_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
-    file.name = "constant_literal_expr_conflict.proto"
+    file.name = "boolean_expr_type_error.proto"
     file.package = "demo"
     file.syntax = "proto3"
     file.dependency.append("protocyte/options.proto")
 
     message = file.message_type.add()
     message.name = "Broken"
-    message.options.ParseFromString(_constant_options_bytes([("BROKEN", 2, "1", "2")]))
+    message.options.ParseFromString(_constant_options_bytes([("BROKEN", "boolean_expr", "1 + 1")]))
+    return file
+
+
+def _typed_expr_overflow_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "typed_expr_overflow.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.options.ParseFromString(_constant_options_bytes([("BROKEN", "u32_expr", "4294967296")]))
     return file
 
 
@@ -1256,7 +1351,7 @@ def _invalid_array_file() -> descriptor_pb2.FileDescriptorProto:
 
 def _constant_collision_file(
     file_name: str,
-    constants: list[tuple[str, int, str | None, str | None]],
+    constants: list[tuple[str, str, object]],
 ) -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = file_name
@@ -1279,7 +1374,7 @@ def _invalid_cpp_identifier_file() -> descriptor_pb2.FileDescriptorProto:
 
     message = file.message_type.add()
     message.name = "Broken"
-    message.options.ParseFromString(_constant_options_bytes([("1", 2, "1", None)]))
+    message.options.ParseFromString(_constant_options_bytes([("1", "i32", 1)]))
     return file
 
 
@@ -1295,8 +1390,8 @@ def _constant_cycle_file() -> descriptor_pb2.FileDescriptorProto:
     message.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("A", 2, None, "B + 1"),
-                ("B", 2, None, "A + 1"),
+                ("A", "i32_expr", "B + 1"),
+                ("B", "i32_expr", "A + 1"),
             ]
         )
     )
@@ -1342,7 +1437,7 @@ def _invalid_hex_file() -> descriptor_pb2.FileDescriptorProto:
     message.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("BROKEN", 2, None, "0x + 1"),
+                ("BROKEN", "i32_expr", "0x + 1"),
             ]
         )
     )
@@ -1382,7 +1477,7 @@ def _unicode_constant_file() -> descriptor_pb2.FileDescriptorProto:
 
     message = file.message_type.add()
     message.name = "Words"
-    message.options.ParseFromString(_constant_options_bytes([("NAME", 8, chr(0x0100) + chr(0x00E9), None)]))
+    message.options.ParseFromString(_constant_options_bytes([("NAME", "str", chr(0x0100) + chr(0x00E9))]))
     return file
 
 
@@ -1495,9 +1590,9 @@ def _cross_message_file() -> descriptor_pb2.FileDescriptorProto:
     source.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("ROOT_CAP", 4, "6", None),
-                ("ROOT_LABEL", 8, None, 'substr("crossing", 0, 5)'),
-                ("ROOT_ENABLED", 1, None, 'starts_with(ROOT_LABEL, "cr")'),
+                ("ROOT_CAP", "u32", 6),
+                ("ROOT_LABEL", "str_expr", 'substr("crossing", 0, 5)'),
+                ("ROOT_ENABLED", "boolean_expr", 'starts_with(ROOT_LABEL, "cr")'),
             ]
         )
     )
@@ -1507,10 +1602,10 @@ def _cross_message_file() -> descriptor_pb2.FileDescriptorProto:
     sink.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("MIRRORED_CAP", 4, None, "Source.ROOT_CAP * 3"),
-                ("DIRECT_CAP", 4, None, "Source.ROOT_CAP + 2"),
-                ("PREFIX", 8, None, 'Source.ROOT_LABEL + "-sink"'),
-                ("READY", 1, None, "Source.ROOT_ENABLED && (MIRRORED_CAP == 18)"),
+                ("MIRRORED_CAP", "u32_expr", "Source.ROOT_CAP * 3"),
+                ("DIRECT_CAP", "u32_expr", "Source.ROOT_CAP + 2"),
+                ("PREFIX", "str_expr", 'Source.ROOT_LABEL + "-sink"'),
+                ("READY", "boolean_expr", "Source.ROOT_ENABLED && (MIRRORED_CAP == 18)"),
             ]
         )
     )
@@ -1534,7 +1629,7 @@ def _cross_message_file() -> descriptor_pb2.FileDescriptorProto:
     nested.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("NESTED_CAP", 4, None, "Source.ROOT_CAP + 3"),
+                ("NESTED_CAP", "u32_expr", "Source.ROOT_CAP + 3"),
             ]
         )
     )
@@ -1564,9 +1659,9 @@ def _external_constant_provider_file() -> descriptor_pb2.FileDescriptorProto:
     file.options.ParseFromString(
         _package_constant_options_bytes(
             [
-                ("CAP", 4, "7", None),
-                ("DOUBLE_CAP", 4, None, "CAP * 2"),
-                ("LABEL", 8, None, '"pkg" + "-label"'),
+                ("CAP", "u32", 7),
+                ("DOUBLE_CAP", "u32_expr", "CAP * 2"),
+                ("LABEL", "str_expr", '"pkg" + "-label"'),
             ]
         )
     )
@@ -1576,8 +1671,8 @@ def _external_constant_provider_file() -> descriptor_pb2.FileDescriptorProto:
     source.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("ROOT_CAP", 4, None, "DOUBLE_CAP + 2"),
-                ("ROOT_LABEL", 8, None, 'LABEL + "-source"'),
+                ("ROOT_CAP", "u32_expr", "DOUBLE_CAP + 2"),
+                ("ROOT_LABEL", "str_expr", 'LABEL + "-source"'),
             ]
         )
     )
@@ -1587,7 +1682,7 @@ def _external_constant_provider_file() -> descriptor_pb2.FileDescriptorProto:
     nested.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("NESTED_CAP", 4, None, "ROOT_CAP + 1"),
+                ("NESTED_CAP", "u32_expr", "ROOT_CAP + 1"),
             ]
         )
     )
@@ -1604,7 +1699,7 @@ def _cross_package_package_constant_file() -> descriptor_pb2.FileDescriptorProto
     file.options.ParseFromString(
         _package_constant_options_bytes(
             [
-                ("FROM_EXTERNAL", 4, None, "alpha.beta.DOUBLE_CAP + 1"),
+                ("FROM_EXTERNAL", "u32_expr", "alpha.beta.DOUBLE_CAP + 1"),
             ]
         )
     )
@@ -1614,8 +1709,8 @@ def _cross_package_package_constant_file() -> descriptor_pb2.FileDescriptorProto
     message.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("MIRROR", 4, None, "FROM_EXTERNAL * 2"),
-                ("NAME", 8, None, 'alpha.beta.LABEL + "-ok"'),
+                ("MIRROR", "u32_expr", "FROM_EXTERNAL * 2"),
+                ("NAME", "str_expr", 'alpha.beta.LABEL + "-ok"'),
             ]
         )
     )
@@ -1649,9 +1744,9 @@ def _cross_package_message_file() -> descriptor_pb2.FileDescriptorProto:
     message.options.ParseFromString(
         _constant_options_bytes(
             [
-                ("MIRROR", 4, None, "alpha.beta.Source.ROOT_CAP * 2"),
-                ("NAME", 8, None, 'alpha.beta.Source.ROOT_LABEL + "-ok"'),
-                ("NESTED", 4, None, "alpha.beta.Source.Inner.NESTED_CAP + 1"),
+                ("MIRROR", "u32_expr", "alpha.beta.Source.ROOT_CAP * 2"),
+                ("NAME", "str_expr", 'alpha.beta.Source.ROOT_LABEL + "-ok"'),
+                ("NESTED", "u32_expr", "alpha.beta.Source.Inner.NESTED_CAP + 1"),
             ]
         )
     )
@@ -1698,9 +1793,7 @@ def _add_oneof_field(
     field.oneof_index = oneof_index
 
 
-def _constant_options_bytes(
-    constants: list[tuple[str, int, str | None, str | None]],
-) -> bytes:
+def _constant_options_bytes(constants: list[tuple[str, str, object]]) -> bytes:
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
     pool.Add(_options_file())
@@ -1709,20 +1802,14 @@ def _constant_options_bytes(
     constant_ext = pool.FindExtensionByName("protocyte.constant")
 
     options = message_options_cls()
-    for name, kind, literal, expr in constants:
+    for name, value_field, value in constants:
         item = options.Extensions[constant_ext].add()
         item.name = name
-        item.kind = kind
-        if literal is not None:
-            item.literal = literal
-        if expr is not None:
-            item.expr = expr
+        setattr(item, value_field, value)
     return options.SerializeToString()
 
 
-def _package_constant_options_bytes(
-    constants: list[tuple[str, int, str | None, str | None]],
-) -> bytes:
+def _package_constant_options_bytes(constants: list[tuple[str, str, object]]) -> bytes:
     pool = descriptor_pool.DescriptorPool()
     pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
     pool.Add(_options_file())
@@ -1731,14 +1818,10 @@ def _package_constant_options_bytes(
     constant_ext = pool.FindExtensionByName("protocyte.package_constant")
 
     options = file_options_cls()
-    for name, kind, literal, expr in constants:
+    for name, value_field, value in constants:
         item = options.Extensions[constant_ext].add()
         item.name = name
-        item.kind = kind
-        if literal is not None:
-            item.literal = literal
-        if expr is not None:
-            item.expr = expr
+        setattr(item, value_field, value)
     return options.SerializeToString()
 
 
@@ -1754,7 +1837,6 @@ def _array_option_bytes(
     field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
     field_options_cls = message_factory.GetMessageClass(field_options_desc)
     array_ext = pool.FindExtensionByName("protocyte.array")
-    fixed_ext = pool.FindExtensionByName("protocyte.fixed")
 
     options = field_options_cls()
     array_options = options.Extensions[array_ext]
@@ -1763,5 +1845,5 @@ def _array_option_bytes(
     if expr is not None:
         array_options.expr = expr
     if fixed:
-        options.Extensions[fixed_ext] = True
+        array_options.fixed = True
     return options.SerializeToString()

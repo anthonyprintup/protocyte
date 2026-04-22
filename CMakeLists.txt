@@ -53,7 +53,8 @@ set(PROTOCYTE_INSTALL_PROTODIR "${CMAKE_INSTALL_DATADIR}/protocyte/proto")
 
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/Protocyte.cmake")
 
-set(PROTOCYTE_RUNTIME_HEADER "${CMAKE_CURRENT_LIST_DIR}/include/protocyte/runtime/runtime.hpp")
+set(PROTOCYTE_RUNTIME_BASE_DIR "${CMAKE_CURRENT_LIST_DIR}/src")
+set(PROTOCYTE_RUNTIME_HEADER "${PROTOCYTE_RUNTIME_BASE_DIR}/protocyte/runtime/runtime.hpp")
 
 add_library(protocyte_codegen INTERFACE)
 add_library(protocyte::codegen ALIAS protocyte_codegen)
@@ -71,14 +72,14 @@ function(protocyte_configure_runtime_target target_name export_name)
     target_include_directories(
         "${target_name}"
         INTERFACE
-            "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+            "$<BUILD_INTERFACE:${PROTOCYTE_RUNTIME_BASE_DIR}>"
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
     )
     target_sources(
         "${target_name}"
         INTERFACE
             FILE_SET HEADERS
-            BASE_DIRS "${CMAKE_CURRENT_LIST_DIR}/include"
+            BASE_DIRS "${PROTOCYTE_RUNTIME_BASE_DIR}"
             FILES "${PROTOCYTE_RUNTIME_HEADER}"
     )
 endfunction()
@@ -127,6 +128,7 @@ install(
     DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"
     FILES_MATCHING
         PATTERN "*.py"
+        PATTERN "*.hpp"
         PATTERN "proto" EXCLUDE
         PATTERN "__pycache__" EXCLUDE
         PATTERN "*.pyc" EXCLUDE

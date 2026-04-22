@@ -74,6 +74,11 @@ namespace protocyte {
         I32 = 5u,
     };
 
+    struct Tag {
+        u32 field_number {};
+        WireType wire_type {};
+    };
+
     struct Error {
         ErrorCode code {};
         usize offset {};
@@ -226,14 +231,10 @@ namespace protocyte {
         static constexpr usize kDefaultMaxRecursionDepth = 100u;
         static constexpr usize kDefaultMaxMessageBytes = 0x7fffffffu;
         static constexpr usize kDefaultMaxStringBytes = 0x7fffffffu;
-        static constexpr usize kDefaultMaxRepeatedCount = 0x7fffffffu;
-        static constexpr usize kDefaultMaxMapEntries = 0x7fffffffu;
 
         usize max_recursion_depth {kDefaultMaxRecursionDepth};
         usize max_message_bytes {kDefaultMaxMessageBytes};
         usize max_string_bytes {kDefaultMaxStringBytes};
-        usize max_repeated_count {kDefaultMaxRepeatedCount};
-        usize max_map_entries {kDefaultMaxMapEntries};
     };
 
     struct Allocator {
@@ -264,6 +265,7 @@ namespace protocyte {
         struct Context {
             Allocator allocator;
             Limits limits;
+            usize recursion_depth {};
         };
 
         template<class T> using Vector = protocyte::Vector<T, DefaultConfig>;
@@ -667,6 +669,9 @@ namespace protocyte {
         }
 
         Status assign(const ByteView view) noexcept {
+            if (ctx_ != nullptr && view.size > ctx_->limits.max_string_bytes) {
+                return Status::error(ErrorCode::size_limit);
+            }
             Bytes temp {ctx_};
             if (const auto st = temp.bytes_.reserve(view.size); !st) {
                 return st;
@@ -873,6 +878,21 @@ namespace protocyte {
         }
 
         Status insert_or_assign(K &&key, V &&value) noexcept {
+            if (buckets_.size()) {
+                usize existing_index {Config::hash(key) & (buckets_.size() - 1u)};
+                for (;;) {
+                    auto &bucket = buckets_[existing_index];
+                    if (!bucket.occupied) {
+                        break;
+                    }
+                    if (Config::equal(bucket.key.value(), key)) {
+                        bucket.value.reset();
+                        bucket.value.emplace(protocyte::move(value));
+                        return {};
+                    }
+                    existing_index = (existing_index + 1u) & (buckets_.size() - 1u);
+                }
+            }
             if (const auto st = ensure_capacity_for_one_more(); !st) {
                 return st;
             }
@@ -884,11 +904,6 @@ namespace protocyte {
                     bucket.key.emplace(protocyte::move(key));
                     bucket.value.emplace(protocyte::move(value));
                     ++size_;
-                    return {};
-                }
-                if (Config::equal(bucket.key.value(), key)) {
-                    bucket.value.reset();
-                    bucket.value.emplace(protocyte::move(value));
                     return {};
                 }
                 index = (index + 1u) & (buckets_.size() - 1u);
@@ -1051,6 +1066,62 @@ namespace protocyte {
         Reader *inner_;
         usize remaining_;
         usize pos_ {};
+    };
+
+    template<class Config>
+    Status push_recursion(typename Config::Context &ctx, const usize offset, const u32 field_number) noexcept {
+        static_assert(
+            requires(typename Config::Context &value) { value.recursion_depth; },
+            "protocyte Config::Context must expose recursion_depth for recursion-limited parsing");
+        if (ctx.recursion_depth >= ctx.limits.max_recursion_depth) {
+            return Status::error(ErrorCode::recursion_limit, offset, field_number);
+        }
+        ++ctx.recursion_depth;
+        return {};
+    }
+
+    template<class Config> void pop_recursion(typename Config::Context &ctx) noexcept {
+        if (ctx.recursion_depth != 0u) {
+            --ctx.recursion_depth;
+        }
+    }
+
+    template<class Reader, class Config> struct NestedMessageReader {
+        using Context = typename Config::Context;
+
+        NestedMessageReader(Context &ctx, Reader &inner, const usize remaining) noexcept:
+            ctx_ {&ctx}, reader_ {inner, remaining}, active_ {true} {}
+        NestedMessageReader(NestedMessageReader &&other) noexcept:
+            ctx_ {other.ctx_}, reader_ {protocyte::move(other.reader_)}, active_ {other.active_} {
+            other.ctx_ = nullptr;
+            other.active_ = false;
+        }
+        NestedMessageReader &operator=(NestedMessageReader &&) noexcept = delete;
+        NestedMessageReader(const NestedMessageReader &) = delete;
+        NestedMessageReader &operator=(const NestedMessageReader &) = delete;
+        ~NestedMessageReader() noexcept { release(); }
+
+        LimitedReader<Reader> &reader() noexcept { return reader_; }
+        ReaderRef reader_ref() noexcept { return ReaderRef {reader_}; }
+
+        Status finish() noexcept {
+            auto st = reader_.finish();
+            release();
+            return st;
+        }
+
+    protected:
+        void release() noexcept {
+            if (active_ && ctx_ != nullptr) {
+                pop_recursion<Config>(*ctx_);
+                active_ = false;
+                ctx_ = nullptr;
+            }
+        }
+
+        Context *ctx_ {};
+        LimitedReader<Reader> reader_;
+        bool active_ {};
     };
 
     struct SliceWriter {
@@ -1346,6 +1417,21 @@ namespace protocyte {
         return wire_type == WireType::SGROUP ? size * 2u : size;
     }
 
+    constexpr Tag decode_tag(const u64 raw) noexcept {
+        return Tag {
+            .field_number = static_cast<u32>(raw >> 3u),
+            .wire_type = static_cast<WireType>(raw & 0x7u),
+        };
+    }
+
+    template<class Reader> Result<Tag> read_tag(Reader &reader) noexcept {
+        auto raw = read_varint(reader);
+        if (!raw) {
+            return Result<Tag>::err(raw.error());
+        }
+        return Result<Tag>::ok(decode_tag(raw.value()));
+    }
+
     template<class Reader>
     Result<i32> read_int32_field(Reader &reader, const WireType wire_type, const u32 field_number) noexcept {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
@@ -1565,10 +1651,74 @@ namespace protocyte {
         if (!len) {
             return Result<usize>::err(len.error());
         }
+        if (len.value() > static_cast<u64>(~static_cast<usize>(0u))) {
+            return Result<usize>::err(ErrorCode::integer_overflow, reader.position());
+        }
         return Result<usize>::ok(static_cast<usize>(len.value()));
     }
 
+    template<class Config, class Reader>
+    Result<NestedMessageReader<Reader, Config>> open_nested_message_sized(typename Config::Context &ctx, Reader &reader,
+                                                                          const usize size,
+                                                                          const u32 field_number) noexcept {
+        if (size > ctx.limits.max_message_bytes) {
+            return Result<NestedMessageReader<Reader, Config>>::err(ErrorCode::size_limit, reader.position(),
+                                                                    field_number);
+        }
+        if (const auto st = push_recursion<Config>(ctx, reader.position(), field_number); !st) {
+            return Result<NestedMessageReader<Reader, Config>>::err(st.error());
+        }
+        return Result<NestedMessageReader<Reader, Config>>::ok(NestedMessageReader<Reader, Config> {ctx, reader, size});
+    }
+
+    template<class Config, class Reader> Result<NestedMessageReader<Reader, Config>>
+    open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept {
+        auto size = read_length_delimited_size(reader);
+        if (!size) {
+            return Result<NestedMessageReader<Reader, Config>>::err(size.error());
+        }
+        return open_nested_message_sized<Config>(ctx, reader, size.value(), field_number);
+    }
+
+    template<class Config, class Reader, class Message>
+    Status read_message(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
+        auto nested = open_nested_message<Config>(ctx, reader, field_number);
+        if (!nested) {
+            return nested.status();
+        }
+        auto nested_reader = nested.value().reader_ref();
+        if (const auto st = out.merge_from(nested_reader); !st) {
+            return st;
+        }
+        return nested.value().finish();
+    }
+
+    template<class Writer, class Message>
+    Status write_message_field(Writer &writer, const u32 field_number, const Message &value) noexcept {
+        if (const auto st = write_tag(writer, field_number, WireType::LEN); !st) {
+            return st;
+        }
+        auto size = value.encoded_size();
+        if (!size) {
+            return size.status();
+        }
+        if (const auto st = write_varint(writer, static_cast<u64>(size.value())); !st) {
+            return st;
+        }
+        return value.serialize(writer);
+    }
+
+    template<class Message> Result<usize> message_field_size(const u32 field_number, const Message &value) noexcept {
+        auto size = value.encoded_size();
+        if (!size) {
+            return Result<usize>::err(size.error());
+        }
+        return Result<usize>::ok(tag_size(field_number) + varint_size(size.value()) + size.value());
+    }
+
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;
+    template<class Config, class Reader>
+    Status skip_group(typename Config::Context &ctx, Reader &reader, u32 start_field_number) noexcept;
 
     template<class Reader>
     Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept {
@@ -1579,11 +1729,11 @@ namespace protocyte {
             }
             case WireType::I64: return reader.skip(8u);
             case WireType::LEN: {
-                auto len = read_varint(reader);
+                auto len = read_length_delimited_size(reader);
                 if (!len) {
                     return len.status();
                 }
-                return reader.skip(static_cast<usize>(len.value()));
+                return reader.skip(len.value());
             }
             case WireType::SGROUP: return skip_group(reader, field_number);
             case WireType::EGROUP: return {};
@@ -1592,13 +1742,35 @@ namespace protocyte {
         }
     }
 
+    template<class Config, class Reader> Status skip_field(typename Config::Context &ctx, Reader &reader,
+                                                           const WireType wire_type,
+                                                           const u32 field_number = {}) noexcept {
+        switch (wire_type) {
+            case WireType::VARINT: {
+                auto ignored = read_varint(reader);
+                return ignored.status();
+            }
+            case WireType::I64: return reader.skip(8u);
+            case WireType::LEN: {
+                auto len = read_length_delimited_size(reader);
+                if (!len) {
+                    return len.status();
+                }
+                return reader.skip(len.value());
+            }
+            case WireType::SGROUP: return skip_group<Config>(ctx, reader, field_number);
+            case WireType::EGROUP: return {};
+            case WireType::I32: return reader.skip(4u);
+            default: return Status::error(ErrorCode::invalid_wire_type, reader.position(), field_number);
+        }
+    }
+
     template<class Reader> Status skip_group(Reader &reader, const u32 start_field_number) noexcept {
         for (;;) {
-            if (const auto tag = read_varint(reader); !tag) {
+            if (const auto tag = read_tag(reader); !tag) {
                 return tag.status();
             } else {
-                const auto field = static_cast<u32>(tag.value() >> 3u);
-                const auto wire = static_cast<WireType>(tag.value() & 0x7u);
+                const auto [field, wire] = tag.value();
                 if (wire == WireType::EGROUP) {
                     if (field != start_field_number) {
                         return Status::error(ErrorCode::invalid_wire_type, reader.position(), field);
@@ -1606,6 +1778,32 @@ namespace protocyte {
                     return {};
                 }
                 if (const auto st = skip_field(reader, wire, field); !st) {
+                    return st;
+                }
+            }
+        }
+    }
+
+    template<class Config, class Reader>
+    Status skip_group(typename Config::Context &ctx, Reader &reader, const u32 start_field_number) noexcept {
+        if (const auto st = push_recursion<Config>(ctx, reader.position(), start_field_number); !st) {
+            return st;
+        }
+        for (;;) {
+            if (const auto tag = read_tag(reader); !tag) {
+                pop_recursion<Config>(ctx);
+                return tag.status();
+            } else {
+                const auto [field, wire] = tag.value();
+                if (wire == WireType::EGROUP) {
+                    pop_recursion<Config>(ctx);
+                    if (field != start_field_number) {
+                        return Status::error(ErrorCode::invalid_wire_type, reader.position(), field);
+                    }
+                    return {};
+                }
+                if (const auto st = skip_field<Config>(ctx, reader, wire, field); !st) {
+                    pop_recursion<Config>(ctx);
                     return st;
                 }
             }
@@ -1728,8 +1926,12 @@ namespace protocyte {
     inline Status add_size(usize *total, const usize value) noexcept { return checked_add(*total, value, total); }
 
 #ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
-    void *hosted_allocate(void *state, usize size, usize alignment) noexcept;
-    void hosted_deallocate(void *state, void *ptr, usize size, usize alignment) noexcept;
+    inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {
+        return ::operator new(size, static_cast<::std::align_val_t>(alignment), ::std::nothrow);
+    }
+    inline void hosted_deallocate(void *, void *ptr, const usize, const usize alignment) noexcept {
+        ::operator delete(ptr, static_cast<::std::align_val_t>(alignment));
+    }
     inline Allocator hosted_allocator() noexcept {
         return {.state = nullptr, .allocate = hosted_allocate, .deallocate = hosted_deallocate};
     }

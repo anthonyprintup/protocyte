@@ -4,24 +4,25 @@ package protocyte;
 
 import "google/protobuf/descriptor.proto";
 
-enum ConstantKind {
-  KIND_UNSPECIFIED = 0;
-  BOOL = 1;
-  INT32 = 2;
-  INT64 = 3;
-  UINT32 = 4;
-  UINT64 = 5;
-  FLOAT = 6;
-  DOUBLE = 7;
-  STRING = 8;
-}
-
-message StructConstant {
+message Constant {
   string name = 1;
-  ConstantKind kind = 2;
   oneof value {
-    string literal = 3;
-    string expr = 4;
+    bool boolean = 2;
+    string boolean_expr = 3;
+    int32 i32 = 4;
+    string i32_expr = 5;
+    uint32 u32 = 6;
+    string u32_expr = 7;
+    int64 i64 = 8;
+    string i64_expr = 9;
+    uint64 u64 = 10;
+    string u64_expr = 11;
+    float f32 = 12;
+    string f32_expr = 13;
+    double f64 = 14;
+    string f64_expr = 15;
+    string str = 16;
+    string str_expr = 17;
   }
 }
 
@@ -30,17 +31,17 @@ message ArrayOptions {
     uint32 max = 1;
     string expr = 2;
   }
+  bool fixed = 3;
 }
 
 extend google.protobuf.MessageOptions {
-  repeated StructConstant constant = 50000;
+  repeated Constant constant = 50000;
 }
 
 extend google.protobuf.FileOptions {
-  repeated StructConstant package_constant = 50002;
+  repeated Constant package_constant = 50002;
 }
 
 extend google.protobuf.FieldOptions {
   ArrayOptions array = 50000;
-  bool fixed = 50001;
 }

@@ -26,7 +26,6 @@ set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
-    "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
 )
 
 if(PROTOCYTE_SMOKE_REGENERATE)
@@ -81,7 +80,6 @@ add_executable(protocyte_host_smoke
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
-    "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
 )
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
 target_compile_definitions(protocyte_host_smoke PRIVATE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
@@ -109,7 +107,6 @@ if(PROTOCYTE_SMOKE_BUILD_DRIVER)
     wdk_add_driver(protocyte_kernel_smoke
         src/kernel_driver_smoke.cpp
         "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
-        "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.cpp"
     )
     target_include_directories(protocyte_kernel_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
     target_compile_features(protocyte_kernel_smoke PRIVATE cxx_std_20)
