@@ -252,7 +252,9 @@ without failing.
 
 CMake users can forward these through the existing `OPTIONS` argument on
 `protocyte_generate(...)` or `protocyte_add_proto_library(...)`; no dedicated
-CMake option is required.
+CMake option is required. The CMake integration hex-encodes generator
+parameters before passing them through `protoc`, so absolute Windows and POSIX
+paths are safe in `OPTIONS`.
 
 Example:
 
