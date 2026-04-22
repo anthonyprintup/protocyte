@@ -50,6 +50,54 @@ namespace protocyte {
         return static_cast<T &&>(value);
     }
 
+    template<class T> struct ReverseIterator {
+        using value_type = T;
+        using difference_type = isize;
+        using reference = T &;
+        using pointer = T *;
+
+        constexpr ReverseIterator() noexcept = default;
+        constexpr explicit ReverseIterator(pointer current) noexcept: current_ {current} {}
+
+        constexpr reference operator*() const noexcept { return current_[-1]; }
+        constexpr pointer operator->() const noexcept { return &current_[-1]; }
+
+        constexpr ReverseIterator &operator++() noexcept {
+            --current_;
+            return *this;
+        }
+
+        constexpr ReverseIterator operator++(int) noexcept {
+            auto copy = *this;
+            --current_;
+            return copy;
+        }
+
+        constexpr ReverseIterator &operator--() noexcept {
+            ++current_;
+            return *this;
+        }
+
+        constexpr ReverseIterator operator--(int) noexcept {
+            auto copy = *this;
+            ++current_;
+            return copy;
+        }
+
+        constexpr pointer base() const noexcept { return current_; }
+
+        friend constexpr bool operator==(const ReverseIterator lhs, const ReverseIterator rhs) noexcept {
+            return lhs.current_ == rhs.current_;
+        }
+
+        friend constexpr bool operator!=(const ReverseIterator lhs, const ReverseIterator rhs) noexcept {
+            return lhs.current_ != rhs.current_;
+        }
+
+    protected:
+        pointer current_ {};
+    };
+
     enum class ErrorCode : u32 {
         ok = 0,
         no_memory = 1,
@@ -210,13 +258,49 @@ namespace protocyte {
     };
 
     struct ByteView {
+        using value_type = const u8;
+        using iterator = const u8 *;
+        using const_iterator = const u8 *;
+        using reverse_iterator = ReverseIterator<const u8>;
+        using const_reverse_iterator = ReverseIterator<const u8>;
+
         const u8 *data {};
         usize size {};
+
+        constexpr iterator begin() const noexcept { return data; }
+        constexpr iterator end() const noexcept { return data + size; }
+        constexpr const_iterator cbegin() const noexcept { return begin(); }
+        constexpr const_iterator cend() const noexcept { return end(); }
+        constexpr reverse_iterator rbegin() const noexcept { return reverse_iterator {end()}; }
+        constexpr reverse_iterator rend() const noexcept { return reverse_iterator {begin()}; }
+        constexpr const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        constexpr const_reverse_iterator crend() const noexcept { return rend(); }
+        constexpr bool empty() const noexcept { return size == 0u; }
     };
 
     struct MutableByteView {
+        using value_type = u8;
+        using iterator = u8 *;
+        using const_iterator = const u8 *;
+        using reverse_iterator = ReverseIterator<u8>;
+        using const_reverse_iterator = ReverseIterator<const u8>;
+
         u8 *data {};
         usize size {};
+
+        constexpr iterator begin() noexcept { return data; }
+        constexpr const_iterator begin() const noexcept { return data; }
+        constexpr iterator end() noexcept { return data + size; }
+        constexpr const_iterator end() const noexcept { return data + size; }
+        constexpr const_iterator cbegin() const noexcept { return begin(); }
+        constexpr const_iterator cend() const noexcept { return end(); }
+        constexpr reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
+        constexpr const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
+        constexpr reverse_iterator rend() noexcept { return reverse_iterator {begin()}; }
+        constexpr const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
+        constexpr const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        constexpr const_reverse_iterator crend() const noexcept { return rend(); }
+        constexpr bool empty() const noexcept { return size == 0u; }
     };
 
     constexpr bool bytes_equal(const ByteView lhs, const ByteView rhs) noexcept {
@@ -399,6 +483,11 @@ namespace protocyte {
 
     template<class T, class Config> struct Vector {
         using Context = typename Config::Context;
+        using value_type = T;
+        using iterator = T *;
+        using const_iterator = const T *;
+        using reverse_iterator = ReverseIterator<T>;
+        using const_reverse_iterator = ReverseIterator<const T>;
 
         explicit Vector(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}
         Vector(Vector &&other) noexcept:
@@ -433,6 +522,18 @@ namespace protocyte {
         const T *data() const noexcept { return data_; }
         T &operator[](const usize index) noexcept { return data_[index]; }
         const T &operator[](const usize index) const noexcept { return data_[index]; }
+        iterator begin() noexcept { return data_; }
+        const_iterator begin() const noexcept { return data_; }
+        iterator end() noexcept { return data_ + size_; }
+        const_iterator end() const noexcept { return data_ + size_; }
+        const_iterator cbegin() const noexcept { return begin(); }
+        const_iterator cend() const noexcept { return end(); }
+        reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
+        const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
+        reverse_iterator rend() noexcept { return reverse_iterator {begin()}; }
+        const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
+        const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        const_reverse_iterator crend() const noexcept { return rend(); }
 
         void clear() noexcept {
             for (usize i {}; i < size_; ++i) { data_[i].~T(); }
@@ -480,15 +581,9 @@ namespace protocyte {
             return Result<Ref<T>>::ok(ref);
         }
 
-        Status push_back(const T &value) noexcept {
-            auto result = emplace_back(value);
-            return result.status();
-        }
+        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
 
-        Status push_back(T &&value) noexcept {
-            auto result = emplace_back(protocyte::move(value));
-            return result.status();
-        }
+        Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
         Status resize_default(const usize count) noexcept {
             if (count < size_) {
@@ -525,6 +620,12 @@ namespace protocyte {
     };
 
     template<class T, usize Max> struct Array {
+        using value_type = T;
+        using iterator = T *;
+        using const_iterator = const T *;
+        using reverse_iterator = ReverseIterator<T>;
+        using const_reverse_iterator = ReverseIterator<const T>;
+
         Array() noexcept = default;
         Array(Array &&other) noexcept {
             for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
@@ -553,6 +654,18 @@ namespace protocyte {
         const T *data() const noexcept { return size_ ? ptr(0u) : nullptr; }
         T &operator[](const usize index) noexcept { return *ptr(index); }
         const T &operator[](const usize index) const noexcept { return *ptr(index); }
+        iterator begin() noexcept { return data(); }
+        const_iterator begin() const noexcept { return data(); }
+        iterator end() noexcept { return data() + size_; }
+        const_iterator end() const noexcept { return data() + size_; }
+        const_iterator cbegin() const noexcept { return begin(); }
+        const_iterator cend() const noexcept { return end(); }
+        reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
+        const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
+        reverse_iterator rend() noexcept { return reverse_iterator {begin()}; }
+        const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
+        const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        const_reverse_iterator crend() const noexcept { return rend(); }
 
         void clear() noexcept {
             while (size_) {
@@ -585,6 +698,12 @@ namespace protocyte {
     };
 
     template<usize Max> struct ByteArray {
+        using value_type = u8;
+        using iterator = u8 *;
+        using const_iterator = const u8 *;
+        using reverse_iterator = ReverseIterator<u8>;
+        using const_reverse_iterator = ReverseIterator<const u8>;
+
         ByteArray() noexcept = default;
         ByteArray(ByteArray &&other) noexcept: size_ {other.size_} {
             for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
@@ -609,6 +728,18 @@ namespace protocyte {
         const u8 *data() const noexcept { return bytes_; }
         usize size() const noexcept { return size_; }
         bool empty() const noexcept { return !size_; }
+        iterator begin() noexcept { return bytes_; }
+        const_iterator begin() const noexcept { return bytes_; }
+        iterator end() noexcept { return bytes_ + size_; }
+        const_iterator end() const noexcept { return bytes_ + size_; }
+        const_iterator cbegin() const noexcept { return begin(); }
+        const_iterator cend() const noexcept { return end(); }
+        reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
+        const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
+        reverse_iterator rend() noexcept { return reverse_iterator {begin()}; }
+        const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
+        const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        const_reverse_iterator crend() const noexcept { return rend(); }
         void clear() noexcept { size_ = {}; }
 
         Status resize(const usize count) noexcept {
@@ -637,6 +768,12 @@ namespace protocyte {
     };
 
     template<usize Max> struct FixedByteArray {
+        using value_type = u8;
+        using iterator = u8 *;
+        using const_iterator = const u8 *;
+        using reverse_iterator = ReverseIterator<u8>;
+        using const_reverse_iterator = ReverseIterator<const u8>;
+
         FixedByteArray() noexcept = default;
         FixedByteArray(FixedByteArray &&other) noexcept: has_ {other.has_} {
             if (other.has_) {
@@ -672,6 +809,18 @@ namespace protocyte {
         usize size() const noexcept { return has_ ? Max : 0u; }
         bool empty() const noexcept { return !has_; }
         bool has_value() const noexcept { return has_; }
+        iterator begin() noexcept { return bytes_; }
+        const_iterator begin() const noexcept { return bytes_; }
+        iterator end() noexcept { return bytes_ + size(); }
+        const_iterator end() const noexcept { return bytes_ + size(); }
+        const_iterator cbegin() const noexcept { return begin(); }
+        const_iterator cend() const noexcept { return end(); }
+        reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
+        const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
+        reverse_iterator rend() noexcept { return reverse_iterator {begin()}; }
+        const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
+        const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        const_reverse_iterator crend() const noexcept { return rend(); }
         void clear() noexcept { has_ = false; }
 
         Status assign(const ByteView view) noexcept {
@@ -690,6 +839,11 @@ namespace protocyte {
 
     template<class Config> struct Bytes {
         using Context = typename Config::Context;
+        using value_type = u8;
+        using iterator = typename Config::template Vector<u8>::iterator;
+        using const_iterator = typename Config::template Vector<u8>::const_iterator;
+        using reverse_iterator = typename Config::template Vector<u8>::reverse_iterator;
+        using const_reverse_iterator = typename Config::template Vector<u8>::const_reverse_iterator;
 
         explicit Bytes(Context *ctx = nullptr) noexcept: ctx_ {ctx}, bytes_ {ctx} {}
         Bytes(Bytes &&other) noexcept: ctx_ {other.ctx_}, bytes_ {protocyte::move(other.bytes_)} {}
@@ -702,6 +856,18 @@ namespace protocyte {
         Bytes &operator=(const Bytes &) = delete;
 
         ByteView view() const noexcept { return {.data = bytes_.data(), .size = bytes_.size()}; }
+        iterator begin() noexcept { return bytes_.begin(); }
+        const_iterator begin() const noexcept { return bytes_.begin(); }
+        iterator end() noexcept { return bytes_.end(); }
+        const_iterator end() const noexcept { return bytes_.end(); }
+        const_iterator cbegin() const noexcept { return bytes_.cbegin(); }
+        const_iterator cend() const noexcept { return bytes_.cend(); }
+        reverse_iterator rbegin() noexcept { return bytes_.rbegin(); }
+        const_reverse_iterator rbegin() const noexcept { return bytes_.rbegin(); }
+        reverse_iterator rend() noexcept { return bytes_.rend(); }
+        const_reverse_iterator rend() const noexcept { return bytes_.rend(); }
+        const_reverse_iterator crbegin() const noexcept { return bytes_.crbegin(); }
+        const_reverse_iterator crend() const noexcept { return bytes_.crend(); }
         const u8 *data() const noexcept { return bytes_.data(); }
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
@@ -735,6 +901,11 @@ namespace protocyte {
 
     template<class Config> struct String {
         using Context = typename Config::Context;
+        using value_type = const u8;
+        using iterator = typename Config::Bytes::const_iterator;
+        using const_iterator = typename Config::Bytes::const_iterator;
+        using reverse_iterator = typename Config::Bytes::const_reverse_iterator;
+        using const_reverse_iterator = typename Config::Bytes::const_reverse_iterator;
 
         explicit String(Context *ctx = nullptr) noexcept: bytes_ {ctx} {}
         String(String &&other) noexcept: bytes_ {protocyte::move(other.bytes_)} {}
@@ -746,6 +917,14 @@ namespace protocyte {
         String &operator=(const String &) = delete;
 
         ByteView view() const noexcept { return bytes_.view(); }
+        const_iterator begin() const noexcept { return bytes_.begin(); }
+        const_iterator end() const noexcept { return bytes_.end(); }
+        const_iterator cbegin() const noexcept { return bytes_.cbegin(); }
+        const_iterator cend() const noexcept { return bytes_.cend(); }
+        const_reverse_iterator rbegin() const noexcept { return bytes_.rbegin(); }
+        const_reverse_iterator rend() const noexcept { return bytes_.rend(); }
+        const_reverse_iterator crbegin() const noexcept { return bytes_.crbegin(); }
+        const_reverse_iterator crend() const noexcept { return bytes_.crend(); }
         const u8 *data() const noexcept { return bytes_.data(); }
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
@@ -864,13 +1043,112 @@ namespace protocyte {
     };
 
     template<class K, class V, class Config> struct HashMap {
-        struct Bucket {
-            bool occupied {};
-            Optional<K> key;
-            Optional<V> value;
+        struct Entry {
+            K key;
+            V value;
+
+            template<class KeyArg, class ValueArg> explicit Entry(KeyArg &&key_arg, ValueArg &&value_arg) noexcept:
+                key {protocyte::forward<KeyArg>(key_arg)}, value {protocyte::forward<ValueArg>(value_arg)} {}
         };
 
         using Context = typename Config::Context;
+        using Bucket = Optional<Entry>;
+
+        struct EntryProxy {
+            const K &key;
+            V &value;
+        };
+
+        struct ConstEntryProxy {
+            const K &key;
+            const V &value;
+        };
+
+        struct iterator {
+            using value_type = Entry;
+            using difference_type = isize;
+            using reference = EntryProxy;
+
+            constexpr iterator() noexcept = default;
+            constexpr iterator(Bucket *current, Bucket *end) noexcept: current_ {current}, end_ {end} { skip_empty(); }
+
+            constexpr reference operator*() const noexcept { return {(*current_)->key, (*current_)->value}; }
+
+            constexpr iterator &operator++() noexcept {
+                ++current_;
+                skip_empty();
+                return *this;
+            }
+
+            constexpr iterator operator++(int) noexcept {
+                auto copy = *this;
+                ++(*this);
+                return copy;
+            }
+
+            friend constexpr bool operator==(const iterator lhs, const iterator rhs) noexcept {
+                return lhs.current_ == rhs.current_;
+            }
+
+            friend constexpr bool operator!=(const iterator lhs, const iterator rhs) noexcept {
+                return lhs.current_ != rhs.current_;
+            }
+
+            friend struct const_iterator;
+
+        protected:
+            constexpr void skip_empty() noexcept {
+                while (current_ != end_ && !current_->has_value()) { ++current_; }
+            }
+
+            Bucket *current_ {};
+            Bucket *end_ {};
+        };
+
+        struct const_iterator {
+            using value_type = Entry;
+            using difference_type = isize;
+            using reference = ConstEntryProxy;
+
+            constexpr const_iterator() noexcept = default;
+            constexpr const_iterator(const Bucket *current, const Bucket *end) noexcept:
+                current_ {current}, end_ {end} {
+                skip_empty();
+            }
+            constexpr const_iterator(const iterator other) noexcept: current_ {other.current_}, end_ {other.end_} {
+                skip_empty();
+            }
+
+            constexpr reference operator*() const noexcept { return {(*current_)->key, (*current_)->value}; }
+
+            constexpr const_iterator &operator++() noexcept {
+                ++current_;
+                skip_empty();
+                return *this;
+            }
+
+            constexpr const_iterator operator++(int) noexcept {
+                auto copy = *this;
+                ++(*this);
+                return copy;
+            }
+
+            friend constexpr bool operator==(const const_iterator lhs, const const_iterator rhs) noexcept {
+                return lhs.current_ == rhs.current_;
+            }
+
+            friend constexpr bool operator!=(const const_iterator lhs, const const_iterator rhs) noexcept {
+                return lhs.current_ != rhs.current_;
+            }
+
+        protected:
+            constexpr void skip_empty() noexcept {
+                while (current_ != end_ && !current_->has_value()) { ++current_; }
+            }
+
+            const Bucket *current_ {};
+            const Bucket *end_ {};
+        };
 
         explicit HashMap(Context *ctx = nullptr) noexcept: ctx_ {ctx}, buckets_ {ctx} {}
         HashMap(HashMap &&other) noexcept:
@@ -892,12 +1170,14 @@ namespace protocyte {
 
         usize size() const noexcept { return size_; }
         bool empty() const noexcept { return !size_; }
+        iterator begin() noexcept { return iterator {buckets_.begin(), buckets_.end()}; }
+        const_iterator begin() const noexcept { return const_iterator {buckets_.begin(), buckets_.end()}; }
+        iterator end() noexcept { return iterator {buckets_.end(), buckets_.end()}; }
+        const_iterator end() const noexcept { return const_iterator {buckets_.end(), buckets_.end()}; }
+        const_iterator cbegin() const noexcept { return begin(); }
+        const_iterator cend() const noexcept { return end(); }
         void clear() noexcept {
-            for (usize i {}; i < buckets_.size(); ++i) {
-                buckets_[i].occupied = false;
-                buckets_[i].key.reset();
-                buckets_[i].value.reset();
-            }
+            for (usize i {}; i < buckets_.size(); ++i) { buckets_[i].reset(); }
             size_ = {};
         }
 
@@ -912,9 +1192,9 @@ namespace protocyte {
                 return st;
             }
             for (usize i {}; i < buckets_.size(); ++i) {
-                if (buckets_[i].occupied) {
-                    if (const auto st = next.insert_or_assign(protocyte::move(*buckets_[i].key),
-                                                              protocyte::move(*buckets_[i].value));
+                if (buckets_[i].has_value()) {
+                    if (const auto st = next.insert_or_assign(protocyte::move((*buckets_[i]).key),
+                                                              protocyte::move((*buckets_[i]).value));
                         !st) {
                         return st;
                     }
@@ -929,12 +1209,13 @@ namespace protocyte {
                 usize existing_index {Config::hash(key) & (buckets_.size() - 1u)};
                 for (;;) {
                     auto &bucket = buckets_[existing_index];
-                    if (!bucket.occupied) {
+                    if (!bucket.has_value()) {
                         break;
                     }
-                    if (Config::equal(*bucket.key, key)) {
-                        bucket.value.reset();
-                        bucket.value.emplace(protocyte::move(value));
+                    if (Config::equal((*bucket).key, key)) {
+                        K stored_key {protocyte::move((*bucket).key)};
+                        bucket.reset();
+                        bucket.emplace(protocyte::move(stored_key), protocyte::move(value));
                         return {};
                     }
                     existing_index = (existing_index + 1u) & (buckets_.size() - 1u);
@@ -945,27 +1226,13 @@ namespace protocyte {
             }
             usize index {Config::hash(key) & (buckets_.size() - 1u)};
             for (;;) {
-                auto &bucket = buckets_[index];
-                if (!bucket.occupied) {
-                    bucket.occupied = true;
-                    bucket.key.emplace(protocyte::move(key));
-                    bucket.value.emplace(protocyte::move(value));
+                if (auto &bucket = buckets_[index]; !bucket.has_value()) {
+                    bucket.emplace(protocyte::move(key), protocyte::move(value));
                     ++size_;
                     return {};
                 }
                 index = (index + 1u) & (buckets_.size() - 1u);
             }
-        }
-
-        template<class Fn> Status for_each(Fn &&fn) const noexcept {
-            for (usize i {}; i < buckets_.size(); ++i) {
-                if (const Bucket &bucket = buckets_[i]; bucket.occupied) {
-                    if (const auto st = fn(*bucket.key, *bucket.value); !st) {
-                        return st;
-                    }
-                }
-            }
-            return {};
         }
 
     protected:
@@ -1771,8 +2038,7 @@ namespace protocyte {
     Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept {
         switch (wire_type) {
             case WireType::VARINT: {
-                auto ignored = read_varint(reader);
-                return ignored.status();
+                return read_varint(reader).status();
             }
             case WireType::I64: return reader.skip(8u);
             case WireType::LEN: {
@@ -1794,8 +2060,7 @@ namespace protocyte {
                                                            const u32 field_number = {}) noexcept {
         switch (wire_type) {
             case WireType::VARINT: {
-                auto ignored = read_varint(reader);
-                return ignored.status();
+                return read_varint(reader).status();
             }
             case WireType::I64: return reader.skip(8u);
             case WireType::LEN: {

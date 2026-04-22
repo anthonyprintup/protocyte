@@ -237,6 +237,41 @@ namespace {
         require_success(out.push_back(protocyte::move(value)));
     }
 
+    template<class Container, class T, size_t N>
+    void check_scalar_sequence(const Container &values, const T (&expected)[N]) {
+        REQUIRE(values.size() == N);
+        size_t index {};
+        for (const auto &value : values) {
+            REQUIRE(index < N);
+            CHECK(value == expected[index]);
+            ++index;
+        }
+        CHECK(index == N);
+    }
+
+    template<class Container, class T, size_t N>
+    void check_scalar_reverse_sequence(const Container &values, const T (&expected)[N]) {
+        size_t index {N};
+        for (auto it = values.rbegin(); it != values.rend(); ++it) {
+            REQUIRE(index != 0u);
+            --index;
+            CHECK(*it == expected[index]);
+        }
+        CHECK(index == 0u);
+    }
+
+    template<class Container, size_t N>
+    void check_byte_entry_sequence(const Container &values, const protocyte::ByteView (&expected)[N]) {
+        REQUIRE(values.size() == N);
+        size_t index {};
+        for (const auto &value : values) {
+            REQUIRE(index < N);
+            CHECK(view_equal(value.view(), expected[index]));
+            ++index;
+        }
+        CHECK(index == N);
+    }
+
     std::string serialize_compat(const CompatMessage &message) {
         auto encoded_size = message.encoded_size();
         require_success(encoded_size);
@@ -275,10 +310,8 @@ namespace {
 
     template<class Container> void check_three_byte_entries(const Container &values, protocyte::ByteView first,
                                                             protocyte::ByteView second, protocyte::ByteView third) {
-        REQUIRE(values.size() == 3u);
-        CHECK(view_equal(values[0].view(), first));
-        CHECK(view_equal(values[1].view(), second));
-        CHECK(view_equal(values[2].view(), third));
+        const protocyte::ByteView expected[] = {first, second, third};
+        check_byte_entry_sequence(values, expected);
     }
 
     void populate_repeated_bytes_holder(RepeatedBytesHolder &value, Config::Context &ctx) {
@@ -316,18 +349,25 @@ namespace {
 
     bool nested2_matches(const Nested2 &value, protocyte::ByteView description, float first, float second,
                          InnerMode mode) noexcept {
-        const auto &values = value.values();
-        return view_equal(value.description(), description) && values.size() == 2u && values[0] == first &&
-               values[1] == second && value.mode() == mode;
+        const float expected[] = {first, second};
+        size_t index {};
+        if (!view_equal(value.description(), description) || value.values().size() != 2u || value.mode() != mode) {
+            return false;
+        }
+        for (const auto current : value.values()) {
+            if (index >= 2u || current != expected[index]) {
+                return false;
+            }
+            ++index;
+        }
+        return index == 2u;
     }
 
     void check_nested2(const Nested2 &value, protocyte::ByteView description, float first, float second,
                        InnerMode mode) {
-        const auto &values = value.values();
+        const float expected[] = {first, second};
         CHECK(view_equal(value.description(), description));
-        REQUIRE(values.size() == 2u);
-        CHECK(values[0] == first);
-        CHECK(values[1] == second);
+        check_scalar_sequence(value.values(), expected);
         CHECK(value.mode() == mode);
     }
 
@@ -480,58 +520,48 @@ namespace {
 
     void check_maps(const Message &message) {
         bool saw_str_int32 = false;
-        require_success(
-            message.map_str_int32().for_each([&](const auto &key, const auto &value) noexcept -> protocyte::Status {
-                if (view_equal(key.view(), view_of(kMapKey)) && value == 301) {
-                    saw_str_int32 = true;
-                }
-                return protocyte::Status::ok();
-            }));
+        for (const auto entry : message.map_str_int32()) {
+            if (view_equal(entry.key.view(), view_of(kMapKey)) && entry.value == 301) {
+                saw_str_int32 = true;
+            }
+        }
         CHECK(saw_str_int32);
         CHECK(message.map_str_int32().size() == 1u);
 
         bool saw_int32_str = false;
-        require_success(
-            message.map_int32_str().for_each([&](const auto &key, const auto &value) noexcept -> protocyte::Status {
-                if (key == 302 && view_equal(value.view(), view_of(kMapValue))) {
-                    saw_int32_str = true;
-                }
-                return protocyte::Status::ok();
-            }));
+        for (const auto entry : message.map_int32_str()) {
+            if (entry.key == 302 && view_equal(entry.value.view(), view_of(kMapValue))) {
+                saw_int32_str = true;
+            }
+        }
         CHECK(saw_int32_str);
         CHECK(message.map_int32_str().size() == 1u);
 
         bool saw_bool_bytes = false;
-        require_success(
-            message.map_bool_bytes().for_each([&](const auto &key, const auto &value) noexcept -> protocyte::Status {
-                if (key && view_equal(value.view(), view_of(kBoolBytes))) {
-                    saw_bool_bytes = true;
-                }
-                return protocyte::Status::ok();
-            }));
+        for (const auto entry : message.map_bool_bytes()) {
+            if (entry.key && view_equal(entry.value.view(), view_of(kBoolBytes))) {
+                saw_bool_bytes = true;
+            }
+        }
         CHECK(saw_bool_bytes);
         CHECK(message.map_bool_bytes().size() == 1u);
 
         bool saw_uint64_msg = false;
-        require_success(
-            message.map_uint64_msg().for_each([&](const auto &key, const auto &value) noexcept -> protocyte::Status {
-                if (key == 3300u && nested1_matches(value, view_of(kNestedName), 330)) {
-                    saw_uint64_msg = true;
-                }
-                return protocyte::Status::ok();
-            }));
+        for (const auto entry : message.map_uint64_msg()) {
+            if (entry.key == 3300u && nested1_matches(entry.value, view_of(kNestedName), 330)) {
+                saw_uint64_msg = true;
+            }
+        }
         CHECK(saw_uint64_msg);
         CHECK(message.map_uint64_msg().size() == 1u);
 
         bool saw_very_nested = false;
-        require_success(
-            message.very_nested_map().for_each([&](const auto &key, const auto &value) noexcept -> protocyte::Status {
-                if (view_equal(key.view(), view_of(kVeryNestedKey)) &&
-                    nested2_matches(value, view_of(kNestedDescription), 3.5f, 4.5f, InnerMode::C)) {
-                    saw_very_nested = true;
-                }
-                return protocyte::Status::ok();
-            }));
+        for (const auto entry : message.very_nested_map()) {
+            if (view_equal(entry.key.view(), view_of(kVeryNestedKey)) &&
+                nested2_matches(entry.value, view_of(kNestedDescription), 3.5f, 4.5f, InnerMode::C)) {
+                saw_very_nested = true;
+            }
+        }
         CHECK(saw_very_nested);
         CHECK(message.very_nested_map().size() == 1u);
     }
@@ -553,20 +583,12 @@ namespace {
         CHECK(view_equal(parsed.f_string(), view_of(kString)));
         CHECK(view_equal(parsed.f_bytes(), view_of(kBytes)));
 
-        const auto &unpacked = parsed.r_int32_unpacked();
-        REQUIRE(unpacked.size() == 2u);
-        CHECK(unpacked[0] == 21);
-        CHECK(unpacked[1] == 22);
-
-        const auto &packed = parsed.r_int32_packed();
-        REQUIRE(packed.size() == 2u);
-        CHECK(packed[0] == 23);
-        CHECK(packed[1] == 24);
-
-        const auto &doubles = parsed.r_double();
-        REQUIRE(doubles.size() == 2u);
-        CHECK(doubles[0] == 23.5);
-        CHECK(doubles[1] == 24.5);
+        const protocyte::i32 expected_unpacked[] = {21, 22};
+        const protocyte::i32 expected_packed[] = {23, 24};
+        const protocyte::f64 expected_doubles[] = {23.5, 24.5};
+        check_scalar_sequence(parsed.r_int32_unpacked(), expected_unpacked);
+        check_scalar_sequence(parsed.r_int32_packed(), expected_packed);
+        check_scalar_sequence(parsed.r_double(), expected_doubles);
 
         CHECK(parsed.color() == Color::GREEN);
 
@@ -590,10 +612,8 @@ namespace {
         REQUIRE(nested_items.size() == 1u);
         check_nested2(nested_items[0], view_of(kNestedDescription), 36.5f, 37.5f, InnerMode::A);
 
-        const auto &colors = parsed.colors();
-        REQUIRE(colors.size() == 2u);
-        CHECK(colors[0] == static_cast<int32_t>(Color::RED));
-        CHECK(colors[1] == static_cast<int32_t>(Color::BLUE));
+        const protocyte::i32 expected_colors[] = {static_cast<int32_t>(Color::RED), static_cast<int32_t>(Color::BLUE)};
+        check_scalar_sequence(parsed.colors(), expected_colors);
 
         REQUIRE(parsed.has_opt_int32());
         CHECK(parsed.opt_int32() == 38);
@@ -605,33 +625,16 @@ namespace {
         CHECK(parsed.byte_array_size() == test::ultimate::BYTE_ARRAY_CAP);
         CHECK(view_equal(parsed.float_expr_array(), view_of(kFloatExprArray)));
         CHECK(parsed.float_expr_array_size() == Message::FLOATISH_BOUND);
-        const auto &repeated_byte_array = parsed.repeated_byte_array();
-        REQUIRE(repeated_byte_array.size() == 3u);
-        CHECK(view_equal(repeated_byte_array[0].view(), view_of(kRepeatedBytes0)));
-        CHECK(view_equal(repeated_byte_array[1].view(), view_of(kRepeatedBytes1)));
-        CHECK(view_equal(repeated_byte_array[2].view(), view_of(kRepeatedBytes2)));
-        const auto &bounded_repeated_byte_array = parsed.bounded_repeated_byte_array();
-        REQUIRE(bounded_repeated_byte_array.size() == 3u);
-        CHECK(view_equal(bounded_repeated_byte_array[0].view(), view_of(kRepeatedBytes1)));
-        CHECK(view_equal(bounded_repeated_byte_array[1].view(), view_of(kRepeatedBytes2)));
-        CHECK(view_equal(bounded_repeated_byte_array[2].view(), view_of(kRepeatedBytes3)));
-        const auto &fixed_repeated_byte_array = parsed.fixed_repeated_byte_array();
-        REQUIRE(fixed_repeated_byte_array.size() == 3u);
-        CHECK(view_equal(fixed_repeated_byte_array[0].view(), view_of(kRepeatedBytes0)));
-        CHECK(view_equal(fixed_repeated_byte_array[1].view(), view_of(kRepeatedBytes2)));
-        CHECK(view_equal(fixed_repeated_byte_array[2].view(), view_of(kRepeatedBytes3)));
+        check_three_byte_entries(parsed.repeated_byte_array(), view_of(kRepeatedBytes0), view_of(kRepeatedBytes1),
+                                 view_of(kRepeatedBytes2));
+        check_three_byte_entries(parsed.bounded_repeated_byte_array(), view_of(kRepeatedBytes1),
+                                 view_of(kRepeatedBytes2), view_of(kRepeatedBytes3));
+        check_three_byte_entries(parsed.fixed_repeated_byte_array(), view_of(kRepeatedBytes0), view_of(kRepeatedBytes2),
+                                 view_of(kRepeatedBytes3));
 
-        const auto &integer_array = parsed.integer_array();
-        REQUIRE(integer_array.size() == Message::INTEGER_ARRAY_CAP);
-        for (size_t i = 0; i < sizeof(kIntegerArray) / sizeof(kIntegerArray[0]); ++i) {
-            CHECK(integer_array[i] == kIntegerArray[i]);
-        }
-
-        const auto &fixed_integer_array = parsed.fixed_integer_array();
-        REQUIRE(fixed_integer_array.size() == Message::FIXED_INTEGER_ARRAY_CAP);
-        for (size_t i = 0; i < sizeof(kFixedIntegerArray) / sizeof(kFixedIntegerArray[0]); ++i) {
-            CHECK(fixed_integer_array[i] == kFixedIntegerArray[i]);
-        }
+        check_scalar_sequence(parsed.integer_array(), kIntegerArray);
+        check_scalar_reverse_sequence(parsed.integer_array(), kIntegerArray);
+        check_scalar_sequence(parsed.fixed_integer_array(), kFixedIntegerArray);
 
         REQUIRE(parsed.has_extreme_nesting());
         const Deep &deep = *parsed.extreme_nesting();
@@ -641,13 +644,11 @@ namespace {
         CHECK(view_equal(deep.text(), view_of(kDeepText)));
 
         bool saw_weird = false;
-        require_success(
-            deep.weird_map().for_each([&](const auto &key, const auto &value) noexcept -> protocyte::Status {
-                if (key == 7 && view_equal(value.view(), view_of(kWeirdValue))) {
-                    saw_weird = true;
-                }
-                return protocyte::Status::ok();
-            }));
+        for (const auto entry : deep.weird_map()) {
+            if (entry.key == 7 && view_equal(entry.value.view(), view_of(kWeirdValue))) {
+                saw_weird = true;
+            }
+        }
         CHECK(saw_weird);
         CHECK(deep.weird_map().size() == 1u);
     }
@@ -1037,7 +1038,22 @@ namespace {
             auto sha256 = message.mutable_sha256();
             REQUIRE(message.has_sha256());
             REQUIRE(sha256.size == 32u);
-            for (size_t i = 0; i < sha256.size; ++i) { CHECK(sha256.data[i] == 0u); }
+            uint8_t expected_byte = 1u;
+            for (auto &byte : sha256) {
+                CHECK(byte == 0u);
+                byte = expected_byte++;
+            }
+            CHECK(expected_byte == 33u);
+
+            uint8_t forward_byte = 1u;
+            for (const auto byte : message.sha256()) { CHECK(byte == forward_byte++); }
+            CHECK(forward_byte == 33u);
+
+            uint8_t reverse_byte = 32u;
+            for (auto it = message.sha256().rbegin(); it != message.sha256().rend(); ++it) {
+                CHECK(*it == reverse_byte--);
+            }
+            CHECK(reverse_byte == 0u);
 
             message.clear_sha256();
             CHECK_FALSE(message.has_sha256());
@@ -1077,7 +1093,12 @@ namespace {
 
             require_success(message.resize_byte_array(test::ultimate::BYTE_ARRAY_CAP));
             REQUIRE(message.byte_array_size() == test::ultimate::BYTE_ARRAY_CAP);
-            for (size_t i = 0; i < message.byte_array().size; ++i) { CHECK(message.byte_array().data[i] == 0u); }
+            size_t zero_bytes {};
+            for (const auto byte : message.byte_array()) {
+                CHECK(byte == 0u);
+                ++zero_bytes;
+            }
+            CHECK(zero_bytes == test::ultimate::BYTE_ARRAY_CAP);
 
             message.clear_byte_array();
             CHECK(message.byte_array_size() == 0u);
@@ -1324,11 +1345,7 @@ namespace {
         CHECK(view_equal(message.external_bytes(), view_of(kExternalBytes)));
         CHECK(message.external_bytes_size() == sizeof(kExternalBytes));
 
-        const auto &mirrored_values = message.mirrored_values();
-        REQUIRE(mirrored_values.size() == Cross::ROOT_MIRROR);
-        for (size_t i = 0; i < sizeof(kMirroredValues) / sizeof(kMirroredValues[0]); ++i) {
-            CHECK(mirrored_values[i] == kMirroredValues[i]);
-        }
+        check_scalar_sequence(message.mirrored_values(), kMirroredValues);
 
         REQUIRE(message.has_nested());
         CHECK(view_equal(message.nested()->nested_bytes(), view_of(kNestedBytes)));
@@ -1369,11 +1386,7 @@ namespace {
         CHECK(view_equal(message.remote_bytes(), view_of(kCrossPackageBytes)));
         CHECK(message.remote_bytes_size() == sizeof(kCrossPackageBytes));
 
-        const auto &remote_values = message.remote_values();
-        REQUIRE(remote_values.size() == CrossPackage::NESTED_COUNT);
-        for (size_t i = 0; i < sizeof(kCrossPackageValues) / sizeof(kCrossPackageValues[0]); ++i) {
-            CHECK(remote_values[i] == kCrossPackageValues[i]);
-        }
+        check_scalar_sequence(message.remote_values(), kCrossPackageValues);
 
         REQUIRE(message.has_nested());
         CHECK(view_equal(message.nested()->nested_bytes(), view_of(kCrossPackageNestedBytes)));
@@ -1430,6 +1443,126 @@ TEST_CASE("Fixed bytes preserve presence semantics", "[smoke][fixed]") {
 TEST_CASE("Array bounds are enforced", "[smoke][array]") {
     auto ctx = make_context();
     check_array_validation(ctx);
+}
+
+TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
+    auto ctx = make_context();
+
+    SECTION("vector and array support range and reverse traversal") {
+        Config::Vector<protocyte::i32> values(&ctx);
+        require_success(values.push_back(1));
+        require_success(values.push_back(2));
+        require_success(values.push_back(3));
+
+        protocyte::i32 expected_values[] = {10, 20, 30};
+        size_t index {};
+        for (auto &value : values) {
+            value = expected_values[index];
+            ++index;
+        }
+        CHECK(index == 3u);
+
+        check_scalar_sequence(values, expected_values);
+        check_scalar_reverse_sequence(values, expected_values);
+
+        protocyte::Array<protocyte::i32, 3u> bounded;
+        for (const auto value : expected_values) { require_success(bounded.push_back(value)); }
+        check_scalar_sequence(bounded, expected_values);
+        check_scalar_reverse_sequence(bounded, expected_values);
+    }
+
+    SECTION("byte containers and views iterate in const and mutable contexts") {
+        protocyte::ByteArray<sizeof(kByteArray)> bytes;
+        require_success(bytes.assign(view_of(kByteArray)));
+
+        size_t index {};
+        for (const auto byte : bytes.view()) {
+            CHECK(byte == kByteArray[index]);
+            ++index;
+        }
+        CHECK(index == sizeof(kByteArray));
+
+        auto mutable_bytes = bytes.mutable_view();
+        for (auto &byte : mutable_bytes) { byte = static_cast<uint8_t>(byte ^ 0xffu); }
+
+        index = 0u;
+        for (const auto byte : bytes) {
+            CHECK(byte == static_cast<uint8_t>(kByteArray[index] ^ 0xffu));
+            ++index;
+        }
+        CHECK(index == sizeof(kByteArray));
+
+        index = sizeof(kByteArray);
+        for (auto it = bytes.rbegin(); it != bytes.rend(); ++it) {
+            --index;
+            CHECK(*it == static_cast<uint8_t>(kByteArray[index] ^ 0xffu));
+        }
+        CHECK(index == 0u);
+
+        protocyte::FixedByteArray<sizeof(kOneofBytes)> fixed_bytes;
+        auto fixed_view = fixed_bytes.mutable_view();
+        index = 0u;
+        for (auto &byte : fixed_view) {
+            byte = kOneofBytes[index];
+            ++index;
+        }
+        CHECK(index == sizeof(kOneofBytes));
+        CHECK(view_equal(fixed_bytes.view(), view_of(kOneofBytes)));
+    }
+
+    SECTION("bytes wrappers expose mutable iterators and strings stay read-only") {
+        Config::Bytes payload(&ctx);
+        assign_bytes(payload, view_of(kBytes));
+
+        size_t index {};
+        for (auto &byte : payload) { byte = static_cast<uint8_t>(byte ^ 0x1u); }
+
+        index = 0u;
+        for (const auto byte : payload) {
+            CHECK(byte == static_cast<uint8_t>(kBytes[index] ^ 0x1u));
+            ++index;
+        }
+        CHECK(index == sizeof(kBytes));
+
+        Config::String text(&ctx);
+        assign_string(text, view_of(kString));
+        index = 0u;
+        for (const auto byte : text) {
+            CHECK(byte == kString[index]);
+            ++index;
+        }
+        CHECK(index == sizeof(kString));
+
+        index = sizeof(kString);
+        for (auto it = text.rbegin(); it != text.rend(); ++it) {
+            --index;
+            CHECK(*it == kString[index]);
+        }
+        CHECK(index == 0u);
+    }
+}
+
+TEST_CASE("HashMap iterators expose key/value proxies", "[smoke][iterators][map]") {
+    auto ctx = make_context();
+    Message message(ctx);
+    insert_map_str_int32(message, ctx);
+
+    bool mutated = false;
+    for (auto entry : message.mutable_map_str_int32()) {
+        if (view_equal(entry.key.view(), view_of(kMapKey))) {
+            entry.value = 302;
+            mutated = true;
+        }
+    }
+    CHECK(mutated);
+
+    bool saw_iterator = false;
+    for (const auto entry : message.map_str_int32()) {
+        if (view_equal(entry.key.view(), view_of(kMapKey)) && entry.value == 302) {
+            saw_iterator = true;
+        }
+    }
+    CHECK(saw_iterator);
 }
 
 TEST_CASE("Cross-message constants resolve into arrays", "[smoke][constants]") {
