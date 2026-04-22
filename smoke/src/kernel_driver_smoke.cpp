@@ -10,14 +10,38 @@ extern "C" {
     int _fltused = 0;
 #ifdef __cplusplus
 }
+
+void __cdecl operator delete(void *ptr) noexcept {
+    if (ptr != nullptr) {
+        ExFreePool(ptr);
+    }
+}
+
+void __cdecl operator delete(void *ptr, size_t) noexcept { ::operator delete(ptr); }
+
+void __cdecl operator delete[](void *ptr) noexcept { ::operator delete(ptr); }
+
+void __cdecl operator delete[](void *ptr, size_t) noexcept { ::operator delete(ptr); }
 #endif
 
 namespace {
 
     constexpr ULONG kProtocytePoolTag = 'TyCP';
 
+    POOL_TYPE kernel_pool_type() noexcept {
+#if NTDDI_VERSION >= NTDDI_WIN8
+        return NonPagedPoolNx;
+#else
+        return NonPagedPool;
+#endif
+    }
+
     void *kernel_allocate(void *, size_t size, size_t) noexcept {
+#if NTDDI_VERSION >= NTDDI_WIN10_VB
         return ExAllocatePool2(POOL_FLAG_NON_PAGED, size, kProtocytePoolTag);
+#else
+        return ExAllocatePoolWithTag(kernel_pool_type(), size, kProtocytePoolTag);
+#endif
     }
 
     void kernel_deallocate(void *, void *ptr, size_t, size_t) noexcept {

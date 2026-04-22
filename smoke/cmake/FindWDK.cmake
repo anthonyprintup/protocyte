@@ -100,6 +100,7 @@ set(WDK_COMPILE_FLAGS
     "/GR-" # disable RTTI
     "/Gz" # __stdcall by default
     "/kernel" # create kernel mode binary
+    "/Zc:sizedDealloc-" # avoid CRT sized delete requirements in no-CRT driver builds
     "/FIwarning.h" # disable warnings in WDK headers
     "/FI${WDK_ADDITIONAL_FLAGS_FILE}" # include file to disable RTC
     "/Oi" # enable intrinsic functions so that you can use functions like _disable or _enable
@@ -165,7 +166,6 @@ function(wdk_add_driver _target)
     target_include_directories(${_target} SYSTEM PRIVATE
         "${WDK_ROOT}/Include/${WDK_INC_VERSION}/shared"
         "${WDK_ROOT}/Include/${WDK_INC_VERSION}/km"
-        "${WDK_ROOT}/Include/${WDK_INC_VERSION}/km/crt"
     )
 
     target_link_libraries(${_target} WDK::NTOSKRNL WDK::HAL WDK::WMILIB)
@@ -225,7 +225,6 @@ function(wdk_add_library _target)
     target_include_directories(${_target} SYSTEM PRIVATE
         "${WDK_ROOT}/Include/${WDK_INC_VERSION}/shared"
         "${WDK_ROOT}/Include/${WDK_INC_VERSION}/km"
-        "${WDK_ROOT}/Include/${WDK_INC_VERSION}/km/crt"
     )
 
     if(DEFINED WDK_KMDF)
