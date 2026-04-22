@@ -406,7 +406,7 @@ namespace protocyte_smoke::test::compat {
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.nested()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.nested()); !st) {
                     return st;
                 }
             } else {
@@ -460,7 +460,7 @@ namespace protocyte_smoke::test::compat {
                 case Special_oneofCase::oneof_nested: {
                     if (auto ensured = ensure_oneof_nested(); !ensured) {
                         return ensured.status();
-                    } else if (const auto st = ensured->get().copy_from(*other.oneof_nested()); !st) {
+                    } else if (const auto st = (*ensured)->copy_from(*other.oneof_nested()); !st) {
                         return st;
                     }
                     break;
@@ -950,8 +950,7 @@ namespace protocyte_smoke::test::compat {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -1090,8 +1089,7 @@ namespace protocyte_smoke::test::compat {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }

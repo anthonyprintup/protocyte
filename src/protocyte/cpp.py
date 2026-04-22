@@ -526,7 +526,7 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
             w.push()
             w.line("return ensured.status();")
             w.pop()
-            w.line("} else if (const auto st = ensured->get().copy_from(*other." + f"{item.cpp_name}()); !st) {{")
+            w.line("} else if (const auto st = (*ensured)->copy_from(*other." + f"{item.cpp_name}()); !st) {{")
             w.push()
             w.line("return st;")
             w.pop()
@@ -581,7 +581,7 @@ def _emit_copy_repeated_field(w: CppWriter, item: FieldModel, options: Generator
     elif item.kind == "message":
         w.line(f"auto copied = mutable_{item.cpp_name}().emplace_back(*ctx_);")
         w.line("if (!copied) { return copied.status(); }")
-        w.line(f"if (const auto st = copied->get().copy_from({source}[i]); !st) {{ return st; }}")
+        w.line(f"if (const auto st = (*copied)->copy_from({source}[i]); !st) {{ return st; }}")
     else:
         w.line(f"if (const auto st = mutable_{item.cpp_name}().push_back({source}[i]); !st) {{ return st; }}")
     w.pop()
@@ -630,7 +630,7 @@ def _emit_copy_oneof_from_other(w: CppWriter, oneof: OneofModel, options: Genera
             w.push()
             w.line("return ensured.status();")
             w.pop()
-            w.line(f"}} else if (const auto st = ensured->get().copy_from(*{source}.{item.cpp_name}()); !st) {{")
+            w.line(f"}} else if (const auto st = (*ensured)->copy_from(*{source}.{item.cpp_name}()); !st) {{")
             w.push()
             w.line("return st;")
             w.pop()
@@ -1096,7 +1096,7 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
         w.line(f"auto ensured = ensure_{item.cpp_name}();")
         w.line("if (!ensured) { return ensured.status(); }")
         w.line(
-            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, ensured->get()); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, **ensured); !st) {{ return st; }}"
         )
         return
     if item.oneof_name:

@@ -132,6 +132,8 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "const T &operator*() const noexcept { return *ptr_; }" in files["protocyte/runtime/runtime.hpp"]
     assert "T *operator->() noexcept { return ptr_; }" in files["protocyte/runtime/runtime.hpp"]
     assert "const T *operator->() const noexcept { return ptr_; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class T> struct Ref {" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr T &operator*() const noexcept { return *ptr_; }" in files["protocyte/runtime/runtime.hpp"]
     assert "const auto [field, wire] = *tag;" in files["protocyte/runtime/runtime.hpp"]
     assert "Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
@@ -254,7 +256,7 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "FieldNumber::opt_name), opt_name_.view());" in header
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
     assert "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);" in header
-    assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get())" in header
+    assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured)" in header
     assert "return has_self() ? self_.operator->() : nullptr;" in header
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
@@ -449,7 +451,7 @@ def test_generated_header_copies_oneof_state() -> None:
     assert "if (const auto st = set_text(other.text()); !st) {" in header
     assert "return st;" in header
     assert "if (auto ensured = ensure_inner(); !ensured) {" in header
-    assert "ensured->get().copy_from(*other.inner())" in header
+    assert "(*ensured)->copy_from(*other.inner())" in header
     assert "clear_choice();" in header
 
 

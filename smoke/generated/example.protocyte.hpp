@@ -334,7 +334,7 @@ namespace test::ultimate {
             if (other.has_inner()) {
                 if (auto ensured = ensure_inner(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.inner()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.inner()); !st) {
                     return st;
                 }
             } else {
@@ -438,8 +438,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -1855,7 +1854,7 @@ namespace test::ultimate {
             if (other.has_nested1()) {
                 if (auto ensured = ensure_nested1(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.nested1()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.nested1()); !st) {
                     return st;
                 }
             } else {
@@ -1952,7 +1951,7 @@ namespace test::ultimate {
             if (other.has_recursive_self()) {
                 if (auto ensured = ensure_recursive_self(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.recursive_self()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.recursive_self()); !st) {
                     return st;
                 }
             } else {
@@ -1964,7 +1963,7 @@ namespace test::ultimate {
                 if (!copied) {
                     return copied.status();
                 }
-                if (const auto st = copied->get().copy_from(other.lots_of_nested()[i]); !st) {
+                if (const auto st = (*copied)->copy_from(other.lots_of_nested()[i]); !st) {
                     return st;
                 }
             }
@@ -1991,7 +1990,7 @@ namespace test::ultimate {
             if (other.has_extreme_nesting()) {
                 if (auto ensured = ensure_extreme_nesting(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.extreme_nesting()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.extreme_nesting()); !st) {
                     return st;
                 }
             } else {
@@ -2068,7 +2067,7 @@ namespace test::ultimate {
                 case Special_oneofCase::oneof_msg: {
                     if (auto ensured = ensure_oneof_msg(); !ensured) {
                         return ensured.status();
-                    } else if (const auto st = ensured->get().copy_from(*other.oneof_msg()); !st) {
+                    } else if (const auto st = (*ensured)->copy_from(*other.oneof_msg()); !st) {
                         return st;
                     }
                     break;
@@ -2107,7 +2106,7 @@ namespace test::ultimate {
                 case Crazy_bytes_oneofCase::crazy_repeated_bytes: {
                     if (auto ensured = ensure_crazy_repeated_bytes(); !ensured) {
                         return ensured.status();
-                    } else if (const auto st = ensured->get().copy_from(*other.crazy_repeated_bytes()); !st) {
+                    } else if (const auto st = (*ensured)->copy_from(*other.crazy_repeated_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -2115,7 +2114,7 @@ namespace test::ultimate {
                 case Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes: {
                     if (auto ensured = ensure_crazy_bounded_repeated_bytes(); !ensured) {
                         return ensured.status();
-                    } else if (const auto st = ensured->get().copy_from(*other.crazy_bounded_repeated_bytes()); !st) {
+                    } else if (const auto st = (*ensured)->copy_from(*other.crazy_bounded_repeated_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -2123,7 +2122,7 @@ namespace test::ultimate {
                 case Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes: {
                     if (auto ensured = ensure_crazy_fixed_repeated_bytes(); !ensured) {
                         return ensured.status();
-                    } else if (const auto st = ensured->get().copy_from(*other.crazy_fixed_repeated_bytes()); !st) {
+                    } else if (const auto st = (*ensured)->copy_from(*other.crazy_fixed_repeated_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -3089,8 +3088,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -3127,8 +3125,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -3516,8 +3513,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -3599,8 +3595,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -3863,8 +3858,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -3879,8 +3873,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -3895,8 +3888,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -5632,7 +5624,7 @@ namespace test::ultimate {
             if (other.has_ref()) {
                 if (auto ensured = ensure_ref(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.ref()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.ref()); !st) {
                     return st;
                 }
             } else {
@@ -5717,8 +5709,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -5972,7 +5963,7 @@ namespace test::ultimate {
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.nested()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.nested()); !st) {
                     return st;
                 }
             } else {
@@ -6129,8 +6120,7 @@ namespace test::ultimate {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }

@@ -356,7 +356,7 @@ namespace {
         require_success(value.set_id(id));
         auto inner = value.ensure_inner();
         require_success(inner);
-        populate_nested2(inner->get(), view_of(kNestedDescription), 1.5f, 2.5f, InnerMode::B);
+        populate_nested2(**inner, view_of(kNestedDescription), 1.5f, 2.5f, InnerMode::B);
         check_nested1(value, name, id);
     }
 
@@ -427,7 +427,7 @@ namespace {
 
         auto nested = message.ensure_nested1();
         require_success(nested);
-        populate_nested1(nested->get(), view_of(kNestedName), 25);
+        populate_nested1(**nested, view_of(kNestedName), 25);
 
         require_success(message.set_oneof_bytes(view_of(kOneofBytes)));
         insert_map_str_int32(message, ctx);
@@ -438,13 +438,13 @@ namespace {
 
         auto recursive = message.ensure_recursive_self();
         require_success(recursive);
-        require_success(recursive->get().set_f_string(view_of(kRecursiveString)));
-        require_success(recursive->get().set_f_int32(350));
-        populate_required_fixed_array(recursive->get(), ctx);
+        require_success((*recursive)->set_f_string(view_of(kRecursiveString)));
+        require_success((*recursive)->set_f_int32(350));
+        populate_required_fixed_array(**recursive, ctx);
 
         auto nested_item = message.mutable_lots_of_nested().emplace_back(ctx);
         require_success(nested_item);
-        populate_nested2(nested_item->get(), view_of(kNestedDescription), 36.5f, 37.5f, InnerMode::A);
+        populate_nested2(**nested_item, view_of(kNestedDescription), 36.5f, 37.5f, InnerMode::A);
 
         require_success(message.mutable_colors().push_back(static_cast<int32_t>(Color::RED)));
         require_success(message.mutable_colors().push_back(static_cast<int32_t>(Color::BLUE)));
@@ -464,7 +464,7 @@ namespace {
         append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(kRepeatedBytes3));
         auto crazy_fixed_repeated = message.ensure_crazy_fixed_repeated_bytes();
         require_success(crazy_fixed_repeated);
-        populate_fixed_repeated_bytes_holder(crazy_fixed_repeated->get(), ctx);
+        populate_fixed_repeated_bytes_holder(**crazy_fixed_repeated, ctx);
 
         for (size_t i = 0; i < sizeof(kIntegerArray) / sizeof(kIntegerArray[0]); ++i) {
             require_success(message.mutable_integer_array().push_back(kIntegerArray[i]));
@@ -475,7 +475,7 @@ namespace {
 
         auto deep = message.ensure_extreme_nesting();
         require_success(deep);
-        populate_deep(deep->get(), ctx);
+        populate_deep(**deep, ctx);
     }
 
     void check_maps(const Message &message) {
@@ -718,7 +718,7 @@ namespace {
             Message message(ctx);
             auto oneof_msg = message.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(oneof_msg->get(), view_of(kNestedName), 2800);
+            populate_nested1(**oneof_msg, view_of(kNestedName), 2800);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -786,7 +786,7 @@ namespace {
             Message first(ctx);
             auto first_oneof = first.ensure_oneof_msg();
             require_success(first_oneof);
-            require_success(first_oneof->get().set_name(view_of(kNestedName)));
+            require_success((*first_oneof)->set_name(view_of(kNestedName)));
             populate_required_fixed_array(first, ctx);
             require_success(first.set_oneof_bytes(view_of(kOneofBytes)));
 
@@ -817,7 +817,7 @@ namespace {
             Message source(ctx);
             auto oneof_msg = source.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(oneof_msg->get(), view_of(kNestedName), 2802);
+            populate_nested1(**oneof_msg, view_of(kNestedName), 2802);
 
             Message target(ctx);
             require_success(target.set_oneof_string(view_of(kOneofString)));
@@ -833,7 +833,7 @@ namespace {
             Message source(ctx);
             auto oneof_msg = source.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(oneof_msg->get(), view_of(kNestedName), 2802);
+            populate_nested1(**oneof_msg, view_of(kNestedName), 2802);
 
             Message target(ctx);
             require_success(target.set_oneof_string(view_of(kOneofString)));
@@ -849,7 +849,7 @@ namespace {
             Message source(ctx);
             auto oneof_msg = source.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(oneof_msg->get(), view_of(kNestedName), 2802);
+            populate_nested1(**oneof_msg, view_of(kNestedName), 2802);
 
             auto cloned = source.clone();
             require_success(cloned);
@@ -916,7 +916,7 @@ namespace {
             Message message(ctx);
             auto crazy_repeated = message.ensure_crazy_repeated_bytes();
             require_success(crazy_repeated);
-            populate_repeated_bytes_holder(crazy_repeated->get(), ctx);
+            populate_repeated_bytes_holder(**crazy_repeated, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -935,7 +935,7 @@ namespace {
             Message message(ctx);
             auto crazy_bounded = message.ensure_crazy_bounded_repeated_bytes();
             require_success(crazy_bounded);
-            populate_bounded_repeated_bytes_holder(crazy_bounded->get(), ctx);
+            populate_bounded_repeated_bytes_holder(**crazy_bounded, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -954,7 +954,7 @@ namespace {
             Message message(ctx);
             auto crazy_fixed = message.ensure_crazy_fixed_repeated_bytes();
             require_success(crazy_fixed);
-            populate_fixed_repeated_bytes_holder(crazy_fixed->get(), ctx);
+            populate_fixed_repeated_bytes_holder(**crazy_fixed, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -973,7 +973,7 @@ namespace {
             Message message(ctx);
             auto crazy_repeated = message.ensure_crazy_repeated_bytes();
             require_success(crazy_repeated);
-            populate_repeated_bytes_holder(crazy_repeated->get(), ctx);
+            populate_repeated_bytes_holder(**crazy_repeated, ctx);
             require_success(message.set_crazy_fixed_bytes(view_of(kCrazyFixedBytes)));
             populate_required_fixed_array(message, ctx);
 
@@ -994,7 +994,7 @@ namespace {
             require_success(message.set_crazy_bounded_bytes(view_of(kCrazyBoundedBytes)));
             auto crazy_fixed = message.ensure_crazy_fixed_repeated_bytes();
             require_success(crazy_fixed);
-            populate_fixed_repeated_bytes_holder(crazy_fixed->get(), ctx);
+            populate_fixed_repeated_bytes_holder(**crazy_fixed, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -1317,7 +1317,7 @@ namespace {
         }
         auto nested = message.ensure_nested();
         require_success(nested);
-        require_success(nested->get().set_nested_bytes(view_of(kNestedBytes)));
+        require_success((*nested)->set_nested_bytes(view_of(kNestedBytes)));
     }
 
     void check_cross_message(const Cross &message) {
@@ -1362,7 +1362,7 @@ namespace {
         }
         auto nested = message.ensure_nested();
         require_success(nested);
-        require_success(nested->get().set_nested_bytes(view_of(kCrossPackageNestedBytes)));
+        require_success((*nested)->set_nested_bytes(view_of(kCrossPackageNestedBytes)));
     }
 
     void check_cross_package(const CrossPackage &message) {
@@ -1484,7 +1484,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         require_success(protocyte_message.set_f_string(view_of(kString)));
         require_success(protocyte_message.set_f_bytes(view_of(kBytes)));
         if (auto nested = protocyte_message.ensure_nested(); nested) {
-            populate_compat_nested(nested->get(), 417, view_of(kNestedName));
+            populate_compat_nested(**nested, 417, view_of(kNestedName));
         } else {
             require_success(nested);
         }
@@ -1525,7 +1525,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         CompatMessage protocyte_message(ctx);
 
         if (auto nested = protocyte_message.ensure_oneof_nested(); nested) {
-            populate_compat_nested(nested->get(), 90210, view_of(kNestedDescription));
+            populate_compat_nested(**nested, 90210, view_of(kNestedDescription));
         } else {
             require_success(nested);
         }
@@ -1749,15 +1749,15 @@ TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[s
 
     auto nested = message.ensure_nested1();
     require_success(nested);
-    require_success(nested->get().set_name(view_of(kNestedName)));
-    require_success(nested->get().set_id(77));
+    require_success((*nested)->set_name(view_of(kNestedName)));
+    require_success((*nested)->set_id(77));
 
-    auto inner = nested->get().ensure_inner();
+    auto inner = (*nested)->ensure_inner();
     require_success(inner);
-    require_success(inner->get().set_description(view_of(kNestedDescription)));
-    require_success(inner->get().mutable_values().push_back(4.5f));
-    require_success(inner->get().mutable_values().push_back(5.5f));
-    require_success(inner->get().set_mode(InnerMode::C));
+    require_success((*inner)->set_description(view_of(kNestedDescription)));
+    require_success((*inner)->mutable_values().push_back(4.5f));
+    require_success((*inner)->mutable_values().push_back(5.5f));
+    require_success((*inner)->set_mode(InnerMode::C));
 
     auto encoded_size = message.encoded_size();
     require_success(encoded_size);

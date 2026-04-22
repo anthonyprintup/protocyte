@@ -206,7 +206,7 @@ namespace test::crosspkg {
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured->get().copy_from(*other.nested()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.nested()); !st) {
                     return st;
                 }
             } else {
@@ -361,8 +361,7 @@ namespace test::crosspkg {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }

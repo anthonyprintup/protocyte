@@ -106,6 +106,7 @@ namespace protocyte {
     template<class T> struct Ref {
         constexpr explicit Ref(T &value) noexcept: ptr_ {&value} {}
         constexpr T &get() const noexcept { return *ptr_; }
+        constexpr T &operator*() const noexcept { return *ptr_; }
         constexpr operator T &() const noexcept { return *ptr_; }
         constexpr T *operator->() const noexcept { return ptr_; }
 
