@@ -130,11 +130,11 @@ jobs:
 
       - name: Configure kernel smoke build
         working-directory: smoke
-        run: cmake --preset windows-clangcl-ninja-driver
+        run: cmake --preset windows-msvc-ninja-driver
 
       - name: Build kernel smoke target
         working-directory: smoke
-        run: cmake --build --preset windows-clangcl-ninja-driver --target protocyte_kernel_smoke
+        run: cmake --build --preset windows-msvc-ninja-driver --target protocyte_kernel_smoke
 
   fetchcontent-linux:
     name: FetchContent Linux
