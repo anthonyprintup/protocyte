@@ -19,6 +19,15 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.emit_runtime is False
     assert options.runtime_prefix == "protocyte/runtime"
     assert options.namespace_prefix == ""
+    assert options.clang_format is None
+    assert options.clang_format_config is None
+
+
+def test_parse_accepts_clang_format_options() -> None:
+    options = parse_parameter("clang_format=custom-format,clang_format_config=configs/protocyte.style")
+
+    assert options.clang_format == "custom-format"
+    assert options.clang_format_config == "configs/protocyte.style"
 
 
 def test_rejects_duplicate_parameters() -> None:

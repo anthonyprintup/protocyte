@@ -108,12 +108,15 @@ def generate_outputs(model: DescriptorModel, options: GeneratorOptions) -> dict[
     for file_model in model.generated_files():
         outputs[_header_name(file_model.name)] = generate_header(file_model, options)
         outputs[_source_name(file_model.name)] = generate_source(file_model, options)
-    return _format_cpp_outputs(outputs)
+    return _format_cpp_outputs(outputs, options)
 
 
-def _format_cpp_outputs(outputs: dict[str, str]) -> dict[str, str]:
-    clang_format = _clang_format_executable()
-    style_args = _clang_format_style_args()
+def _format_cpp_outputs(outputs: dict[str, str], options: GeneratorOptions) -> dict[str, str]:
+    clang_format = _resolve_clang_format_executable(options)
+    if clang_format is None:
+        return outputs
+
+    style_args = _clang_format_style_args(options)
     formatted: dict[str, str] = {}
     for name, content in outputs.items():
         if not name.endswith((".h", ".hh", ".hpp", ".c", ".cc", ".cpp", ".cxx")):
@@ -136,28 +139,28 @@ def _format_cpp_outputs(outputs: dict[str, str]) -> dict[str, str]:
     return formatted
 
 
-def _clang_format_executable() -> str:
-    found = shutil.which("clang-format")
-    if found:
-        return found
-    candidates = [
-        Path(r"C:\Program Files\LLVM\bin\clang-format.exe"),
-        Path(r"C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\Llvm\x64\bin\clang-format.exe"),
-        Path(r"C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\Llvm\bin\clang-format.exe"),
-        Path(r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin\clang-format.exe"),
-        Path(r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\bin\clang-format.exe"),
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    raise ProtocyteError("clang-format is required to format generated C++ output")
+def _resolve_clang_format_executable(options: GeneratorOptions) -> str | None:
+    if options.clang_format:
+        return options.clang_format
+    return shutil.which("clang-format")
 
 
-def _clang_format_style_args() -> list[str]:
-    config = _find_clang_format_config()
+def _clang_format_style_args(options: GeneratorOptions) -> list[str]:
+    config = _resolve_clang_format_config(options)
     if config is None:
         return ["--style=file"]
     return [f"--style=file:{config}"]
+
+
+def _resolve_clang_format_config(options: GeneratorOptions) -> str | None:
+    if options.clang_format_config is not None:
+        if not Path(options.clang_format_config).is_file():
+            raise ProtocyteError(f"clang-format config was not found: {options.clang_format_config}")
+        return options.clang_format_config
+    config = _find_clang_format_config()
+    if config is None:
+        return None
+    return str(config)
 
 
 def _find_clang_format_config() -> Path | None:
