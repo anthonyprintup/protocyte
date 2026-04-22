@@ -147,8 +147,9 @@ targets are not already available, then exposes:
 - `protocyte_generate(...)` as the lower-level codegen primitive
 - `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
 
-`TARGET` must be a real CMake target name without `::`. Use `ALIAS` when you
-want to publish a namespaced target for downstream linkage.
+`TARGET` must be a real CMake target name without `::`. `ALIAS` can use any
+valid alias target name; namespaced aliases like `demo::proto` are recommended
+for downstream linkage.
 
 Pin a published release tag for downstream builds instead of tracking `main`.
 
