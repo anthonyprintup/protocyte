@@ -129,11 +129,15 @@ FetchContent_MakeAvailable(protocyte)
 
 protocyte_add_proto_library(
     TARGET demo_proto
+    ALIAS demo::proto
     PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
     OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
     DISCOVER
     HOSTED_ALLOCATOR
 )
+
+add_executable(demo main.cpp)
+target_link_libraries(demo PRIVATE demo::proto)
 ```
 
 By default, the protocyte CMake project fetches protobuf when protobuf CMake
@@ -142,6 +146,10 @@ targets are not already available, then exposes:
 - `protocyte_add_proto_library(...)` for the common target-oriented workflow
 - `protocyte_generate(...)` as the lower-level codegen primitive
 - `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
+
+`TARGET` must be a real CMake target name without `::`. `ALIAS` can use any
+valid alias target name; namespaced aliases like `demo::proto` are recommended
+for downstream linkage.
 
 Pin a published release tag for downstream builds instead of tracking `main`.
 
@@ -169,11 +177,15 @@ find_package(protocyte CONFIG REQUIRED)
 
 protocyte_add_proto_library(
     TARGET demo_proto
+    ALIAS demo::proto
     PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
     OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
     DISCOVER
     HOSTED_ALLOCATOR
 )
+
+add_executable(demo main.cpp)
+target_link_libraries(demo PRIVATE demo::proto)
 ```
 
 Configure the consumer with `-DCMAKE_PREFIX_PATH=<prefix>` so CMake can find

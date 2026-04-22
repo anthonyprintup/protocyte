@@ -15,11 +15,16 @@ set(FETCHCONTENT_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 protocyte_add_proto_library(
     TARGET fetchcontent_proto
+    ALIAS fetchcontent::proto
     PROTO_ROOT "${FETCHCONTENT_PROTO_ROOT}"
     OUT_DIR "${FETCHCONTENT_GENERATED_DIR}"
     DISCOVER
     HOSTED_ALLOCATOR
 )
+
+if(NOT TARGET fetchcontent::proto)
+    message(FATAL_ERROR "protocyte_add_proto_library did not create the requested alias target")
+endif()
 
 if(MSVC)
     target_compile_options(fetchcontent_proto PRIVATE /W4 /permissive-)
@@ -28,7 +33,7 @@ else()
 endif()
 
 add_executable(fetchcontent_demo src/main.cpp)
-target_link_libraries(fetchcontent_demo PRIVATE fetchcontent_proto)
+target_link_libraries(fetchcontent_demo PRIVATE fetchcontent::proto)
 target_compile_features(fetchcontent_demo PRIVATE cxx_std_20)
 
 if(MSVC)
