@@ -87,6 +87,38 @@ jobs:
         working-directory: smoke
         run: ctest --preset windows-clangcl-ninja
 
+  smoke-kernel-build:
+    name: Smoke Kernel Build
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Configure kernel smoke build
+        working-directory: smoke
+        run: cmake --preset windows-clangcl-ninja-driver
+
+      - name: Build kernel smoke target
+        working-directory: smoke
+        run: cmake --build --preset windows-clangcl-ninja-driver --target protocyte_kernel_smoke
+
   fetchcontent-linux:
     name: FetchContent Linux
     runs-on: ubuntu-latest
