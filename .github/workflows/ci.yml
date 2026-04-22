@@ -108,10 +108,15 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
       - name: Configure FetchContent integration test
         run: >
           cmake -S tests/fetchcontent -B tests/fetchcontent/build
           -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
+          -DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}
 
       - name: Build FetchContent integration test
         run: cmake --build tests/fetchcontent/build
@@ -140,6 +145,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
       - name: Configure protocyte install tree
         run: cmake -S . -B build/protocyte-install
 
@@ -151,7 +160,7 @@ jobs:
           cmake -S tests/find_package -B tests/find_package/build
           -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
           -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
-          -DPROTOCYTE_FETCH_PROTOBUF=ON
+          -DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}
 
       - name: Build find_package integration test
         run: cmake --build tests/find_package/build
@@ -185,8 +194,14 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
       - name: Install hell
         run: npm install --global rili-hell@1.5.0
 
       - name: Run hell integration test
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.protoc.outputs.protoc }}
         run: uv run python tests/hell/run_ci.py

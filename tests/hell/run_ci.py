@@ -9,6 +9,7 @@ from pathlib import Path
 import google.protobuf
 
 GATE_URI_ENV = "PROTOCYTE_HELL_GATE_URI"
+PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
@@ -164,12 +165,15 @@ def main() -> int:
     hell_env = os.environ.copy()
     python_executable = get_repo_python(repo_root)
     python_package_root = get_python_package_root()
+    protoc_executable = os.environ.get(PROTOC_ENV)
     cmake_generator, build_config = get_cmake_generator()
     prepend_env_path(hell_env, "PATH", node_executable.parent)
     print(f"Using hell config rewriter: {rewriter_script}", flush=True)
     print(f"Using Node executable for hell: {node_executable}", flush=True)
     print(f"Using Python interpreter for CMake: {python_executable}", flush=True)
     print(f"Using Python package root for CMake: {python_package_root}", flush=True)
+    if protoc_executable:
+        print(f"Using protoc executable for CMake: {protoc_executable}", flush=True)
 
     build_env = os.environ.copy()
     prepend_env_path(build_env, "PYTHONPATH", python_package_root)
@@ -207,22 +211,22 @@ def main() -> int:
         install_prefix = project_dir / ".hell" / "install"
         verify_install_prefix(install_prefix)
 
-        run(
-            [
-                "cmake",
-                "-S",
-                str(project_dir),
-                "-B",
-                str(build_dir),
-                "-G",
-                cmake_generator,
-                f"-DCMAKE_PREFIX_PATH={install_prefix}",
-                f"-DPython3_EXECUTABLE={python_executable}",
-                "-DPROTOCYTE_FETCH_PROTOBUF=ON",
-            ],
-            cwd=repo_root,
-            env=build_env,
-        )
+        cmake_configure_command = [
+            "cmake",
+            "-S",
+            str(project_dir),
+            "-B",
+            str(build_dir),
+            "-G",
+            cmake_generator,
+            f"-DCMAKE_PREFIX_PATH={install_prefix}",
+            f"-DPython3_EXECUTABLE={python_executable}",
+        ]
+        if protoc_executable:
+            cmake_configure_command.append(f"-DProtobuf_PROTOC_EXECUTABLE={protoc_executable}")
+        else:
+            cmake_configure_command.append("-DPROTOCYTE_FETCH_PROTOBUF=ON")
+        run(cmake_configure_command, cwd=repo_root, env=build_env)
         build_command = ["cmake", "--build", str(build_dir)]
         if build_config is not None:
             build_command.extend(["--config", build_config])
