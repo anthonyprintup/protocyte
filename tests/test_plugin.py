@@ -23,6 +23,11 @@ def _basic_request(*, parameter: str = "") -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+@pytest.fixture(autouse=True)
+def _disable_implicit_clang_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
+
+
 def test_runtime_files_load_packaged_sources() -> None:
     files = runtime_files()
 
