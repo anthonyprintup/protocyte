@@ -52,7 +52,7 @@ namespace protocyte_smoke::test::compat {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().copy_from(*this); !st) {
+            if (const auto st = out->copy_from(*this); !st) {
                 return ::protocyte::Result<EncodingMatrix_Inner>::err(st.error());
             }
             return out;
@@ -83,7 +83,7 @@ namespace protocyte_smoke::test::compat {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().merge_from(reader); !st) {
+            if (const auto st = out->merge_from(reader); !st) {
                 return ::protocyte::Result<EncodingMatrix_Inner>::err(st.error());
             }
             return out;
@@ -95,14 +95,14 @@ namespace protocyte_smoke::test::compat {
                 if (!tag) {
                     return tag.status();
                 }
-                const auto [field_number, wire_type] = tag.value();
+                const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::value: {
                         auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
                         if (!decoded) {
                             return decoded.status();
                         }
-                        value_ = decoded.value();
+                        value_ = *decoded;
                         break;
                     }
                     case FieldNumber::label: {
@@ -406,7 +406,7 @@ namespace protocyte_smoke::test::compat {
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured.value().get().copy_from(*other.nested()); !st) {
+                } else if (const auto st = (*ensured)->copy_from(*other.nested()); !st) {
                     return st;
                 }
             } else {
@@ -460,7 +460,7 @@ namespace protocyte_smoke::test::compat {
                 case Special_oneofCase::oneof_nested: {
                     if (auto ensured = ensure_oneof_nested(); !ensured) {
                         return ensured.status();
-                    } else if (const auto st = ensured.value().get().copy_from(*other.oneof_nested()); !st) {
+                    } else if (const auto st = (*ensured)->copy_from(*other.oneof_nested()); !st) {
                         return st;
                     }
                     break;
@@ -485,7 +485,7 @@ namespace protocyte_smoke::test::compat {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().copy_from(*this); !st) {
+            if (const auto st = out->copy_from(*this); !st) {
                 return ::protocyte::Result<EncodingMatrix>::err(st.error());
             }
             return out;
@@ -648,7 +648,7 @@ namespace protocyte_smoke::test::compat {
 
         bool has_nested() const noexcept { return nested_.has_value(); }
         const ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> *nested() const noexcept {
-            return has_nested() ? &nested_.value() : nullptr;
+            return has_nested() ? nested_.operator->() : nullptr;
         }
         ::protocyte::Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>
         ensure_nested() noexcept {
@@ -661,7 +661,7 @@ namespace protocyte_smoke::test::compat {
             }
             return ::protocyte::
                 Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>::ok(
-                    ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {nested_.value()});
+                    ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {*nested_});
         }
         void clear_nested() noexcept { nested_.reset(); }
 
@@ -719,8 +719,9 @@ namespace protocyte_smoke::test::compat {
             return special_oneof_case_ == Special_oneofCase::oneof_nested;
         }
         const ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> *oneof_nested() const noexcept {
-            return has_oneof_nested() && special_oneof.oneof_nested.has_value() ? &special_oneof.oneof_nested.value() :
-                                                                                  nullptr;
+            return has_oneof_nested() && special_oneof.oneof_nested.has_value() ?
+                       special_oneof.oneof_nested.operator->() :
+                       nullptr;
         }
         ::protocyte::Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>
         ensure_oneof_nested() noexcept {
@@ -740,7 +741,7 @@ namespace protocyte_smoke::test::compat {
             return ::protocyte::
                 Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>::ok(
                     ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                        special_oneof.oneof_nested.value()});
+                        *special_oneof.oneof_nested});
         }
 
         constexpr bool has_oneof_bytes() const noexcept {
@@ -798,7 +799,7 @@ namespace protocyte_smoke::test::compat {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().merge_from(reader); !st) {
+            if (const auto st = out->merge_from(reader); !st) {
                 return ::protocyte::Result<EncodingMatrix>::err(st.error());
             }
             return out;
@@ -810,14 +811,14 @@ namespace protocyte_smoke::test::compat {
                 if (!tag) {
                     return tag.status();
                 }
-                const auto [field_number, wire_type] = tag.value();
+                const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::f_int32: {
                         auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_int32_ = decoded.value();
+                        f_int32_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_int64: {
@@ -825,7 +826,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_int64_ = decoded.value();
+                        f_int64_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_uint32: {
@@ -833,7 +834,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_uint32_ = decoded.value();
+                        f_uint32_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_uint64: {
@@ -841,7 +842,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_uint64_ = decoded.value();
+                        f_uint64_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_sint32: {
@@ -849,7 +850,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_sint32_ = decoded.value();
+                        f_sint32_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_sint64: {
@@ -857,7 +858,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_sint64_ = decoded.value();
+                        f_sint64_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_bool: {
@@ -865,7 +866,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_bool_ = decoded.value();
+                        f_bool_ = *decoded;
                         break;
                     }
                     case FieldNumber::mode: {
@@ -873,7 +874,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        mode_ = decoded.value();
+                        mode_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_fixed32: {
@@ -881,7 +882,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_fixed32_ = decoded.value();
+                        f_fixed32_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_fixed64: {
@@ -889,7 +890,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_fixed64_ = decoded.value();
+                        f_fixed64_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_sfixed32: {
@@ -897,7 +898,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_sfixed32_ = decoded.value();
+                        f_sfixed32_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_sfixed64: {
@@ -905,7 +906,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_sfixed64_ = decoded.value();
+                        f_sfixed64_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_float: {
@@ -913,7 +914,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_float_ = decoded.value();
+                        f_float_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_double: {
@@ -921,7 +922,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        f_double_ = decoded.value();
+                        f_double_ = *decoded;
                         break;
                     }
                     case FieldNumber::f_string: {
@@ -949,8 +950,7 @@ namespace protocyte_smoke::test::compat {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -962,14 +962,14 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
+                            ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
                                 if (!decoded) {
                                     return decoded.status();
                                 }
-                                value = decoded.value();
+                                value = *decoded;
                                 if (const auto st = r_int32_unpacked_.push_back(value); !st) {
                                     return st;
                                 }
@@ -984,7 +984,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        value = decoded.value();
+                        value = *decoded;
                         if (const auto st = r_int32_unpacked_.push_back(value); !st) {
                             return st;
                         }
@@ -996,14 +996,14 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
+                            ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
                                 if (!decoded) {
                                     return decoded.status();
                                 }
-                                value = decoded.value();
+                                value = *decoded;
                                 if (const auto st = r_int32_packed_.push_back(value); !st) {
                                     return st;
                                 }
@@ -1018,7 +1018,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        value = decoded.value();
+                        value = *decoded;
                         if (const auto st = r_int32_packed_.push_back(value); !st) {
                             return st;
                         }
@@ -1030,14 +1030,14 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
+                            ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::f64 value {};
                                 auto decoded = ::protocyte::read_double(packed);
                                 if (!decoded) {
                                     return decoded.status();
                                 }
-                                value = decoded.value();
+                                value = *decoded;
                                 if (const auto st = r_double_.push_back(value); !st) {
                                     return st;
                                 }
@@ -1052,7 +1052,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        value = decoded.value();
+                        value = *decoded;
                         if (const auto st = r_double_.push_back(value); !st) {
                             return st;
                         }
@@ -1077,7 +1077,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        special_oneof.oneof_int32 = decoded.value();
+                        special_oneof.oneof_int32 = *decoded;
                         break;
                     }
                     case FieldNumber::oneof_nested: {
@@ -1089,8 +1089,7 @@ namespace protocyte_smoke::test::compat {
                         if (!ensured) {
                             return ensured.status();
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
                             !st) {
                             return st;
                         }
@@ -1112,7 +1111,7 @@ namespace protocyte_smoke::test::compat {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        opt_int32_ = decoded.value();
+                        opt_int32_ = *decoded;
                         has_opt_int32_ = true;
                         break;
                     }
@@ -1252,7 +1251,7 @@ namespace protocyte_smoke::test::compat {
             }
             if (nested_.has_value()) {
                 if (const auto st = ::protocyte::write_message_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), nested_.value());
+                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
                     !st) {
                     return st;
                 }
@@ -1334,8 +1333,7 @@ namespace protocyte_smoke::test::compat {
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
                 if (const auto st = ::protocyte::write_message_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_nested),
-                        special_oneof.oneof_nested.value());
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_nested), *special_oneof.oneof_nested);
                     !st) {
                     return st;
                 }
@@ -1490,12 +1488,12 @@ namespace protocyte_smoke::test::compat {
                 }
             }
             if (nested_.has_value()) {
-                auto nested_size = ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested),
-                                                                   nested_.value());
+                auto nested_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
+                if (const auto st = ::protocyte::add_size(&total, *nested_size); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
@@ -1561,11 +1559,11 @@ namespace protocyte_smoke::test::compat {
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
                 auto nested_size = ::protocyte::message_field_size(
-                    static_cast<::protocyte::u32>(FieldNumber::oneof_nested), special_oneof.oneof_nested.value());
+                    static_cast<::protocyte::u32>(FieldNumber::oneof_nested), *special_oneof.oneof_nested);
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
+                if (const auto st = ::protocyte::add_size(&total, *nested_size); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }

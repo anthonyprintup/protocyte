@@ -26,7 +26,7 @@ namespace {
             throw std::runtime_error("encoded_size failed");
         }
 
-        std::string buffer(size.value(), '\0');
+        std::string buffer(*size, '\0');
         ::protocyte::SliceWriter writer(reinterpret_cast<unsigned char *>(buffer.data()), buffer.size());
         if (const auto st = message.serialize(writer); !st) {
             throw std::runtime_error("serialize failed");
@@ -51,12 +51,12 @@ int main() {
         std::cerr << "failed to create Header\n";
         return EXIT_FAILURE;
     }
-    if (const auto st = header.value().set_version(1u); !st) {
+    if (const auto st = header->set_version(1u); !st) {
         std::cerr << "failed to set header version\n";
         return EXIT_FAILURE;
     }
     constexpr std::array<unsigned char, 2> kTag {'O', 'K'};
-    if (const auto st = header.value().set_tag(view_of(kTag)); !st) {
+    if (const auto st = header->set_tag(view_of(kTag)); !st) {
         std::cerr << "failed to set header tag\n";
         return EXIT_FAILURE;
     }
@@ -66,25 +66,25 @@ int main() {
         std::cerr << "failed to create Envelope\n";
         return EXIT_FAILURE;
     }
-    if (auto ensured = envelope.value().ensure_header(); !ensured) {
+    if (auto ensured = envelope->ensure_header(); !ensured) {
         std::cerr << "failed to create envelope header\n";
         return EXIT_FAILURE;
-    } else if (const auto st = ensured.value().get().copy_from(header.value()); !st) {
+    } else if (const auto st = ensured->get().copy_from(*header); !st) {
         std::cerr << "failed to copy header into envelope\n";
         return EXIT_FAILURE;
     }
-    if (const auto st = envelope.value().set_id(150u); !st) {
+    if (const auto st = envelope->set_id(150u); !st) {
         std::cerr << "failed to set envelope id\n";
         return EXIT_FAILURE;
     }
     constexpr std::array<unsigned char, 3> kPayload {'h', 'e', 'y'};
-    if (const auto st = envelope.value().set_payload(view_of(kPayload)); !st) {
+    if (const auto st = envelope->set_payload(view_of(kPayload)); !st) {
         std::cerr << "failed to set envelope payload\n";
         return EXIT_FAILURE;
     }
 
-    const std::string header_hex = encode_hex(header.value());
-    const std::string envelope_hex = encode_hex(envelope.value());
+    const std::string header_hex = encode_hex(*header);
+    const std::string envelope_hex = encode_hex(*envelope);
 
     std::cout << "Header: " << header_hex << '\n';
     std::cout << "Envelope: " << envelope_hex << '\n';

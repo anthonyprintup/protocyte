@@ -39,7 +39,7 @@ namespace {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
 
-        auto &message = created.value();
+        auto &message = *created;
         if (!message.set_f_int32(42) || !message.set_f_bool(true)) {
             return STATUS_INVALID_PARAMETER;
         }
