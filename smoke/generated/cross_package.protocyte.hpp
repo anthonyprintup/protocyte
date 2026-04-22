@@ -258,7 +258,7 @@ namespace test::crosspkg {
 
         bool has_nested() const noexcept { return nested_.has_value(); }
         const ::test::crosspkg::CrossPackageConstants_Nested<Config> *nested() const noexcept {
-            return has_nested() ? &nested_.value() : nullptr;
+            return has_nested() ? nested_.operator->() : nullptr;
         }
         ::protocyte::Result<::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>>>
         ensure_nested() noexcept {
@@ -269,7 +269,7 @@ namespace test::crosspkg {
                 }
             }
             return ::protocyte::Result<::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>>>::ok(
-                ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {nested_.value()});
+                ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {*nested_});
         }
         void clear_nested() noexcept { nested_.reset(); }
 
@@ -418,7 +418,7 @@ namespace test::crosspkg {
             }
             if (nested_.has_value()) {
                 if (const auto st = ::protocyte::write_message_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), nested_.value());
+                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
                     !st) {
                     return st;
                 }
@@ -456,8 +456,8 @@ namespace test::crosspkg {
                 }
             }
             if (nested_.has_value()) {
-                auto nested_size = ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested),
-                                                                   nested_.value());
+                auto nested_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }

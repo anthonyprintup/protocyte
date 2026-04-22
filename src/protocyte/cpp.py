@@ -673,7 +673,7 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
     if item.kind == "message":
         typ = _field_type(item, options)
         w.line(f"bool has_{item.cpp_name}() const noexcept {{ return {_member(item)}.has_value(); }}")
-        w.line(f"const {typ}* {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? &{_member(item)}.value() : nullptr; }}")
+        w.line(f"const {typ}* {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.operator->() : nullptr; }}")
         w.line(f"::protocyte::Result<::protocyte::Ref<{typ}>> ensure_{item.cpp_name}() noexcept {{")
         w.push()
         if item.recursive_box:
@@ -684,7 +684,7 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             w.line(f"if (const auto st = {_member(item)}.emplace(*ctx_); !st) {{ return ::protocyte::Result<::protocyte::Ref<{typ}>>::err(st.error()); }}")
             w.pop()
             w.line("}")
-            w.line(f"return ::protocyte::Result<::protocyte::Ref<{typ}>>::ok(::protocyte::Ref<{typ}>{{{_member(item)}.value()}});")
+            w.line(f"return ::protocyte::Result<::protocyte::Ref<{typ}>>::ok(::protocyte::Ref<{typ}>{{*{_member(item)}}});")
         w.pop()
         w.line("}")
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.reset(); }}")
@@ -845,7 +845,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         return
     if item.kind == "message":
         w.line(
-            f"const {typ}* {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() && {_member(item)}.has_value() ? &{_member(item)}.value() : nullptr; }}"
+            f"const {typ}* {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() && {_member(item)}.has_value() ? {_member(item)}.operator->() : nullptr; }}"
         )
         w.line(f"::protocyte::Result<::protocyte::Ref<{typ}>> ensure_{item.cpp_name}() noexcept {{")
         w.push()
@@ -868,7 +868,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
             w.line(f"if (const auto st = {_member(item)}.emplace(*ctx_); !st) {{ return ::protocyte::Result<::protocyte::Ref<{typ}>>::err(st.error()); }}")
             w.pop()
             w.line("}")
-        w.line(f"return ::protocyte::Result<::protocyte::Ref<{typ}>>::ok(::protocyte::Ref<{typ}>{{{_member(item)}.value()}});")
+        w.line(f"return ::protocyte::Result<::protocyte::Ref<{typ}>>::ok(::protocyte::Ref<{typ}>{{*{_member(item)}}});")
         w.pop()
         w.line("}")
         return
@@ -1248,7 +1248,7 @@ def _emit_write_field(
         )
         return
     if item.kind == "message":
-        expr = f"{value}.value()" if value == _member(item) else value
+        expr = f"*{value}" if value == _member(item) else value
         w.line(
             f"if (const auto st = ::protocyte::write_message_field(writer, {_field_number_u32(item, enum_type)}, {expr}); !st) {{ return st; }}"
         )
@@ -1394,7 +1394,7 @@ def _emit_add_size(
             f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + ::protocyte::varint_size({value}.size()) + {value}.size()"
         )
     elif item.kind == "message":
-        expr = f"{value}.value()" if value == _member(item) else value
+        expr = f"*{value}" if value == _member(item) else value
         w.line(f"auto nested_size = ::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {expr});")
         w.line("if (!nested_size) { return ::protocyte::Result<::protocyte::usize>::err(nested_size.error()); }")
         value_size = "*nested_size"

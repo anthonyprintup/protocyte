@@ -648,7 +648,7 @@ namespace protocyte_smoke::test::compat {
 
         bool has_nested() const noexcept { return nested_.has_value(); }
         const ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> *nested() const noexcept {
-            return has_nested() ? &nested_.value() : nullptr;
+            return has_nested() ? nested_.operator->() : nullptr;
         }
         ::protocyte::Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>
         ensure_nested() noexcept {
@@ -661,7 +661,7 @@ namespace protocyte_smoke::test::compat {
             }
             return ::protocyte::
                 Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>::ok(
-                    ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {nested_.value()});
+                    ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {*nested_});
         }
         void clear_nested() noexcept { nested_.reset(); }
 
@@ -719,8 +719,9 @@ namespace protocyte_smoke::test::compat {
             return special_oneof_case_ == Special_oneofCase::oneof_nested;
         }
         const ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> *oneof_nested() const noexcept {
-            return has_oneof_nested() && special_oneof.oneof_nested.has_value() ? &special_oneof.oneof_nested.value() :
-                                                                                  nullptr;
+            return has_oneof_nested() && special_oneof.oneof_nested.has_value() ?
+                       special_oneof.oneof_nested.operator->() :
+                       nullptr;
         }
         ::protocyte::Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>
         ensure_oneof_nested() noexcept {
@@ -740,7 +741,7 @@ namespace protocyte_smoke::test::compat {
             return ::protocyte::
                 Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>::ok(
                     ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                        special_oneof.oneof_nested.value()});
+                        *special_oneof.oneof_nested});
         }
 
         constexpr bool has_oneof_bytes() const noexcept {
@@ -1252,7 +1253,7 @@ namespace protocyte_smoke::test::compat {
             }
             if (nested_.has_value()) {
                 if (const auto st = ::protocyte::write_message_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), nested_.value());
+                        writer, static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
                     !st) {
                     return st;
                 }
@@ -1334,8 +1335,7 @@ namespace protocyte_smoke::test::compat {
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
                 if (const auto st = ::protocyte::write_message_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_nested),
-                        special_oneof.oneof_nested.value());
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_nested), *special_oneof.oneof_nested);
                     !st) {
                     return st;
                 }
@@ -1490,8 +1490,8 @@ namespace protocyte_smoke::test::compat {
                 }
             }
             if (nested_.has_value()) {
-                auto nested_size = ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested),
-                                                                   nested_.value());
+                auto nested_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
@@ -1561,7 +1561,7 @@ namespace protocyte_smoke::test::compat {
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
                 auto nested_size = ::protocyte::message_field_size(
-                    static_cast<::protocyte::u32>(FieldNumber::oneof_nested), special_oneof.oneof_nested.value());
+                    static_cast<::protocyte::u32>(FieldNumber::oneof_nested), *special_oneof.oneof_nested);
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }

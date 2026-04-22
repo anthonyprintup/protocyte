@@ -122,6 +122,16 @@ def test_generates_proto3_files_and_runtime() -> None:
     ]
     assert "constexpr void operator*() const noexcept {}" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr void value() const noexcept {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class T> struct Optional {" in files["protocyte/runtime/runtime.hpp"]
+    assert "T &operator*() noexcept { return *ptr(); }" in files["protocyte/runtime/runtime.hpp"]
+    assert "const T &operator*() const noexcept { return *ptr(); }" in files["protocyte/runtime/runtime.hpp"]
+    assert "T *operator->() noexcept { return ptr(); }" in files["protocyte/runtime/runtime.hpp"]
+    assert "const T *operator->() const noexcept { return ptr(); }" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class T, class Config> struct Box {" in files["protocyte/runtime/runtime.hpp"]
+    assert "T &operator*() noexcept { return *ptr_; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "const T &operator*() const noexcept { return *ptr_; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "T *operator->() noexcept { return ptr_; }" in files["protocyte/runtime/runtime.hpp"]
+    assert "const T *operator->() const noexcept { return ptr_; }" in files["protocyte/runtime/runtime.hpp"]
     assert "const auto [field, wire] = *tag;" in files["protocyte/runtime/runtime.hpp"]
     assert "Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
@@ -245,6 +255,7 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
     assert "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);" in header
     assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get())" in header
+    assert "return has_self() ? self_.operator->() : nullptr;" in header
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
     assert "clear_items();" in header
@@ -272,6 +283,8 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "copied_value.copy_from(value)" in header
     assert "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
+    assert "return has_recursive_self() ? recursive_self_.operator->() : nullptr;" in header
+    assert "static_cast<::protocyte::u32>(FieldNumber::recursive_self), *recursive_self_" in header
     assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP" in header
     assert "fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u" in header
 
@@ -653,6 +666,8 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "new (&choice.text) typename Config::String {::protocyte::move(temp)};" in header
     assert "new (&choice.count)::protocyte::i32 {value};" in header
     assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>> {};" in header
+    assert "return has_inner() && choice.inner.has_value() ? choice.inner.operator->() : nullptr;" in header
+    assert "::protocyte::Ref<::demo::Carrier_Inner<Config>> {*choice.inner}" in header
     assert "new (&choice.none)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none;" not in header
     assert "auto ensured = ensure_inner();" in header

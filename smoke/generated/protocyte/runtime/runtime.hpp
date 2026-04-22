@@ -381,6 +381,10 @@ namespace protocyte {
         }
 
         bool has_value() const noexcept { return has_; }
+        T &operator*() noexcept { return *ptr(); }
+        const T &operator*() const noexcept { return *ptr(); }
+        T *operator->() noexcept { return ptr(); }
+        const T *operator->() const noexcept { return ptr(); }
         T &value() noexcept { return *ptr(); }
         const T &value() const noexcept { return *ptr(); }
 
@@ -823,6 +827,10 @@ namespace protocyte {
         ~Box() noexcept { reset(); }
 
         bool has_value() const noexcept { return ptr_ != nullptr; }
+        T &operator*() noexcept { return *ptr_; }
+        const T &operator*() const noexcept { return *ptr_; }
+        T *operator->() noexcept { return ptr_; }
+        const T *operator->() const noexcept { return ptr_; }
         T &value() noexcept { return *ptr_; }
         const T &value() const noexcept { return *ptr_; }
 
@@ -904,8 +912,8 @@ namespace protocyte {
             }
             for (usize i {}; i < buckets_.size(); ++i) {
                 if (buckets_[i].occupied) {
-                    if (const auto st = next.insert_or_assign(protocyte::move(buckets_[i].key.value()),
-                                                              protocyte::move(buckets_[i].value.value()));
+                    if (const auto st = next.insert_or_assign(protocyte::move(*buckets_[i].key),
+                                                              protocyte::move(*buckets_[i].value));
                         !st) {
                         return st;
                     }
@@ -923,7 +931,7 @@ namespace protocyte {
                     if (!bucket.occupied) {
                         break;
                     }
-                    if (Config::equal(bucket.key.value(), key)) {
+                    if (Config::equal(*bucket.key, key)) {
                         bucket.value.reset();
                         bucket.value.emplace(protocyte::move(value));
                         return {};
@@ -951,7 +959,7 @@ namespace protocyte {
         template<class Fn> Status for_each(Fn &&fn) const noexcept {
             for (usize i {}; i < buckets_.size(); ++i) {
                 if (const Bucket &bucket = buckets_[i]; bucket.occupied) {
-                    if (const auto st = fn(bucket.key.value(), bucket.value.value()); !st) {
+                    if (const auto st = fn(*bucket.key, *bucket.value); !st) {
                         return st;
                     }
                 }
