@@ -112,7 +112,17 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "template<class Reader> Result<Tag> read_tag(Reader &reader) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "const auto [field, wire] = tag.value();" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<> struct Result<void> {" in files["protocyte/runtime/runtime.hpp"]
+    assert "static constexpr Result ok() noexcept { return Result {}; }" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "constexpr Result() noexcept = default;" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr explicit Result(const Error error) noexcept: ok_ {false}, error_ {error} {}" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "constexpr void operator*() const noexcept {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr void value() const noexcept {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "const auto [field, wire] = *tag;" in files["protocyte/runtime/runtime.hpp"]
     assert "Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
@@ -125,7 +135,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Result<usize> read_length_delimited_size(Reader &reader) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "if (len.value() > static_cast<u64>(~static_cast<usize>(0u))) {" in files["protocyte/runtime/runtime.hpp"]
+    assert "if (*len > static_cast<u64>(~static_cast<usize>(0u))) {" in files["protocyte/runtime/runtime.hpp"]
     assert "return Result<usize>::err(ErrorCode::integer_overflow, reader.position());" in files[
         "protocyte/runtime/runtime.hpp"
     ]
@@ -209,14 +219,14 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "samples_ {&ctx}" in header
     assert "::protocyte::Status set_id(const ::protocyte::i32 value) noexcept" in header
     assert "const auto tag = ::protocyte::read_tag(reader);" in header
-    assert "const auto [field_number, wire_type] = tag.value();" in header
+    assert "const auto [field_number, wire_type] = *tag;" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
     assert "using RuntimeStatus = ::protocyte::Status;" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     assert "template<typename Reader>" in header
     assert "RuntimeStatus merge_from(Reader &reader) noexcept" in header
     assert "for (::protocyte::usize i {}; i < samples_.size(); ++i)" in header
-    assert "if (const auto st = out.value().copy_from(*this); !st)" in header
+    assert "if (const auto st = out->copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
     assert "enum struct FieldNumber : ::protocyte::u32 {" in header
     assert "id = 1u," in header
@@ -234,7 +244,7 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "FieldNumber::opt_name), opt_name_.view());" in header
     assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
     assert "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);" in header
-    assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get())" in header
+    assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get())" in header
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
     assert "clear_items();" in header
@@ -261,7 +271,7 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "other.map_uint64_msg().for_each([&](const auto &key, const auto &value) noexcept {" in header
     assert "copied_value.copy_from(value)" in header
     assert "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
-    assert "if (const auto st = out.value().copy_from(*this); !st) {" in header
+    assert "if (const auto st = out->copy_from(*this); !st) {" in header
     assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP" in header
     assert "fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u" in header
 
@@ -328,7 +338,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "digest_max_size" not in header
     assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
     assert "::protocyte::ByteView digest() const noexcept { return digest_.view(); }" in header
-    assert "if (len.value() != DOUBLE_MAGIC)" in header
+    assert "if (*len != DOUBLE_MAGIC)" in header
     assert "if (values_.size() != 0u && values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
     assert "template<usize Max> struct ByteArray" in runtime_header
@@ -426,7 +436,7 @@ def test_generated_header_copies_oneof_state() -> None:
     assert "if (const auto st = set_text(other.text()); !st) {" in header
     assert "return st;" in header
     assert "if (auto ensured = ensure_inner(); !ensured) {" in header
-    assert "ensured.value().get().copy_from(*other.inner())" in header
+    assert "ensured->get().copy_from(*other.inner())" in header
     assert "clear_choice();" in header
 
 
@@ -456,7 +466,7 @@ def test_generated_header_uses_real_other_for_map_only_copy() -> None:
     assert "clear_items();" in header
     assert "source.items().for_each([&](const auto &key, const auto &value) noexcept {" in header
     assert "auto copied_value = value;" in header
-    assert "if (const auto st = out.value().copy_from(*this); !st) {" in header
+    assert "if (const auto st = out->copy_from(*this); !st) {" in header
 
 
 def test_rejects_invalid_hex_numeric_literals() -> None:
@@ -664,8 +674,8 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     header = next(file.content for file in response.file if file.name == "oneof_array.protocyte.hpp")
     assert "new (&choice.data)::protocyte::ByteArray<8u> {};" in header
     assert "choice_case_ = ChoiceCase::data;" in header
-    assert "if (const auto st = choice.data.resize(len.value()); !st) {" in header
-    assert "if (len.value() > ctx_->limits.max_string_bytes) {" in header
+    assert "if (const auto st = choice.data.resize(*len); !st) {" in header
+    assert "if (*len > ctx_->limits.max_string_bytes) {" in header
     assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st) {" in header
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 

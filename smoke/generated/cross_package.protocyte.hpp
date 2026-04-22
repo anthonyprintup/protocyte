@@ -49,7 +49,7 @@ namespace test::crosspkg {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().copy_from(*this); !st) {
+            if (const auto st = out->copy_from(*this); !st) {
                 return ::protocyte::Result<CrossPackageConstants_Nested>::err(st.error());
             }
             return out;
@@ -85,7 +85,7 @@ namespace test::crosspkg {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().merge_from(reader); !st) {
+            if (const auto st = out->merge_from(reader); !st) {
                 return ::protocyte::Result<CrossPackageConstants_Nested>::err(st.error());
             }
             return out;
@@ -97,7 +97,7 @@ namespace test::crosspkg {
                 if (!tag) {
                     return tag.status();
                 }
-                const auto [field_number, wire_type] = tag.value();
+                const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::nested_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
@@ -108,15 +108,15 @@ namespace test::crosspkg {
                         if (!len) {
                             return len.status();
                         }
-                        if (len.value() > ctx_->limits.max_string_bytes) {
+                        if (*len > ctx_->limits.max_string_bytes) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
                                                               field_number);
                         }
-                        if (len.value() > MIRRORED_COUNT) {
+                        if (*len > MIRRORED_COUNT) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = nested_bytes_.resize(len.value()); !st) {
+                        if (const auto st = nested_bytes_.resize(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
@@ -206,7 +206,7 @@ namespace test::crosspkg {
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {
                     return ensured.status();
-                } else if (const auto st = ensured.value().get().copy_from(*other.nested()); !st) {
+                } else if (const auto st = ensured->get().copy_from(*other.nested()); !st) {
                     return st;
                 }
             } else {
@@ -220,7 +220,7 @@ namespace test::crosspkg {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().copy_from(*this); !st) {
+            if (const auto st = out->copy_from(*this); !st) {
                 return ::protocyte::Result<CrossPackageConstants>::err(st.error());
             }
             return out;
@@ -279,7 +279,7 @@ namespace test::crosspkg {
             if (!out) {
                 return out;
             }
-            if (const auto st = out.value().merge_from(reader); !st) {
+            if (const auto st = out->merge_from(reader); !st) {
                 return ::protocyte::Result<CrossPackageConstants>::err(st.error());
             }
             return out;
@@ -291,7 +291,7 @@ namespace test::crosspkg {
                 if (!tag) {
                     return tag.status();
                 }
-                const auto [field_number, wire_type] = tag.value();
+                const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::remote_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
@@ -302,15 +302,15 @@ namespace test::crosspkg {
                         if (!len) {
                             return len.status();
                         }
-                        if (len.value() > ctx_->limits.max_string_bytes) {
+                        if (*len > ctx_->limits.max_string_bytes) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
                                                               field_number);
                         }
-                        if (len.value() > 8u + 1u) {
+                        if (*len > 8u + 1u) {
                             return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
                                                               field_number);
                         }
-                        if (const auto st = remote_bytes_.resize(len.value()); !st) {
+                        if (const auto st = remote_bytes_.resize(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(remote_bytes_.data(), remote_bytes_.size()); !st) {
@@ -324,14 +324,14 @@ namespace test::crosspkg {
                             if (!len) {
                                 return len.status();
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader, len.value()};
+                            ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
                                 auto decoded = ::protocyte::read_int32(packed);
                                 if (!decoded) {
                                     return decoded.status();
                                 }
-                                value = decoded.value();
+                                value = *decoded;
                                 if (const auto st = remote_values_.push_back(value); !st) {
                                     return st;
                                 }
@@ -346,7 +346,7 @@ namespace test::crosspkg {
                         if (!decoded) {
                             return decoded.status();
                         }
-                        value = decoded.value();
+                        value = *decoded;
                         if (const auto st = remote_values_.push_back(value); !st) {
                             return st;
                         }
@@ -362,7 +362,7 @@ namespace test::crosspkg {
                             return ensured.status();
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured.value().get());
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, ensured->get());
                             !st) {
                             return st;
                         }
@@ -461,7 +461,7 @@ namespace test::crosspkg {
                 if (!nested_size) {
                     return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
                 }
-                if (const auto st = ::protocyte::add_size(&total, nested_size.value()); !st) {
+                if (const auto st = ::protocyte::add_size(&total, *nested_size); !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }

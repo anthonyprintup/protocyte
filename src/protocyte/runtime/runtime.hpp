@@ -153,6 +153,12 @@ namespace protocyte {
 
         constexpr bool is_ok() const noexcept { return ok_; }
         constexpr explicit operator bool() const noexcept { return ok_; }
+        T &operator*() & noexcept { return value_; }
+        const T &operator*() const & noexcept { return value_; }
+        T &&operator*() && noexcept { return protocyte::move(value_); }
+        const T &&operator*() const && noexcept { return protocyte::move(value_); }
+        T *operator->() noexcept { return &value_; }
+        const T *operator->() const noexcept { return &value_; }
         T &value() & noexcept { return value_; }
         const T &value() const & noexcept { return value_; }
         T &&take_value() && noexcept { return protocyte::move(value_); }
@@ -168,6 +174,38 @@ namespace protocyte {
             T value_;
             Error error_;
         };
+    };
+
+    template<> struct Result<void> {
+        static constexpr Result ok() noexcept { return Result {}; }
+        static constexpr Result err(const Error error) noexcept { return Result {error}; }
+        static constexpr Result err(const ErrorCode code, const usize offset = {},
+                                    const u32 field_number = {}) noexcept {
+            return Result {Error {.code = code, .offset = offset, .field_number = field_number}};
+        }
+
+        constexpr Result(Result &&) noexcept = default;
+        constexpr Result &operator=(Result &&) noexcept = default;
+
+        Result(const Result &) = delete;
+        Result &operator=(const Result &) = delete;
+
+        ~Result() noexcept = default;
+
+        constexpr bool is_ok() const noexcept { return ok_; }
+        constexpr explicit operator bool() const noexcept { return ok_; }
+        constexpr void operator*() const noexcept {}
+        constexpr void value() const noexcept {}
+        constexpr void take_value() && noexcept {}
+        constexpr Error error() const noexcept { return ok_ ? Error {} : error_; }
+        constexpr Status status() const noexcept { return ok_ ? Status {} : Status {error_}; }
+
+    protected:
+        constexpr Result() noexcept = default;
+        constexpr explicit Result(const Error error) noexcept: ok_ {false}, error_ {error} {}
+
+        bool ok_ {true};
+        Error error_ {};
     };
 
     struct ByteView {
@@ -1157,8 +1195,8 @@ namespace protocyte {
             if (!byte) {
                 return Result<u64>::err(byte.error());
             }
-            value |= (static_cast<u64>(byte.value() & 0x7Fu) << shift);
-            if ((byte.value() & 0x80u) == 0u) {
+            value |= (static_cast<u64>(*byte & 0x7Fu) << shift);
+            if ((*byte & 0x80u) == 0u) {
                 return Result<u64>::ok(value);
             }
             shift += 7u;
@@ -1255,7 +1293,7 @@ namespace protocyte {
         if (!raw) {
             return Result<T>::err(raw.error());
         }
-        return Result<T>::ok(static_cast<T>(raw.value()));
+        return Result<T>::ok(static_cast<T>(*raw));
     }
 
     template<class T, class Reader> Result<T> read_zigzag32_scalar(Reader &reader) noexcept {
@@ -1263,7 +1301,7 @@ namespace protocyte {
         if (!raw) {
             return Result<T>::err(raw.error());
         }
-        return Result<T>::ok(static_cast<T>(decode_zigzag32(static_cast<u32>(raw.value()))));
+        return Result<T>::ok(static_cast<T>(decode_zigzag32(static_cast<u32>(*raw))));
     }
 
     template<class T, class Reader> Result<T> read_zigzag64_scalar(Reader &reader) noexcept {
@@ -1271,7 +1309,7 @@ namespace protocyte {
         if (!raw) {
             return Result<T>::err(raw.error());
         }
-        return Result<T>::ok(static_cast<T>(decode_zigzag64(raw.value())));
+        return Result<T>::ok(static_cast<T>(decode_zigzag64(*raw)));
     }
 
     template<class T, class Reader> Result<T> read_fixed32_scalar(Reader &reader) noexcept {
@@ -1279,7 +1317,7 @@ namespace protocyte {
         if (!raw) {
             return Result<T>::err(raw.error());
         }
-        return Result<T>::ok(static_cast<T>(raw.value()));
+        return Result<T>::ok(static_cast<T>(*raw));
     }
 
     template<class T, class Reader> Result<T> read_fixed64_scalar(Reader &reader) noexcept {
@@ -1287,7 +1325,7 @@ namespace protocyte {
         if (!raw) {
             return Result<T>::err(raw.error());
         }
-        return Result<T>::ok(static_cast<T>(raw.value()));
+        return Result<T>::ok(static_cast<T>(*raw));
     }
 
     template<class Reader> Result<i32> read_int32(Reader &reader) noexcept { return read_varint_scalar<i32>(reader); }
@@ -1303,7 +1341,7 @@ namespace protocyte {
         if (!raw) {
             return Result<bool>::err(raw.error());
         }
-        return Result<bool>::ok(raw.value() != 0u);
+        return Result<bool>::ok(*raw != 0u);
     }
 
     template<class Reader> Result<i32> read_enum(Reader &reader) noexcept { return read_varint_scalar<i32>(reader); }
@@ -1337,7 +1375,7 @@ namespace protocyte {
         if (!raw) {
             return Result<f32>::err(raw.error());
         }
-        return Result<f32>::ok(::std::bit_cast<f32>(raw.value()));
+        return Result<f32>::ok(::std::bit_cast<f32>(*raw));
     }
 
     template<class Reader> Result<f64> read_double(Reader &reader) noexcept {
@@ -1345,7 +1383,7 @@ namespace protocyte {
         if (!raw) {
             return Result<f64>::err(raw.error());
         }
-        return Result<f64>::ok(::std::bit_cast<f64>(raw.value()));
+        return Result<f64>::ok(::std::bit_cast<f64>(*raw));
     }
 
     template<class Writer, class T> Status write_varint_scalar(Writer &writer, const T value) noexcept {
@@ -1429,7 +1467,7 @@ namespace protocyte {
         if (!raw) {
             return Result<Tag>::err(raw.error());
         }
-        return Result<Tag>::ok(decode_tag(raw.value()));
+        return Result<Tag>::ok(decode_tag(*raw));
     }
 
     template<class Reader>
@@ -1651,10 +1689,10 @@ namespace protocyte {
         if (!len) {
             return Result<usize>::err(len.error());
         }
-        if (len.value() > static_cast<u64>(~static_cast<usize>(0u))) {
+        if (*len > static_cast<u64>(~static_cast<usize>(0u))) {
             return Result<usize>::err(ErrorCode::integer_overflow, reader.position());
         }
-        return Result<usize>::ok(static_cast<usize>(len.value()));
+        return Result<usize>::ok(static_cast<usize>(*len));
     }
 
     template<class Config, class Reader>
@@ -1677,7 +1715,7 @@ namespace protocyte {
         if (!size) {
             return Result<NestedMessageReader<Reader, Config>>::err(size.error());
         }
-        return open_nested_message_sized<Config>(ctx, reader, size.value(), field_number);
+        return open_nested_message_sized<Config>(ctx, reader, *size, field_number);
     }
 
     template<class Config, class Reader, class Message>
@@ -1686,11 +1724,11 @@ namespace protocyte {
         if (!nested) {
             return nested.status();
         }
-        auto nested_reader = nested.value().reader_ref();
+        auto nested_reader = nested->reader_ref();
         if (const auto st = out.merge_from(nested_reader); !st) {
             return st;
         }
-        return nested.value().finish();
+        return nested->finish();
     }
 
     template<class Writer, class Message>
@@ -1702,7 +1740,7 @@ namespace protocyte {
         if (!size) {
             return size.status();
         }
-        if (const auto st = write_varint(writer, static_cast<u64>(size.value())); !st) {
+        if (const auto st = write_varint(writer, static_cast<u64>(*size)); !st) {
             return st;
         }
         return value.serialize(writer);
@@ -1713,7 +1751,7 @@ namespace protocyte {
         if (!size) {
             return Result<usize>::err(size.error());
         }
-        return Result<usize>::ok(tag_size(field_number) + varint_size(size.value()) + size.value());
+        return Result<usize>::ok(tag_size(field_number) + varint_size(*size) + *size);
     }
 
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;
@@ -1733,7 +1771,7 @@ namespace protocyte {
                 if (!len) {
                     return len.status();
                 }
-                return reader.skip(len.value());
+                return reader.skip(*len);
             }
             case WireType::SGROUP: return skip_group(reader, field_number);
             case WireType::EGROUP: return {};
@@ -1756,7 +1794,7 @@ namespace protocyte {
                 if (!len) {
                     return len.status();
                 }
-                return reader.skip(len.value());
+                return reader.skip(*len);
             }
             case WireType::SGROUP: return skip_group<Config>(ctx, reader, field_number);
             case WireType::EGROUP: return {};
@@ -1770,7 +1808,7 @@ namespace protocyte {
             if (const auto tag = read_tag(reader); !tag) {
                 return tag.status();
             } else {
-                const auto [field, wire] = tag.value();
+                const auto [field, wire] = *tag;
                 if (wire == WireType::EGROUP) {
                     if (field != start_field_number) {
                         return Status::error(ErrorCode::invalid_wire_type, reader.position(), field);
@@ -1794,7 +1832,7 @@ namespace protocyte {
                 pop_recursion<Config>(ctx);
                 return tag.status();
             } else {
-                const auto [field, wire] = tag.value();
+                const auto [field, wire] = *tag;
                 if (wire == WireType::EGROUP) {
                     pop_recursion<Config>(ctx);
                     if (field != start_field_number) {
@@ -1829,7 +1867,7 @@ namespace protocyte {
             if (!byte) {
                 return byte.status();
             }
-            if (const auto st = buffer.push_back(byte.value()); !st) {
+            if (const auto st = buffer.push_back(*byte); !st) {
                 return st;
             }
         }
@@ -1846,7 +1884,7 @@ namespace protocyte {
         if (!size) {
             return size.status();
         }
-        return read_bytes_sized<Config>(ctx, reader, size.value(), out);
+        return read_bytes_sized<Config>(ctx, reader, *size, out);
     }
 
     template<class Config, class Reader> Status read_bytes_field(typename Config::Context &ctx, Reader &reader,
@@ -1873,7 +1911,7 @@ namespace protocyte {
             if (!byte) {
                 return byte.status();
             }
-            if (const auto st = buffer.push_back(byte.value()); !st) {
+            if (const auto st = buffer.push_back(*byte); !st) {
                 return st;
             }
         }
@@ -1891,7 +1929,7 @@ namespace protocyte {
         if (!size) {
             return size.status();
         }
-        return read_string_sized<Config>(ctx, reader, size.value(), out);
+        return read_string_sized<Config>(ctx, reader, *size, out);
     }
 
     template<class Config, class Reader> Status read_string_field(typename Config::Context &ctx, Reader &reader,
