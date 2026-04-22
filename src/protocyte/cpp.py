@@ -291,6 +291,7 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
         with w.indent():
             w.line(f"return ::protocyte::Result<{message.cpp_name}>::ok({message.cpp_name}{{ctx}});")
         w.line("}")
+        w.line("Context* context() const noexcept { return ctx_; }")
         _emit_special_members(w, message, options)
         w.line(f"{message.cpp_name}(const {message.cpp_name}&) = delete;")
         w.line(f"{message.cpp_name}& operator=(const {message.cpp_name}&) = delete;")
@@ -572,49 +573,14 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
 
 
 def _emit_copy_repeated_field(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
+    del options
     source = f"other.{item.cpp_name}()"
-    element = f"{item.cpp_name}_item"
-    w.line(f"clear_{item.cpp_name}();")
-    w.line(f"for (const auto &{element} : {source}) {{")
-    w.push()
-    if item.kind in {"string", "bytes"}:
-        typ = _field_type(item, options)
-        w.line(f"{typ} value{{ctx_}};")
-        w.line(f"if (const auto st = value.assign({element}.view()); !st) {{ return st; }}")
-        w.line(f"if (const auto st = mutable_{item.cpp_name}().push_back(::protocyte::move(value)); !st) {{ return st; }}")
-    elif item.kind == "message":
-        w.line(f"auto copied = mutable_{item.cpp_name}().emplace_back(*ctx_);")
-        w.line("if (!copied) { return copied.status(); }")
-        w.line(f"if (const auto st = (*copied)->copy_from({element}); !st) {{ return st; }}")
-    else:
-        w.line(f"if (const auto st = mutable_{item.cpp_name}().push_back({element}); !st) {{ return st; }}")
-    w.pop()
-    w.line("}")
+    w.line(f"if (const auto st = mutable_{item.cpp_name}().copy_from({source}); !st) {{ return st; }}")
 
 
 def _emit_copy_map_field(w: CppWriter, item: FieldModel, options: GeneratorOptions, *, source: str = "other") -> None:
-    assert item.map_key is not None and item.map_value is not None
-    key_type = _field_type(item.map_key, options)
-    value_type = _field_type(item.map_value, options)
-    w.line(f"clear_{item.cpp_name}();")
-    w.line(f"for (const auto entry : {source}.{item.cpp_name}()) {{")
-    w.push()
-    if item.map_key.kind == "string":
-        w.line(f"{key_type} copied_key{{ctx_}};")
-        w.line("if (const auto st = copied_key.assign(entry.key.view()); !st) { return st; }")
-    else:
-        w.line("auto copied_key = entry.key;")
-    if item.map_value.kind in {"string", "bytes"}:
-        w.line(f"{value_type} copied_value{{ctx_}};")
-        w.line("if (const auto st = copied_value.assign(entry.value.view()); !st) { return st; }")
-    elif item.map_value.kind == "message":
-        w.line(f"{value_type} copied_value{{*ctx_}};")
-        w.line("if (const auto st = copied_value.copy_from(entry.value); !st) { return st; }")
-    else:
-        w.line("auto copied_value = entry.value;")
-    w.line(f"if (const auto insert = mutable_{item.cpp_name}().insert_or_assign(::protocyte::move(copied_key), ::protocyte::move(copied_value)); !insert) {{ return insert; }}")
-    w.pop()
-    w.line("}")
+    del options
+    w.line(f"if (const auto st = mutable_{item.cpp_name}().copy_from({source}.{item.cpp_name}()); !st) {{ return st; }}")
 
 
 def _emit_copy_oneof_from_other(w: CppWriter, oneof: OneofModel, options: GeneratorOptions, *, source: str) -> None:
@@ -994,6 +960,18 @@ def _emit_fixed_array_validation(w: CppWriter, message: MessageModel, *, for_siz
         w.line("}")
 
 
+def _packed_fixed_width_size(item: FieldModel) -> str | None:
+    widths = {
+        FieldDescriptorProto.TYPE_FIXED32: "4u",
+        FieldDescriptorProto.TYPE_SFIXED32: "4u",
+        FieldDescriptorProto.TYPE_FLOAT: "4u",
+        FieldDescriptorProto.TYPE_FIXED64: "8u",
+        FieldDescriptorProto.TYPE_SFIXED64: "8u",
+        FieldDescriptorProto.TYPE_DOUBLE: "8u",
+    }
+    return widths.get(item.proto_type)
+
+
 def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     if item.repeated and item.kind != "map":
         if item.packable:
@@ -1001,6 +979,14 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
             with w.indent():
                 w.line("auto len = ::protocyte::read_length_delimited_size(reader);")
                 w.line("if (!len) { return len.status(); }")
+                width = _packed_fixed_width_size(item)
+                if not item.repeated_array and width is not None:
+                    reserve_name = f"packed_reserve_{item.cpp_name}"
+                    w.line(f"::protocyte::usize {reserve_name} {{}};")
+                    w.line(
+                        f"if (const auto st = ::protocyte::checked_add({_member(item)}.size(), *len / {width}, &{reserve_name}); !st) {{ return st; }}"
+                    )
+                    w.line(f"if (const auto st = {_member(item)}.reserve({reserve_name}); !st) {{ return st; }}")
                 w.line("::protocyte::LimitedReader<Reader> packed{reader, *len};")
                 w.line("while (!packed.eof()) {")
                 with w.indent():

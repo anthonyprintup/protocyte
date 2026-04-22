@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -15,26 +17,38 @@ F = descriptor_pb2.FieldDescriptorProto
 
 
 def main() -> int:
+    try:
+        clang_format = _resolve_smoke_clang_format()
+        clang_format_config = _resolve_smoke_clang_format_config()
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
     out_dir = Path(__file__).resolve().parents[1] / "generated"
     out_dir.mkdir(parents=True, exist_ok=True)
     written_paths: set[Path] = set()
 
     requests: list[plugin_pb2.CodeGeneratorRequest] = []
+    smoke_format_options = (
+        f"clang_format={clang_format}",
+        f"clang_format_config={clang_format_config.as_posix()}",
+    )
 
     example_request = plugin_pb2.CodeGeneratorRequest()
     example_request.file_to_generate.append("example.proto")
-    example_request.parameter = "runtime=emit"
+    example_request.parameter = _generator_parameter("runtime=emit", *smoke_format_options)
     example_request.proto_file.extend([options_file(), example_file()])
     requests.append(example_request)
 
     compat_request = plugin_pb2.CodeGeneratorRequest()
     compat_request.file_to_generate.append("compat.proto")
-    compat_request.parameter = "namespace_prefix=protocyte_smoke"
+    compat_request.parameter = _generator_parameter("namespace_prefix=protocyte_smoke", *smoke_format_options)
     compat_request.proto_file.append(compat_file())
     requests.append(compat_request)
 
     cross_package_request = plugin_pb2.CodeGeneratorRequest()
     cross_package_request.file_to_generate.append("cross_package.proto")
+    cross_package_request.parameter = _generator_parameter(*smoke_format_options)
     cross_package_request.proto_file.extend([options_file(), example_file(), cross_package_file()])
     requests.append(cross_package_request)
 
@@ -59,6 +73,58 @@ def main() -> int:
         stale_runtime_source.unlink()
 
     return 0
+
+
+def _generator_parameter(*parts: str) -> str:
+    return ",".join(part for part in parts if part)
+
+
+def _resolve_smoke_clang_format() -> str:
+    override = os.environ.get("PROTOCYTE_SMOKE_CLANG_FORMAT")
+    if override:
+        return override
+
+    for command in ("clang-format", "clang-format.exe"):
+        resolved = shutil.which(command)
+        if resolved:
+            return Path(resolved).as_posix()
+
+    for candidate in _clang_format_candidates():
+        if candidate.is_file():
+            return candidate.as_posix()
+
+    raise FileNotFoundError(
+        "clang-format was not found. Set PROTOCYTE_SMOKE_CLANG_FORMAT or install clang-format."
+    )
+
+
+def _resolve_smoke_clang_format_config() -> Path:
+    override = os.environ.get("PROTOCYTE_SMOKE_CLANG_FORMAT_CONFIG")
+    config = Path(override) if override else ROOT / ".clang-format"
+    if config.is_file():
+        return config
+
+    raise FileNotFoundError(f"clang-format config was not found: {config.as_posix()}")
+
+
+def _clang_format_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    if os.name == "nt":
+        for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+            prefix = os.environ.get(env_name)
+            if prefix:
+                candidates.append(Path(prefix) / "LLVM" / "bin" / "clang-format.exe")
+        return candidates
+
+    if sys.platform == "darwin":
+        return [
+            Path("/opt/homebrew/opt/llvm/bin/clang-format"),
+            Path("/usr/local/opt/llvm/bin/clang-format"),
+        ]
+
+    candidates.extend(sorted(Path("/usr/lib").glob("llvm-*/bin/clang-format"), reverse=True))
+    candidates.extend([Path("/usr/local/bin/clang-format"), Path("/usr/bin/clang-format")])
+    return candidates
 
 
 def add_field(

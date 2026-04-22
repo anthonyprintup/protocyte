@@ -29,6 +29,7 @@ namespace protocyte_smoke::test::compat {
         static ::protocyte::Result<EncodingMatrix_Inner> create(Context &ctx) noexcept {
             return ::protocyte::Result<EncodingMatrix_Inner>::ok(EncodingMatrix_Inner {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         EncodingMatrix_Inner(EncodingMatrix_Inner &&) noexcept = default;
         EncodingMatrix_Inner &operator=(EncodingMatrix_Inner &&) noexcept = default;
         EncodingMatrix_Inner(const EncodingMatrix_Inner &) = delete;
@@ -224,6 +225,7 @@ namespace protocyte_smoke::test::compat {
         static ::protocyte::Result<EncodingMatrix> create(Context &ctx) noexcept {
             return ::protocyte::Result<EncodingMatrix>::ok(EncodingMatrix {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         EncodingMatrix(EncodingMatrix &&other) noexcept:
             ctx_ {other.ctx_},
             f_int32_ {other.f_int32_},
@@ -412,23 +414,14 @@ namespace protocyte_smoke::test::compat {
             } else {
                 clear_nested();
             }
-            clear_r_int32_unpacked();
-            for (const auto &r_int32_unpacked_item : other.r_int32_unpacked()) {
-                if (const auto st = mutable_r_int32_unpacked().push_back(r_int32_unpacked_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked()); !st) {
+                return st;
             }
-            clear_r_int32_packed();
-            for (const auto &r_int32_packed_item : other.r_int32_packed()) {
-                if (const auto st = mutable_r_int32_packed().push_back(r_int32_packed_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_r_int32_packed().copy_from(other.r_int32_packed()); !st) {
+                return st;
             }
-            clear_r_double();
-            for (const auto &r_double_item : other.r_double()) {
-                if (const auto st = mutable_r_double().push_back(r_double_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_r_double().copy_from(other.r_double()); !st) {
+                return st;
             }
             if (other.has_opt_int32()) {
                 if (const auto st = set_opt_int32(other.opt_int32()); !st) {
@@ -1029,6 +1022,15 @@ namespace protocyte_smoke::test::compat {
                             auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
+                            }
+                            ::protocyte::usize packed_reserve_r_double {};
+                            if (const auto st =
+                                    ::protocyte::checked_add(r_double_.size(), *len / 8u, &packed_reserve_r_double);
+                                !st) {
+                                return st;
+                            }
+                            if (const auto st = r_double_.reserve(packed_reserve_r_double); !st) {
+                                return st;
                             }
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {

@@ -61,6 +61,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>::ok(
                 UltimateComplexMessage_NestedLevel1_NestedLevel2 {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_NestedLevel1_NestedLevel2(UltimateComplexMessage_NestedLevel1_NestedLevel2 &&) noexcept =
             default;
         UltimateComplexMessage_NestedLevel1_NestedLevel2 &
@@ -77,11 +78,8 @@ namespace test::ultimate {
             if (const auto st = set_description(other.description()); !st) {
                 return st;
             }
-            clear_values();
-            for (const auto &values_item : other.values()) {
-                if (const auto st = mutable_values().push_back(values_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+                return st;
             }
             if (const auto st = set_mode_raw(other.mode_raw()); !st) {
                 return st;
@@ -163,6 +161,15 @@ namespace test::ultimate {
                             auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
+                            }
+                            ::protocyte::usize packed_reserve_values {};
+                            if (const auto st =
+                                    ::protocyte::checked_add(values_.size(), *len / 4u, &packed_reserve_values);
+                                !st) {
+                                return st;
+                            }
+                            if (const auto st = values_.reserve(packed_reserve_values); !st) {
+                                return st;
                             }
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
@@ -308,6 +315,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_NestedLevel1>::ok(
                 UltimateComplexMessage_NestedLevel1 {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_NestedLevel1(UltimateComplexMessage_NestedLevel1 &&) noexcept = default;
         UltimateComplexMessage_NestedLevel1 &operator=(UltimateComplexMessage_NestedLevel1 &&) noexcept = default;
         UltimateComplexMessage_NestedLevel1(const UltimateComplexMessage_NestedLevel1 &) = delete;
@@ -524,6 +532,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>::ok(
                 UltimateComplexMessage_RepeatedBytesHolder {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_RepeatedBytesHolder(UltimateComplexMessage_RepeatedBytesHolder &&) noexcept = default;
         UltimateComplexMessage_RepeatedBytesHolder &
         operator=(UltimateComplexMessage_RepeatedBytesHolder &&) noexcept = default;
@@ -535,15 +544,8 @@ namespace test::ultimate {
             if (this == &other) {
                 return ::protocyte::Status::ok();
             }
-            clear_values();
-            for (const auto &values_item : other.values()) {
-                typename Config::Bytes value {ctx_};
-                if (const auto st = value.assign(values_item.view()); !st) {
-                    return st;
-                }
-                if (const auto st = mutable_values().push_back(::protocyte::move(value)); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+                return st;
             }
             return ::protocyte::Status::ok();
         }
@@ -648,6 +650,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>::ok(
                 UltimateComplexMessage_BoundedRepeatedBytesHolder {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_BoundedRepeatedBytesHolder(
             UltimateComplexMessage_BoundedRepeatedBytesHolder &&) noexcept = default;
         UltimateComplexMessage_BoundedRepeatedBytesHolder &
@@ -661,15 +664,8 @@ namespace test::ultimate {
             if (this == &other) {
                 return ::protocyte::Status::ok();
             }
-            clear_values();
-            for (const auto &values_item : other.values()) {
-                typename Config::Bytes value {ctx_};
-                if (const auto st = value.assign(values_item.view()); !st) {
-                    return st;
-                }
-                if (const auto st = mutable_values().push_back(::protocyte::move(value)); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+                return st;
             }
             return ::protocyte::Status::ok();
         }
@@ -776,6 +772,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>::ok(
                 UltimateComplexMessage_FixedRepeatedBytesHolder {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_FixedRepeatedBytesHolder(UltimateComplexMessage_FixedRepeatedBytesHolder &&) noexcept =
             default;
         UltimateComplexMessage_FixedRepeatedBytesHolder &
@@ -789,15 +786,8 @@ namespace test::ultimate {
             if (this == &other) {
                 return ::protocyte::Status::ok();
             }
-            clear_values();
-            for (const auto &values_item : other.values()) {
-                typename Config::Bytes value {ctx_};
-                if (const auto st = value.assign(values_item.view()); !st) {
-                    return st;
-                }
-                if (const auto st = mutable_values().push_back(::protocyte::move(value)); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+                return st;
             }
             return ::protocyte::Status::ok();
         }
@@ -930,6 +920,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>::ok(
                 UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(
             UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &&other) noexcept:
             ctx_ {other.ctx_},
@@ -996,18 +987,8 @@ namespace test::ultimate {
             if (const auto st = set_extreme(other.extreme()); !st) {
                 return st;
             }
-            clear_weird_map();
-            for (const auto entry : other.weird_map()) {
-                auto copied_key = entry.key;
-                typename Config::String copied_value {ctx_};
-                if (const auto st = copied_value.assign(entry.value.view()); !st) {
-                    return st;
-                }
-                if (const auto insert = mutable_weird_map().insert_or_assign(::protocyte::move(copied_key),
-                                                                             ::protocyte::move(copied_value));
-                    !insert) {
-                    return insert;
-                }
+            if (const auto st = mutable_weird_map().copy_from(other.weird_map()); !st) {
+                return st;
             }
             switch (other.deep_oneof_case_) {
                 case Deep_oneofCase::val: {
@@ -1507,6 +1488,7 @@ namespace test::ultimate {
         static ::protocyte::Result<UltimateComplexMessage> create(Context &ctx) noexcept {
             return ::protocyte::Result<UltimateComplexMessage>::ok(UltimateComplexMessage {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage(UltimateComplexMessage &&other) noexcept:
             ctx_ {other.ctx_},
             f_double_ {other.f_double_},
@@ -1813,23 +1795,14 @@ namespace test::ultimate {
             if (const auto st = set_f_bytes(other.f_bytes()); !st) {
                 return st;
             }
-            clear_r_int32_unpacked();
-            for (const auto &r_int32_unpacked_item : other.r_int32_unpacked()) {
-                if (const auto st = mutable_r_int32_unpacked().push_back(r_int32_unpacked_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked()); !st) {
+                return st;
             }
-            clear_r_int32_packed();
-            for (const auto &r_int32_packed_item : other.r_int32_packed()) {
-                if (const auto st = mutable_r_int32_packed().push_back(r_int32_packed_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_r_int32_packed().copy_from(other.r_int32_packed()); !st) {
+                return st;
             }
-            clear_r_double();
-            for (const auto &r_double_item : other.r_double()) {
-                if (const auto st = mutable_r_double().push_back(r_double_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_r_double().copy_from(other.r_double()); !st) {
+                return st;
             }
             if (const auto st = set_color_raw(other.color_raw()); !st) {
                 return st;
@@ -1843,73 +1816,20 @@ namespace test::ultimate {
             } else {
                 clear_nested1();
             }
-            clear_map_str_int32();
-            for (const auto entry : other.map_str_int32()) {
-                typename Config::String copied_key {ctx_};
-                if (const auto st = copied_key.assign(entry.key.view()); !st) {
-                    return st;
-                }
-                auto copied_value = entry.value;
-                if (const auto insert = mutable_map_str_int32().insert_or_assign(::protocyte::move(copied_key),
-                                                                                 ::protocyte::move(copied_value));
-                    !insert) {
-                    return insert;
-                }
+            if (const auto st = mutable_map_str_int32().copy_from(other.map_str_int32()); !st) {
+                return st;
             }
-            clear_map_int32_str();
-            for (const auto entry : other.map_int32_str()) {
-                auto copied_key = entry.key;
-                typename Config::String copied_value {ctx_};
-                if (const auto st = copied_value.assign(entry.value.view()); !st) {
-                    return st;
-                }
-                if (const auto insert = mutable_map_int32_str().insert_or_assign(::protocyte::move(copied_key),
-                                                                                 ::protocyte::move(copied_value));
-                    !insert) {
-                    return insert;
-                }
+            if (const auto st = mutable_map_int32_str().copy_from(other.map_int32_str()); !st) {
+                return st;
             }
-            clear_map_bool_bytes();
-            for (const auto entry : other.map_bool_bytes()) {
-                auto copied_key = entry.key;
-                typename Config::Bytes copied_value {ctx_};
-                if (const auto st = copied_value.assign(entry.value.view()); !st) {
-                    return st;
-                }
-                if (const auto insert = mutable_map_bool_bytes().insert_or_assign(::protocyte::move(copied_key),
-                                                                                  ::protocyte::move(copied_value));
-                    !insert) {
-                    return insert;
-                }
+            if (const auto st = mutable_map_bool_bytes().copy_from(other.map_bool_bytes()); !st) {
+                return st;
             }
-            clear_map_uint64_msg();
-            for (const auto entry : other.map_uint64_msg()) {
-                auto copied_key = entry.key;
-                ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> copied_value {*ctx_};
-                if (const auto st = copied_value.copy_from(entry.value); !st) {
-                    return st;
-                }
-                if (const auto insert = mutable_map_uint64_msg().insert_or_assign(::protocyte::move(copied_key),
-                                                                                  ::protocyte::move(copied_value));
-                    !insert) {
-                    return insert;
-                }
+            if (const auto st = mutable_map_uint64_msg().copy_from(other.map_uint64_msg()); !st) {
+                return st;
             }
-            clear_very_nested_map();
-            for (const auto entry : other.very_nested_map()) {
-                typename Config::String copied_key {ctx_};
-                if (const auto st = copied_key.assign(entry.key.view()); !st) {
-                    return st;
-                }
-                ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> copied_value {*ctx_};
-                if (const auto st = copied_value.copy_from(entry.value); !st) {
-                    return st;
-                }
-                if (const auto insert = mutable_very_nested_map().insert_or_assign(::protocyte::move(copied_key),
-                                                                                   ::protocyte::move(copied_value));
-                    !insert) {
-                    return insert;
-                }
+            if (const auto st = mutable_very_nested_map().copy_from(other.very_nested_map()); !st) {
+                return st;
             }
             if (other.has_recursive_self()) {
                 if (auto ensured = ensure_recursive_self(); !ensured) {
@@ -1920,21 +1840,11 @@ namespace test::ultimate {
             } else {
                 clear_recursive_self();
             }
-            clear_lots_of_nested();
-            for (const auto &lots_of_nested_item : other.lots_of_nested()) {
-                auto copied = mutable_lots_of_nested().emplace_back(*ctx_);
-                if (!copied) {
-                    return copied.status();
-                }
-                if (const auto st = (*copied)->copy_from(lots_of_nested_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_lots_of_nested().copy_from(other.lots_of_nested()); !st) {
+                return st;
             }
-            clear_colors();
-            for (const auto &colors_item : other.colors()) {
-                if (const auto st = mutable_colors().push_back(colors_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_colors().copy_from(other.colors()); !st) {
+                return st;
             }
             if (other.has_opt_int32()) {
                 if (const auto st = set_opt_int32(other.opt_int32()); !st) {
@@ -1966,53 +1876,27 @@ namespace test::ultimate {
             } else {
                 clear_sha256();
             }
-            clear_integer_array();
-            for (const auto &integer_array_item : other.integer_array()) {
-                if (const auto st = mutable_integer_array().push_back(integer_array_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_integer_array().copy_from(other.integer_array()); !st) {
+                return st;
             }
             if (const auto st = set_byte_array(other.byte_array()); !st) {
                 return st;
             }
-            clear_fixed_integer_array();
-            for (const auto &fixed_integer_array_item : other.fixed_integer_array()) {
-                if (const auto st = mutable_fixed_integer_array().push_back(fixed_integer_array_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_fixed_integer_array().copy_from(other.fixed_integer_array()); !st) {
+                return st;
             }
             if (const auto st = set_float_expr_array(other.float_expr_array()); !st) {
                 return st;
             }
-            clear_repeated_byte_array();
-            for (const auto &repeated_byte_array_item : other.repeated_byte_array()) {
-                typename Config::Bytes value {ctx_};
-                if (const auto st = value.assign(repeated_byte_array_item.view()); !st) {
-                    return st;
-                }
-                if (const auto st = mutable_repeated_byte_array().push_back(::protocyte::move(value)); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_repeated_byte_array().copy_from(other.repeated_byte_array()); !st) {
+                return st;
             }
-            clear_bounded_repeated_byte_array();
-            for (const auto &bounded_repeated_byte_array_item : other.bounded_repeated_byte_array()) {
-                typename Config::Bytes value {ctx_};
-                if (const auto st = value.assign(bounded_repeated_byte_array_item.view()); !st) {
-                    return st;
-                }
-                if (const auto st = mutable_bounded_repeated_byte_array().push_back(::protocyte::move(value)); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_bounded_repeated_byte_array().copy_from(other.bounded_repeated_byte_array());
+                !st) {
+                return st;
             }
-            clear_fixed_repeated_byte_array();
-            for (const auto &fixed_repeated_byte_array_item : other.fixed_repeated_byte_array()) {
-                typename Config::Bytes value {ctx_};
-                if (const auto st = value.assign(fixed_repeated_byte_array_item.view()); !st) {
-                    return st;
-                }
-                if (const auto st = mutable_fixed_repeated_byte_array().push_back(::protocyte::move(value)); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_fixed_repeated_byte_array().copy_from(other.fixed_repeated_byte_array()); !st) {
+                return st;
             }
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
@@ -3005,6 +2889,15 @@ namespace test::ultimate {
                             auto len = ::protocyte::read_length_delimited_size(reader);
                             if (!len) {
                                 return len.status();
+                            }
+                            ::protocyte::usize packed_reserve_r_double {};
+                            if (const auto st =
+                                    ::protocyte::checked_add(r_double_.size(), *len / 8u, &packed_reserve_r_double);
+                                !st) {
+                                return st;
+                            }
+                            if (const auto st = r_double_.reserve(packed_reserve_r_double); !st) {
+                                return st;
                             }
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
@@ -5238,6 +5131,7 @@ namespace test::ultimate {
         static ::protocyte::Result<UltimateComplexMessage_LevelA> create(Context &ctx) noexcept {
             return ::protocyte::Result<UltimateComplexMessage_LevelA>::ok(UltimateComplexMessage_LevelA {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_LevelA(UltimateComplexMessage_LevelA &&) noexcept = default;
         UltimateComplexMessage_LevelA &operator=(UltimateComplexMessage_LevelA &&) noexcept = default;
         UltimateComplexMessage_LevelA(const UltimateComplexMessage_LevelA &) = delete;
@@ -5310,6 +5204,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB>::ok(
                 UltimateComplexMessage_LevelA_LevelB {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_LevelA_LevelB(UltimateComplexMessage_LevelA_LevelB &&) noexcept = default;
         UltimateComplexMessage_LevelA_LevelB &operator=(UltimateComplexMessage_LevelA_LevelB &&) noexcept = default;
         UltimateComplexMessage_LevelA_LevelB(const UltimateComplexMessage_LevelA_LevelB &) = delete;
@@ -5382,6 +5277,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>::ok(
                 UltimateComplexMessage_LevelA_LevelB_LevelC {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_LevelA_LevelB_LevelC(UltimateComplexMessage_LevelA_LevelB_LevelC &&) noexcept = default;
         UltimateComplexMessage_LevelA_LevelB_LevelC &
         operator=(UltimateComplexMessage_LevelA_LevelB_LevelC &&) noexcept = default;
@@ -5456,6 +5352,7 @@ namespace test::ultimate {
             return ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>::ok(
                 UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD(
             UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &&) noexcept = default;
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &
@@ -5533,6 +5430,7 @@ namespace test::ultimate {
         static ::protocyte::Result<ExtraMessage> create(Context &ctx) noexcept {
             return ::protocyte::Result<ExtraMessage>::ok(ExtraMessage {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         ExtraMessage(ExtraMessage &&) noexcept = default;
         ExtraMessage &operator=(ExtraMessage &&) noexcept = default;
         ExtraMessage(const ExtraMessage &) = delete;
@@ -5711,6 +5609,7 @@ namespace test::ultimate {
         static ::protocyte::Result<CrossMessageConstants_Nested> create(Context &ctx) noexcept {
             return ::protocyte::Result<CrossMessageConstants_Nested>::ok(CrossMessageConstants_Nested {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         CrossMessageConstants_Nested(CrossMessageConstants_Nested &&) noexcept = default;
         CrossMessageConstants_Nested &operator=(CrossMessageConstants_Nested &&) noexcept = default;
         CrossMessageConstants_Nested(const CrossMessageConstants_Nested &) = delete;
@@ -5866,6 +5765,7 @@ namespace test::ultimate {
         static ::protocyte::Result<CrossMessageConstants> create(Context &ctx) noexcept {
             return ::protocyte::Result<CrossMessageConstants>::ok(CrossMessageConstants {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         CrossMessageConstants(CrossMessageConstants &&) noexcept = default;
         CrossMessageConstants &operator=(CrossMessageConstants &&) noexcept = default;
         CrossMessageConstants(const CrossMessageConstants &) = delete;
@@ -5878,11 +5778,8 @@ namespace test::ultimate {
             if (const auto st = set_external_bytes(other.external_bytes()); !st) {
                 return st;
             }
-            clear_mirrored_values();
-            for (const auto &mirrored_values_item : other.mirrored_values()) {
-                if (const auto st = mutable_mirrored_values().push_back(mirrored_values_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_mirrored_values().copy_from(other.mirrored_values()); !st) {
+                return st;
             }
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {

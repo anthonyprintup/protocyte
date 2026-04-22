@@ -29,6 +29,7 @@ namespace test::crosspkg {
         static ::protocyte::Result<CrossPackageConstants_Nested> create(Context &ctx) noexcept {
             return ::protocyte::Result<CrossPackageConstants_Nested>::ok(CrossPackageConstants_Nested {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         CrossPackageConstants_Nested(CrossPackageConstants_Nested &&) noexcept = default;
         CrossPackageConstants_Nested &operator=(CrossPackageConstants_Nested &&) noexcept = default;
         CrossPackageConstants_Nested(const CrossPackageConstants_Nested &) = delete;
@@ -185,6 +186,7 @@ namespace test::crosspkg {
         static ::protocyte::Result<CrossPackageConstants> create(Context &ctx) noexcept {
             return ::protocyte::Result<CrossPackageConstants>::ok(CrossPackageConstants {ctx});
         }
+        Context *context() const noexcept { return ctx_; }
         CrossPackageConstants(CrossPackageConstants &&) noexcept = default;
         CrossPackageConstants &operator=(CrossPackageConstants &&) noexcept = default;
         CrossPackageConstants(const CrossPackageConstants &) = delete;
@@ -197,11 +199,8 @@ namespace test::crosspkg {
             if (const auto st = set_remote_bytes(other.remote_bytes()); !st) {
                 return st;
             }
-            clear_remote_values();
-            for (const auto &remote_values_item : other.remote_values()) {
-                if (const auto st = mutable_remote_values().push_back(remote_values_item); !st) {
-                    return st;
-                }
+            if (const auto st = mutable_remote_values().copy_from(other.remote_values()); !st) {
+                return st;
             }
             if (other.has_nested()) {
                 if (auto ensured = ensure_nested(); !ensured) {
