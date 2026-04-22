@@ -8,6 +8,16 @@ function(_protocyte_shell_single_quote out_var value)
     set(${out_var} "'${escaped}'" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_encode_generator_parameter out_var value)
+    if("${value}" STREQUAL "")
+        set(${out_var} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    string(HEX "${value}" encoded)
+    set(${out_var} "_protocyte_options_hex=${encoded}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_get_internal out_var name)
     get_property(value GLOBAL PROPERTY "PROTOCYTE_INTERNAL_${name}")
     if(NOT DEFINED value OR value STREQUAL "")
@@ -274,6 +284,7 @@ function(protocyte_generate)
     endif()
 
     string(JOIN "," generator_parameter ${generator_options})
+    _protocyte_encode_generator_parameter(encoded_generator_parameter "${generator_parameter}")
 
     set(protocyte_generated_headers)
     set(protocyte_generated_sources)
@@ -331,10 +342,10 @@ function(protocyte_generate)
         list(APPEND protoc_proto_paths "--proto_path=${import_dir}")
     endforeach()
 
-    if(generator_parameter STREQUAL "")
+    if(encoded_generator_parameter STREQUAL "")
         set(protocyte_out_arg "--protocyte_out=${PROTOCYTE_OUT_DIR}")
     else()
-        set(protocyte_out_arg "--protocyte_out=${generator_parameter}:${PROTOCYTE_OUT_DIR}")
+        set(protocyte_out_arg "--protocyte_out=${encoded_generator_parameter}:${PROTOCYTE_OUT_DIR}")
     endif()
 
     add_custom_command(

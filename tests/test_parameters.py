@@ -30,6 +30,25 @@ def test_parse_accepts_clang_format_options() -> None:
     assert options.clang_format_config == "configs/protocyte.style"
 
 
+def test_parse_decodes_hex_transport_parameter() -> None:
+    raw = "runtime=emit:C:/toolchain/runtime,namespace_prefix=drv::wire,clang_format=C:/Program Files/LLVM/bin/clang-format.exe"
+    encoded = raw.encode("utf-8").hex()
+
+    options = parse_parameter(f"_protocyte_options_hex={encoded}")
+
+    assert options.emit_runtime is True
+    assert options.runtime_prefix == "C:/toolchain/runtime"
+    assert options.namespace_prefix == "drv::wire"
+    assert options.clang_format == "C:/Program Files/LLVM/bin/clang-format.exe"
+
+
+def test_rejects_mixed_encoded_transport_parameter() -> None:
+    encoded = b"runtime=emit".hex()
+
+    with pytest.raises(ProtocyteError, match="encoded protocyte transport parameter must be the only protocyte parameter"):
+        parse_parameter(f"_protocyte_options_hex={encoded},include_prefix=generated")
+
+
 def test_rejects_duplicate_parameters() -> None:
     with pytest.raises(ProtocyteError, match="duplicate protocyte parameter: runtime"):
         parse_parameter("runtime=emit,runtime=omit")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 
 from protocyte.errors import ProtocyteError
@@ -17,6 +19,7 @@ class GeneratorOptions:
 
 def parse_parameter(parameter: str) -> GeneratorOptions:
     """Parse protoc's comma-separated plugin parameter string."""
+    parameter = _decode_transport_parameter(parameter)
     values: dict[str, str] = {}
 
     if parameter:
@@ -79,6 +82,48 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         clang_format=clang_format,
         clang_format_config=clang_format_config,
     )
+
+
+def _decode_transport_parameter(parameter: str) -> str:
+    parts = [raw_part.strip() for raw_part in parameter.split(",") if raw_part.strip()]
+    if not parts:
+        return parameter
+
+    transport_decoders = {
+        "_protocyte_options_hex": _decode_hex_transport_parameter,
+        "_protocyte_options_b64": _decode_base64_transport_parameter,
+    }
+    transport_parts = [part for part in parts if part.split("=", 1)[0] in transport_decoders]
+    if not transport_parts:
+        return parameter
+    if len(transport_parts) != 1 or len(parts) != 1:
+        raise ProtocyteError("encoded protocyte transport parameter must be the only protocyte parameter")
+
+    name, encoded = transport_parts[0].split("=", 1)
+    return transport_decoders[name](encoded)
+
+
+def _decode_hex_transport_parameter(encoded: str) -> str:
+    try:
+        decoded = bytes.fromhex(encoded)
+    except ValueError as exc:
+        raise ProtocyteError("invalid _protocyte_options_hex payload") from exc
+    return _decode_transport_bytes("_protocyte_options_hex", decoded)
+
+
+def _decode_base64_transport_parameter(encoded: str) -> str:
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ProtocyteError("invalid _protocyte_options_b64 payload") from exc
+    return _decode_transport_bytes("_protocyte_options_b64", decoded)
+
+
+def _decode_transport_bytes(name: str, decoded: bytes) -> str:
+    try:
+        return decoded.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProtocyteError(f"{name} payload must decode as UTF-8") from exc
 
 
 def _parse_bool(value: str, name: str) -> bool:

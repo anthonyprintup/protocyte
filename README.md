@@ -140,6 +140,23 @@ add_executable(demo main.cpp)
 target_link_libraries(demo PRIVATE demo::proto)
 ```
 
+Generator options can be forwarded through `OPTIONS`:
+
+```cmake
+protocyte_add_proto_library(
+    TARGET demo_proto
+    ALIAS demo::proto
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    DISCOVER
+    OPTIONS
+        "clang_format=C:/Program Files/LLVM/bin/clang-format.exe"
+        "clang_format_config=${CMAKE_SOURCE_DIR}/.clang-format"
+)
+```
+
+Absolute Windows and POSIX paths are safe to use in `OPTIONS`.
+
 By default, the protocyte CMake project fetches protobuf when protobuf CMake
 targets are not already available, then exposes:
 
@@ -252,7 +269,8 @@ without failing.
 
 CMake users can forward these through the existing `OPTIONS` argument on
 `protocyte_generate(...)` or `protocyte_add_proto_library(...)`; no dedicated
-CMake option is required.
+CMake option is required. Absolute Windows and POSIX paths are safe in
+`OPTIONS`.
 
 Example:
 

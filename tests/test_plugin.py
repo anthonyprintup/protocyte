@@ -263,6 +263,33 @@ def test_generation_uses_explicit_clang_format_override_verbatim(monkeypatch: py
     assert all(item.content == "formatted\n" for item in response.file)
 
 
+def test_generation_decodes_explicit_clang_format_override_from_transport_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "custom.style"
+    config_path.write_text("BasedOnStyle: LLVM\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="formatted\n", stderr="")
+
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    raw = (
+        "clang_format=C:/Program Files/LLVM/bin/clang-format.exe,"
+        f"clang_format_config={config_path.as_posix()}"
+    )
+    encoded = raw.encode("utf-8").hex()
+    response = generate_response(_basic_request(parameter=f"_protocyte_options_hex={encoded}"))
+
+    assert not response.error
+    assert commands
+    assert all(command[0] == "C:/Program Files/LLVM/bin/clang-format.exe" for command in commands)
+    assert all(f"--style=file:{config_path.as_posix()}" in command for command in commands)
+
+
 def test_generation_reports_explicit_clang_format_launch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         protocyte_cpp.subprocess,
