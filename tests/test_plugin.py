@@ -5,6 +5,7 @@ import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
+import protocyte.cpp as protocyte_cpp
 from protocyte.cpp import CppWriter
 from protocyte.model import CONSTANT_KIND_UINT32, ProtocyteError, _build_constants, _build_field, _coerce_literal, build_model
 from protocyte.plugin import generate_response
@@ -12,6 +13,19 @@ from protocyte.runtime import runtime_files
 
 
 F = descriptor_pb2.FieldDescriptorProto
+
+
+def _basic_request(*, parameter: str = "") -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("simple.proto")
+    request.parameter = parameter
+    request.proto_file.append(_simple_file())
+    return request
+
+
+@pytest.fixture(autouse=True)
+def _disable_implicit_clang_format(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
 
 
 def test_runtime_files_load_packaged_sources() -> None:
@@ -67,7 +81,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "protocyte Config::Context must expose recursion_depth for recursion-limited parsing" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "template<typename Config = ::protocyte::DefaultConfig>" in files["simple.protocyte.hpp"]
+    assert "template <typename Config = ::protocyte::DefaultConfig>" in files["simple.protocyte.hpp"]
     assert "class Status" not in files["protocyte/runtime/runtime.hpp"]
     assert "public:" not in files["protocyte/runtime/runtime.hpp"]
     assert "private:" not in files["protocyte/runtime/runtime.hpp"]
@@ -200,6 +214,116 @@ def test_rejects_non_proto3_target() -> None:
     assert 'expected syntax = "proto3"' in response.error
 
 
+def test_generation_succeeds_without_clang_format_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("clang-format should not be invoked when it is unavailable")
+
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fail_run)
+
+    response = generate_response(_basic_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    assert files["simple.protocyte.hpp"].startswith("#pragma once\n")
+
+
+def test_generation_uses_explicit_clang_format_override_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout="formatted\n", stderr="")
+
+    monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    response = generate_response(_basic_request(parameter="clang_format=my-format"))
+
+    assert not response.error
+    assert commands
+    assert all(command[0] == "my-format" for command in commands)
+    assert all(item.content == "formatted\n" for item in response.file)
+
+
+def test_generation_reports_explicit_clang_format_launch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("missing executable")),
+    )
+
+    response = generate_response(_basic_request(parameter="clang_format=missing-format"))
+
+    assert "failed to run clang-format" in response.error
+    assert "missing executable" in response.error
+
+
+def test_generation_reports_explicit_clang_format_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="broken style"),
+    )
+
+    response = generate_response(_basic_request(parameter="clang_format=my-format"))
+
+    assert "clang-format failed for simple.protocyte.hpp: broken style" in response.error
+
+
+def test_generation_passes_explicit_clang_format_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "custom.style"
+    config_path.write_text("BasedOnStyle: LLVM\n", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append(command)
+        assume_filename = next(part for part in command if part.startswith("--assume-filename="))
+        return SimpleNamespace(returncode=0, stdout=assume_filename + "\n", stderr="")
+
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    response = generate_response(
+        _basic_request(parameter=f"clang_format=my-format,clang_format_config={config_path.as_posix()}")
+    )
+
+    assert not response.error
+    assert commands
+    assert all(f"--style=file:{config_path.as_posix()}" in command for command in commands)
+
+
+def test_generation_reports_missing_explicit_clang_format_config(tmp_path: Path) -> None:
+    missing_config = tmp_path / "missing.style"
+
+    response = generate_response(
+        _basic_request(parameter=f"clang_format=my-format,clang_format_config={missing_config.as_posix()}")
+    )
+
+    assert response.error == f"clang-format config was not found: {missing_config.as_posix()}"
+
+
+def test_generation_uses_clang_format_found_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append(command)
+        assume_filename = next(part for part in command if part.startswith("--assume-filename="))
+        filename = assume_filename.split("=", 1)[1]
+        return SimpleNamespace(returncode=0, stdout=f"formatted:{filename}\n", stderr="")
+
+    monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: "/usr/bin/clang-format")
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    response = generate_response(_basic_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    assert files["simple.protocyte.hpp"] == "formatted:simple.protocyte.hpp\n"
+    assert files["simple.protocyte.cpp"] == "formatted:simple.protocyte.cpp\n"
+    assert all(command[0] == "/usr/bin/clang-format" for command in commands)
+
+
 def test_model_detects_maps_and_recursive_boxing() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("simple.proto")
@@ -226,17 +350,17 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "struct Sample {" in header
     assert "typename Config::template Map<typename Config::String, ::protocyte::i32> items_;" in header
     assert "typename Config::template Box<::demo::Sample<Config>> self_;" in header
-    assert "ctx_ {&ctx}" in header
-    assert "items_ {&ctx}" in header
-    assert "samples_ {&ctx}" in header
+    assert "ctx_{&ctx}" in header
+    assert "items_{&ctx}" in header
+    assert "samples_{&ctx}" in header
     assert "::protocyte::Status set_id(const ::protocyte::i32 value) noexcept" in header
     assert "const auto tag = ::protocyte::read_tag(reader);" in header
     assert "const auto [field_number, wire_type] = *tag;" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
     assert "using RuntimeStatus = ::protocyte::Status;" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
-    assert "template<typename Reader>" in header
-    assert "RuntimeStatus merge_from(Reader &reader) noexcept" in header
+    assert "template <typename Reader>" in header
+    assert "RuntimeStatus merge_from(Reader& reader) noexcept" in header
     assert "for (::protocyte::usize i {}; i < samples_.size(); ++i)" in header
     assert "if (const auto st = out->copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
@@ -261,7 +385,7 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
     assert "clear_items();" in header
-    assert "other.items().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "other.items().for_each([&](const auto& key, const auto& value) noexcept {" in header
     assert "clear_samples();" in header
     assert "mutable_samples().push_back(other.samples()[i])" in header
     assert "clear_message_items();" in header
@@ -461,7 +585,7 @@ def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
     assert not response.error
     header = next(item.content for item in response.file if item.name == "repeated_array_only.protocyte.hpp")
 
-    assert "copy_from(const OnlyArrays &other) noexcept" in header
+    assert "copy_from(const OnlyArrays& other) noexcept" in header
     assert "if (this == &other) {" in header
     assert "return ::protocyte::Status::ok();" in header
     assert "clear_values();" in header
@@ -475,11 +599,11 @@ def test_generated_header_uses_real_other_for_map_only_copy() -> None:
     assert not response.error
     header = next(item.content for item in response.file if item.name == "map_only.protocyte.hpp")
 
-    assert "copy_from(const OnlyMaps &other) noexcept" in header
+    assert "copy_from(const OnlyMaps& other) noexcept" in header
     assert "if (this == &other) {" in header
-    assert "const auto &source = other;" in header
+    assert "const auto& source = other;" in header
     assert "clear_items();" in header
-    assert "source.items().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "source.items().for_each([&](const auto& key, const auto& value) noexcept {" in header
     assert "auto copied_value = value;" in header
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
 
@@ -651,10 +775,11 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     header = files["oneof.protocyte.hpp"]
     protected = header.split("protected:", maxsplit=1)[1]
 
-    assert "Carrier(Carrier &&other) noexcept" in header
-    assert "Carrier &operator=(Carrier &&other) noexcept" in header
-    assert "~Carrier() noexcept { clear_choice(); }" in header
-    assert "template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }" in header
+    assert "Carrier(Carrier&& other) noexcept" in header
+    assert "Carrier& operator=(Carrier&& other) noexcept" in header
+    assert "~Carrier() noexcept {\n    clear_choice();\n  }" in header
+    assert "template <typename T>" in header
+    assert "static void destroy_at_(T* value) noexcept { value->~T(); }" in header
     assert "void clear_choice() noexcept {" in header
     assert "destroy_at_(&choice.text);" in header
     assert "destroy_at_(&choice.inner);" in header
@@ -666,21 +791,21 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "::protocyte::i32 count;" in header
     assert "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner;" in header
     assert "new (&choice.text) typename Config::String {::protocyte::move(temp)};" in header
-    assert "new (&choice.count)::protocyte::i32 {value};" in header
+    assert "new (&choice.count) ::protocyte::i32 {value};" in header
     assert "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>> {};" in header
     assert "return has_inner() && choice.inner.has_value() ? choice.inner.operator->() : nullptr;" in header
-    assert "::protocyte::Ref<::demo::Carrier_Inner<Config>> {*choice.inner}" in header
+    assert "::protocyte::Ref<::demo::Carrier_Inner<Config>>{*choice.inner}" in header
     assert "new (&choice.none)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none;" not in header
     assert "auto ensured = ensure_inner();" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
     assert "choice_case_ == ChoiceCase::inner" in header
-    assert "::protocyte::i32 before_ {};" in protected
-    assert "::protocyte::i32 after_ {};" in protected
-    assert protected.index("::protocyte::i32 before_ {};") < protected.index("ChoiceCase choice_case_ {ChoiceCase::none};")
+    assert "::protocyte::i32 before_{};" in protected
+    assert "::protocyte::i32 after_{};" in protected
+    assert protected.index("::protocyte::i32 before_{};") < protected.index("ChoiceCase choice_case_ {ChoiceCase::none};")
     assert protected.index("ChoiceCase choice_case_ {ChoiceCase::none};") < protected.index("union ChoiceStorage {")
-    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_ {};")
+    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_{};")
     assert "typename Config::String text = " not in header
 
 
@@ -689,7 +814,7 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
 
     assert not response.error
     header = next(file.content for file in response.file if file.name == "oneof_array.protocyte.hpp")
-    assert "new (&choice.data)::protocyte::ByteArray<8u> {};" in header
+    assert "new (&choice.data) ::protocyte::ByteArray<8u> {};" in header
     assert "choice_case_ = ChoiceCase::data;" in header
     assert "if (const auto st = choice.data.resize(*len); !st) {" in header
     assert "if (*len > ctx_->limits.max_string_bytes) {" in header
@@ -707,7 +832,7 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
     assert not response.error
     header = next(file.content for file in response.file if file.name == "empty.protocyte.hpp")
 
-    assert "RuntimeStatus serialize(Writer & /* writer */) const noexcept {" in header
+    assert "RuntimeStatus serialize(Writer& /* writer */) const noexcept {" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {" in header
     assert "::protocyte::usize total {};" not in header
     assert "return ::protocyte::Result<::protocyte::usize>::ok({});" in header
@@ -725,8 +850,8 @@ def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
 
     assert "namespace test::protocyte {" in header
     assert "using RuntimeStatus = ::protocyte::Status;" in header
-    assert "RuntimeStatus merge_from(Reader &reader) noexcept {" in header
-    assert "RuntimeStatus serialize(Writer &writer) const noexcept {" in header
+    assert "RuntimeStatus merge_from(Reader& reader) noexcept {" in header
+    assert "RuntimeStatus serialize(Writer& writer) const noexcept {" in header
 
 
 def test_repo_root_options_proto_matches_generator_copy() -> None:

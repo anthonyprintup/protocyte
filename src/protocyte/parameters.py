@@ -11,6 +11,8 @@ class GeneratorOptions:
     runtime_prefix: str = "protocyte/runtime"
     include_prefix: str = ""
     namespace_prefix: str = ""
+    clang_format: str | None = None
+    clang_format_config: str | None = None
 
 
 def parse_parameter(parameter: str) -> GeneratorOptions:
@@ -40,6 +42,8 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "include_prefix",
         "namespace",
         "namespace_prefix",
+        "clang_format",
+        "clang_format_config",
     }
     if unknown:
         joined = ", ".join(sorted(unknown))
@@ -64,12 +68,16 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
 
     namespace_prefix = values.get("namespace_prefix", values.get("namespace", "")).strip(":")
     include_prefix = values.get("include_prefix", "").strip("/")
+    clang_format = values.get("clang_format")
+    clang_format_config = values.get("clang_format_config")
 
     return GeneratorOptions(
         emit_runtime=emit_runtime,
         runtime_prefix=runtime_prefix or "protocyte/runtime",
         include_prefix=include_prefix,
         namespace_prefix=namespace_prefix,
+        clang_format=clang_format,
+        clang_format_config=clang_format_config,
     )
 
 

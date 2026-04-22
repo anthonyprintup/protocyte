@@ -239,6 +239,20 @@ Supported `--protocyte_out=` parameters:
 - `namespace=<a::b>`: accepted as an alias for `namespace_prefix`; specify only
   one of the two names.
 - `include_prefix=<path>`: prefix includes for imported generated headers.
+- `clang_format=<command-or-path>`: run an explicit `clang-format` executable
+  after generation. When specified, launch and formatting failures are reported
+  as plugin errors.
+- `clang_format_config=<path>`: use an explicit clang-format config file when
+  formatting runs.
+
+Formatting is best-effort by default. If `clang-format` is on `PATH`, protocyte
+uses it for generated C++ output. If it is not available and no explicit
+`clang_format=...` override is supplied, protocyte still emits generated files
+without failing.
+
+CMake users can forward these through the existing `OPTIONS` argument on
+`protocyte_generate(...)` or `protocyte_add_proto_library(...)`; no dedicated
+CMake option is required.
 
 Example:
 
