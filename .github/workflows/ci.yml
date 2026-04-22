@@ -87,6 +87,23 @@ jobs:
         working-directory: smoke
         run: ctest --preset windows-clangcl-ninja
 
+  smoke-host-linux:
+    name: Smoke Host Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Configure Linux smoke tests
+        run: cmake -S smoke -B smoke/build/linux-host -G Ninja
+
+      - name: Build Linux smoke tests
+        run: cmake --build smoke/build/linux-host
+
+      - name: Run Linux smoke tests
+        run: ctest --test-dir smoke/build/linux-host --output-on-failure
+
   smoke-kernel-build:
     name: Smoke Kernel Build
     runs-on: windows-2022
