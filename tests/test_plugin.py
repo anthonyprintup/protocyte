@@ -120,7 +120,23 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "if (ctx_ != nullptr && view.size > ctx_->limits.max_string_bytes) {" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "if (const Bucket &bucket = buckets_[i]; bucket.occupied)" in files["protocyte/runtime/runtime.hpp"]
+    assert "using reverse_iterator = ReverseIterator<const u8>;" in files["protocyte/runtime/runtime.hpp"]
+    assert "offset_ptr(" not in files["protocyte/runtime/runtime.hpp"]
+    assert "using iterator = typename Config::Bytes::const_iterator;" in files["protocyte/runtime/runtime.hpp"]
+    assert "using reverse_iterator = typename Config::Bytes::const_reverse_iterator;" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "using Bucket = Optional<Entry>;" in files["protocyte/runtime/runtime.hpp"]
+    assert "struct EntryProxy {" in files["protocyte/runtime/runtime.hpp"]
+    assert "struct ConstEntryProxy {" in files["protocyte/runtime/runtime.hpp"]
+    assert "iterator begin() noexcept { return iterator {buckets_.begin(), buckets_.end()}; }" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "const_iterator begin() const noexcept { return const_iterator {buckets_.begin(), buckets_.end()}; }" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "template<class Fn> Status for_each(Fn &&fn) noexcept" not in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class Fn> Status for_each(Fn &&fn) const noexcept" not in files["protocyte/runtime/runtime.hpp"]
     assert "struct Tag {" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr Tag decode_tag(const u64 raw) noexcept" in files["protocyte/runtime/runtime.hpp"]
     assert "template<class Reader> Result<Tag> read_tag(Reader &reader) noexcept" in files[
@@ -361,7 +377,7 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     assert "template <typename Reader>" in header
     assert "RuntimeStatus merge_from(Reader& reader) noexcept" in header
-    assert "for (::protocyte::usize i {}; i < samples_.size(); ++i)" in header
+    assert "for (const auto &packed_value_samples : samples_) {" in header
     assert "if (const auto st = out->copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
     assert "enum struct FieldNumber : ::protocyte::u32 {" in header
@@ -385,11 +401,13 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
     assert "clear_items();" in header
-    assert "other.items().for_each([&](const auto& key, const auto& value) noexcept {" in header
+    assert "for (const auto entry : other.items()) {" in header
     assert "clear_samples();" in header
-    assert "mutable_samples().push_back(other.samples()[i])" in header
+    assert "for (const auto &samples_item : other.samples()) {" in header
+    assert "mutable_samples().push_back(samples_item)" in header
     assert "clear_message_items();" in header
-    assert "copied_value.copy_from(value)" in header
+    assert "copied_value.copy_from(entry.value)" in header
+    assert "if (const auto st_size = ::protocyte::checked_mul(samples_.size(), 4u, &packed_size_samples); !st_size)" in header
 
 
 def test_checked_smoke_output_reflects_copy_propagation() -> None:
@@ -403,10 +421,10 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "clear_r_int32_packed();" in header
     assert "clear_r_double();" in header
     assert "clear_map_str_int32();" in header
-    assert "other.map_str_int32().for_each([&](const auto &key, const auto &value) noexcept {" in header
+    assert "for (const auto entry : other.map_str_int32()) {" in header
     assert "clear_map_uint64_msg();" in header
-    assert "other.map_uint64_msg().for_each([&](const auto &key, const auto &value) noexcept {" in header
-    assert "copied_value.copy_from(value)" in header
+    assert "for (const auto entry : other.map_uint64_msg()) {" in header
+    assert "copied_value.copy_from(entry.value)" in header
     assert "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
     assert "return has_recursive_self() ? recursive_self_.operator->() : nullptr;" in header
@@ -482,6 +500,10 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "template<class T, usize Max> struct Array" in runtime_header
     assert "template<usize Max> struct ByteArray" in runtime_header
     assert "template<usize Max> struct FixedByteArray" in runtime_header
+    assert "iterator end() noexcept { return bytes_ + size_; }" in runtime_header
+    assert "const_iterator end() const noexcept { return bytes_ + size_; }" in runtime_header
+    assert "iterator end() noexcept { return bytes_ + size(); }" in runtime_header
+    assert "const_iterator end() const noexcept { return bytes_ + size(); }" in runtime_header
     assert "u8 bytes_[Max];" in runtime_header
     assert "u8 bytes_[Max] {};" not in runtime_header
 
@@ -499,8 +521,8 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     assert "set_blob(other.blob())" in header
     assert "set_hex_blob(other.hex_blob())" in header
     assert "clear_values();" in header
-    assert "for (::protocyte::usize i {}; i < other.values().size(); ++i) {" in header
-    assert "mutable_values().push_back(other.values()[i])" in header
+    assert "for (const auto &values_item : other.values()) {" in header
+    assert "mutable_values().push_back(values_item)" in header
     assert "Array(Array &&other) noexcept" in runtime_header
     assert "Array &operator=(Array &&other) noexcept" in runtime_header
     assert "ByteArray(ByteArray &&other) noexcept" in runtime_header
@@ -589,8 +611,8 @@ def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
     assert "if (this == &other) {" in header
     assert "return ::protocyte::Status::ok();" in header
     assert "clear_values();" in header
-    assert "for (::protocyte::usize i {}; i < other.values().size(); ++i) {" in header
-    assert "mutable_values().push_back(other.values()[i])" in header
+    assert "for (const auto &values_item : other.values()) {" in header
+    assert "mutable_values().push_back(values_item)" in header
 
 
 def test_generated_header_uses_real_other_for_map_only_copy() -> None:
@@ -603,8 +625,8 @@ def test_generated_header_uses_real_other_for_map_only_copy() -> None:
     assert "if (this == &other) {" in header
     assert "const auto& source = other;" in header
     assert "clear_items();" in header
-    assert "source.items().for_each([&](const auto& key, const auto& value) noexcept {" in header
-    assert "auto copied_value = value;" in header
+    assert "for (const auto entry : source.items()) {" in header
+    assert "auto copied_value = entry.value;" in header
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
 
 

@@ -413,20 +413,20 @@ namespace protocyte_smoke::test::compat {
                 clear_nested();
             }
             clear_r_int32_unpacked();
-            for (::protocyte::usize i {}; i < other.r_int32_unpacked().size(); ++i) {
-                if (const auto st = mutable_r_int32_unpacked().push_back(other.r_int32_unpacked()[i]); !st) {
+            for (const auto &r_int32_unpacked_item : other.r_int32_unpacked()) {
+                if (const auto st = mutable_r_int32_unpacked().push_back(r_int32_unpacked_item); !st) {
                     return st;
                 }
             }
             clear_r_int32_packed();
-            for (::protocyte::usize i {}; i < other.r_int32_packed().size(); ++i) {
-                if (const auto st = mutable_r_int32_packed().push_back(other.r_int32_packed()[i]); !st) {
+            for (const auto &r_int32_packed_item : other.r_int32_packed()) {
+                if (const auto st = mutable_r_int32_packed().push_back(r_int32_packed_item); !st) {
                     return st;
                 }
             }
             clear_r_double();
-            for (::protocyte::usize i {}; i < other.r_double().size(); ++i) {
-                if (const auto st = mutable_r_double().push_back(other.r_double()[i]); !st) {
+            for (const auto &r_double_item : other.r_double()) {
+                if (const auto st = mutable_r_double().push_back(r_double_item); !st) {
                     return st;
                 }
             }
@@ -1256,20 +1256,20 @@ namespace protocyte_smoke::test::compat {
                     return st;
                 }
             }
-            for (::protocyte::usize i {}; i < r_int32_unpacked_.size(); ++i) {
+            for (const auto &r_int32_unpacked_value : r_int32_unpacked_) {
                 if (const auto st = ::protocyte::write_int32_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::r_int32_unpacked), r_int32_unpacked_[i]);
+                        writer, static_cast<::protocyte::u32>(FieldNumber::r_int32_unpacked), r_int32_unpacked_value);
                     !st) {
                     return st;
                 }
             }
             if (!r_int32_packed_.empty()) {
                 ::protocyte::usize packed_size_r_int32_packed {};
-                for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
+                for (const auto &packed_value_r_int32_packed : r_int32_packed_) {
                     {
                         if (const auto st_size = ::protocyte::add_size(
                                 &packed_size_r_int32_packed,
-                                ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_packed_[i])));
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(packed_value_r_int32_packed)));
                             !st_size) {
                             return st_size;
                         }
@@ -1285,20 +1285,17 @@ namespace protocyte_smoke::test::compat {
                     !st) {
                     return st;
                 }
-                for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
-                    if (const auto st = ::protocyte::write_int32(writer, r_int32_packed_[i]); !st) {
+                for (const auto &packed_value_r_int32_packed : r_int32_packed_) {
+                    if (const auto st = ::protocyte::write_int32(writer, packed_value_r_int32_packed); !st) {
                         return st;
                     }
                 }
             }
             if (!r_double_.empty()) {
                 ::protocyte::usize packed_size_r_double {};
-                for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
-                    {
-                        if (const auto st_size = ::protocyte::add_size(&packed_size_r_double, 8u); !st_size) {
-                            return st_size;
-                        }
-                    }
+                if (const auto st_size = ::protocyte::checked_mul(r_double_.size(), 8u, &packed_size_r_double);
+                    !st_size) {
+                    return st_size;
                 }
                 if (const auto st = ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::r_double),
                                                            ::protocyte::WireType::LEN);
@@ -1310,8 +1307,8 @@ namespace protocyte_smoke::test::compat {
                     !st) {
                     return st;
                 }
-                for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
-                    if (const auto st = ::protocyte::write_double(writer, r_double_[i]); !st) {
+                for (const auto &packed_value_r_double : r_double_) {
+                    if (const auto st = ::protocyte::write_double(writer, packed_value_r_double); !st) {
                         return st;
                     }
                 }
@@ -1497,21 +1494,21 @@ namespace protocyte_smoke::test::compat {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
-            for (::protocyte::usize i {}; i < r_int32_unpacked_.size(); ++i) {
+            for (const auto &r_int32_unpacked_value : r_int32_unpacked_) {
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::r_int32_unpacked)) +
-                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_unpacked_[i])));
+                                    ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_unpacked_value)));
                     !st) {
                     return ::protocyte::Result<::protocyte::usize>::err(st.error());
                 }
             }
             if (!r_int32_packed_.empty()) {
                 ::protocyte::usize packed_size_r_int32_packed {};
-                for (::protocyte::usize i {}; i < r_int32_packed_.size(); ++i) {
+                for (const auto &r_int32_packed_value : r_int32_packed_) {
                     {
                         if (const auto st_size = ::protocyte::add_size(
                                 &packed_size_r_int32_packed,
-                                ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_packed_[i])));
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(r_int32_packed_value)));
                             !st_size) {
                             return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
                         }
@@ -1526,12 +1523,9 @@ namespace protocyte_smoke::test::compat {
             }
             if (!r_double_.empty()) {
                 ::protocyte::usize packed_size_r_double {};
-                for (::protocyte::usize i {}; i < r_double_.size(); ++i) {
-                    {
-                        if (const auto st_size = ::protocyte::add_size(&packed_size_r_double, 8u); !st_size) {
-                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
-                        }
-                    }
+                if (const auto st_size = ::protocyte::checked_mul(r_double_.size(), 8u, &packed_size_r_double);
+                    !st_size) {
+                    return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
                 }
                 if (const auto st = ::protocyte::add_size(
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::r_double)) +

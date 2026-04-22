@@ -198,8 +198,8 @@ namespace test::crosspkg {
                 return st;
             }
             clear_remote_values();
-            for (::protocyte::usize i {}; i < other.remote_values().size(); ++i) {
-                if (const auto st = mutable_remote_values().push_back(other.remote_values()[i]); !st) {
+            for (const auto &remote_values_item : other.remote_values()) {
+                if (const auto st = mutable_remote_values().push_back(remote_values_item); !st) {
                     return st;
                 }
             }
@@ -389,11 +389,11 @@ namespace test::crosspkg {
             }
             if (!remote_values_.empty()) {
                 ::protocyte::usize packed_size_remote_values {};
-                for (::protocyte::usize i {}; i < remote_values_.size(); ++i) {
+                for (const auto &packed_value_remote_values : remote_values_) {
                     {
                         if (const auto st_size = ::protocyte::add_size(
                                 &packed_size_remote_values,
-                                ::protocyte::varint_size(static_cast<::protocyte::u64>(remote_values_[i])));
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(packed_value_remote_values)));
                             !st_size) {
                             return st_size;
                         }
@@ -409,8 +409,8 @@ namespace test::crosspkg {
                     !st) {
                     return st;
                 }
-                for (::protocyte::usize i {}; i < remote_values_.size(); ++i) {
-                    if (const auto st = ::protocyte::write_int32(writer, remote_values_[i]); !st) {
+                for (const auto &packed_value_remote_values : remote_values_) {
+                    if (const auto st = ::protocyte::write_int32(writer, packed_value_remote_values); !st) {
                         return st;
                     }
                 }
@@ -437,11 +437,11 @@ namespace test::crosspkg {
             }
             if (!remote_values_.empty()) {
                 ::protocyte::usize packed_size_remote_values {};
-                for (::protocyte::usize i {}; i < remote_values_.size(); ++i) {
+                for (const auto &remote_values_value : remote_values_) {
                     {
                         if (const auto st_size = ::protocyte::add_size(
                                 &packed_size_remote_values,
-                                ::protocyte::varint_size(static_cast<::protocyte::u64>(remote_values_[i])));
+                                ::protocyte::varint_size(static_cast<::protocyte::u64>(remote_values_value)));
                             !st_size) {
                             return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
                         }
