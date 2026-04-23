@@ -861,7 +861,6 @@ def _fill_message_details(
     custom_options: _CustomOptions,
 ) -> None:
     message.constants = _build_constants(message, custom_options)
-    _validate_constant_collisions(message)
 
     oneof_fields: dict[int, OneofModel] = {}
     for index, oneof in enumerate(message.descriptor.oneof_decl):
@@ -877,6 +876,7 @@ def _fill_message_details(
             oneof_fields[field_model.oneof_index].fields.append(field_model)
 
     message.oneofs = [oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields]
+    _validate_constant_collisions(message)
     _validate_field_collisions(message)
     if files[message.file_name].syntax == "proto3":
         for field_model in message.fields:
@@ -936,16 +936,8 @@ def _validate_constant_collisions(message: MessageModel) -> None:
     reserved.update(nested.name for nested in message.nested_messages if not nested.is_map_entry)
     reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
     reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
-    for proto_field in message.descriptor.field:
-        cpp_name = cpp_identifier(proto_field.name)
-        reserved.add(cpp_name)
-        reserved.add(f"clear_{cpp_name}")
-        reserved.add(f"set_{cpp_name}")
-        reserved.add(f"mutable_{cpp_name}")
-        reserved.add(f"has_{cpp_name}")
-        reserved.add(f"ensure_{cpp_name}")
-        reserved.add(f"{cpp_name}_raw")
-        reserved.add(f"set_{cpp_name}_raw")
+    for field_model in message.fields:
+        reserved.update(_field_generated_cpp_names(field_model))
 
     for constant in message.constants:
         if constant.name in seen_names:
@@ -1030,16 +1022,7 @@ def _validate_field_collisions(message: MessageModel) -> None:
             raise ProtocyteError(
                 f"{message.full_name}.{field_model.name}: field collides with {first!r} after C++ identifier normalization"
             )
-        generated_names = {
-            field_model.cpp_name,
-            f"clear_{field_model.cpp_name}",
-            f"set_{field_model.cpp_name}",
-            f"mutable_{field_model.cpp_name}",
-            f"has_{field_model.cpp_name}",
-            f"ensure_{field_model.cpp_name}",
-            f"{field_model.cpp_name}_raw",
-            f"set_{field_model.cpp_name}_raw",
-        }
+        generated_names = _field_generated_cpp_names(field_model)
         if generated_names & reserved:
             raise ProtocyteError(f"{message.full_name}.{field_model.name}: field collides with generated API")
         for generated_name in generated_names:
@@ -1051,6 +1034,55 @@ def _validate_field_collisions(message: MessageModel) -> None:
         seen_cpp_names[field_model.cpp_name] = field_model.name
         for generated_name in generated_names:
             seen_generated_names[generated_name] = field_model.name
+
+
+def _field_generated_cpp_names(field_model: FieldModel) -> set[str]:
+    cpp_name = field_model.cpp_name
+    names = {cpp_name}
+    if field_model.oneof_name is not None:
+        names.add(f"has_{cpp_name}")
+        if field_model.kind == "message":
+            names.add(f"ensure_{cpp_name}")
+        elif field_model.kind == "enum":
+            names.update({f"{cpp_name}_raw", f"set_{cpp_name}_raw", f"set_{cpp_name}"})
+        else:
+            names.add(f"set_{cpp_name}")
+        return names
+
+    names.add(f"clear_{cpp_name}")
+    if field_model.repeated and field_model.kind != "map":
+        names.add(f"mutable_{cpp_name}")
+    elif field_model.kind == "map":
+        names.add(f"mutable_{cpp_name}")
+    elif field_model.kind == "message":
+        names.update({f"has_{cpp_name}", f"ensure_{cpp_name}"})
+    elif field_model.fixed_bytes:
+        names.update({f"has_{cpp_name}", f"mutable_{cpp_name}", f"set_{cpp_name}"})
+    elif field_model.kind == "bytes" and field_model.array_enabled:
+        names.update(
+            {
+                f"{cpp_name}_size",
+                f"{cpp_name}_max_size",
+                f"resize_{cpp_name}",
+                f"mutable_{cpp_name}",
+                f"set_{cpp_name}",
+            }
+        )
+        if field_model.proto3_optional:
+            names.add(f"has_{cpp_name}")
+    elif field_model.kind in {"string", "bytes"}:
+        names.update({f"mutable_{cpp_name}", f"set_{cpp_name}"})
+        if field_model.proto3_optional:
+            names.add(f"has_{cpp_name}")
+    elif field_model.kind == "enum":
+        names.update({f"{cpp_name}_raw", f"set_{cpp_name}_raw", f"set_{cpp_name}"})
+        if field_model.proto3_optional:
+            names.add(f"has_{cpp_name}")
+    else:
+        names.add(f"set_{cpp_name}")
+        if field_model.proto3_optional:
+            names.add(f"has_{cpp_name}")
+    return names
 
 
 def _build_field(

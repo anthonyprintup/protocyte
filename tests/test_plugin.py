@@ -538,6 +538,36 @@ def test_rejects_field_cpp_name_collisions() -> None:
     assert "field collides with 'class' after C++ identifier normalization" in response.error
 
 
+def test_field_collision_checks_only_emitted_accessors() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("accessor_names.proto")
+    file = request.proto_file.add()
+    file.name = "accessor_names.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    message = file.message_type.add()
+    message.name = "AccessorNames"
+
+    values = message.field.add()
+    values.name = "values"
+    values.number = 1
+    values.label = F.LABEL_REPEATED
+    values.type = F.TYPE_INT32
+
+    set_values = message.field.add()
+    set_values.name = "set_values"
+    set_values.number = 2
+    set_values.label = F.LABEL_OPTIONAL
+    set_values.type = F.TYPE_INT32
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "accessor_names.protocyte.hpp")
+    assert "void clear_values() noexcept" in header
+    assert "::protocyte::Status set_set_values(const ::protocyte::i32 value) noexcept" in header
+
+
 def test_len_array_expression_emits_numeric_bound() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("len_bound.proto")
