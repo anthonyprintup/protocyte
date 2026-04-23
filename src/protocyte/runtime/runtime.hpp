@@ -1396,10 +1396,8 @@ namespace protocyte {
         constexpr Optional or_else(F &&f) const & noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f))))
             requires(OptionalType<InvokeResult<F>> &&
                      ::std::same_as<typename ::std::remove_cvref_t<InvokeResult<F>>::value_type, T> &&
-                     requires(F &&fn, const T &value_ref) {
-                         protocyte::invoke(protocyte::forward<F>(fn));
-                         Optional {}.emplace(value_ref);
-                     })
+                     ::std::is_constructible_v<T, const T &> &&
+                     requires(F &&fn) { protocyte::invoke(protocyte::forward<F>(fn)); })
         {
             if (!has_) {
                 return protocyte::invoke(protocyte::forward<F>(f));
@@ -1413,10 +1411,8 @@ namespace protocyte {
         constexpr Optional or_else(F &&f) && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f))))
             requires(OptionalType<InvokeResult<F>> &&
                      ::std::same_as<typename ::std::remove_cvref_t<InvokeResult<F>>::value_type, T> &&
-                     requires(F &&fn, T &&value_ref) {
-                         protocyte::invoke(protocyte::forward<F>(fn));
-                         Optional {}.emplace(protocyte::forward<T>(value_ref));
-                     })
+                     ::std::is_constructible_v<T, T &&> &&
+                     requires(F &&fn) { protocyte::invoke(protocyte::forward<F>(fn)); })
         {
             if (!has_) {
                 return protocyte::invoke(protocyte::forward<F>(f));
