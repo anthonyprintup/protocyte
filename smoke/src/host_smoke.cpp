@@ -279,6 +279,20 @@ namespace {
         }
     };
 
+    struct MemberInvokeProbe {
+        int value {};
+
+        int doubled() const noexcept { return value * 2; }
+
+        protocyte::Result<int> next() const noexcept { return value + 3; }
+
+        protocyte::Optional<int> maybe() const noexcept {
+            protocyte::Optional<int> out {};
+            (void) out.emplace(value + 4);
+            return out;
+        }
+    };
+
     struct TrackedPayload {
         inline static int copies = 0;
         inline static int moves = 0;
@@ -2110,6 +2124,24 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         REQUIRE(ok_status);
         REQUIRE_FALSE(err_status);
         CHECK(err_status.error() == 21u);
+
+        MemberInvokeProbe probe {9};
+        auto member_object_transform =
+            protocyte::Result<MemberInvokeProbe> {MemberInvokeProbe {7}}.transform(&MemberInvokeProbe::value);
+        auto member_pointer_transform =
+            protocyte::Result<MemberInvokeProbe *> {&probe}.transform(&MemberInvokeProbe::value);
+        auto member_function_transform =
+            protocyte::Result<MemberInvokeProbe> {MemberInvokeProbe {8}}.transform(&MemberInvokeProbe::doubled);
+        auto member_function_chain =
+            protocyte::Result<MemberInvokeProbe> {MemberInvokeProbe {10}}.and_then(&MemberInvokeProbe::next);
+        require_success(member_object_transform);
+        require_success(member_pointer_transform);
+        require_success(member_function_transform);
+        require_success(member_function_chain);
+        CHECK(*member_object_transform == 7);
+        CHECK(*member_pointer_transform == 9);
+        CHECK(*member_function_transform == 16);
+        CHECK(*member_function_chain == 13);
     }
 
     SECTION("Optional monadic overloads follow value category and stay lazy") {
@@ -2193,6 +2225,18 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         CHECK_FALSE(transform_called);
         CHECK_FALSE(and_then_called);
         CHECK_FALSE(or_else_called);
+
+        protocyte::Optional<MemberInvokeProbe> member_value {};
+        require_success(member_value.emplace(MemberInvokeProbe {6}));
+        auto member_object_transform = member_value.transform(&MemberInvokeProbe::value);
+        auto member_function_transform = member_value.transform(&MemberInvokeProbe::doubled);
+        auto member_function_chain = member_value.and_then(&MemberInvokeProbe::maybe);
+        REQUIRE(member_object_transform);
+        REQUIRE(member_function_transform);
+        REQUIRE(member_function_chain);
+        CHECK(*member_object_transform == 6);
+        CHECK(*member_function_transform == 12);
+        CHECK(*member_function_chain == 10);
     }
 }
 

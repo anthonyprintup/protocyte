@@ -46,8 +46,51 @@ namespace protocyte {
 
     template<class T> auto declval() noexcept -> T &&;
 
+    template<class Member, class Object, class... Args>
+    constexpr decltype(auto) invoke_member(Member member, Object &&object, Args &&...args) noexcept(
+        noexcept(((*protocyte::forward<Object>(object)).*member)(protocyte::forward<Args>(args)...)))
+        requires(::std::is_member_function_pointer_v<::std::remove_cvref_t<Member>> &&
+                 ::std::is_pointer_v<::std::remove_cvref_t<Object>>)
+    {
+        return ((*protocyte::forward<Object>(object)).*member)(protocyte::forward<Args>(args)...);
+    }
+
+    template<class Member, class Object, class... Args>
+    constexpr decltype(auto) invoke_member(Member member, Object &&object, Args &&...args) noexcept(
+        noexcept((protocyte::forward<Object>(object).*member)(protocyte::forward<Args>(args)...)))
+        requires(::std::is_member_function_pointer_v<::std::remove_cvref_t<Member>> &&
+                 !::std::is_pointer_v<::std::remove_cvref_t<Object>>)
+    {
+        return (protocyte::forward<Object>(object).*member)(protocyte::forward<Args>(args)...);
+    }
+
+    template<class Member, class Object> constexpr decltype(auto)
+    invoke_member(Member member, Object &&object) noexcept(noexcept((*protocyte::forward<Object>(object)).*member))
+        requires(!::std::is_member_function_pointer_v<::std::remove_cvref_t<Member>> &&
+                 ::std::is_pointer_v<::std::remove_cvref_t<Object>>)
+    {
+        return (*protocyte::forward<Object>(object)).*member;
+    }
+
+    template<class Member, class Object> constexpr decltype(auto)
+    invoke_member(Member member, Object &&object) noexcept(noexcept(protocyte::forward<Object>(object).*member))
+        requires(!::std::is_member_function_pointer_v<::std::remove_cvref_t<Member>> &&
+                 !::std::is_pointer_v<::std::remove_cvref_t<Object>>)
+    {
+        return protocyte::forward<Object>(object).*member;
+    }
+
+    template<class F, class... Args> constexpr decltype(auto) invoke(F &&f, Args &&...args) noexcept(
+        noexcept(protocyte::invoke_member(protocyte::forward<F>(f), protocyte::forward<Args>(args)...)))
+        requires(::std::is_member_pointer_v<::std::remove_cvref_t<F>>)
+    {
+        return protocyte::invoke_member(protocyte::forward<F>(f), protocyte::forward<Args>(args)...);
+    }
+
     template<class F, class... Args> constexpr decltype(auto)
-    invoke(F &&f, Args &&...args) noexcept(noexcept(protocyte::forward<F>(f)(protocyte::forward<Args>(args)...))) {
+    invoke(F &&f, Args &&...args) noexcept(noexcept(protocyte::forward<F>(f)(protocyte::forward<Args>(args)...)))
+        requires(!::std::is_member_pointer_v<::std::remove_cvref_t<F>>)
+    {
         return protocyte::forward<F>(f)(protocyte::forward<Args>(args)...);
     }
 
@@ -448,16 +491,15 @@ namespace protocyte {
 
         template<class F>
         constexpr auto transform(F &&f) & noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), value())) &&
-                                                   noexcept(Result<::std::remove_cv_t<InvokeResult<F, T &>>, E> {
+                                                   noexcept(Result<::std::remove_cvref_t<InvokeResult<F, T &>>, E> {
                                                        protocyte::unexpected(error())}))
-            -> Result<::std::remove_cv_t<InvokeResult<F, T &>>, E>
-            requires(!::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, T &>>> &&
-                     requires(F &&fn, T &value_ref, E &error_ref) {
-                         protocyte::invoke(protocyte::forward<F>(fn), value_ref);
-                         Result<::std::remove_cv_t<InvokeResult<F, T &>>, E> {protocyte::unexpected(error_ref)};
-                     })
+            -> Result<::std::remove_cvref_t<InvokeResult<F, T &>>, E>
+            requires(requires(F &&fn, T &value_ref, E &error_ref) {
+                protocyte::invoke(protocyte::forward<F>(fn), value_ref);
+                Result<::std::remove_cvref_t<InvokeResult<F, T &>>, E> {protocyte::unexpected(error_ref)};
+            })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, T &>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, T &>>;
             if (!ok_) {
                 return Result<U, E> {protocyte::unexpected(error())};
             }
@@ -471,15 +513,14 @@ namespace protocyte {
 
         template<class F> constexpr auto transform(F &&f) const & noexcept(
             noexcept(protocyte::invoke(protocyte::forward<F>(f), value())) &&
-            noexcept(Result<::std::remove_cv_t<InvokeResult<F, const T &>>, E> {protocyte::unexpected(error())}))
-            -> Result<::std::remove_cv_t<InvokeResult<F, const T &>>, E>
-            requires(!::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, const T &>>> &&
-                     requires(F &&fn, const T &value_ref, const E &error_ref) {
-                         protocyte::invoke(protocyte::forward<F>(fn), value_ref);
-                         Result<::std::remove_cv_t<InvokeResult<F, const T &>>, E> {protocyte::unexpected(error_ref)};
-                     })
+            noexcept(Result<::std::remove_cvref_t<InvokeResult<F, const T &>>, E> {protocyte::unexpected(error())}))
+            -> Result<::std::remove_cvref_t<InvokeResult<F, const T &>>, E>
+            requires(requires(F &&fn, const T &value_ref, const E &error_ref) {
+                protocyte::invoke(protocyte::forward<F>(fn), value_ref);
+                Result<::std::remove_cvref_t<InvokeResult<F, const T &>>, E> {protocyte::unexpected(error_ref)};
+            })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, const T &>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, const T &>>;
             if (!ok_) {
                 return Result<U, E> {protocyte::unexpected(error())};
             }
@@ -493,17 +534,16 @@ namespace protocyte {
 
         template<class F> constexpr auto
         transform(F &&f) && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(value_))) &&
-                                     noexcept(Result<::std::remove_cv_t<InvokeResult<F, T &&>>, E> {
+                                     noexcept(Result<::std::remove_cvref_t<InvokeResult<F, T &&>>, E> {
                                          protocyte::unexpected(protocyte::move(error_))}))
-            -> Result<::std::remove_cv_t<InvokeResult<F, T &&>>, E>
-            requires(!::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, T &&>>> &&
-                     requires(F &&fn, T &&value_ref, E &&error_ref) {
-                         protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<T>(value_ref));
-                         Result<::std::remove_cv_t<InvokeResult<F, T &&>>, E> {
-                             protocyte::unexpected(protocyte::forward<E>(error_ref))};
-                     })
+            -> Result<::std::remove_cvref_t<InvokeResult<F, T &&>>, E>
+            requires(requires(F &&fn, T &&value_ref, E &&error_ref) {
+                protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<T>(value_ref));
+                Result<::std::remove_cvref_t<InvokeResult<F, T &&>>, E> {
+                    protocyte::unexpected(protocyte::forward<E>(error_ref))};
+            })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, T &&>>;
             if (!ok_) {
                 return Result<U, E> {protocyte::unexpected(protocyte::move(error_))};
             }
@@ -517,17 +557,16 @@ namespace protocyte {
 
         template<class F> constexpr auto transform(F &&f) const && noexcept(
             noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(value_))) &&
-            noexcept(Result<::std::remove_cv_t<InvokeResult<F, const T &&>>, E> {
+            noexcept(Result<::std::remove_cvref_t<InvokeResult<F, const T &&>>, E> {
                 protocyte::unexpected(protocyte::move(error_))}))
-            -> Result<::std::remove_cv_t<InvokeResult<F, const T &&>>, E>
-            requires(!::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, const T &&>>> &&
-                     requires(F &&fn, const T &&value_ref, const E &&error_ref) {
-                         protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<const T>(value_ref));
-                         Result<::std::remove_cv_t<InvokeResult<F, const T &&>>, E> {
-                             protocyte::unexpected(protocyte::forward<const E>(error_ref))};
-                     })
+            -> Result<::std::remove_cvref_t<InvokeResult<F, const T &&>>, E>
+            requires(requires(F &&fn, const T &&value_ref, const E &&error_ref) {
+                protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<const T>(value_ref));
+                Result<::std::remove_cvref_t<InvokeResult<F, const T &&>>, E> {
+                    protocyte::unexpected(protocyte::forward<const E>(error_ref))};
+            })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, const T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, const T &&>>;
             if (!ok_) {
                 return Result<U, E> {protocyte::unexpected(protocyte::move(error_))};
             }
@@ -1447,12 +1486,11 @@ namespace protocyte {
 
         template<class F>
         constexpr auto transform(F &&f) & noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), value())))
-            -> Optional<::std::remove_cv_t<InvokeResult<F, T &>>>
-            requires(!::std::is_void_v<::std::remove_cv_t<InvokeResult<F, T &>>> &&
-                     !::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, T &>>> &&
+            -> Optional<::std::remove_cvref_t<InvokeResult<F, T &>>>
+            requires(!::std::is_void_v<::std::remove_cvref_t<InvokeResult<F, T &>>> &&
                      requires(F &&fn, T &value_ref) { protocyte::invoke(protocyte::forward<F>(fn), value_ref); })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, T &>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, T &>>;
             Optional<U> out {};
             if (has_) {
                 (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), value()));
@@ -1462,12 +1500,11 @@ namespace protocyte {
 
         template<class F>
         constexpr auto transform(F &&f) const & noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), value())))
-            -> Optional<::std::remove_cv_t<InvokeResult<F, const T &>>>
-            requires(!::std::is_void_v<::std::remove_cv_t<InvokeResult<F, const T &>>> &&
-                     !::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, const T &>>> &&
+            -> Optional<::std::remove_cvref_t<InvokeResult<F, const T &>>>
+            requires(!::std::is_void_v<::std::remove_cvref_t<InvokeResult<F, const T &>>> &&
                      requires(F &&fn, const T &value_ref) { protocyte::invoke(protocyte::forward<F>(fn), value_ref); })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, const T &>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, const T &>>;
             Optional<U> out {};
             if (has_) {
                 (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), value()));
@@ -1477,14 +1514,13 @@ namespace protocyte {
 
         template<class F> constexpr auto
         transform(F &&f) && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr()))))
-            -> Optional<::std::remove_cv_t<InvokeResult<F, T &&>>>
-            requires(!::std::is_void_v<::std::remove_cv_t<InvokeResult<F, T &&>>> &&
-                     !::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, T &&>>> &&
+            -> Optional<::std::remove_cvref_t<InvokeResult<F, T &&>>>
+            requires(!::std::is_void_v<::std::remove_cvref_t<InvokeResult<F, T &&>>> &&
                      requires(F &&fn, T &&value_ref) {
                          protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<T>(value_ref));
                      })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, T &&>>;
             Optional<U> out {};
             if (has_) {
                 (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr())));
@@ -1495,14 +1531,13 @@ namespace protocyte {
         template<class F>
         constexpr auto transform(F &&f) const && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f),
                                                                                      protocyte::move(*ptr()))))
-            -> Optional<::std::remove_cv_t<InvokeResult<F, const T &&>>>
-            requires(!::std::is_void_v<::std::remove_cv_t<InvokeResult<F, const T &&>>> &&
-                     !::std::is_reference_v<::std::remove_cv_t<InvokeResult<F, const T &&>>> &&
+            -> Optional<::std::remove_cvref_t<InvokeResult<F, const T &&>>>
+            requires(!::std::is_void_v<::std::remove_cvref_t<InvokeResult<F, const T &&>>> &&
                      requires(F &&fn, const T &&value_ref) {
                          protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<const T>(value_ref));
                      })
         {
-            using U = ::std::remove_cv_t<InvokeResult<F, const T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, const T &&>>;
             Optional<U> out {};
             if (has_) {
                 (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr())));
