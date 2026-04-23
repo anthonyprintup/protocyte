@@ -17,7 +17,6 @@ namespace test::crosspkg {
 
     template<typename Config> struct CrossPackageConstants_Nested {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         static constexpr ::protocyte::u32 MIRRORED_COUNT {15u};
 
         enum struct FieldNumber : ::protocyte::u32 {
@@ -92,7 +91,7 @@ namespace test::crosspkg {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -137,7 +136,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!nested_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::nested_bytes), nested_bytes_.view());
@@ -167,7 +166,6 @@ namespace test::crosspkg {
 
     template<typename Config> struct CrossPackageConstants {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using Nested = CrossPackageConstants_Nested<NestedConfig>;
 
         static constexpr ::protocyte::u32 REMOTE_COUNT {16u};
@@ -284,7 +282,7 @@ namespace test::crosspkg {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -376,7 +374,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!remote_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::remote_bytes), remote_bytes_.view());

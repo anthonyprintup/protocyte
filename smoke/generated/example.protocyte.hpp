@@ -45,7 +45,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_NestedLevel1_NestedLevel2 {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         using InnerEnum = UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum;
 
         enum struct FieldNumber : ::protocyte::u32 {
@@ -139,7 +138,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -218,7 +217,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!description_.empty()) {
                 if (const auto st = ::protocyte::write_string_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::description), description_.view());
@@ -298,7 +297,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_NestedLevel1 {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using NestedLevel2 =
             UltimateComplexMessage_NestedLevel1_NestedLevel2<NestedConfig>;
 
@@ -404,7 +402,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -453,7 +451,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!name_.empty()) {
                 if (const auto st = ::protocyte::write_string_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::name), name_.view());
@@ -518,7 +516,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_RepeatedBytesHolder {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         enum struct FieldNumber : ::protocyte::u32 {
             values = 1u,
         };
@@ -573,7 +570,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -605,7 +602,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             for (const auto &values_value : values_) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::values), values_value.view());
@@ -635,7 +632,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_BoundedRepeatedBytesHolder {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         enum struct FieldNumber : ::protocyte::u32 {
             values = 1u,
         };
@@ -692,7 +688,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -727,7 +723,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             for (const auto &values_value : values_) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::values), values_value.view());
@@ -757,7 +753,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_FixedRepeatedBytesHolder {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         enum struct FieldNumber : ::protocyte::u32 {
             values = 1u,
         };
@@ -814,7 +809,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -853,7 +848,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (values_.size() != 0u && values_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::values));
@@ -891,7 +886,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
 
         enum struct Deep_oneofCase : ::protocyte::u32 {
             none = 0u,
@@ -1090,7 +1084,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -1210,7 +1204,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!extreme_.empty()) {
                 if (const auto st = ::protocyte::write_string_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::extreme), extreme_.view());
@@ -1357,7 +1351,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         using Color = UltimateComplexMessage_Color;
         template<typename NestedConfig = Config> using NestedLevel1 = UltimateComplexMessage_NestedLevel1<NestedConfig>;
         template<typename NestedConfig = Config> using RepeatedBytesHolder =
@@ -2691,7 +2684,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -3776,7 +3769,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
@@ -5134,7 +5127,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelB = UltimateComplexMessage_LevelA_LevelB<NestedConfig>;
 
         explicit UltimateComplexMessage_LevelA(Context &ctx) noexcept: ctx_ {&ctx} {}
@@ -5178,7 +5170,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5192,7 +5184,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept { return {}; }
+        template<typename Writer>::protocyte::Status serialize(Writer & /* writer */) const noexcept { return {}; }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept { return ::protocyte::usize {}; }
     protected:
@@ -5201,7 +5193,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelC =
             UltimateComplexMessage_LevelA_LevelB_LevelC<NestedConfig>;
 
@@ -5246,7 +5237,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5260,7 +5251,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept { return {}; }
+        template<typename Writer>::protocyte::Status serialize(Writer & /* writer */) const noexcept { return {}; }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept { return ::protocyte::usize {}; }
     protected:
@@ -5269,7 +5260,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelD =
             UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD<NestedConfig>;
 
@@ -5316,7 +5306,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5330,7 +5320,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept { return {}; }
+        template<typename Writer>::protocyte::Status serialize(Writer & /* writer */) const noexcept { return {}; }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept { return ::protocyte::usize {}; }
     protected:
@@ -5339,7 +5329,6 @@ namespace test::ultimate {
 
     template<typename Config> struct UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using LevelE =
             UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<NestedConfig>;
 
@@ -5388,7 +5377,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5402,7 +5391,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer & /* writer */) const noexcept { return {}; }
+        template<typename Writer>::protocyte::Status serialize(Writer & /* writer */) const noexcept { return {}; }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept { return ::protocyte::usize {}; }
     protected:
@@ -5411,7 +5400,6 @@ namespace test::ultimate {
 
     template<typename Config> struct ExtraMessage {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         enum struct FieldNumber : ::protocyte::u32 {
             tag = 1u,
             ref = 2u,
@@ -5495,7 +5483,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5536,7 +5524,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!tag_.empty()) {
                 if (const auto st = ::protocyte::write_string_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::tag), tag_.view());
@@ -5584,7 +5572,6 @@ namespace test::ultimate {
 
     template<typename Config> struct CrossMessageConstants_Nested {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         static constexpr ::protocyte::u32 EXTERNAL_CAP {8u};
 
         enum struct FieldNumber : ::protocyte::u32 {
@@ -5659,7 +5646,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5704,7 +5691,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!nested_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::nested_bytes), nested_bytes_.view());
@@ -5734,7 +5721,6 @@ namespace test::ultimate {
 
     template<typename Config> struct CrossMessageConstants {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using Nested = CrossMessageConstants_Nested<NestedConfig>;
 
         static constexpr ::protocyte::u32 ROOT_MIRROR {10u};
@@ -5852,7 +5838,7 @@ namespace test::ultimate {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -5944,7 +5930,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!external_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::external_bytes), external_bytes_.view());

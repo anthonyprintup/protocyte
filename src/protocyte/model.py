@@ -923,7 +923,6 @@ def _validate_constant_collisions(message: MessageModel) -> None:
     seen_cpp_names: set[str] = set()
     reserved = {
         "Context",
-        "RuntimeStatus",
         "FieldNumber",
         "create",
         "clone",
@@ -1008,7 +1007,6 @@ def _validate_field_collisions(message: MessageModel) -> None:
     seen_generated_names: dict[str, str] = {}
     reserved = {
         "Context",
-        "RuntimeStatus",
         "FieldNumber",
         "create",
         "clone",

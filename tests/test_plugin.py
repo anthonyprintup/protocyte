@@ -430,10 +430,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "const auto tag = ::protocyte::read_tag(reader);" in header
     assert "const auto [field_number, wire_type] = *tag;" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept" in header
-    assert "using RuntimeStatus = ::protocyte::Status;" in header
     assert "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     assert "template <typename Reader>" in header
-    assert "RuntimeStatus merge_from(Reader& reader) noexcept" in header
+    assert "::protocyte::Status merge_from(Reader& reader) noexcept" in header
     assert "for (const auto &packed_value_samples : samples_) {" in header
     assert "if (const auto st = out->copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
@@ -946,7 +945,7 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
     assert not response.error
     header = next(file.content for file in response.file if file.name == "empty.protocyte.hpp")
 
-    assert "RuntimeStatus serialize(Writer& /* writer */) const noexcept {" in header
+    assert "::protocyte::Status serialize(Writer& /* writer */) const noexcept {" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {" in header
     assert "::protocyte::usize total {};" not in header
     assert "return ::protocyte::usize {};" in header
@@ -963,9 +962,8 @@ def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
     header = next(file.content for file in response.file if file.name == "namespaced.protocyte.hpp")
 
     assert "namespace test::protocyte {" in header
-    assert "using RuntimeStatus = ::protocyte::Status;" in header
-    assert "RuntimeStatus merge_from(Reader& reader) noexcept {" in header
-    assert "RuntimeStatus serialize(Writer& writer) const noexcept {" in header
+    assert "::protocyte::Status merge_from(Reader& reader) noexcept {" in header
+    assert "::protocyte::Status serialize(Writer& writer) const noexcept {" in header
 
 
 def test_repo_root_options_proto_matches_generator_copy() -> None:

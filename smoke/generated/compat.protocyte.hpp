@@ -18,7 +18,6 @@ namespace protocyte_smoke::test::compat {
 
     template<typename Config> struct EncodingMatrix_Inner {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         enum struct FieldNumber : ::protocyte::u32 {
             value = 1u,
             label = 2u,
@@ -90,7 +89,7 @@ namespace protocyte_smoke::test::compat {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -126,7 +125,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (value_ != 0) {
                 if (const auto st = ::protocyte::write_int32_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::value), value_);
@@ -172,7 +171,6 @@ namespace protocyte_smoke::test::compat {
 
     template<typename Config> struct EncodingMatrix {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         using Mode = EncodingMatrix_Mode;
         template<typename NestedConfig = Config> using Inner = EncodingMatrix_Inner<NestedConfig>;
 
@@ -793,7 +791,7 @@ namespace protocyte_smoke::test::compat {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -1132,7 +1130,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (f_int32_ != 0) {
                 if (const auto st = ::protocyte::write_int32_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::f_int32), f_int32_);
