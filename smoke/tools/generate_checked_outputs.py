@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,6 +67,7 @@ def main() -> int:
 
     compat_cases_path = out_dir / "compat_cases.hpp"
     compat_cases_path.write_text(compat_cases_header(), encoding="utf-8", newline="\n")
+    _clang_format_file(compat_cases_path, clang_format, clang_format_config)
     written_paths.add(compat_cases_path)
 
     stale_runtime_source = out_dir / "protocyte" / "runtime" / "runtime.cpp"
@@ -125,6 +127,13 @@ def _clang_format_candidates() -> list[Path]:
     candidates.extend(sorted(Path("/usr/lib").glob("llvm-*/bin/clang-format"), reverse=True))
     candidates.extend([Path("/usr/local/bin/clang-format"), Path("/usr/bin/clang-format")])
     return candidates
+
+
+def _clang_format_file(path: Path, clang_format: str, clang_format_config: Path) -> None:
+    subprocess.run(
+        [clang_format, f"-style=file:{clang_format_config.as_posix()}", "-i", path.as_posix()],
+        check=True,
+    )
 
 
 def add_field(
@@ -610,7 +619,7 @@ def compat_cases_header() -> str:
 
     cases: list[tuple[str, bytes]] = []
 
-    cases.append(("kEmpty", message_cls().SerializeToString()))
+    cases.append(("empty", message_cls().SerializeToString()))
 
     message = message_cls()
     message.f_int32 = -(2**31)
@@ -621,7 +630,7 @@ def compat_cases_header() -> str:
     message.f_sint64 = -17000000000
     message.f_bool = True
     message.mode = 2
-    cases.append(("kVarint", message.SerializeToString()))
+    cases.append(("varint", message.SerializeToString()))
 
     message = message_cls()
     message.f_fixed32 = 0x11223344
@@ -630,42 +639,42 @@ def compat_cases_header() -> str:
     message.f_sfixed64 = -1234567890123
     message.f_float = -0.0
     message.f_double = 123.5
-    cases.append(("kFixed", message.SerializeToString()))
+    cases.append(("fixed", message.SerializeToString()))
 
     message = message_cls()
     message.f_string = "smoke"
     message.f_bytes = bytes([0x00, 0x01, 0x7F, 0x80, 0xFF])
     message.nested.value = 417
     message.nested.label = "nested"
-    cases.append(("kLengthDelimited", message.SerializeToString()))
+    cases.append(("length_delimited", message.SerializeToString()))
 
     message = message_cls()
     message.r_int32_unpacked.extend([-1, 0, 150])
     message.r_int32_packed.extend([-1, 0, 150])
     message.r_double.extend([23.5, -0.0])
-    cases.append(("kRepeated", message.SerializeToString()))
+    cases.append(("repeated", message.SerializeToString()))
 
     message = message_cls()
     message.oneof_string = "oneof-str"
-    cases.append(("kOneofString", message.SerializeToString()))
+    cases.append(("oneof_string", message.SerializeToString()))
 
     message = message_cls()
     message.oneof_int32 = -2701
-    cases.append(("kOneofInt32", message.SerializeToString()))
+    cases.append(("oneof_int32", message.SerializeToString()))
 
     message = message_cls()
     message.oneof_nested.value = 90210
     message.oneof_nested.label = "inner"
-    cases.append(("kOneofNested", message.SerializeToString()))
+    cases.append(("oneof_nested", message.SerializeToString()))
 
     message = message_cls()
     message.oneof_bytes = bytes([0xDE, 0xAD, 0xBE, 0xEF])
-    cases.append(("kOneofBytes", message.SerializeToString()))
+    cases.append(("oneof_bytes", message.SerializeToString()))
 
     message = message_cls()
     message.opt_int32 = -99
     message.opt_string = "opt"
-    cases.append(("kOptional", message.SerializeToString()))
+    cases.append(("optional_case", message.SerializeToString()))
 
     lines = [
         "#pragma once",

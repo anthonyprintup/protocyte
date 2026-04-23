@@ -289,7 +289,7 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
         w.line()
         w.line(f"static ::protocyte::Result<{message.cpp_name}> create(Context& ctx) noexcept {{")
         with w.indent():
-            w.line(f"return ::protocyte::Result<{message.cpp_name}>::ok({message.cpp_name}{{ctx}});")
+            w.line(f"return {message.cpp_name}{{ctx}};")
         w.line("}")
         w.line("Context* context() const noexcept { return ctx_; }")
         _emit_special_members(w, message, options)
@@ -492,7 +492,7 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
     map_only = bool(non_oneof_fields) and all(item.kind == "map" for item in non_oneof_fields)
     w.line(f"::protocyte::Status copy_from(const {message.cpp_name}& other) noexcept {{")
     w.push()
-    w.line("if (this == &other) { return ::protocyte::Status::ok(); }")
+    w.line("if (this == &other) { return {}; }")
     if map_only:
         w.line("const auto& source = other;")
     for item in message.fields:
@@ -526,11 +526,9 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
         elif item.kind == "message":
             w.line(f"if (other.has_{item.cpp_name}()) {{")
             w.push()
-            w.line(f"if (auto ensured = ensure_{item.cpp_name}(); !ensured) {{")
-            w.push()
-            w.line("return ensured.status();")
-            w.pop()
-            w.line("} else if (const auto st = (*ensured)->copy_from(*other." + f"{item.cpp_name}()); !st) {{")
+            w.line(
+                f"if (const auto st = ensure_{item.cpp_name}().and_then([&](auto ensured) noexcept -> ::protocyte::Status {{ return ensured->copy_from(*other.{item.cpp_name}()); }}); !st) {{"
+            )
             w.push()
             w.line("return st;")
             w.pop()
@@ -557,7 +555,7 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
                 w.line(f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}")
     for oneof in message.oneofs:
         _emit_copy_oneof_from_other(w, oneof, options, source="other")
-    w.line("return ::protocyte::Status::ok();")
+    w.line("return {};")
     w.pop()
     w.line("}")
     w.line()
@@ -565,7 +563,7 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
     w.push()
     w.line(f"auto out = {message.cpp_name}::create(*ctx_);")
     w.line("if (!out) { return out; }")
-    w.line(f"if (const auto st = out->copy_from(*this); !st) {{ return ::protocyte::Result<{message.cpp_name}>::err(st.error()); }}")
+    w.line("if (const auto st = out->copy_from(*this); !st) { return ::protocyte::unexpected(st.error()); }")
     w.line("return out;")
     w.pop()
     w.line("}")
@@ -595,11 +593,9 @@ def _emit_copy_oneof_from_other(w: CppWriter, oneof: OneofModel, options: Genera
         if item.kind in {"string", "bytes"}:
             w.line(f"if (const auto st = set_{item.cpp_name}({source}.{item.cpp_name}()); !st) {{ return st; }}")
         elif item.kind == "message":
-            w.line(f"if (auto ensured = ensure_{item.cpp_name}(); !ensured) {{")
-            w.push()
-            w.line("return ensured.status();")
-            w.pop()
-            w.line(f"}} else if (const auto st = (*ensured)->copy_from(*{source}.{item.cpp_name}()); !st) {{")
+            w.line(
+                f"if (const auto st = ensure_{item.cpp_name}().and_then([&](auto ensured) noexcept -> ::protocyte::Status {{ return ensured->copy_from(*{source}.{item.cpp_name}()); }}); !st) {{"
+            )
             w.push()
             w.line("return st;")
             w.pop()
@@ -648,12 +644,14 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         if item.recursive_box:
             w.line(f"return {_member(item)}.ensure();")
         else:
-            w.line(f"if (!{_member(item)}.has_value()) {{")
+            w.line(f"if ({_member(item)}.has_value()) {{")
             w.push()
-            w.line(f"if (const auto st = {_member(item)}.emplace(*ctx_); !st) {{ return ::protocyte::Result<::protocyte::Ref<{typ}>>::err(st.error()); }}")
+            w.line(f"return ::protocyte::Ref<{typ}>{{*{_member(item)}}};")
             w.pop()
             w.line("}")
-            w.line(f"return ::protocyte::Result<::protocyte::Ref<{typ}>>::ok(::protocyte::Ref<{typ}>{{*{_member(item)}}});")
+            w.line(
+                f"return {_member(item)}.emplace(*ctx_).transform([this]() noexcept -> ::protocyte::Ref<{typ}> {{ return ::protocyte::Ref<{typ}>{{*{_member(item)}}}; }});"
+            )
         w.pop()
         w.line("}")
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.reset(); }}")
@@ -670,7 +668,7 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line("}")
         w.line(f"::protocyte::Status set_{item.cpp_name}(const ::protocyte::ByteView value) noexcept {{")
         w.push()
-        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit); }")
+        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         w.line(f"return {_member(item)}.assign(value);")
         w.pop()
         w.line("}")
@@ -685,13 +683,13 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"static constexpr ::protocyte::usize {item.cpp_name}_max_size() noexcept {{ return {bound}; }}")
         w.line(f"::protocyte::Status resize_{item.cpp_name}(const ::protocyte::usize size) noexcept {{")
         w.push()
-        w.line("if (size > ctx_->limits.max_string_bytes) { return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit); }")
+        w.line("if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         if item.array_fixed:
-            w.line(f"if (size != {bound}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument); }}")
+            w.line(f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
         w.line(f"if (const auto st = {_member(item)}.resize(size); !st) {{ return st; }}")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
         w.pop()
         w.line("}")
         w.line(f"::protocyte::MutableByteView mutable_{item.cpp_name}() noexcept {{")
@@ -710,13 +708,13 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line("}")
         w.line(f"::protocyte::Status set_{item.cpp_name}(const ::protocyte::ByteView value) noexcept {{")
         w.push()
-        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit); }")
+        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         if item.array_fixed:
-            w.line(f"if (value.size != {bound}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument); }}")
+            w.line(f"if (value.size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
         w.line(f"if (const auto st = {_member(item)}.assign(value); !st) {{ return st; }}")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
         w.pop()
         w.line("}")
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear();")
@@ -743,7 +741,7 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"{_member(item)} = ::protocyte::move(temp);")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
         w.pop()
         w.line("}")
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear();")
@@ -757,14 +755,12 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"constexpr {enum_typ} {item.cpp_name}() const noexcept {{ return static_cast<{enum_typ}>({_member(item)}); }}")
         if item.proto3_optional:
             w.line(f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}")
-        w.line(
-            f"constexpr ::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{ {_member(item)} = value;"
-        )
+        w.line(f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{ {_member(item)} = value;")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return ::protocyte::Status::ok(); }")
+        w.line("return {}; }")
         w.line(
-            f"constexpr ::protocyte::Status set_{item.cpp_name}(const {enum_typ} value) noexcept {{ return set_{item.cpp_name}_raw(static_cast<::protocyte::i32>(value)); }}"
+            f"::protocyte::Status set_{item.cpp_name}(const {enum_typ} value) noexcept {{ return set_{item.cpp_name}_raw(static_cast<::protocyte::i32>(value)); }}"
         )
         w.line(f"constexpr void clear_{item.cpp_name}() noexcept {{ {_member(item)} = {{}};")
         if item.proto3_optional:
@@ -775,10 +771,10 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
     w.line(f"constexpr {typ} {item.cpp_name}() const noexcept {{ return {_member(item)}; }}")
     if item.proto3_optional:
         w.line(f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}")
-    w.line(f"constexpr ::protocyte::Status set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;")
+    w.line(f"::protocyte::Status set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;")
     if item.proto3_optional:
         w.line(f"has_{item.cpp_name}_ = true;")
-    w.line("return ::protocyte::Status::ok(); }")
+    w.line("return {}; }")
     w.line(f"constexpr void clear_{item.cpp_name}() noexcept {{ {_member(item)} = {{}};")
     if item.proto3_optional:
         w.line(f"has_{item.cpp_name}_ = false;")
@@ -800,7 +796,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         w.line(f"::protocyte::Status set_{item.cpp_name}(const ::protocyte::ByteView value) noexcept {{")
         w.push()
         if item.kind == "bytes" and item.array_enabled:
-            w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit); }")
+            w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
             w.line(f"{_storage_type(item, options)} temp{{}};")
         else:
             w.line(f"{typ} temp{{ctx_}};")
@@ -808,7 +804,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move(temp)}};")
         w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
         w.pop()
         w.line("}")
         return
@@ -832,12 +828,18 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
             w.line(f"auto ensured = {_member(item)}.ensure();")
             w.line("if (!ensured) { return ensured; }")
         else:
-            w.line(f"if (!{_member(item)}.has_value()) {{")
+            w.line(f"if ({_member(item)}.has_value()) {{")
             w.push()
-            w.line(f"if (const auto st = {_member(item)}.emplace(*ctx_); !st) {{ return ::protocyte::Result<::protocyte::Ref<{typ}>>::err(st.error()); }}")
+            w.line(f"return ::protocyte::Ref<{typ}>{{*{_member(item)}}};")
             w.pop()
             w.line("}")
-        w.line(f"return ::protocyte::Result<::protocyte::Ref<{typ}>>::ok(::protocyte::Ref<{typ}>{{*{_member(item)}}});")
+            w.line(
+                f"return {_member(item)}.emplace(*ctx_).transform([this]() noexcept -> ::protocyte::Ref<{typ}> {{ return ::protocyte::Ref<{typ}>{{*{_member(item)}}}; }});"
+            )
+            w.pop()
+            w.line("}")
+            return
+        w.line(f"return ::protocyte::Ref<{typ}>{{*{_member(item)}}};")
         w.pop()
         w.line("}")
         return
@@ -852,7 +854,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
         w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
         w.pop()
         w.line("}")
         w.line(
@@ -865,7 +867,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
     w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
     w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
     w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-    w.line("return ::protocyte::Status::ok();")
+    w.line("return {};")
     w.pop()
     w.line("}")
 
@@ -876,7 +878,7 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
     with w.indent():
         w.line(f"auto out = {message.cpp_name}::create(ctx);")
         w.line("if (!out) { return out; }")
-        w.line(f"if (const auto st = out->merge_from(reader); !st) {{ return ::protocyte::Result<{message.cpp_name}>::err(st.error()); }}")
+        w.line("if (const auto st = out->merge_from(reader); !st) { return ::protocyte::unexpected(st.error()); }")
         w.line("return out;")
     w.line("}")
     w.line()
@@ -907,7 +909,7 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
                 w.line("if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }")
         w.line("}")
         _emit_fixed_array_validation(w, message)
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
     w.line("}")
     w.line()
     writer_name = "writer" if message.fields else "/* writer */"
@@ -917,7 +919,7 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
         _emit_fixed_array_validation(w, message)
         for item in sorted(message.fields, key=lambda f: f.number):
             _emit_serialize_statement(w, item, options)
-        w.line("return ::protocyte::Status::ok();")
+        w.line("return {};")
     w.line("}")
     w.line()
     w.line("::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {")
@@ -927,9 +929,9 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
             w.line("::protocyte::usize total {};")
             for item in sorted(message.fields, key=lambda f: f.number):
                 _emit_size_statement(w, item, options)
-            w.line("return ::protocyte::Result<::protocyte::usize>::ok(total);")
+            w.line("return total;")
         else:
-            w.line("return ::protocyte::Result<::protocyte::usize>::ok({});")
+            w.line("return ::protocyte::usize {};")
     w.line("}")
 
 
@@ -944,18 +946,14 @@ def _emit_fixed_array_validation(w: CppWriter, message: MessageModel, *, for_siz
             )
         else:
             continue
-        error = (
-            "::protocyte::Result<::protocyte::usize>::err(::protocyte::Status::error("
-            "::protocyte::ErrorCode::invalid_argument, {}, "
-            f"{_field_number_u32(item)}).error())"
-        )
+        error = f"::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)})"
         w.line(f"if ({condition}) {{")
         with w.indent():
             if for_size:
                 w.line(f"return {error};")
             else:
                 w.line(
-                    f"return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)});"
+                    f"return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)});"
                 )
         w.line("}")
 
@@ -998,7 +996,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
         if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
             _emit_read_repeated_value(w, item, "reader", options, checked=True)
         else:
-            w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
+            w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
             _emit_read_repeated_value(w, item, "reader", options)
         return
     if item.kind == "map":
@@ -1007,7 +1005,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
     if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
         _emit_read_single_value(w, item, "reader", options)
         return
-    w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
+    w.line(f"if (wire_type != {_wire(item)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }}")
     _emit_read_single_value(w, item, "reader", options)
 
 
@@ -1019,14 +1017,16 @@ def _emit_read_repeated_value(
         w.line(f"{typ} value{{ctx_}};")
         helper = _length_delimited_read_helper(item, checked=checked)
         args = f"*ctx_, {reader}, wire_type, field_number, value" if checked else f"*ctx_, {reader}, value"
-        w.line(f"if (const auto st = ::protocyte::{helper}<Config>({args}); !st) {{ return st; }}")
-        w.line(f"if (const auto st = {_member(item)}.push_back(::protocyte::move(value)); !st) {{ return st; }}")
+        w.line(
+            f"if (const auto st = ::protocyte::{helper}<Config>({args}).and_then([&]() noexcept -> ::protocyte::Status {{ return {_member(item)}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
+        )
         return
     if item.kind == "message":
         typ = _field_type(item, options)
         w.line(f"{typ} value{{*ctx_}};")
-        w.line(f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, value); !st) {{ return st; }}")
-        w.line(f"if (const auto st = {_member(item)}.push_back(::protocyte::move(value)); !st) {{ return st; }}")
+        w.line(
+            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, value).and_then([&]() noexcept -> ::protocyte::Status {{ return {_member(item)}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
+        )
         return
     w.line(f"{_element_type(item, options)} value{{}};")
     _emit_read_scalar(w, item, reader, "value", options, checked=checked)
@@ -1038,17 +1038,17 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str) -> Non
     w.line(f"auto len = ::protocyte::read_length_delimited_size({reader});")
     w.line("if (!len) { return len.status(); }")
     w.line(
-        f"if (*len > ctx_->limits.max_string_bytes) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, {reader}.position(), field_number); }}"
+        f"if (*len > ctx_->limits.max_string_bytes) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {reader}.position(), field_number); }}"
     )
     if item.array_fixed:
         w.line(
-            f"if (*len != {bound}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_argument, {reader}.position(), field_number); }}"
+            f"if (*len != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {reader}.position(), field_number); }}"
         )
         w.line(f"auto view = {_member(item)}.mutable_view();")
         w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{ return st; }}")
     else:
         w.line(
-            f"if (*len > {bound}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
+            f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
         w.line(f"if (const auto st = {_member(item)}.resize(*len); !st) {{ return st; }}")
         w.line(f"if (const auto st = {reader}.read({_member(item)}.data(), {_member(item)}.size()); !st) {{ return st; }}")
@@ -1082,10 +1082,8 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
             w.line(f"has_{item.cpp_name}_ = true;")
         return
     if item.kind == "message":
-        w.line(f"auto ensured = ensure_{item.cpp_name}();")
-        w.line("if (!ensured) { return ensured.status(); }")
         w.line(
-            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, **ensured); !st) {{ return st; }}"
+            f"if (const auto st = ensure_{item.cpp_name}().and_then([&](auto ensured) noexcept -> ::protocyte::Status {{ return ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, *ensured); }}); !st) {{ return st; }}"
         )
         return
     if item.oneof_name:
@@ -1105,7 +1103,7 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
     assert item.map_key is not None and item.map_value is not None
     key = item.map_key
     value = item.map_value
-    w.line("if (wire_type != ::protocyte::WireType::LEN) { return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }")
+    w.line("if (wire_type != ::protocyte::WireType::LEN) { return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }")
     w.line("auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);")
     w.line("if (!entry) { return entry.status(); }")
     w.line("auto &entry_reader = entry->reader();")
@@ -1126,7 +1124,7 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             w.line(f"case EntryFieldNumber::{_field_number_name(key)}: {{")
             with w.indent():
                 w.line(
-                    f"if (entry_wire != {_wire(key)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), {_field_number_u32(key, 'EntryFieldNumber')}); }}"
+                    f"if (entry_wire != {_wire(key)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), {_field_number_u32(key, 'EntryFieldNumber')}); }}"
                 )
                 _emit_read_named_value(
                     w, key, "entry_reader", "key", options, _field_number_u32(key, "EntryFieldNumber")
@@ -1136,7 +1134,7 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             w.line(f"case EntryFieldNumber::{_field_number_name(value)}: {{")
             with w.indent():
                 w.line(
-                    f"if (entry_wire != {_wire(value)}) {{ return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), {_field_number_u32(value, 'EntryFieldNumber')}); }}"
+                    f"if (entry_wire != {_wire(value)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), {_field_number_u32(value, 'EntryFieldNumber')}); }}"
                 )
                 _emit_read_named_value(
                     w, value, "entry_reader", "value", options, _field_number_u32(value, "EntryFieldNumber")
@@ -1182,9 +1180,9 @@ def _emit_read_scalar(
     del options
     helper = _scalar_read_helper(item, checked=checked)
     args = f"{reader}, wire_type, field_number" if checked else reader
-    w.line(f"auto decoded = ::protocyte::{helper}({args});")
-    w.line("if (!decoded) { return decoded.status(); }")
-    w.line(f"{target} = *decoded;")
+    w.line(
+        f"if (const auto st = ::protocyte::{helper}({args}).transform([&](const auto decoded) noexcept {{ {target} = decoded; }}); !st) {{ return st; }}"
+    )
 
 
 def _emit_serialize_statement(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
@@ -1334,7 +1332,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
                 width = _fixed_scalar_width(item)
                 if width is not None:
                     w.line(
-                        f"if (const auto st_size = ::protocyte::checked_mul({_member(item)}.size(), {width}, &{packed_name}); !st_size) {{ return ::protocyte::Result<::protocyte::usize>::err(st_size.error()); }}"
+                        f"if (const auto st_size = ::protocyte::checked_mul({_member(item)}.size(), {width}, &{packed_name}); !st_size) {{ return ::protocyte::unexpected(st_size.error()); }}"
                     )
                 else:
                     w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
@@ -1342,7 +1340,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
                         _emit_add_packed_size_result(w, item, value_name, packed_name)
                     w.line("}")
                 w.line(
-                    f"if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size({_field_number_u32(item)}) + ::protocyte::varint_size({packed_name}) + {packed_name}); !st) {{ return ::protocyte::Result<::protocyte::usize>::err(st.error()); }}"
+                    f"if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size({_field_number_u32(item)}) + ::protocyte::varint_size({packed_name}) + {packed_name}); !st) {{ return ::protocyte::unexpected(st.error()); }}"
                 )
             w.line("}")
             return
@@ -1389,7 +1387,7 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             result=True,
         )
         w.line(
-            f"if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size({_field_number_u32(item)}) + ::protocyte::varint_size(entry_payload) + entry_payload); !st) {{ return ::protocyte::Result<::protocyte::usize>::err(st.error()); }}"
+            f"if (const auto st = ::protocyte::add_size(&total, ::protocyte::tag_size({_field_number_u32(item)}) + ::protocyte::varint_size(entry_payload) + entry_payload); !st) {{ return ::protocyte::unexpected(st.error()); }}"
         )
     w.line("}")
 
@@ -1409,12 +1407,13 @@ def _emit_add_size(
         )
     elif item.kind == "message":
         expr = f"*{value}" if value == _member(item) else value
-        w.line(f"auto nested_size = ::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {expr});")
-        w.line("if (!nested_size) { return ::protocyte::Result<::protocyte::usize>::err(nested_size.error()); }")
-        value_size = "*nested_size"
+        w.line(
+            f"if (const auto st = ::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {expr}).and_then([&](const ::protocyte::usize nested_size) noexcept -> ::protocyte::Status {{ return ::protocyte::add_size(&total, nested_size); }}); !st) {{ return ::protocyte::unexpected(st.error()); }}"
+        )
+        return
     else:
         value_size = f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + {_scalar_size(item, value)}"
-    w.line(f"if (const auto st = ::protocyte::add_size(&total, {value_size}); !st) {{ return ::protocyte::Result<::protocyte::usize>::err(st.error()); }}")
+    w.line(f"if (const auto st = ::protocyte::add_size(&total, {value_size}); !st) {{ return ::protocyte::unexpected(st.error()); }}")
 
 
 def _emit_add_size_status(
@@ -1434,17 +1433,22 @@ def _emit_add_size_status(
                 f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + ::protocyte::varint_size({value}.size()) + {value}.size()"
             )
         elif item.kind == "message":
-            w.line(f"auto nested_size = ::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {value});")
             if result:
-                w.line("if (!nested_size) { return ::protocyte::Result<::protocyte::usize>::err(nested_size.error()); }")
+                w.line(
+                    f"if (const auto st_size = ::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {value}).and_then([&](const ::protocyte::usize nested_size) noexcept -> ::protocyte::Status {{ return ::protocyte::add_size(&{total_name}, nested_size); }}); !st_size) {{ return ::protocyte::unexpected(st_size.error()); }}"
+                )
             else:
-                w.line("if (!nested_size) { return nested_size.status(); }")
-            value_size = "*nested_size"
+                w.line(
+                    f"if (const auto st_size = ::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {value}).and_then([&](const ::protocyte::usize nested_size) noexcept -> ::protocyte::Status {{ return ::protocyte::add_size(&{total_name}, nested_size); }}); !st_size) {{ return st_size; }}"
+                )
+            value_size = ""
         else:
             value_size = f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + {_scalar_size(item, value)}"
-        if result:
+        if value_size == "":
+            pass
+        elif result:
             w.line(
-                f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {value_size}); !st_size) {{ return ::protocyte::Result<::protocyte::usize>::err(st_size.error()); }}"
+                f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {value_size}); !st_size) {{ return ::protocyte::unexpected(st_size.error()); }}"
             )
         else:
             w.line(f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {value_size}); !st_size) {{ return st_size; }}")
@@ -1464,7 +1468,7 @@ def _emit_add_packed_size_result(w: CppWriter, item: FieldModel, value: str, tot
     w.line("{")
     with w.indent():
         w.line(
-            f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {_scalar_size(item, value)}); !st_size) {{ return ::protocyte::Result<::protocyte::usize>::err(st_size.error()); }}"
+            f"if (const auto st_size = ::protocyte::add_size(&{total_name}, {_scalar_size(item, value)}); !st_size) {{ return ::protocyte::unexpected(st_size.error()); }}"
         )
     w.line("}")
 

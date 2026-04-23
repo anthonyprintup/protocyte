@@ -34,6 +34,12 @@
       "binaryDir": "${sourceDir}/build/clangcl"
     },
     {
+      "name": "windows-msvc-ninja",
+      "inherits": "windows-msvc-base",
+      "displayName": "Windows MSVC + Ninja",
+      "binaryDir": "${sourceDir}/build/msvc"
+    },
+    {
       "name": "windows-clangcl-ninja-driver",
       "inherits": "windows-clangcl-ninja",
       "displayName": "Windows clang-cl + Ninja + WDK driver",
@@ -58,6 +64,10 @@
       "configurePreset": "windows-clangcl-ninja"
     },
     {
+      "name": "windows-msvc-ninja",
+      "configurePreset": "windows-msvc-ninja"
+    },
+    {
       "name": "windows-clangcl-ninja-driver",
       "configurePreset": "windows-clangcl-ninja-driver"
     },
@@ -70,6 +80,13 @@
     {
       "name": "windows-clangcl-ninja",
       "configurePreset": "windows-clangcl-ninja",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc-ninja",
+      "configurePreset": "windows-msvc-ninja",
       "output": {
         "outputOnFailure": true
       }

@@ -74,9 +74,9 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "#include <cstdlib>" not in files["protocyte/runtime/runtime.hpp"]
     assert "#include <stddef.h>" not in files["protocyte/runtime/runtime.hpp"]
     assert "#include <stdint.h>" not in files["protocyte/runtime/runtime.hpp"]
-    assert "kDefaultMaxRecursionDepth = 100u" in files["protocyte/runtime/runtime.hpp"]
-    assert "kDefaultMaxMessageBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
-    assert "kDefaultMaxStringBytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
+    assert "default_max_recursion_depth = 100u" in files["protocyte/runtime/runtime.hpp"]
+    assert "default_max_message_bytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
+    assert "default_max_string_bytes = 0x7fffffffu" in files["protocyte/runtime/runtime.hpp"]
     assert "usize recursion_depth {};" in files["protocyte/runtime/runtime.hpp"]
     assert "protocyte Config::Context must expose recursion_depth for recursion-limited parsing" in files[
         "protocyte/runtime/runtime.hpp"
@@ -92,15 +92,22 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "VARINT = 0u" in files["protocyte/runtime/runtime.hpp"]
     assert "I64 = 1u" in files["protocyte/runtime/runtime.hpp"]
     assert "LEN = 2u" in files["protocyte/runtime/runtime.hpp"]
-    assert "constexpr Status() noexcept = default;" in files["protocyte/runtime/runtime.hpp"]
-    assert "constexpr Status() noexcept: error_" not in files["protocyte/runtime/runtime.hpp"]
-    assert "constexpr explicit Status(const Error error) noexcept" in files["protocyte/runtime/runtime.hpp"]
-    assert "static constexpr Status ok() noexcept { return {}; }" in files["protocyte/runtime/runtime.hpp"]
-    assert "const usize offset = {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "using Status = Result<void>;" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class T, class E = Error> struct Result {" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class E> struct Result<void, E> {" in files["protocyte/runtime/runtime.hpp"]
+    assert "using value_type = T;" in files["protocyte/runtime/runtime.hpp"]
+    assert "using error_type = E;" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result() noexcept(noexcept(T {}))" in files["protocyte/runtime/runtime.hpp"]
+    assert "requires(!ResultType<U> && !UnexpectedType<U>)" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result(const Result<U, G> &other)" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result(Result<U, G> &&other)" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result(const Result<void, G> &other)" in files["protocyte/runtime/runtime.hpp"]
+    assert "static constexpr Result ok() noexcept" not in files["protocyte/runtime/runtime.hpp"]
+    assert "const usize offset," in files["protocyte/runtime/runtime.hpp"]
     assert "inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "return Status {Error {.code = code, .offset = offset, .field_number = field_number}};" in files[
+    assert "constexpr Unexpected<Error> unexpected(const ErrorCode code, const usize offset," in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert "u64 value {};" in files["protocyte/runtime/runtime.hpp"]
@@ -142,19 +149,25 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "template<class Reader> Result<Tag> read_tag(Reader &reader) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "template<> struct Result<void> {" in files["protocyte/runtime/runtime.hpp"]
-    assert "static constexpr Result ok() noexcept { return Result {}; }" in files[
-        "protocyte/runtime/runtime.hpp"
-    ]
+    assert "template<class E> struct Unexpected {" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr auto unexpected(E &&error_value) noexcept(" in files["protocyte/runtime/runtime.hpp"]
+    assert "requires(!UnexpectedType<E>)" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class U = T>" in files["protocyte/runtime/runtime.hpp"]
+    assert "Result<void, E> status() const & noexcept" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr auto and_then(F &&f) & noexcept(" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr auto transform(F &&f) & noexcept(" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr auto or_else(F &&f) & noexcept(" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr auto transform_error(F &&f) & noexcept(" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr Result() noexcept = default;" in files["protocyte/runtime/runtime.hpp"]
-    assert "constexpr explicit Result(const Error error) noexcept: ok_ {false}, error_ {error} {}" in files[
+    assert "union Storage {" in files["protocyte/runtime/runtime.hpp"]
+    assert "static constexpr Result err(const ErrorCode code, const usize offset = {}, const u32 field_number = {}) noexcept" not in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert "constexpr void operator*() const noexcept {}" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr void value() const noexcept {}" in files["protocyte/runtime/runtime.hpp"]
     assert "template<class T> struct Optional {" in files["protocyte/runtime/runtime.hpp"]
-    assert "T &operator*() noexcept { return *ptr(); }" in files["protocyte/runtime/runtime.hpp"]
-    assert "const T &operator*() const noexcept { return *ptr(); }" in files["protocyte/runtime/runtime.hpp"]
+    assert "T &operator*() & noexcept { return *ptr(); }" in files["protocyte/runtime/runtime.hpp"]
+    assert "const T &operator*() const & noexcept { return *ptr(); }" in files["protocyte/runtime/runtime.hpp"]
     assert "T *operator->() noexcept { return ptr(); }" in files["protocyte/runtime/runtime.hpp"]
     assert "const T *operator->() const noexcept { return ptr(); }" in files["protocyte/runtime/runtime.hpp"]
     assert "template<class T, class Config> struct Box {" in files["protocyte/runtime/runtime.hpp"]
@@ -177,11 +190,11 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Result<usize> read_length_delimited_size(Reader &reader) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "if (*len > static_cast<u64>(~static_cast<usize>(0u))) {" in files["protocyte/runtime/runtime.hpp"]
-    assert "return Result<usize>::err(ErrorCode::integer_overflow, reader.position());" in files[
+    assert "if (len > static_cast<u64>(~static_cast<usize>(0u))) {" in files["protocyte/runtime/runtime.hpp"]
+    assert "return protocyte::unexpected(ErrorCode::integer_overflow, reader.position());" in files[
         "protocyte/runtime/runtime.hpp"
-    ]
-    assert "auto len = read_length_delimited_size(reader);" in files["protocyte/runtime/runtime.hpp"]
+    ] or "return protocyte::unexpected(ErrorCode::integer_overflow, {});" in files["protocyte/runtime/runtime.hpp"]
+    assert "return read_length_delimited_size(reader)" in files["protocyte/runtime/runtime.hpp"]
     assert "open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
@@ -207,6 +220,15 @@ def test_generates_proto3_files_and_runtime() -> None:
         "protocyte/runtime/runtime.hpp"
     ]
     assert "Result<usize> message_field_size(const u32 field_number, const Message &value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "return copied.assign(value.view()).transform([&copied]() noexcept -> T {" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "return expect_wire_type(reader, wire_type, WireType::VARINT, field_number)" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "return value.encoded_size().transform(" in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert (
@@ -412,18 +434,19 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "opt_name = 2u," in header
     assert "case FieldNumber::id: {" in header
     assert "case FieldNumber::opt_name: {" in header
-    assert "auto decoded = ::protocyte::read_float(packed);" in header
+    assert "::protocyte::read_float(packed).transform([&](const auto decoded) noexcept { value = decoded; });" in header
     assert "auto decoded = ::protocyte::read_fixed32(packed);" not in header
-    assert "::protocyte::read_int32_field(reader, wire_type, field_number);" in header
+    assert "::protocyte::read_int32_field(reader, wire_type, field_number).transform(" in header
     assert "::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);" in header
     assert "::protocyte::read_string_field<Config>(*ctx_, reader, wire_type," in header
     assert "::protocyte::write_string_field(" in header
     assert "::protocyte::write_message_field(" in header
     assert "::protocyte::message_field_size(" in header
     assert "FieldNumber::opt_name), opt_name_.view());" in header
-    assert "return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());" in header
+    assert ".transform([&](const auto decoded) noexcept {" in header
+    assert "::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::self), *self_).and_then(" in header
     assert "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);" in header
-    assert "::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured)" in header
+    assert "ensure_self().and_then([&](auto ensured) noexcept -> ::protocyte::Status { return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured); });" in header
     assert "return has_self() ? self_.operator->() : nullptr;" in header
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
@@ -614,13 +637,12 @@ def test_generated_header_copies_oneof_state() -> None:
     header = next(item.content for item in response.file if item.name == "oneof.protocyte.hpp")
 
     assert "if (this == &other) {" in header
-    assert "return ::protocyte::Status::ok();" in header
+    assert "return {};" in header
     assert "switch (other.choice_case_) {" in header
     assert "case ChoiceCase::text: {" in header
     assert "if (const auto st = set_text(other.text()); !st) {" in header
     assert "return st;" in header
-    assert "if (auto ensured = ensure_inner(); !ensured) {" in header
-    assert "(*ensured)->copy_from(*other.inner())" in header
+    assert "ensure_inner().and_then([&](auto ensured) noexcept -> ::protocyte::Status { return ensured->copy_from(*other.inner()); });" in header
     assert "clear_choice();" in header
 
 
@@ -632,7 +654,7 @@ def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
 
     assert "copy_from(const OnlyArrays& other) noexcept" in header
     assert "if (this == &other) {" in header
-    assert "return ::protocyte::Status::ok();" in header
+    assert "return {};" in header
     assert "mutable_values().copy_from(other.values())" in header
 
 
@@ -838,7 +860,7 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "::protocyte::Ref<::demo::Carrier_Inner<Config>>{*choice.inner}" in header
     assert "new (&choice.none)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none;" not in header
-    assert "auto ensured = ensure_inner();" in header
+    assert "return choice.inner.emplace(*ctx_).transform(" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
     assert "choice_case_ == ChoiceCase::inner" in header
@@ -876,7 +898,7 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
     assert "RuntimeStatus serialize(Writer& /* writer */) const noexcept {" in header
     assert "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {" in header
     assert "::protocyte::usize total {};" not in header
-    assert "return ::protocyte::Result<::protocyte::usize>::ok({});" in header
+    assert "return ::protocyte::usize {};" in header
 
 
 def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
