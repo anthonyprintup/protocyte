@@ -314,6 +314,9 @@ namespace {
         }
     };
 
+    template<class T>
+    concept CanCallUnexpected = requires(T &&value) { protocyte::unexpected(protocyte::forward<T>(value)); };
+
     std::string hex_of(std::string_view bytes) {
         static constexpr char hex_digits[] = "0123456789abcdef";
         std::string out;
@@ -2037,7 +2040,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                      ResultU32>);
         static_assert(std::is_same_v<decltype(protocyte::unexpected(protocyte::ErrorCode::invalid_argument)),
                                      protocyte::Unexpected<protocyte::ErrorCode>>);
-        static_assert(!requires { protocyte::unexpected(protocyte::unexpected(protocyte::u32 {7u})); });
+        static_assert(!CanCallUnexpected<protocyte::Unexpected<protocyte::u32>>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {7}.status()), protocyte::Status>);
         static_assert(
             std::is_same_v<decltype(protocyte::Result<int, protocyte::u32> {protocyte::unexpected(9u)}.status()),
