@@ -97,6 +97,11 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "template<class E> struct Result<void, E> {" in files["protocyte/runtime/runtime.hpp"]
     assert "using value_type = T;" in files["protocyte/runtime/runtime.hpp"]
     assert "using error_type = E;" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result() noexcept(noexcept(T {}))" in files["protocyte/runtime/runtime.hpp"]
+    assert "requires(!ResultType<U> && !UnexpectedType<U>)" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result(const Result<U, G> &other)" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result(Result<U, G> &&other)" in files["protocyte/runtime/runtime.hpp"]
+    assert "constexpr Result(const Result<void, G> &other)" in files["protocyte/runtime/runtime.hpp"]
     assert "static constexpr Result ok() noexcept" not in files["protocyte/runtime/runtime.hpp"]
     assert "const usize offset," in files["protocyte/runtime/runtime.hpp"]
     assert "inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {" in files[

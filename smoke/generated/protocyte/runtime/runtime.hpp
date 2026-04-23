@@ -210,8 +210,12 @@ namespace protocyte {
         using value_type = T;
         using error_type = E;
 
+        constexpr Result() noexcept(noexcept(T {}))
+            requires(requires { T {}; })
+            : ok_ {true}, value_ {} {}
+
         template<class U = T> constexpr Result(U &&value) noexcept(noexcept(T {protocyte::forward<U>(value)}))
-            requires(!::std::same_as<::std::remove_cvref_t<U>, Result> && !UnexpectedType<U>)
+            requires(!ResultType<U> && !UnexpectedType<U>)
             : ok_ {true}, value_ {protocyte::forward<U>(value)} {}
 
         template<class G>
@@ -223,6 +227,37 @@ namespace protocyte {
             protocyte::move(unexpected_value).error()}))
             requires(requires(G &&error_value) { E {protocyte::forward<G>(error_value)}; })
             : ok_ {false}, error_ {protocyte::move(unexpected_value).error()} {}
+
+        template<class U, class G>
+        constexpr Result(const Result<U, G> &other) noexcept(noexcept(T {*other}) && noexcept(E {other.error()}))
+            requires(!::std::same_as<Result<U, G>, Result> && !::std::same_as<U, void> &&
+                     requires(const Result<U, G> &source) {
+                         T {*source};
+                         E {source.error()};
+                     })
+            : ok_ {other.is_ok()} {
+            if (ok_) {
+                new (&value_) T {*other};
+            } else {
+                new (&error_) E {other.error()};
+            }
+        }
+
+        template<class U, class G>
+        constexpr Result(Result<U, G> &&other) noexcept(noexcept(T {*protocyte::move(other)}) &&
+                                                        noexcept(E {protocyte::move(other).error()}))
+            requires(!::std::same_as<Result<U, G>, Result> && !::std::same_as<U, void> &&
+                     requires(Result<U, G> &&source) {
+                         T {*protocyte::move(source)};
+                         E {protocyte::move(source).error()};
+                     })
+            : ok_ {other.is_ok()} {
+            if (ok_) {
+                new (&value_) T {*protocyte::move(other)};
+            } else {
+                new (&error_) E {protocyte::move(other).error()};
+            }
+        }
 
         Result(Result &&other) noexcept(noexcept(T {protocyte::move(other.value_)}) &&
                                         noexcept(E {protocyte::move(other.error_)})):
@@ -268,6 +303,43 @@ namespace protocyte {
                 new (&value_) T {other.value_};
             } else {
                 new (&error_) E {other.error_};
+            }
+            return *this;
+        }
+
+        template<class U, class G>
+        Result &operator=(const Result<U, G> &other) noexcept(noexcept(T {*other}) && noexcept(E {other.error()}))
+            requires(!::std::same_as<Result<U, G>, Result> && !::std::same_as<U, void> &&
+                     requires(const Result<U, G> &source) {
+                         T {*source};
+                         E {source.error()};
+                     })
+        {
+            destroy();
+            ok_ = other.is_ok();
+            if (ok_) {
+                new (&value_) T {*other};
+            } else {
+                new (&error_) E {other.error()};
+            }
+            return *this;
+        }
+
+        template<class U, class G>
+        Result &operator=(Result<U, G> &&other) noexcept(noexcept(T {*protocyte::move(other)}) &&
+                                                         noexcept(E {protocyte::move(other).error()}))
+            requires(!::std::same_as<Result<U, G>, Result> && !::std::same_as<U, void> &&
+                     requires(Result<U, G> &&source) {
+                         T {*protocyte::move(source)};
+                         E {protocyte::move(source).error()};
+                     })
+        {
+            destroy();
+            ok_ = other.is_ok();
+            if (ok_) {
+                new (&value_) T {*protocyte::move(other)};
+            } else {
+                new (&error_) E {protocyte::move(other).error()};
             }
             return *this;
         }
@@ -624,6 +696,25 @@ namespace protocyte {
             new (&storage_.error_) E {protocyte::move(unexpected_value).error()};
         }
 
+        template<class G> constexpr Result(const Result<void, G> &other) noexcept(noexcept(E {other.error()}))
+            requires(!::std::same_as<Result<void, G>, Result> &&
+                     requires(const Result<void, G> &source) { E {source.error()}; })
+            : ok_ {other.is_ok()} {
+            if (!ok_) {
+                new (&storage_.error_) E {other.error()};
+            }
+        }
+
+        template<class G>
+        constexpr Result(Result<void, G> &&other) noexcept(noexcept(E {protocyte::move(other).error()}))
+            requires(!::std::same_as<Result<void, G>, Result> &&
+                     requires(Result<void, G> &&source) { E {protocyte::move(source).error()}; })
+            : ok_ {other.is_ok()} {
+            if (!ok_) {
+                new (&storage_.error_) E {protocyte::move(other).error()};
+            }
+        }
+
         Result(Result &&other) noexcept(noexcept(E {protocyte::move(other.storage_.error_)})): ok_ {other.ok_} {
             if (!ok_) {
                 new (&storage_.error_) E {protocyte::move(other.storage_.error_)};
@@ -656,6 +747,31 @@ namespace protocyte {
             ok_ = other.ok_;
             if (!ok_) {
                 new (&storage_.error_) E {other.storage_.error_};
+            }
+            return *this;
+        }
+
+        template<class G> Result &operator=(const Result<void, G> &other) noexcept(noexcept(E {other.error()}))
+            requires(!::std::same_as<Result<void, G>, Result> &&
+                     requires(const Result<void, G> &source) { E {source.error()}; })
+        {
+            destroy();
+            ok_ = other.is_ok();
+            if (!ok_) {
+                new (&storage_.error_) E {other.error()};
+            }
+            return *this;
+        }
+
+        template<class G>
+        Result &operator=(Result<void, G> &&other) noexcept(noexcept(E {protocyte::move(other).error()}))
+            requires(!::std::same_as<Result<void, G>, Result> &&
+                     requires(Result<void, G> &&source) { E {protocyte::move(source).error()}; })
+        {
+            destroy();
+            ok_ = other.is_ok();
+            if (!ok_) {
+                new (&storage_.error_) E {protocyte::move(other).error()};
             }
             return *this;
         }

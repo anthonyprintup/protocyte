@@ -2193,6 +2193,14 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
 }
 
 TEST_CASE("Result special members and payload propagation stay correct", "[smoke][runtime][result]") {
+    static_assert(requires { protocyte::Result<int> {}; });
+    static_assert(!std::is_constructible_v<protocyte::Result<bool>, protocyte::Result<int>>);
+    static_assert(requires { protocyte::Result<long, protocyte::u64> {protocyte::Result<int, protocyte::u32> {7}}; });
+    static_assert(requires {
+        protocyte::Result<void, protocyte::u64> {
+            protocyte::Result<void, protocyte::u32> {protocyte::unexpected(protocyte::u32 {3u})}};
+    });
+
     SECTION("Result<T, E> preserves the active value or error across copy and move operations") {
         using TrackedResult = protocyte::Result<TrackedPayload, TrackedPayload>;
 
@@ -2336,6 +2344,46 @@ TEST_CASE("Result special members and payload propagation stay correct", "[smoke
             protocyte::unexpected(protocyte::u32 {23u})};
         REQUIRE_FALSE(converted_status_error);
         CHECK(converted_status_error.error() == 23u);
+    }
+
+    SECTION("Result converts across compatible Result specializations") {
+        const protocyte::Result<int, protocyte::u32> value_source {41};
+        const protocyte::Result<long, protocyte::u64> converted_value {value_source};
+        REQUIRE(converted_value);
+        CHECK(*converted_value == 41);
+
+        const protocyte::Result<int, protocyte::u32> error_source {protocyte::unexpected(protocyte::u32 {43u})};
+        const protocyte::Result<long, protocyte::u64> converted_error {error_source};
+        REQUIRE_FALSE(converted_error);
+        CHECK(converted_error.error() == 43u);
+
+        protocyte::Result<long, protocyte::u64> assigned_value {0};
+        assigned_value = value_source;
+        REQUIRE(assigned_value);
+        CHECK(*assigned_value == 41);
+
+        protocyte::Result<long, protocyte::u64> assigned_error {0};
+        assigned_error = error_source;
+        REQUIRE_FALSE(assigned_error);
+        CHECK(assigned_error.error() == 43u);
+
+        const protocyte::Result<void, protocyte::u32> void_ok_source {};
+        const protocyte::Result<void, protocyte::u64> converted_void_ok {void_ok_source};
+        REQUIRE(converted_void_ok);
+
+        const protocyte::Result<void, protocyte::u32> void_error_source {protocyte::unexpected(protocyte::u32 {47u})};
+        const protocyte::Result<void, protocyte::u64> converted_void_error {void_error_source};
+        REQUIRE_FALSE(converted_void_error);
+        CHECK(converted_void_error.error() == 47u);
+
+        protocyte::Result<void, protocyte::u64> assigned_void_ok {protocyte::unexpected(protocyte::u64 {1u})};
+        assigned_void_ok = void_ok_source;
+        REQUIRE(assigned_void_ok);
+
+        protocyte::Result<void, protocyte::u64> assigned_void_error {};
+        assigned_void_error = void_error_source;
+        REQUIRE_FALSE(assigned_void_error);
+        CHECK(assigned_void_error.error() == 47u);
     }
 
     SECTION("Result preserves the original error payload when the success callback is skipped") {
