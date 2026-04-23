@@ -27,7 +27,7 @@ namespace test::crosspkg {
         explicit CrossPackageConstants_Nested(Context &ctx) noexcept: ctx_ {&ctx} {}
 
         static ::protocyte::Result<CrossPackageConstants_Nested> create(Context &ctx) noexcept {
-            return ::protocyte::Result<CrossPackageConstants_Nested>::ok(CrossPackageConstants_Nested {ctx});
+            return CrossPackageConstants_Nested {ctx};
         }
         Context *context() const noexcept { return ctx_; }
         CrossPackageConstants_Nested(CrossPackageConstants_Nested &&) noexcept = default;
@@ -37,12 +37,12 @@ namespace test::crosspkg {
 
         ::protocyte::Status copy_from(const CrossPackageConstants_Nested &other) noexcept {
             if (this == &other) {
-                return ::protocyte::Status::ok();
+                return {};
             }
             if (const auto st = set_nested_bytes(other.nested_bytes()); !st) {
                 return st;
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
 
         ::protocyte::Result<CrossPackageConstants_Nested> clone() const noexcept {
@@ -51,7 +51,7 @@ namespace test::crosspkg {
                 return out;
             }
             if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::Result<CrossPackageConstants_Nested>::err(st.error());
+                return ::protocyte::unexpected(st.error());
             }
             return out;
         }
@@ -61,22 +61,22 @@ namespace test::crosspkg {
         static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return MIRRORED_COUNT; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
             }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         ::protocyte::Status set_nested_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
             }
             if (const auto st = nested_bytes_.assign(value); !st) {
                 return st;
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
         void clear_nested_bytes() noexcept { nested_bytes_.clear(); }
 
@@ -87,7 +87,7 @@ namespace test::crosspkg {
                 return out;
             }
             if (const auto st = out->merge_from(reader); !st) {
-                return ::protocyte::Result<CrossPackageConstants_Nested>::err(st.error());
+                return ::protocyte::unexpected(st.error());
             }
             return out;
         }
@@ -102,20 +102,20 @@ namespace test::crosspkg {
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::nested_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                           field_number);
                         }
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
                         }
                         if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                              field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                           field_number);
                         }
                         if (*len > MIRRORED_COUNT) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
-                                                              field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                           field_number);
                         }
                         if (const auto st = nested_bytes_.resize(*len); !st) {
                             return st;
@@ -134,7 +134,7 @@ namespace test::crosspkg {
                     }
                 }
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
 
         template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
@@ -145,7 +145,7 @@ namespace test::crosspkg {
                     return st;
                 }
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -155,10 +155,10 @@ namespace test::crosspkg {
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::nested_bytes)) +
                                     ::protocyte::varint_size(nested_bytes_.size()) + nested_bytes_.size());
                     !st) {
-                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                    return ::protocyte::unexpected(st.error());
                 }
             }
-            return ::protocyte::Result<::protocyte::usize>::ok(total);
+            return total;
         }
     protected:
         Context *ctx_;
@@ -184,7 +184,7 @@ namespace test::crosspkg {
         explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx} {}
 
         static ::protocyte::Result<CrossPackageConstants> create(Context &ctx) noexcept {
-            return ::protocyte::Result<CrossPackageConstants>::ok(CrossPackageConstants {ctx});
+            return CrossPackageConstants {ctx};
         }
         Context *context() const noexcept { return ctx_; }
         CrossPackageConstants(CrossPackageConstants &&) noexcept = default;
@@ -194,7 +194,7 @@ namespace test::crosspkg {
 
         ::protocyte::Status copy_from(const CrossPackageConstants &other) noexcept {
             if (this == &other) {
-                return ::protocyte::Status::ok();
+                return {};
             }
             if (const auto st = set_remote_bytes(other.remote_bytes()); !st) {
                 return st;
@@ -203,15 +203,16 @@ namespace test::crosspkg {
                 return st;
             }
             if (other.has_nested()) {
-                if (auto ensured = ensure_nested(); !ensured) {
-                    return ensured.status();
-                } else if (const auto st = (*ensured)->copy_from(*other.nested()); !st) {
+                if (const auto st = ensure_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
+                        return ensured->copy_from(*other.nested());
+                    });
+                    !st) {
                     return st;
                 }
             } else {
                 clear_nested();
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
 
         ::protocyte::Result<CrossPackageConstants> clone() const noexcept {
@@ -220,7 +221,7 @@ namespace test::crosspkg {
                 return out;
             }
             if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::Result<CrossPackageConstants>::err(st.error());
+                return ::protocyte::unexpected(st.error());
             }
             return out;
         }
@@ -230,22 +231,22 @@ namespace test::crosspkg {
         static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 8u + 1u; }
         ::protocyte::Status resize_remote_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
             }
             if (const auto st = remote_bytes_.resize(size); !st) {
                 return st;
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
         ::protocyte::MutableByteView mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
         ::protocyte::Status set_remote_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
             }
             if (const auto st = remote_bytes_.assign(value); !st) {
                 return st;
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
         void clear_remote_bytes() noexcept { remote_bytes_.clear(); }
 
@@ -261,14 +262,13 @@ namespace test::crosspkg {
         }
         ::protocyte::Result<::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>>>
         ensure_nested() noexcept {
-            if (!nested_.has_value()) {
-                if (const auto st = nested_.emplace(*ctx_); !st) {
-                    return ::protocyte::Result<
-                        ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>>>::err(st.error());
-                }
+            if (nested_.has_value()) {
+                return ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {*nested_};
             }
-            return ::protocyte::Result<::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>>>::ok(
-                ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {*nested_});
+            return nested_.emplace(*ctx_).transform(
+                [this]() noexcept -> ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {
+                    return ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {*nested_};
+                });
         }
         void clear_nested() noexcept { nested_.reset(); }
 
@@ -279,7 +279,7 @@ namespace test::crosspkg {
                 return out;
             }
             if (const auto st = out->merge_from(reader); !st) {
-                return ::protocyte::Result<CrossPackageConstants>::err(st.error());
+                return ::protocyte::unexpected(st.error());
             }
             return out;
         }
@@ -294,20 +294,20 @@ namespace test::crosspkg {
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::remote_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                           field_number);
                         }
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
                         }
                         if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                              field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                           field_number);
                         }
                         if (*len > 8u + 1u) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::count_limit, reader.position(),
-                                                              field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                           field_number);
                         }
                         if (const auto st = remote_bytes_.resize(*len); !st) {
                             return st;
@@ -326,11 +326,11 @@ namespace test::crosspkg {
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
-                                auto decoded = ::protocyte::read_int32(packed);
-                                if (!decoded) {
-                                    return decoded.status();
+                                if (const auto st = ::protocyte::read_int32(packed).transform(
+                                        [&](const auto decoded) noexcept { value = decoded; });
+                                    !st) {
+                                    return st;
                                 }
-                                value = *decoded;
                                 if (const auto st = remote_values_.push_back(value); !st) {
                                     return st;
                                 }
@@ -341,11 +341,11 @@ namespace test::crosspkg {
                             break;
                         }
                         ::protocyte::i32 value {};
-                        auto decoded = ::protocyte::read_int32_field(reader, wire_type, field_number);
-                        if (!decoded) {
-                            return decoded.status();
+                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
+                                                .transform([&](const auto decoded) noexcept { value = decoded; });
+                            !st) {
+                            return st;
                         }
-                        value = *decoded;
                         if (const auto st = remote_values_.push_back(value); !st) {
                             return st;
                         }
@@ -353,14 +353,12 @@ namespace test::crosspkg {
                     }
                     case FieldNumber::nested: {
                         if (wire_type != ::protocyte::WireType::LEN) {
-                            return ::protocyte::Status::error(::protocyte::ErrorCode::invalid_wire_type,
-                                                              reader.position(), field_number);
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                           field_number);
                         }
-                        auto ensured = ensure_nested();
-                        if (!ensured) {
-                            return ensured.status();
-                        }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, **ensured);
+                        if (const auto st = ensure_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
+                                return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
+                            });
                             !st) {
                             return st;
                         }
@@ -375,7 +373,7 @@ namespace test::crosspkg {
                     }
                 }
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
 
         template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
@@ -421,7 +419,7 @@ namespace test::crosspkg {
                     return st;
                 }
             }
-            return ::protocyte::Status::ok();
+            return {};
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -431,7 +429,7 @@ namespace test::crosspkg {
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::remote_bytes)) +
                                     ::protocyte::varint_size(remote_bytes_.size()) + remote_bytes_.size());
                     !st) {
-                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                    return ::protocyte::unexpected(st.error());
                 }
             }
             if (!remote_values_.empty()) {
@@ -442,7 +440,7 @@ namespace test::crosspkg {
                                 &packed_size_remote_values,
                                 ::protocyte::varint_size(static_cast<::protocyte::u64>(remote_values_value)));
                             !st_size) {
-                            return ::protocyte::Result<::protocyte::usize>::err(st_size.error());
+                            return ::protocyte::unexpected(st_size.error());
                         }
                     }
                 }
@@ -450,20 +448,20 @@ namespace test::crosspkg {
                         &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::remote_values)) +
                                     ::protocyte::varint_size(packed_size_remote_values) + packed_size_remote_values);
                     !st) {
-                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                    return ::protocyte::unexpected(st.error());
                 }
             }
             if (nested_.has_value()) {
-                auto nested_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
-                if (!nested_size) {
-                    return ::protocyte::Result<::protocyte::usize>::err(nested_size.error());
-                }
-                if (const auto st = ::protocyte::add_size(&total, *nested_size); !st) {
-                    return ::protocyte::Result<::protocyte::usize>::err(st.error());
+                if (const auto st =
+                        ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_)
+                            .and_then([&](const ::protocyte::usize nested_size) noexcept -> ::protocyte::Status {
+                                return ::protocyte::add_size(&total, nested_size);
+                            });
+                    !st) {
+                    return ::protocyte::unexpected(st.error());
                 }
             }
-            return ::protocyte::Result<::protocyte::usize>::ok(total);
+            return total;
         }
     protected:
         Context *ctx_;

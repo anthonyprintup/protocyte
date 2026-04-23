@@ -26,7 +26,7 @@ void __cdecl operator delete[](void *ptr, size_t) noexcept { ::operator delete(p
 
 namespace {
 
-    constexpr ULONG kProtocytePoolTag = 'TyCP';
+    constexpr ULONG protocyte_pool_tag = 'TyCP';
 
     POOL_TYPE kernel_pool_type() noexcept {
 #if NTDDI_VERSION >= NTDDI_WIN8
@@ -38,15 +38,15 @@ namespace {
 
     void *kernel_allocate(void *, size_t size, size_t) noexcept {
 #if NTDDI_VERSION >= NTDDI_WIN10_VB
-        return ExAllocatePool2(POOL_FLAG_NON_PAGED, size, kProtocytePoolTag);
+        return ExAllocatePool2(POOL_FLAG_NON_PAGED, size, protocyte_pool_tag);
 #else
-        return ExAllocatePoolWithTag(kernel_pool_type(), size, kProtocytePoolTag);
+        return ExAllocatePoolWithTag(kernel_pool_type(), size, protocyte_pool_tag);
 #endif
     }
 
     void kernel_deallocate(void *, void *ptr, size_t, size_t) noexcept {
         if (ptr != nullptr) {
-            ExFreePoolWithTag(ptr, kProtocytePoolTag);
+            ExFreePoolWithTag(ptr, protocyte_pool_tag);
         }
     }
 

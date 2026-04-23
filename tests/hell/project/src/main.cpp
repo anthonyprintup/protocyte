@@ -55,8 +55,8 @@ int main() {
         std::cerr << "failed to set header version\n";
         return EXIT_FAILURE;
     }
-    constexpr std::array<unsigned char, 2> kTag {'O', 'K'};
-    if (const auto st = header->set_tag(view_of(kTag)); !st) {
+    constexpr std::array<unsigned char, 2> tag {'O', 'K'};
+    if (const auto st = header->set_tag(view_of(tag)); !st) {
         std::cerr << "failed to set header tag\n";
         return EXIT_FAILURE;
     }
@@ -77,8 +77,8 @@ int main() {
         std::cerr << "failed to set envelope id\n";
         return EXIT_FAILURE;
     }
-    constexpr std::array<unsigned char, 3> kPayload {'h', 'e', 'y'};
-    if (const auto st = envelope->set_payload(view_of(kPayload)); !st) {
+    constexpr std::array<unsigned char, 3> payload {'h', 'e', 'y'};
+    if (const auto st = envelope->set_payload(view_of(payload)); !st) {
         std::cerr << "failed to set envelope payload\n";
         return EXIT_FAILURE;
     }
