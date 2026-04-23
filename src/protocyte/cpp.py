@@ -563,9 +563,7 @@ def _emit_clone_api(w: CppWriter, message: MessageModel, options: GeneratorOptio
     w.push()
     w.line(f"auto out = {message.cpp_name}::create(*ctx_);")
     w.line("if (!out) { return out; }")
-    w.line(
-        f"if (const auto st = out->copy_from(*this); !st) {{ return ::protocyte::unexpected(st.error()); }}"
-    )
+    w.line("if (const auto st = out->copy_from(*this); !st) { return ::protocyte::unexpected(st.error()); }")
     w.line("return out;")
     w.pop()
     w.line("}")
@@ -880,9 +878,7 @@ def _emit_wire_api(w: CppWriter, message: MessageModel, options: GeneratorOption
     with w.indent():
         w.line(f"auto out = {message.cpp_name}::create(ctx);")
         w.line("if (!out) { return out; }")
-        w.line(
-            f"if (const auto st = out->merge_from(reader); !st) {{ return ::protocyte::unexpected(st.error()); }}"
-        )
+        w.line("if (const auto st = out->merge_from(reader); !st) { return ::protocyte::unexpected(st.error()); }")
         w.line("return out;")
     w.line("}")
     w.line()

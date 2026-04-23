@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,6 +67,7 @@ def main() -> int:
 
     compat_cases_path = out_dir / "compat_cases.hpp"
     compat_cases_path.write_text(compat_cases_header(), encoding="utf-8", newline="\n")
+    _clang_format_file(compat_cases_path, clang_format, clang_format_config)
     written_paths.add(compat_cases_path)
 
     stale_runtime_source = out_dir / "protocyte" / "runtime" / "runtime.cpp"
@@ -125,6 +127,13 @@ def _clang_format_candidates() -> list[Path]:
     candidates.extend(sorted(Path("/usr/lib").glob("llvm-*/bin/clang-format"), reverse=True))
     candidates.extend([Path("/usr/local/bin/clang-format"), Path("/usr/bin/clang-format")])
     return candidates
+
+
+def _clang_format_file(path: Path, clang_format: str, clang_format_config: Path) -> None:
+    subprocess.run(
+        [clang_format, f"-style=file:{clang_format_config.as_posix()}", "-i", path.as_posix()],
+        check=True,
+    )
 
 
 def add_field(
