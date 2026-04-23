@@ -18,6 +18,18 @@ set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
 set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
 set(PROTOCYTE_CROSS_PACKAGE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/cross_package.proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
+set(
+    PROTOCYTE_SMOKE_CLANG_FORMAT
+    ""
+    CACHE FILEPATH
+    "Explicit clang-format executable for smoke code generation."
+)
+set(
+    PROTOCYTE_SMOKE_CLANG_FORMAT_CONFIG
+    "${PROTOCYTE_REPO_ROOT}/.clang-format"
+    CACHE FILEPATH
+    "clang-format config used for smoke code generation."
+)
 set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
@@ -36,12 +48,40 @@ endif()
 add_subdirectory("${PROTOCYTE_REPO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/protocyte")
 
 if(PROTOCYTE_SMOKE_REGENERATE)
+    if(PROTOCYTE_SMOKE_CLANG_FORMAT)
+        set(protocyte_smoke_clang_format "${PROTOCYTE_SMOKE_CLANG_FORMAT}")
+    else()
+        set(protocyte_smoke_clang_format_hints)
+        if(WIN32)
+            list(APPEND protocyte_smoke_clang_format_hints "$ENV{ProgramFiles}/LLVM/bin")
+            list(APPEND protocyte_smoke_clang_format_hints "$ENV{ProgramW6432}/LLVM/bin")
+        endif()
+        find_program(
+            protocyte_smoke_clang_format
+            NAMES clang-format clang-format.exe
+            HINTS ${protocyte_smoke_clang_format_hints}
+            REQUIRED
+        )
+    endif()
+    if(NOT EXISTS "${PROTOCYTE_SMOKE_CLANG_FORMAT_CONFIG}")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_SMOKE_CLANG_FORMAT_CONFIG does not exist: ${PROTOCYTE_SMOKE_CLANG_FORMAT_CONFIG}"
+        )
+    endif()
+    set(
+        PROTOCYTE_SMOKE_FORMAT_OPTIONS
+        "clang_format=${protocyte_smoke_clang_format}"
+        "clang_format_config=${PROTOCYTE_SMOKE_CLANG_FORMAT_CONFIG}"
+    )
+
     protocyte_generate(
         TARGET protocyte_smoke_example_codegen
         PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
         OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
         PROTOS "${PROTOCYTE_EXAMPLE_PROTO}"
         EMIT_RUNTIME
+        OPTIONS ${PROTOCYTE_SMOKE_FORMAT_OPTIONS}
     )
 
     protocyte_generate(
@@ -49,7 +89,7 @@ if(PROTOCYTE_SMOKE_REGENERATE)
         PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
         OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
         PROTOS "${PROTOCYTE_COMPAT_PROTO}"
-        OPTIONS "namespace_prefix=protocyte_smoke"
+        OPTIONS ${PROTOCYTE_SMOKE_FORMAT_OPTIONS} "namespace_prefix=protocyte_smoke"
     )
 
     protocyte_generate(
@@ -57,6 +97,7 @@ if(PROTOCYTE_SMOKE_REGENERATE)
         PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
         OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
         PROTOS "${PROTOCYTE_CROSS_PACKAGE_PROTO}"
+        OPTIONS ${PROTOCYTE_SMOKE_FORMAT_OPTIONS}
     )
 
     add_custom_target(protocyte_smoke_regenerate)

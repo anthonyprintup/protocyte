@@ -427,13 +427,11 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "return has_self() ? self_.operator->() : nullptr;" in header
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
-    assert "clear_items();" in header
-    assert "for (const auto entry : other.items()) {" in header
-    assert "clear_samples();" in header
-    assert "for (const auto &samples_item : other.samples()) {" in header
-    assert "mutable_samples().push_back(samples_item)" in header
-    assert "clear_message_items();" in header
-    assert "copied_value.copy_from(entry.value)" in header
+    assert "mutable_items().copy_from(other.items())" in header
+    assert "mutable_samples().copy_from(other.samples())" in header
+    assert "mutable_message_items().copy_from(other.message_items())" in header
+    assert "::protocyte::checked_add(samples_.size(), *len / 4u, &packed_reserve_samples)" in header
+    assert "samples_.reserve(packed_reserve_samples)" in header
     assert "if (const auto st_size = ::protocyte::checked_mul(samples_.size(), 4u, &packed_size_samples); !st_size)" in header
 
 
@@ -444,14 +442,11 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
 
     assert "copy_from(const UltimateComplexMessage &other) noexcept" in header
     assert "if (this == &other) {" in header
-    assert "clear_r_int32_unpacked();" in header
-    assert "clear_r_int32_packed();" in header
-    assert "clear_r_double();" in header
-    assert "clear_map_str_int32();" in header
-    assert "for (const auto entry : other.map_str_int32()) {" in header
-    assert "clear_map_uint64_msg();" in header
-    assert "for (const auto entry : other.map_uint64_msg()) {" in header
-    assert "copied_value.copy_from(entry.value)" in header
+    assert "mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked())" in header
+    assert "mutable_r_int32_packed().copy_from(other.r_int32_packed())" in header
+    assert "mutable_r_double().copy_from(other.r_double())" in header
+    assert "mutable_map_str_int32().copy_from(other.map_str_int32())" in header
+    assert "mutable_map_uint64_msg().copy_from(other.map_uint64_msg())" in header
     assert "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
     assert "return has_recursive_self() ? recursive_self_.operator->() : nullptr;" in header
@@ -547,11 +542,12 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     assert "set_digest(other.digest())" in header
     assert "set_blob(other.blob())" in header
     assert "set_hex_blob(other.hex_blob())" in header
-    assert "clear_values();" in header
-    assert "for (const auto &values_item : other.values()) {" in header
-    assert "mutable_values().push_back(values_item)" in header
+    assert "mutable_values().copy_from(other.values())" in header
     assert "Array(Array &&other) noexcept" in runtime_header
     assert "Array &operator=(Array &&other) noexcept" in runtime_header
+    assert "Status copy_from(const Array &other) noexcept" in runtime_header
+    assert "Status copy_from(const Vector &other) noexcept" in runtime_header
+    assert "Status copy_from(const HashMap &other) noexcept" in runtime_header
     assert "ByteArray(ByteArray &&other) noexcept" in runtime_header
     assert "ByteArray &operator=(ByteArray &&other) noexcept" in runtime_header
     assert "FixedByteArray(FixedByteArray &&other) noexcept" in runtime_header
@@ -637,9 +633,7 @@ def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
     assert "copy_from(const OnlyArrays& other) noexcept" in header
     assert "if (this == &other) {" in header
     assert "return ::protocyte::Status::ok();" in header
-    assert "clear_values();" in header
-    assert "for (const auto &values_item : other.values()) {" in header
-    assert "mutable_values().push_back(values_item)" in header
+    assert "mutable_values().copy_from(other.values())" in header
 
 
 def test_generated_header_uses_real_other_for_map_only_copy() -> None:
@@ -651,9 +645,7 @@ def test_generated_header_uses_real_other_for_map_only_copy() -> None:
     assert "copy_from(const OnlyMaps& other) noexcept" in header
     assert "if (this == &other) {" in header
     assert "const auto& source = other;" in header
-    assert "clear_items();" in header
-    assert "for (const auto entry : source.items()) {" in header
-    assert "auto copied_value = entry.value;" in header
+    assert "mutable_items().copy_from(source.items())" in header
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
 
 

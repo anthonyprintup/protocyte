@@ -350,6 +350,106 @@ namespace protocyte {
         return {};
     }
 
+    template<class T> struct AlwaysFalse {
+        static constexpr bool value = false;
+    };
+
+    inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept {
+        for (usize i {}; i < count; ++i) { dst[i] = src[i]; }
+    }
+
+    template<class T, class Context> Result<T> copy_value(Context *ctx, const T &value) noexcept {
+        if constexpr (requires { T {value}; }) {
+            return Result<T>::ok(T {value});
+        } else if constexpr (
+            requires(const T &src) { src.view(); } && requires(T &out, const ByteView view) { out.assign(view); }) {
+            Context *copy_ctx {ctx};
+            if constexpr (requires(const T &src) { src.context(); }) {
+                if (copy_ctx == nullptr) {
+                    copy_ctx = value.context();
+                }
+            }
+            if constexpr (requires(Context *value_ctx) { T {value_ctx}; }) {
+                T copied {copy_ctx};
+                if (const auto st = copied.assign(value.view()); !st) {
+                    return Result<T>::err(st.error());
+                }
+                return Result<T>::ok(protocyte::move(copied));
+            } else if constexpr (requires { T {}; }) {
+                T copied {};
+                if (const auto st = copied.assign(value.view()); !st) {
+                    return Result<T>::err(st.error());
+                }
+                return Result<T>::ok(protocyte::move(copied));
+            } else {
+                static_assert(AlwaysFalse<T>::value,
+                              "protocyte copy_value requires a default or pointer-context constructor");
+                return Result<T>::err(ErrorCode::invalid_argument);
+            }
+        } else if constexpr (requires(T &out, const T &src) { out.copy_from(src); }) {
+            Context *copy_ctx {ctx};
+            if constexpr (requires(const T &src) { src.context(); }) {
+                if (copy_ctx == nullptr) {
+                    copy_ctx = value.context();
+                }
+            }
+            if constexpr (requires(Context &value_ctx) { T {value_ctx}; }) {
+                if (copy_ctx == nullptr) {
+                    return Result<T>::err(ErrorCode::invalid_argument);
+                }
+                T copied {*copy_ctx};
+                if (const auto st = copied.copy_from(value); !st) {
+                    return Result<T>::err(st.error());
+                }
+                return Result<T>::ok(protocyte::move(copied));
+            } else if constexpr (requires(Context *value_ctx) { T {value_ctx}; }) {
+                T copied {copy_ctx};
+                if (const auto st = copied.copy_from(value); !st) {
+                    return Result<T>::err(st.error());
+                }
+                return Result<T>::ok(protocyte::move(copied));
+            } else if constexpr (requires { T {}; }) {
+                T copied {};
+                if (const auto st = copied.copy_from(value); !st) {
+                    return Result<T>::err(st.error());
+                }
+                return Result<T>::ok(protocyte::move(copied));
+            } else {
+                static_assert(AlwaysFalse<T>::value, "protocyte copy_value requires a default or context constructor");
+                return Result<T>::err(ErrorCode::invalid_argument);
+            }
+        } else {
+            static_assert(AlwaysFalse<T>::value, "protocyte copy_value does not support this type");
+            return Result<T>::err(ErrorCode::invalid_argument);
+        }
+    }
+
+    template<class T> Result<T> copy_value(const T &value) noexcept {
+        if constexpr (requires(const T &src) { src.context(); }) {
+            return copy_value(value.context(), value);
+        } else if constexpr (requires { T {value}; }) {
+            return Result<T>::ok(T {value});
+        } else if constexpr (
+            requires(const T &src) { src.view(); } && requires(T &out, const ByteView view) { out.assign(view); } &&
+            requires { T {}; }) {
+            T copied {};
+            if (const auto st = copied.assign(value.view()); !st) {
+                return Result<T>::err(st.error());
+            }
+            return Result<T>::ok(protocyte::move(copied));
+        } else if constexpr (requires(T &out, const T &src) { out.copy_from(src); } && requires { T {}; }) {
+            T copied {};
+            if (const auto st = copied.copy_from(value); !st) {
+                return Result<T>::err(st.error());
+            }
+            return Result<T>::ok(protocyte::move(copied));
+        } else {
+            static_assert(AlwaysFalse<T>::value,
+                          "protocyte copy_value without context requires a copy constructor or default constructor");
+            return Result<T>::err(ErrorCode::invalid_argument);
+        }
+    }
+
     struct Limits {
         static constexpr usize kDefaultMaxRecursionDepth = 100u;
         static constexpr usize kDefaultMaxMessageBytes = 0x7fffffffu;
@@ -585,6 +685,26 @@ namespace protocyte {
 
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
+        Status copy_from(const Vector &other) noexcept {
+            if (this == &other) {
+                return {};
+            }
+            clear();
+            if (const auto st = reserve(other.size_); !st) {
+                return st;
+            }
+            for (usize i {}; i < other.size_; ++i) {
+                auto copied = protocyte::copy_value(ctx_, other[i]);
+                if (!copied) {
+                    return copied.status();
+                }
+                if (const auto st = push_back(protocyte::move(*copied)); !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
         Status resize_default(const usize count) noexcept {
             if (count < size_) {
                 while (size_ > count) {
@@ -687,6 +807,23 @@ namespace protocyte {
         Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
+        Status copy_from(const Array &other) noexcept {
+            if (this == &other) {
+                return {};
+            }
+            clear();
+            for (usize i {}; i < other.size_; ++i) {
+                auto copied = protocyte::copy_value(other[i]);
+                if (!copied) {
+                    return copied.status();
+                }
+                if (const auto st = push_back(protocyte::move(*copied)); !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
     protected:
         T *ptr(const usize index) noexcept { return reinterpret_cast<T *>(&storage_[index * sizeof(T)]); }
         const T *ptr(const usize index) const noexcept {
@@ -757,7 +894,7 @@ namespace protocyte {
             if (view.size > Max) {
                 return Status::error(ErrorCode::count_limit);
             }
-            for (usize i {}; i < view.size; ++i) { bytes_[i] = view.data[i]; }
+            copy_bytes(bytes_, view.data, view.size);
             size_ = view.size;
             return {};
         }
@@ -827,7 +964,7 @@ namespace protocyte {
             if (view.size != Max) {
                 return Status::error(ErrorCode::invalid_argument);
             }
-            for (usize i {}; i < Max; ++i) { bytes_[i] = view.data[i]; }
+            copy_bytes(bytes_, view.data, Max);
             has_ = true;
             return {};
         }
@@ -856,6 +993,7 @@ namespace protocyte {
         Bytes &operator=(const Bytes &) = delete;
 
         ByteView view() const noexcept { return {.data = bytes_.data(), .size = bytes_.size()}; }
+        MutableByteView mutable_view() noexcept { return {.data = bytes_.data(), .size = bytes_.size()}; }
         iterator begin() noexcept { return bytes_.begin(); }
         const_iterator begin() const noexcept { return bytes_.begin(); }
         iterator end() noexcept { return bytes_.end(); }
@@ -868,7 +1006,9 @@ namespace protocyte {
         const_reverse_iterator rend() const noexcept { return bytes_.rend(); }
         const_reverse_iterator crbegin() const noexcept { return bytes_.crbegin(); }
         const_reverse_iterator crend() const noexcept { return bytes_.crend(); }
+        u8 *data() noexcept { return bytes_.data(); }
         const u8 *data() const noexcept { return bytes_.data(); }
+        Context *context() const noexcept { return ctx_; }
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
         void clear() noexcept { bytes_.clear(); }
@@ -876,20 +1016,22 @@ namespace protocyte {
             ctx_ = ctx;
             bytes_.bind(ctx);
         }
+        Status resize(const usize count) noexcept {
+            if (ctx_ != nullptr && count > ctx_->limits.max_string_bytes) {
+                return Status::error(ErrorCode::size_limit);
+            }
+            return bytes_.resize_default(count);
+        }
 
         Status assign(const ByteView view) noexcept {
             if (ctx_ != nullptr && view.size > ctx_->limits.max_string_bytes) {
                 return Status::error(ErrorCode::size_limit);
             }
             Bytes temp {ctx_};
-            if (const auto st = temp.bytes_.reserve(view.size); !st) {
+            if (const auto st = temp.resize(view.size); !st) {
                 return st;
             }
-            for (usize i {}; i < view.size; ++i) {
-                if (const auto st = temp.bytes_.push_back(view.data[i]); !st) {
-                    return st;
-                }
-            }
+            copy_bytes(temp.data(), view.data, view.size);
             *this = protocyte::move(temp);
             return {};
         }
@@ -926,6 +1068,7 @@ namespace protocyte {
         const_reverse_iterator crbegin() const noexcept { return bytes_.crbegin(); }
         const_reverse_iterator crend() const noexcept { return bytes_.crend(); }
         const u8 *data() const noexcept { return bytes_.data(); }
+        Context *context() const noexcept { return bytes_.context(); }
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
         void clear() noexcept { bytes_.clear(); }
@@ -935,6 +1078,14 @@ namespace protocyte {
                 return Status::error(ErrorCode::invalid_utf8);
             }
             return bytes_.assign(view);
+        }
+
+        Status assign_owned(typename Config::Bytes &&bytes) noexcept {
+            if (!validate_utf8(bytes.view())) {
+                return Status::error(ErrorCode::invalid_utf8);
+            }
+            bytes_ = protocyte::move(bytes);
+            return {};
         }
 
     protected:
@@ -1179,6 +1330,34 @@ namespace protocyte {
         void clear() noexcept {
             for (usize i {}; i < buckets_.size(); ++i) { buckets_[i].reset(); }
             size_ = {};
+        }
+
+        Status copy_from(const HashMap &other) noexcept {
+            if (this == &other) {
+                return {};
+            }
+            clear();
+            if (other.size_ == 0u) {
+                return {};
+            }
+            if (const auto st = reserve(other.size_); !st) {
+                return st;
+            }
+            for (const auto entry : other) {
+                auto copied_key = protocyte::copy_value(ctx_, entry.key);
+                if (!copied_key) {
+                    return copied_key.status();
+                }
+                auto copied_value = protocyte::copy_value(ctx_, entry.value);
+                if (!copied_value) {
+                    return copied_value.status();
+                }
+                if (const auto st = insert_or_assign(protocyte::move(*copied_key), protocyte::move(*copied_value));
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
         }
 
         Status reserve(const usize count) noexcept {
@@ -2129,24 +2308,16 @@ namespace protocyte {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
         typename Config::Bytes temp {&ctx};
-        if (const auto st = temp.assign(ByteView {.data = nullptr, .size = {}}); !st) {
+        if (const auto st = temp.resize(size); !st) {
             return st;
         }
-        typename Config::template Vector<u8> buffer {&ctx};
-        if (const auto st = buffer.reserve(size); !st) {
-            return st;
-        }
+        auto buffer = temp.mutable_view();
         for (usize i {}; i < size; ++i) {
             auto byte = reader.read_byte();
             if (!byte) {
                 return byte.status();
             }
-            if (const auto st = buffer.push_back(*byte); !st) {
-                return st;
-            }
-        }
-        if (const auto st = temp.assign(ByteView {.data = buffer.data(), .size = buffer.size()}); !st) {
-            return st;
+            buffer.data[i] = *byte;
         }
         out = protocyte::move(temp);
         return {};
@@ -2176,21 +2347,20 @@ namespace protocyte {
         if (size > ctx.limits.max_string_bytes) {
             return Status::error(ErrorCode::size_limit, reader.position());
         }
-        typename Config::template Vector<u8> buffer {&ctx};
-        if (const auto st = buffer.reserve(size); !st) {
+        typename Config::Bytes buffer {&ctx};
+        if (const auto st = buffer.resize(size); !st) {
             return st;
         }
+        auto bytes = buffer.mutable_view();
         for (usize i {}; i < size; ++i) {
             auto byte = reader.read_byte();
             if (!byte) {
                 return byte.status();
             }
-            if (const auto st = buffer.push_back(*byte); !st) {
-                return st;
-            }
+            bytes.data[i] = *byte;
         }
         typename Config::String temp {&ctx};
-        if (const auto st = temp.assign(ByteView {.data = buffer.data(), .size = buffer.size()}); !st) {
+        if (const auto st = temp.assign_owned(protocyte::move(buffer)); !st) {
             return st;
         }
         out = protocyte::move(temp);
