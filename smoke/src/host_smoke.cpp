@@ -293,6 +293,27 @@ namespace {
         }
     };
 
+    struct MoveOnlyMember {
+        int value {};
+
+        explicit MoveOnlyMember(const int current) noexcept: value {current} {}
+        MoveOnlyMember(const MoveOnlyMember &) = delete;
+        MoveOnlyMember &operator=(const MoveOnlyMember &) = delete;
+        MoveOnlyMember(MoveOnlyMember &&) noexcept = default;
+        MoveOnlyMember &operator=(MoveOnlyMember &&) noexcept = default;
+    };
+
+    struct MoveOnlyMemberProbe {
+        MoveOnlyMember child;
+
+        explicit MoveOnlyMemberProbe(const int current) noexcept: child {current} {}
+    };
+
+    struct ErrorMemberProbe {
+        protocyte::u32 code {};
+        protocyte::usize offset {};
+    };
+
     struct TrackedPayload {
         inline static int copies = 0;
         inline static int moves = 0;
@@ -330,6 +351,10 @@ namespace {
 
     template<class T>
     concept CanCallUnexpected = requires(T &&value) { protocyte::unexpected(protocyte::forward<T>(value)); };
+
+    template<class T>
+    concept CanTransformMoveOnlyMember =
+        requires(T &&value) { protocyte::forward<T>(value).transform(&MoveOnlyMemberProbe::child); };
 
     std::string hex_of(std::string_view bytes) {
         static constexpr char hex_digits[] = "0123456789abcdef";
@@ -1931,6 +1956,12 @@ TEST_CASE("monadic runtime operations compose for status, result, and optional",
                 [](const protocyte::Error &error) noexcept { return static_cast<protocyte::u32>(error.field_number); });
         REQUIRE_FALSE(transformed_error);
         CHECK(transformed_error.error() == 2u);
+
+        auto member_error =
+            protocyte::Status {protocyte::unexpected(protocyte::ErrorCode::invalid_argument, 12u, 7u)}.transform_error(
+                &protocyte::Error::offset);
+        REQUIRE_FALSE(member_error);
+        CHECK(member_error.error() == 12u);
     }
 
     SECTION("Result<T> supports expected-style chaining") {
@@ -2044,6 +2075,10 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                      protocyte::Result<int>>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {1}.and_then(ResultAndThenQualifier {})),
                                      protocyte::Result<int>>);
+        static_assert(!CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &>);
+        static_assert(!CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &>);
+        static_assert(CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &&>);
+        static_assert(!CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &&>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {
                                          protocyte::unexpected(protocyte::ErrorCode::invalid_argument)}
                                                   .or_else(ResultErrorQualifier {})),
@@ -2142,6 +2177,17 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         CHECK(*member_pointer_transform == 9);
         CHECK(*member_function_transform == 16);
         CHECK(*member_function_chain == 13);
+
+        auto move_only_member =
+            protocyte::Result<MoveOnlyMemberProbe> {MoveOnlyMemberProbe {31}}.transform(&MoveOnlyMemberProbe::child);
+        require_success(move_only_member);
+        CHECK(move_only_member->value == 31);
+
+        auto error_member_transform =
+            protocyte::Result<int, ErrorMemberProbe> {protocyte::unexpected(ErrorMemberProbe {19u, 23u})}
+                .transform_error(&ErrorMemberProbe::code);
+        REQUIRE_FALSE(error_member_transform);
+        CHECK(error_member_transform.error() == 19u);
     }
 
     SECTION("Optional monadic overloads follow value category and stay lazy") {
@@ -2149,6 +2195,10 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                      protocyte::Optional<int>>);
         static_assert(std::is_same_v<decltype(protocyte::Optional<int> {}.and_then(OptionalAndThenQualifier {})),
                                      protocyte::Optional<int>>);
+        static_assert(!CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &>);
+        static_assert(!CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &>);
+        static_assert(CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &&>);
+        static_assert(!CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &&>);
 
         protocyte::Optional<int> lvalue {};
         require_success(lvalue.emplace(10));
@@ -2237,6 +2287,16 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         CHECK(*member_object_transform == 6);
         CHECK(*member_function_transform == 12);
         CHECK(*member_function_chain == 10);
+
+        auto move_only_member =
+            []() noexcept {
+                protocyte::Optional<MoveOnlyMemberProbe> out {};
+                (void) out.emplace(43);
+                return out;
+            }()
+                .transform(&MoveOnlyMemberProbe::child);
+        REQUIRE(move_only_member);
+        CHECK(move_only_member->value == 43);
     }
 }
 
