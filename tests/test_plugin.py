@@ -43,6 +43,44 @@ def test_runtime_files_load_packaged_sources() -> None:
     assert files["protocyte/runtime/runtime.hpp"].startswith("#pragma once\n")
 
 
+def test_runtime_rejects_unmatched_end_group_in_skip_field() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+
+    assert (
+        "case WireType::EGROUP:\n"
+        "                return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);"
+    ) in runtime_header
+    assert "case WireType::EGROUP: return {};" not in runtime_header
+
+
+def test_runtime_container_growth_checks_capacity_limits() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+
+    assert (
+        "static constexpr usize max_size() noexcept { return static_cast<usize>(~static_cast<usize>(0u)) / sizeof(T); }"
+        in runtime_header
+    )
+    assert "if (size_ == max_size())" in runtime_header
+    assert "if (const auto st = checked_add(size_, 1u, &requested); !st)" in runtime_header
+    assert (
+        "if (capacity_ > maximum - capacity_ / 2u) {\n"
+        "                return maximum;\n"
+        "            }\n"
+        "            const usize geometric {capacity_ + capacity_ / 2u};"
+    ) in runtime_header
+    assert (
+        "static constexpr usize max_size() noexcept { return Config::template Vector<Bucket>::max_size() / 2u; }"
+        in runtime_header
+    )
+    assert "const usize target {count * 2u};" in runtime_header
+    assert "next_size >= rehash_threshold_for(buckets_.size())" in runtime_header
+    assert "static constexpr usize rehash_threshold_for(const usize bucket_count) noexcept" in runtime_header
+    assert "capacity_ * 2u" not in runtime_header
+    assert "checked_mul(count, 2u, &target)" not in runtime_header
+    assert "(size_ + 1u) * 10u" not in runtime_header
+    assert "buckets_.size() * 7u" not in runtime_header
+
+
 def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
     writer = CppWriter()
     writer.line("root")
@@ -965,6 +1003,25 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 
+def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("recursive_oneof.proto")
+    request.proto_file.append(_recursive_oneof_file())
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "recursive_oneof.protocyte.hpp")
+    ensure_body = header.split("Result<::protocyte::Ref<::demo::Node<Config>>> ensure_child()", maxsplit=1)[1]
+    ensure_body = ensure_body.split("template <typename Reader>", maxsplit=1)[0]
+
+    assert "auto ensured = choice.child.ensure();" in ensure_body
+    assert "if (!ensured) {\n      destroy_at_(&choice.child);\n      return ensured;\n    }" in ensure_body
+    assert ensure_body.index("auto ensured = choice.child.ensure();") < ensure_body.index(
+        "choice_case_ = ChoiceCase::child;"
+    )
+
+
 def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("empty.proto")
@@ -1856,6 +1913,27 @@ def _oneof_file(*, array_bytes: bool = False) -> descriptor_pb2.FileDescriptorPr
         field.type = F.TYPE_BYTES
         field.oneof_index = 0
         field.options.ParseFromString(_array_option_bytes(max_value=8))
+
+    return file
+
+
+def _recursive_oneof_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "recursive_oneof.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Node"
+    message.oneof_decl.add().name = "choice"
+
+    field = message.field.add()
+    field.name = "child"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Node"
+    field.oneof_index = 0
 
     return file
 

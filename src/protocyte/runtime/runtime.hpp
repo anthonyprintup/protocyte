@@ -1636,6 +1636,7 @@ namespace protocyte {
         ~Vector() noexcept { destroy(); }
 
         void bind(Context *ctx) noexcept { ctx_ = ctx; }
+        static constexpr usize max_size() noexcept { return static_cast<usize>(~static_cast<usize>(0u)) / sizeof(T); }
         usize size() const noexcept { return size_; }
         usize capacity() const noexcept { return capacity_; }
         bool empty() const noexcept { return !size_; }
@@ -1665,6 +1666,9 @@ namespace protocyte {
             if (requested <= capacity_) {
                 return {};
             }
+            if (requested > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
             if (ctx_ == nullptr) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
@@ -1691,8 +1695,18 @@ namespace protocyte {
 
         template<class... Args> Result<Ref<T>> emplace_back(Args &&...args) noexcept {
             if (size_ == capacity_) {
-                const usize next_capacity = !capacity_ ? 4u : capacity_ * 2u;
-                if (const auto st = reserve(next_capacity); !st) {
+                if (size_ == max_size()) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                usize requested {};
+                if (const auto st = checked_add(size_, 1u, &requested); !st) {
+                    return protocyte::unexpected(st.error());
+                }
+                const auto next_capacity = growth_capacity_for(requested);
+                if (!next_capacity) {
+                    return protocyte::unexpected(next_capacity.error());
+                }
+                if (const auto st = reserve(*next_capacity); !st) {
                     return protocyte::unexpected(st.error());
                 }
             }
@@ -1745,6 +1759,21 @@ namespace protocyte {
         }
 
     protected:
+        Result<usize> growth_capacity_for(const usize requested) const noexcept {
+            const usize maximum {max_size()};
+            if (requested > maximum) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            if (!requested) {
+                return usize {};
+            }
+            if (capacity_ > maximum - capacity_ / 2u) {
+                return maximum;
+            }
+            const usize geometric {capacity_ + capacity_ / 2u};
+            return geometric < requested ? requested : geometric;
+        }
+
         void destroy() noexcept {
             clear();
             if (data_ != nullptr && ctx_ != nullptr) {
@@ -2341,6 +2370,7 @@ namespace protocyte {
         HashMap &operator=(const HashMap &) = delete;
 
         usize size() const noexcept { return size_; }
+        static constexpr usize max_size() noexcept { return Config::template Vector<Bucket>::max_size() / 2u; }
         bool empty() const noexcept { return !size_; }
         iterator begin() noexcept { return iterator {buckets_.begin(), buckets_.end()}; }
         const_iterator begin() const noexcept { return const_iterator {buckets_.begin(), buckets_.end()}; }
@@ -2382,8 +2412,17 @@ namespace protocyte {
         }
 
         Status reserve(const usize count) noexcept {
+            if (count > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
             usize desired {8u};
-            while (desired < count * 2u) { desired *= 2u; }
+            const usize target {count * 2u};
+            while (desired < target) {
+                if (desired > Config::template Vector<Bucket>::max_size() / 2u) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                desired *= 2u;
+            }
             if (desired <= buckets_.size()) {
                 return {};
             }
@@ -2437,10 +2476,22 @@ namespace protocyte {
 
     protected:
         Status ensure_capacity_for_one_more() noexcept {
-            if (!buckets_.size() || ((size_ + 1u) * 10u) >= buckets_.size() * 7u) {
-                return reserve(size_ + 1u);
+            usize next_size {};
+            if (const auto st = checked_add(size_, 1u, &next_size); !st) {
+                return st;
+            }
+            if (next_size > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            if (!buckets_.size() || next_size >= rehash_threshold_for(buckets_.size())) {
+                return reserve(next_size);
             }
             return {};
+        }
+
+        static constexpr usize rehash_threshold_for(const usize bucket_count) noexcept {
+            const usize unused = (bucket_count / 10u) * 3u + ((bucket_count % 10u) * 3u) / 10u;
+            return bucket_count - unused;
         }
 
         Context *ctx_ {};
@@ -3225,7 +3276,8 @@ namespace protocyte {
                     [&reader](const usize len) noexcept -> Status { return reader.skip(len); });
             }
             case WireType::SGROUP: return skip_group(reader, field_number);
-            case WireType::EGROUP: return {};
+            case WireType::EGROUP:
+                return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);
             case WireType::I32: return reader.skip(4u);
             default: return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);
         }
@@ -3247,7 +3299,8 @@ namespace protocyte {
                 return reader.skip(*len);
             }
             case WireType::SGROUP: return skip_group<Config>(ctx, reader, field_number);
-            case WireType::EGROUP: return {};
+            case WireType::EGROUP:
+                return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);
             case WireType::I32: return reader.skip(4u);
             default: return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);
         }

@@ -813,32 +813,41 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         )
         w.line(f"::protocyte::Result<::protocyte::Ref<{typ}>> ensure_{item.cpp_name}() noexcept {{")
         w.push()
-        w.line(f"if (!has_{item.cpp_name}()) {{")
-        w.push()
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
         if item.recursive_box:
-            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
-        else:
-            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
-        w.pop()
-        w.line("}")
-        w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-        if item.recursive_box:
-            w.line(f"auto ensured = {_member(item)}.ensure();")
-            w.line("if (!ensured) { return ensured; }")
-        else:
-            w.line(f"if ({_member(item)}.has_value()) {{")
+            w.line(f"if (has_{item.cpp_name}()) {{")
             w.push()
             w.line(f"return ::protocyte::Ref<{typ}>{{*{_member(item)}}};")
             w.pop()
             w.line("}")
-            w.line(
-                f"return {_member(item)}.emplace(*ctx_).transform([this]() noexcept -> ::protocyte::Ref<{typ}> {{ return ::protocyte::Ref<{typ}>{{*{_member(item)}}}; }});"
-            )
+            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
+            w.line(f"auto ensured = {_member(item)}.ensure();")
+            w.line("if (!ensured) {")
+            w.push()
+            w.line(f"destroy_at_(&{_member(item)});")
+            w.line("return ensured;")
+            w.pop()
+            w.line("}")
+            w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+            w.line("return ensured;")
             w.pop()
             w.line("}")
             return
+        w.line(f"if (!has_{item.cpp_name}()) {{")
+        w.push()
+        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
+        w.pop()
+        w.line("}")
+        w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+        w.line(f"if ({_member(item)}.has_value()) {{")
+        w.push()
         w.line(f"return ::protocyte::Ref<{typ}>{{*{_member(item)}}};")
+        w.pop()
+        w.line("}")
+        w.line(
+            f"return {_member(item)}.emplace(*ctx_).transform([this]() noexcept -> ::protocyte::Ref<{typ}> {{ return ::protocyte::Ref<{typ}>{{*{_member(item)}}}; }});"
+        )
         w.pop()
         w.line("}")
         return
