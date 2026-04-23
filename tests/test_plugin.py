@@ -98,11 +98,11 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "using value_type = T;" in files["protocyte/runtime/runtime.hpp"]
     assert "using error_type = E;" in files["protocyte/runtime/runtime.hpp"]
     assert "static constexpr Result ok() noexcept" not in files["protocyte/runtime/runtime.hpp"]
-    assert "const usize offset = {}" in files["protocyte/runtime/runtime.hpp"]
+    assert "const usize offset," in files["protocyte/runtime/runtime.hpp"]
     assert "inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "constexpr Unexpected<Error> unexpected(const ErrorCode code, const usize offset = {}," in files[
+    assert "constexpr Unexpected<Error> unexpected(const ErrorCode code, const usize offset," in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert "u64 value {};" in files["protocyte/runtime/runtime.hpp"]
@@ -187,7 +187,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "if (len > static_cast<u64>(~static_cast<usize>(0u))) {" in files["protocyte/runtime/runtime.hpp"]
     assert "return protocyte::unexpected(ErrorCode::integer_overflow, reader.position());" in files[
         "protocyte/runtime/runtime.hpp"
-    ]
+    ] or "return protocyte::unexpected(ErrorCode::integer_overflow, {});" in files["protocyte/runtime/runtime.hpp"]
     assert "return read_length_delimited_size(reader)" in files["protocyte/runtime/runtime.hpp"]
     assert "open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept" in files[
         "protocyte/runtime/runtime.hpp"

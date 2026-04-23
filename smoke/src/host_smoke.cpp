@@ -2035,10 +2035,17 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                          protocyte::unexpected(protocyte::ErrorCode::invalid_argument)}
                                                   .transform_error(ResultTransformErrorQualifier {})),
                                      ResultU32>);
+        static_assert(std::is_same_v<decltype(protocyte::unexpected(protocyte::ErrorCode::invalid_argument)),
+                                     protocyte::Unexpected<protocyte::ErrorCode>>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {7}.status()), protocyte::Status>);
         static_assert(
             std::is_same_v<decltype(protocyte::Result<int, protocyte::u32> {protocyte::unexpected(9u)}.status()),
                            protocyte::Result<void, protocyte::u32>>);
+
+        auto custom_error_result = protocyte::Result<int, protocyte::ErrorCode> {
+            protocyte::unexpected(protocyte::ErrorCode::invalid_argument)};
+        REQUIRE_FALSE(custom_error_result);
+        CHECK(custom_error_result.error() == protocyte::ErrorCode::invalid_argument);
 
         protocyte::Result<int> lvalue {10};
         const protocyte::Result<int> const_lvalue {10};

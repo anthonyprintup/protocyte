@@ -2287,7 +2287,7 @@ namespace test::ultimate {
         }
         ::protocyte::Status set_oneof_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
@@ -2324,7 +2324,7 @@ namespace test::ultimate {
         }
         ::protocyte::Status set_crazy_bounded_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
@@ -2345,7 +2345,7 @@ namespace test::ultimate {
         }
         ::protocyte::Status set_crazy_fixed_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             ::protocyte::FixedByteArray<BYTE_ARRAY_CAP> temp {};
             if (const auto st = temp.assign(value); !st) {
@@ -2585,7 +2585,7 @@ namespace test::ultimate {
         }
         ::protocyte::Status set_sha256(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             return sha256_.assign(value);
         }
@@ -2604,7 +2604,7 @@ namespace test::ultimate {
         static constexpr ::protocyte::usize byte_array_max_size() noexcept { return BYTE_ARRAY_CAP; }
         ::protocyte::Status resize_byte_array(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = byte_array_.resize(size); !st) {
                 return st;
@@ -2614,7 +2614,7 @@ namespace test::ultimate {
         ::protocyte::MutableByteView mutable_byte_array() noexcept { return byte_array_.mutable_view(); }
         ::protocyte::Status set_byte_array(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = byte_array_.assign(value); !st) {
                 return st;
@@ -2636,7 +2636,7 @@ namespace test::ultimate {
         static constexpr ::protocyte::usize float_expr_array_max_size() noexcept { return FLOATISH_BOUND; }
         ::protocyte::Status resize_float_expr_array(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = float_expr_array_.resize(size); !st) {
                 return st;
@@ -2646,7 +2646,7 @@ namespace test::ultimate {
         ::protocyte::MutableByteView mutable_float_expr_array() noexcept { return float_expr_array_.mutable_view(); }
         ::protocyte::Status set_float_expr_array(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = float_expr_array_.assign(value); !st) {
                 return st;
@@ -5628,7 +5628,7 @@ namespace test::ultimate {
         static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return EXTERNAL_CAP; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
@@ -5638,7 +5638,7 @@ namespace test::ultimate {
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         ::protocyte::Status set_nested_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = nested_bytes_.assign(value); !st) {
                 return st;
@@ -5797,7 +5797,7 @@ namespace test::ultimate {
         static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return BYTE_ARRAY_CAP + 2u; }
         ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = external_bytes_.resize(size); !st) {
                 return st;
@@ -5807,7 +5807,7 @@ namespace test::ultimate {
         ::protocyte::MutableByteView mutable_external_bytes() noexcept { return external_bytes_.mutable_view(); }
         ::protocyte::Status set_external_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = external_bytes_.assign(value); !st) {
                 return st;

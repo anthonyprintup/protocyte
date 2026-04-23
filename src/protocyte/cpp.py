@@ -668,7 +668,7 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line("}")
         w.line(f"::protocyte::Status set_{item.cpp_name}(const ::protocyte::ByteView value) noexcept {{")
         w.push()
-        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit); }")
+        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         w.line(f"return {_member(item)}.assign(value);")
         w.pop()
         w.line("}")
@@ -683,9 +683,9 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"static constexpr ::protocyte::usize {item.cpp_name}_max_size() noexcept {{ return {bound}; }}")
         w.line(f"::protocyte::Status resize_{item.cpp_name}(const ::protocyte::usize size) noexcept {{")
         w.push()
-        w.line("if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit); }")
+        w.line("if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         if item.array_fixed:
-            w.line(f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument); }}")
+            w.line(f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
         w.line(f"if (const auto st = {_member(item)}.resize(size); !st) {{ return st; }}")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
@@ -708,9 +708,9 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line("}")
         w.line(f"::protocyte::Status set_{item.cpp_name}(const ::protocyte::ByteView value) noexcept {{")
         w.push()
-        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit); }")
+        w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         if item.array_fixed:
-            w.line(f"if (value.size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument); }}")
+            w.line(f"if (value.size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
         w.line(f"if (const auto st = {_member(item)}.assign(value); !st) {{ return st; }}")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
@@ -796,7 +796,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         w.line(f"::protocyte::Status set_{item.cpp_name}(const ::protocyte::ByteView value) noexcept {{")
         w.push()
         if item.kind == "bytes" and item.array_enabled:
-            w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit); }")
+            w.line("if (value.size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
             w.line(f"{_storage_type(item, options)} temp{{}};")
         else:
             w.line(f"{typ} temp{{ctx_}};")

@@ -187,7 +187,7 @@ namespace protocyte {
         return Unexpected<::std::remove_cvref_t<E>> {protocyte::forward<E>(error_value)};
     }
 
-    constexpr Unexpected<Error> unexpected(const ErrorCode code, const usize offset = {},
+    constexpr Unexpected<Error> unexpected(const ErrorCode code, const usize offset,
                                            const u32 field_number = {}) noexcept {
         return Error {.code = code, .offset = offset, .field_number = field_number};
     }
@@ -1056,7 +1056,7 @@ namespace protocyte {
     inline Status checked_add(const usize lhs, const usize rhs, usize *out) noexcept {
         const auto value = lhs + rhs;
         if (value < lhs) {
-            return protocyte::unexpected(ErrorCode::integer_overflow);
+            return protocyte::unexpected(ErrorCode::integer_overflow, {});
         }
         *out = value;
         return {};
@@ -1064,7 +1064,7 @@ namespace protocyte {
 
     inline Status checked_mul(const usize lhs, const usize rhs, usize *out) noexcept {
         if (lhs != 0u && rhs > static_cast<usize>(~static_cast<usize>(0u)) / lhs) {
-            return protocyte::unexpected(ErrorCode::integer_overflow);
+            return protocyte::unexpected(ErrorCode::integer_overflow, {});
         }
         *out = lhs * rhs;
         return {};
@@ -1102,7 +1102,7 @@ namespace protocyte {
             } else {
                 static_assert(AlwaysFalse<T>::value,
                               "protocyte copy_value requires a default or pointer-context constructor");
-                return protocyte::unexpected(ErrorCode::invalid_argument);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
         } else if constexpr (requires(T &out, const T &src) { out.copy_from(src); }) {
             Context *copy_ctx {ctx};
@@ -1113,7 +1113,7 @@ namespace protocyte {
             }
             if constexpr (requires(Context &value_ctx) { T {value_ctx}; }) {
                 if (copy_ctx == nullptr) {
-                    return protocyte::unexpected(ErrorCode::invalid_argument);
+                    return protocyte::unexpected(ErrorCode::invalid_argument, {});
                 }
                 T copied {*copy_ctx};
                 return copied.copy_from(value).transform([&copied]() noexcept -> T { return protocyte::move(copied); });
@@ -1125,11 +1125,11 @@ namespace protocyte {
                 return copied.copy_from(value).transform([&copied]() noexcept -> T { return protocyte::move(copied); });
             } else {
                 static_assert(AlwaysFalse<T>::value, "protocyte copy_value requires a default or context constructor");
-                return protocyte::unexpected(ErrorCode::invalid_argument);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
         } else {
             static_assert(AlwaysFalse<T>::value, "protocyte copy_value does not support this type");
-            return protocyte::unexpected(ErrorCode::invalid_argument);
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
     }
 
@@ -1149,7 +1149,7 @@ namespace protocyte {
         } else {
             static_assert(AlwaysFalse<T>::value,
                           "protocyte copy_value without context requires a copy constructor or default constructor");
-            return protocyte::unexpected(ErrorCode::invalid_argument);
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
     }
 
@@ -1494,7 +1494,7 @@ namespace protocyte {
                 return {};
             }
             if (ctx_ == nullptr) {
-                return protocyte::unexpected(ErrorCode::invalid_argument);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
             usize bytes {};
             if (const auto st = checked_mul(requested, sizeof(T), &bytes); !st) {
@@ -1502,7 +1502,7 @@ namespace protocyte {
             }
             auto *raw = Config::allocate(*ctx_, bytes, alignof(T));
             if (raw == nullptr) {
-                return protocyte::unexpected(ErrorCode::no_memory);
+                return protocyte::unexpected(ErrorCode::no_memory, {});
             }
             auto *next = static_cast<T *>(raw);
             for (usize i {}; i < size_; ++i) {
@@ -1645,7 +1645,7 @@ namespace protocyte {
 
         template<class... Args> Result<Ref<T>> emplace_back(Args &&...args) noexcept {
             if (size_ >= Max) {
-                return protocyte::unexpected(ErrorCode::count_limit);
+                return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             new (ptr(size_)) T {protocyte::forward<Args>(args)...};
             Ref<T> ref {*ptr(size_)};
@@ -1730,7 +1730,7 @@ namespace protocyte {
 
         Status resize(const usize count) noexcept {
             if (count > Max) {
-                return protocyte::unexpected(ErrorCode::count_limit);
+                return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             if (count > size_) {
                 for (usize i {size_}; i < count; ++i) { bytes_[i] = 0u; }
@@ -1741,7 +1741,7 @@ namespace protocyte {
 
         Status assign(const ByteView view) noexcept {
             if (view.size > Max) {
-                return protocyte::unexpected(ErrorCode::count_limit);
+                return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             copy_bytes(bytes_, view.data, view.size);
             size_ = view.size;
@@ -1811,7 +1811,7 @@ namespace protocyte {
 
         Status assign(const ByteView view) noexcept {
             if (view.size != Max) {
-                return protocyte::unexpected(ErrorCode::invalid_argument);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
             copy_bytes(bytes_, view.data, Max);
             has_ = true;
@@ -1867,14 +1867,14 @@ namespace protocyte {
         }
         Status resize(const usize count) noexcept {
             if (ctx_ != nullptr && count > ctx_->limits.max_string_bytes) {
-                return protocyte::unexpected(ErrorCode::size_limit);
+                return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             return bytes_.resize_default(count);
         }
 
         Status assign(const ByteView view) noexcept {
             if (ctx_ != nullptr && view.size > ctx_->limits.max_string_bytes) {
-                return protocyte::unexpected(ErrorCode::size_limit);
+                return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             Bytes temp {ctx_};
             if (const auto st = temp.resize(view.size); !st) {
@@ -1924,14 +1924,14 @@ namespace protocyte {
 
         Status assign(const ByteView view) noexcept {
             if (!validate_utf8(view)) {
-                return protocyte::unexpected(ErrorCode::invalid_utf8);
+                return protocyte::unexpected(ErrorCode::invalid_utf8, {});
             }
             return bytes_.assign(view);
         }
 
         Status assign_owned(typename Config::Bytes &&bytes) noexcept {
             if (!validate_utf8(bytes.view())) {
-                return protocyte::unexpected(ErrorCode::invalid_utf8);
+                return protocyte::unexpected(ErrorCode::invalid_utf8, {});
             }
             bytes_ = protocyte::move(bytes);
             return {};
@@ -2019,11 +2019,11 @@ namespace protocyte {
                 return Ref<T> {*ptr_};
             }
             if (ctx_ == nullptr) {
-                return protocyte::unexpected(ErrorCode::invalid_argument);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
             auto *raw = Config::allocate(*ctx_, sizeof(T), alignof(T));
             if (raw == nullptr) {
-                return protocyte::unexpected(ErrorCode::no_memory);
+                return protocyte::unexpected(ErrorCode::no_memory, {});
             }
             ptr_ = new (raw) T {*ctx_};
             return Ref<T> {*ptr_};

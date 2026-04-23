@@ -61,7 +61,7 @@ namespace test::crosspkg {
         static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return MIRRORED_COUNT; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
@@ -71,7 +71,7 @@ namespace test::crosspkg {
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         ::protocyte::Status set_nested_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = nested_bytes_.assign(value); !st) {
                 return st;
@@ -231,7 +231,7 @@ namespace test::crosspkg {
         static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 8u + 1u; }
         ::protocyte::Status resize_remote_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = remote_bytes_.resize(size); !st) {
                 return st;
@@ -241,7 +241,7 @@ namespace test::crosspkg {
         ::protocyte::MutableByteView mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
         ::protocyte::Status set_remote_bytes(const ::protocyte::ByteView value) noexcept {
             if (value.size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit);
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = remote_bytes_.assign(value); !st) {
                 return st;
