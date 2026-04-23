@@ -558,7 +558,7 @@ class _ExprParser:
                     )
                 else:
                     value = _numeric_value(
-                        int(lhs_value / rhs_value),
+                        _truncating_integer_divide(int(lhs_value), int(rhs_value)),
                         cpp_expr=_binary_cpp(value, rhs, "/", 60),
                         cpp_precedence=60,
                     )
@@ -877,6 +877,7 @@ def _fill_message_details(
             oneof_fields[field_model.oneof_index].fields.append(field_model)
 
     message.oneofs = [oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields]
+    _validate_field_collisions(message)
     if files[message.file_name].syntax == "proto3":
         for field_model in message.fields:
             if field_model.kind in {"message", "enum"}:
@@ -998,6 +999,60 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
             if constant.cpp_name in reserved:
                 raise ProtocyteError(f"{constant.full_name}: constant collides with generated API")
             cpp_names.add(constant.cpp_name)
+
+
+def _validate_field_collisions(message: MessageModel) -> None:
+    if message.is_map_entry:
+        return
+    seen_cpp_names: dict[str, str] = {}
+    seen_generated_names: dict[str, str] = {}
+    reserved = {
+        "Context",
+        "RuntimeStatus",
+        "FieldNumber",
+        "create",
+        "clone",
+        "copy_from",
+        "parse",
+        "merge_from",
+        "serialize",
+        "encoded_size",
+    }
+    reserved.update(enum.name for enum in message.nested_enums)
+    reserved.update(nested.name for nested in message.nested_messages if not nested.is_map_entry)
+    reserved.update(constant.cpp_name for constant in message.constants)
+    reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
+    reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
+
+    for field_model in message.fields:
+        if not field_model.cpp_name or field_model.cpp_name == "_":
+            raise ProtocyteError(f"{message.full_name}.{field_model.name}: field name is not a valid C++ identifier")
+        if field_model.cpp_name in seen_cpp_names:
+            first = seen_cpp_names[field_model.cpp_name]
+            raise ProtocyteError(
+                f"{message.full_name}.{field_model.name}: field collides with {first!r} after C++ identifier normalization"
+            )
+        generated_names = {
+            field_model.cpp_name,
+            f"clear_{field_model.cpp_name}",
+            f"set_{field_model.cpp_name}",
+            f"mutable_{field_model.cpp_name}",
+            f"has_{field_model.cpp_name}",
+            f"ensure_{field_model.cpp_name}",
+            f"{field_model.cpp_name}_raw",
+            f"set_{field_model.cpp_name}_raw",
+        }
+        if generated_names & reserved:
+            raise ProtocyteError(f"{message.full_name}.{field_model.name}: field collides with generated API")
+        for generated_name in generated_names:
+            if generated_name in seen_generated_names:
+                first = seen_generated_names[generated_name]
+                raise ProtocyteError(
+                    f"{message.full_name}.{field_model.name}: field generated API collides with {first!r}"
+                )
+        seen_cpp_names[field_model.cpp_name] = field_model.name
+        for generated_name in generated_names:
+            seen_generated_names[generated_name] = field_model.name
 
 
 def _build_field(
@@ -1508,6 +1563,11 @@ def _expect_numeric(value: _TypedValue, label: str) -> int | float:
     return value.value  # type: ignore[return-value]
 
 
+def _truncating_integer_divide(lhs: int, rhs: int) -> int:
+    quotient = abs(lhs) // abs(rhs)
+    return -quotient if (lhs < 0) != (rhs < 0) else quotient
+
+
 def _numeric_operands(lhs: _TypedValue, rhs: _TypedValue, label: str) -> tuple[int | float, int | float, str]:
     left = _expect_numeric(lhs, label)
     right = _expect_numeric(rhs, label)
@@ -1548,7 +1608,8 @@ def _evaluate_function(name: str, args: list[_TypedValue], label: str) -> _Typed
     if name == "len":
         if len(args) != 1 or args[0].family != CONSTANT_KIND_STRING:
             raise ProtocyteError(f"{label}: len() expects one string argument")
-        return _numeric_value(len(str(args[0].value)), cpp_expr=f"{_wrap_cpp(args[0], 100)}.size()")
+        size = len(str(args[0].value))
+        return _numeric_value(size, cpp_expr=_cpp_constant_value(CONSTANT_KIND_UINT32, size))
     if name == "substr":
         if len(args) != 3 or args[0].family != CONSTANT_KIND_STRING:
             raise ProtocyteError(f"{label}: substr() expects string, start, count")

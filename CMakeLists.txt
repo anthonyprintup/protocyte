@@ -17,11 +17,15 @@ string(
 if(NOT PROTOCYTE_VERSION)
     message(FATAL_ERROR "Failed to parse protocyte version from src/protocyte/__init__.py")
 endif()
-string(REGEX MATCH "^([0-9]+\\.[0-9]+\\.[0-9]+)(rc[0-9]+)?$" PROTOCYTE_VERSION_MATCH "${PROTOCYTE_VERSION}")
+string(REGEX MATCH "^([0-9]+\\.[0-9]+\\.([0-9]+))(rc[0-9]+)?$" PROTOCYTE_VERSION_MATCH "${PROTOCYTE_VERSION}")
 if(NOT PROTOCYTE_VERSION_MATCH)
     message(FATAL_ERROR "Unsupported protocyte version format: ${PROTOCYTE_VERSION}")
 endif()
 set(PROTOCYTE_PROJECT_VERSION "${CMAKE_MATCH_1}")
+set(PROTOCYTE_VERSION_IS_PRERELEASE FALSE)
+if(CMAKE_MATCH_3)
+    set(PROTOCYTE_VERSION_IS_PRERELEASE TRUE)
+endif()
 
 project(protocyte VERSION "${PROTOCYTE_PROJECT_VERSION}" LANGUAGES CXX)
 
@@ -103,11 +107,19 @@ configure_package_config_file(
     INSTALL_DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
     NO_CHECK_REQUIRED_COMPONENTS_MACRO
 )
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
-    VERSION "${PROJECT_VERSION}"
-    COMPATIBILITY SameMajorVersion
-)
+if(PROTOCYTE_VERSION_IS_PRERELEASE)
+    configure_file(
+        "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfigVersionPrerelease.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
+        @ONLY
+    )
+else()
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY SameMajorVersion
+    )
+endif()
 
 install(
     TARGETS

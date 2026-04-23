@@ -2145,7 +2145,7 @@ namespace protocyte {
                     }
                     code = (code << 6u) | static_cast<u32>(next & 0x3Fu);
                 }
-                if ((need == 2u && code < 0x800u) || (need == 3u && code < 0x10000u)) {
+                if ((need == 1u && code < 0x80u) || (need == 2u && code < 0x800u) || (need == 3u && code < 0x10000u)) {
                     return false;
                 }
                 if (code > 0x10FFFFu || (code >= 0xD800u && code <= 0xDFFFu)) {
@@ -2671,6 +2671,9 @@ namespace protocyte {
             if (!byte) {
                 return protocyte::unexpected(byte.error());
             }
+            if (i == 9u && (*byte & 0x7Eu) != 0u) {
+                return protocyte::unexpected(ErrorCode::malformed_varint, reader.position());
+            }
             value |= (static_cast<u64>(*byte & 0x7Fu) << shift);
             if ((*byte & 0x80u) == 0u) {
                 return value;
@@ -2942,6 +2945,10 @@ namespace protocyte {
         auto raw = read_varint(reader);
         if (!raw) {
             return protocyte::unexpected(raw.error());
+        }
+        const auto field_number = *raw >> 3u;
+        if (field_number == 0u || field_number > 0x1FFFFFFFu) {
+            return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position());
         }
         return decode_tag(*raw);
     }

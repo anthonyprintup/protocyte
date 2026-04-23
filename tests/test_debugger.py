@@ -47,6 +47,43 @@ class _FakeDebugger:
         return self.interpreter
 
 
+class _FakeLLDBType:
+    def IsValid(self) -> bool:
+        return True
+
+    def GetByteSize(self) -> int:
+        return 16
+
+
+class _FakeLLDBValue:
+    def __init__(self, name: str = "value", *, children: dict[str, "_FakeLLDBValue"] | None = None) -> None:
+        self._name = name
+        self.children = children or {}
+
+    def GetNonSyntheticValue(self):
+        return self
+
+    def CreateValueFromAddress(self, name: str, _address: int, _value_type):
+        return self.children[name]
+
+    def GetChildMemberWithName(self, name: str):
+        return self.children.get(name, _InvalidLLDBValue())
+
+    def IsValid(self) -> bool:
+        return True
+
+    def GetName(self) -> str:
+        return self._name
+
+
+class _InvalidLLDBValue(_FakeLLDBValue):
+    def __init__(self) -> None:
+        super().__init__("<invalid>")
+
+    def IsValid(self) -> bool:
+        return False
+
+
 @pytest.fixture
 def protocyte_lldb_module(monkeypatch: pytest.MonkeyPatch):
     module_path = Path(__file__).resolve().parents[1] / "debugger" / "protocyte_lldb.py"
@@ -88,3 +125,28 @@ def test_lldb_init_module_raises_on_registration_failure(protocyte_lldb_module) 
         r"type category define failed",
     ):
         protocyte_lldb_module.__lldb_init_module(debugger, {})
+
+
+def test_hash_map_provider_reads_optional_entry_bucket_layout(protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch) -> None:
+    key = _FakeLLDBValue("key")
+    value = _FakeLLDBValue("value")
+    renamed = _FakeLLDBValue("alpha =>")
+    entry = _FakeLLDBValue("entry", children={"key": key, "value": value})
+    bucket = _FakeLLDBValue("bucket[0]")
+    root = _FakeLLDBValue("map", children={"bucket[0]": bucket})
+
+    monkeypatch.setattr(protocyte_lldb_module, "_raw_children", lambda value: [])
+    monkeypatch.setattr(protocyte_lldb_module, "_child", lambda value, name: value.GetChildMemberWithName(name))
+    monkeypatch.setattr(protocyte_lldb_module, "_vector_storage", lambda value: ("data", "size", "capacity"))
+    monkeypatch.setattr(protocyte_lldb_module, "_unsigned", lambda value, default=0: 1 if value == "size" else default)
+    monkeypatch.setattr(protocyte_lldb_module, "_pointee_type", lambda value: _FakeLLDBType())
+    monkeypatch.setattr(protocyte_lldb_module, "_pointer_value", lambda value: 0x1000)
+    monkeypatch.setattr(protocyte_lldb_module, "_optional_payload", lambda value, name="value": entry)
+    monkeypatch.setattr(protocyte_lldb_module, "_value_label", lambda value: "alpha")
+    monkeypatch.setattr(protocyte_lldb_module, "_renamed_value", lambda parent, source, name: renamed)
+
+    provider = protocyte_lldb_module.HashMapSyntheticProvider(root, {})
+
+    assert provider.num_children() == 1
+    assert provider.get_child_at_index(0) is renamed
+    assert provider.get_child_index("alpha =>") == 0

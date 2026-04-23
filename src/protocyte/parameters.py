@@ -98,6 +98,9 @@ def _decode_transport_parameter(parameter: str) -> str:
         return parameter
     if len(transport_parts) != 1 or len(parts) != 1:
         raise ProtocyteError("encoded protocyte transport parameter must be the only protocyte parameter")
+    if "=" not in transport_parts[0]:
+        name = transport_parts[0]
+        raise ProtocyteError(f"invalid protocyte parameter {name!r}; expected key=value")
 
     name, encoded = transport_parts[0].split("=", 1)
     return transport_decoders[name](encoded)

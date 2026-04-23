@@ -1434,6 +1434,49 @@ namespace {
             require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
         }
 
+        SECTION("overlong UTF-8 is rejected while parsing") {
+            constexpr uint8_t overlong_utf8[] = {0xc1u, 0xbfu};
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
+                                                 protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, sizeof(overlong_utf8)));
+            require_success(writer.write(overlong_utf8, sizeof(overlong_utf8)));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_utf8);
+        }
+
+        SECTION("overflowing 10-byte varints are rejected") {
+            constexpr uint8_t malformed_varint[] = {
+                0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x02u,
+            };
+
+            protocyte::SliceReader reader(malformed_varint, sizeof(malformed_varint));
+            require_failure(protocyte::read_varint(reader), protocyte::ErrorCode::malformed_varint);
+        }
+
+        SECTION("invalid tag field numbers are rejected") {
+            {
+                constexpr uint8_t zero_field_varint[] = {0x00u, 0x00u};
+
+                Message parsed(ctx);
+                protocyte::SliceReader reader(zero_field_varint, sizeof(zero_field_varint));
+                require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
+            }
+            {
+                uint8_t encoded[128] = {};
+                protocyte::SliceWriter writer(encoded, sizeof(encoded));
+                require_success(protocyte::write_tag(writer, 0x20000000u, protocyte::WireType::VARINT));
+                require_success(protocyte::write_varint(writer, 0u));
+
+                Message parsed(ctx);
+                protocyte::SliceReader reader(encoded, writer.position());
+                require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
+            }
+        }
+
         SECTION("partial fixed arrays are rejected while parsing") {
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));

@@ -7,7 +7,15 @@ from google.protobuf.compiler import plugin_pb2
 
 import protocyte.cpp as protocyte_cpp
 from protocyte.cpp import CppWriter
-from protocyte.model import CONSTANT_KIND_UINT32, ProtocyteError, _build_constants, _build_field, _coerce_literal, build_model
+from protocyte.model import (
+    CONSTANT_KIND_UINT32,
+    ProtocyteError,
+    _ExprParser,
+    _build_constants,
+    _build_field,
+    _coerce_literal,
+    build_model,
+)
 from protocyte.plugin import generate_response
 from protocyte.runtime import runtime_files
 
@@ -508,6 +516,49 @@ def test_model_decodes_constants_and_array_options() -> None:
     assert fields["values"].repeated_array is True
     assert nested_fields["payload"].array_max == 16
     assert nested_fields["payload"].array_cpp_max == "FILE_CAP"
+
+
+def test_rejects_field_cpp_name_collisions() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("field_collision.proto")
+    file = request.proto_file.add()
+    file.name = "field_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    message = file.message_type.add()
+    message.name = "Broken"
+    for number, name in enumerate(("class", "class_"), start=1):
+        field = message.field.add()
+        field.name = name
+        field.number = number
+        field.label = F.LABEL_OPTIONAL
+        field.type = F.TYPE_INT32
+
+    response = generate_response(request)
+
+    assert "field collides with 'class' after C++ identifier normalization" in response.error
+
+
+def test_len_array_expression_emits_numeric_bound() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("len_bound.proto")
+    request.proto_file.extend([_options_file(), _len_bound_file()])
+
+    model = build_model(request)
+    field = model.messages["demo.LenBound"].fields[0]
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert field.array_max == 4
+    assert field.array_cpp_max == "4u"
+    assert not response.error
+    assert "::protocyte::ByteArray<4u> data_;" in files["len_bound.protocyte.hpp"]
+    assert '".size()' not in files["len_bound.protocyte.hpp"]
+
+
+def test_large_integer_division_preserves_precision() -> None:
+    assert _ExprParser("9007199254740993 / 1", lambda name: None, "large").parse().value == 9007199254740993
+    assert _ExprParser("-5 / 2", lambda name: None, "negative").parse().value == -2
 
 
 def test_generated_header_emits_constants_and_array_storage() -> None:
@@ -1507,6 +1558,24 @@ def _array_on_map_file() -> descriptor_pb2.FileDescriptorProto:
     field.type = F.TYPE_MESSAGE
     field.type_name = ".demo.Broken.ItemsEntry"
     field.options.ParseFromString(_array_option_bytes(max_value=4))
+    return file
+
+
+def _len_bound_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "len_bound.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "LenBound"
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr='len("abcd")'))
     return file
 
 
