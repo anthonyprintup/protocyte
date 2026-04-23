@@ -151,6 +151,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     ]
     assert "template<class E> struct Unexpected {" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr auto unexpected(E &&error_value) noexcept(" in files["protocyte/runtime/runtime.hpp"]
+    assert "requires(!UnexpectedType<E>)" in files["protocyte/runtime/runtime.hpp"]
     assert "template<class U = T>" in files["protocyte/runtime/runtime.hpp"]
     assert "Result<void, E> status() const & noexcept" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr auto and_then(F &&f) & noexcept(" in files["protocyte/runtime/runtime.hpp"]

@@ -2037,6 +2037,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                      ResultU32>);
         static_assert(std::is_same_v<decltype(protocyte::unexpected(protocyte::ErrorCode::invalid_argument)),
                                      protocyte::Unexpected<protocyte::ErrorCode>>);
+        static_assert(!requires { protocyte::unexpected(protocyte::unexpected(protocyte::u32 {7u})); });
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {7}.status()), protocyte::Status>);
         static_assert(
             std::is_same_v<decltype(protocyte::Result<int, protocyte::u32> {protocyte::unexpected(9u)}.status()),

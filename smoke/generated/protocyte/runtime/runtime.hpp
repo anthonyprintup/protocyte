@@ -169,7 +169,7 @@ namespace protocyte {
 
         template<class G>
         constexpr Unexpected(G &&error_value) noexcept(noexcept(E {protocyte::forward<G>(error_value)}))
-            requires(!::std::same_as<::std::remove_cvref_t<G>, Unexpected>)
+            requires(!UnexpectedType<G>)
             : error_ {protocyte::forward<G>(error_value)} {}
 
         constexpr E &error() & noexcept { return error_; }
@@ -183,7 +183,9 @@ namespace protocyte {
 
     template<class E>
     constexpr auto unexpected(E &&error_value) noexcept(noexcept(Unexpected<::std::remove_cvref_t<E>> {
-        protocyte::forward<E>(error_value)})) -> Unexpected<::std::remove_cvref_t<E>> {
+        protocyte::forward<E>(error_value)})) -> Unexpected<::std::remove_cvref_t<E>>
+        requires(!UnexpectedType<E>)
+    {
         return Unexpected<::std::remove_cvref_t<E>> {protocyte::forward<E>(error_value)};
     }
 
