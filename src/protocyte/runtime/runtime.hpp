@@ -267,21 +267,21 @@ namespace protocyte {
 
         constexpr Result() noexcept(noexcept(T {}))
             requires(requires { T {}; })
-            : ok_ {true}, value_ {} {}
+            : value_ {}, ok_ {true} {}
 
         template<class U = T> constexpr Result(U &&value) noexcept(noexcept(T {protocyte::forward<U>(value)}))
             requires(!ResultType<U> && !UnexpectedType<U>)
-            : ok_ {true}, value_ {protocyte::forward<U>(value)} {}
+            : value_ {protocyte::forward<U>(value)}, ok_ {true} {}
 
         template<class G>
         constexpr Result(const Unexpected<G> &unexpected_value) noexcept(noexcept(E {unexpected_value.error()}))
             requires(requires(const G &error_value) { E {error_value}; })
-            : ok_ {false}, error_ {unexpected_value.error()} {}
+            : error_ {unexpected_value.error()}, ok_ {false} {}
 
         template<class G> constexpr Result(Unexpected<G> &&unexpected_value) noexcept(noexcept(E {
             protocyte::move(unexpected_value).error()}))
             requires(requires(G &&error_value) { E {protocyte::forward<G>(error_value)}; })
-            : ok_ {false}, error_ {protocyte::move(unexpected_value).error()} {}
+            : error_ {protocyte::move(unexpected_value).error()}, ok_ {false} {}
 
         template<class U, class G>
         constexpr Result(const Result<U, G> &other) noexcept(noexcept(T {*other}) && noexcept(E {other.error()}))
@@ -727,11 +727,11 @@ namespace protocyte {
             }
         }
 
-        bool ok_;
         union {
             T value_;
             E error_;
         };
+        bool ok_;
     };
 
     template<class E> struct Result<void, E> {
@@ -1143,8 +1143,8 @@ namespace protocyte {
             E error_;
         };
 
-        bool ok_ {true};
         Storage storage_;
+        bool ok_ {true};
     };
 
     using Status = Result<void>;
@@ -1598,8 +1598,8 @@ namespace protocyte {
         T *ptr() noexcept { return reinterpret_cast<T *>(&storage_[0]); }
         const T *ptr() const noexcept { return reinterpret_cast<const T *>(&storage_[0]); }
 
-        bool has_ {};
         alignas(T) unsigned char storage_[sizeof(T)];
+        bool has_ {};
     };
 
     template<class T, class Config> struct Vector {

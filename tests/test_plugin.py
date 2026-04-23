@@ -81,6 +81,38 @@ def test_runtime_container_growth_checks_capacity_limits() -> None:
     assert "buckets_.size() * 7u" not in runtime_header
 
 
+def test_runtime_discriminators_follow_payload_storage() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+
+    result_body = runtime_header.split("template<class T, class E = Error> struct Result {", maxsplit=1)[1].split(
+        "template<class E> struct Result<void, E> {", maxsplit=1
+    )[0]
+    result_storage = result_body.split("protected:", maxsplit=1)[1]
+    assert ": value_ {}, ok_ {true}" in result_body
+    assert ": error_ {unexpected_value.error()}, ok_ {false}" in result_body
+    assert result_storage.index("union {\n            T value_;") < result_storage.index("bool ok_;")
+
+    void_result_body = runtime_header.split("template<class E> struct Result<void, E> {", maxsplit=1)[1].split(
+        "using Status = Result<void>;", maxsplit=1
+    )[0]
+    void_result_storage = void_result_body.split("protected:", maxsplit=1)[1]
+    assert void_result_storage.index("Storage storage_;") < void_result_storage.index("bool ok_ {true};")
+
+    optional_body = runtime_header.split("template<class T> struct Optional {", maxsplit=1)[1].split(
+        "template<class T, class Config> struct Vector {", maxsplit=1
+    )[0]
+    optional_storage = optional_body.split("protected:", maxsplit=1)[1]
+    assert optional_storage.index("alignas(T) unsigned char storage_[sizeof(T)];") < optional_storage.index(
+        "bool has_ {};"
+    )
+
+    fixed_bytes_body = runtime_header.split("template<usize Max> struct FixedByteArray {", maxsplit=1)[1].split(
+        "template<class Config> struct Bytes {", maxsplit=1
+    )[0]
+    fixed_bytes_storage = fixed_bytes_body.split("protected:", maxsplit=1)[1]
+    assert fixed_bytes_storage.index("u8 bytes_[Max];") < fixed_bytes_storage.index("bool has_ {};")
+
+
 def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
     writer = CppWriter()
     writer.line("root")
