@@ -644,7 +644,7 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
     assert "return has_recursive_self() ? recursive_self_.operator->() : nullptr;" in header
     assert "static_cast<::protocyte::u32>(FieldNumber::recursive_self), *recursive_self_" in header
-    assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP" in header
+    assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u" in header
     assert "fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u" in header
     assert (
         "for (const auto &packed_value_remote_values : remote_values_) {\n"
