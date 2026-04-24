@@ -7,6 +7,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <new>
 #include <type_traits>
 
@@ -1195,16 +1196,157 @@ namespace protocyte {
         constexpr bool empty() const noexcept { return size == 0u; }
     };
 
+    template<class T> using ContiguousRangeDataPointer = decltype(protocyte::declval<const T &>().data());
+    template<class T> using ContiguousRangeBeginPointer = decltype(protocyte::declval<const T &>().begin());
+    template<class T> using ContiguousRangeEndPointer = decltype(protocyte::declval<const T &>().end());
+
+    template<class T>
+    concept DataSizeContiguousRange = requires(const T &value) {
+        { value.data() };
+        { value.size() } -> ::std::convertible_to<usize>;
+    } && ::std::is_pointer_v<ContiguousRangeDataPointer<T>> && requires {
+        sizeof(::std::remove_pointer_t<ContiguousRangeDataPointer<T>>);
+    };
+
+    template<class T>
+    concept PointerContiguousRange =
+        requires(const T &value) {
+            { value.begin() };
+            { value.end() };
+        } && ::std::is_pointer_v<ContiguousRangeBeginPointer<T>> && ::std::is_pointer_v<ContiguousRangeEndPointer<T>> &&
+        ::std::same_as<::std::remove_cv_t<::std::remove_pointer_t<ContiguousRangeBeginPointer<T>>>,
+                       ::std::remove_cv_t<::std::remove_pointer_t<ContiguousRangeEndPointer<T>>>> &&
+        requires { sizeof(::std::remove_pointer_t<ContiguousRangeBeginPointer<T>>); };
+
+    template<class T>
+    concept ContiguousRange = DataSizeContiguousRange<T> || PointerContiguousRange<T>;
+
+    template<class T> struct ContiguousRangeTraits {};
+
+    template<DataSizeContiguousRange T> struct ContiguousRangeTraits<T> {
+        using pointer = ContiguousRangeDataPointer<T>;
+        using element_type = ::std::remove_pointer_t<pointer>;
+    };
+
+    template<PointerContiguousRange T>
+        requires(!DataSizeContiguousRange<T>)
+    struct ContiguousRangeTraits<T> {
+        using pointer = ContiguousRangeBeginPointer<T>;
+        using element_type = ::std::remove_pointer_t<pointer>;
+    };
+
+    template<class T> using ContiguousRangeElement = typename ContiguousRangeTraits<T>::element_type;
+
+    template<class T>
+    concept ByteViewRange = ::std::same_as<::std::remove_cvref_t<T>, ByteView> || ContiguousRange<T>;
+
+    inline Result<usize> checked_add(const usize lhs, const usize rhs) noexcept {
+        const auto value = lhs + rhs;
+        if (value < lhs) {
+            return protocyte::unexpected(ErrorCode::integer_overflow, {});
+        }
+        return value;
+    }
+
+    inline Result<usize> checked_mul(const usize lhs, const usize rhs) noexcept {
+        if (lhs != 0u && rhs > static_cast<usize>(~static_cast<usize>(0u)) / lhs) {
+            return protocyte::unexpected(ErrorCode::integer_overflow, {});
+        }
+        return lhs * rhs;
+    }
+
+    template<class T> constexpr auto contiguous_range_data(const T &value) noexcept
+        requires(ContiguousRange<T>)
+    {
+        if constexpr (DataSizeContiguousRange<T>) {
+            return value.data();
+        } else {
+            return value.begin();
+        }
+    }
+
+    template<class T> Result<usize> contiguous_range_size(const T &value) noexcept
+        requires(ContiguousRange<T>)
+    {
+        if constexpr (PointerContiguousRange<T> && !DataSizeContiguousRange<T>) {
+            const auto *first = value.begin();
+            const auto *last = value.end();
+            if (first == nullptr || last == nullptr) {
+                if (first == last) {
+                    return 0u;
+                }
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            using Element = ::std::remove_pointer_t<ContiguousRangeBeginPointer<T>>;
+            const auto first_addr = reinterpret_cast<uptr>(first);
+            const auto last_addr = reinterpret_cast<uptr>(last);
+            if (last_addr < first_addr) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            const auto byte_count = last_addr - first_addr;
+            if (byte_count % sizeof(Element) != 0u) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            return static_cast<usize>(byte_count / sizeof(Element));
+        } else {
+            const auto count = value.size();
+            using Count = ::std::remove_cvref_t<decltype(count)>;
+            if constexpr (::std::is_integral_v<Count>) {
+                if constexpr (::std::is_signed_v<Count>) {
+                    if (count < 0) {
+                        return protocyte::unexpected(ErrorCode::count_limit, {});
+                    }
+                }
+                if constexpr (sizeof(Count) > sizeof(usize)) {
+                    if (count > static_cast<Count>(static_cast<usize>(~static_cast<usize>(0u)))) {
+                        return protocyte::unexpected(ErrorCode::count_limit, {});
+                    }
+                }
+            }
+            return static_cast<usize>(count);
+        }
+    }
+
+    inline Result<usize> byte_view_size(const ByteView view) noexcept { return view.size; }
+
+    template<class T> Result<usize> byte_view_size(const T &value) noexcept
+        requires(ContiguousRange<T>)
+    {
+        const auto count = contiguous_range_size(value);
+        if (!count) {
+            return protocyte::unexpected(count.error());
+        }
+        return checked_mul(*count, sizeof(ContiguousRangeElement<T>));
+    }
+
+    inline Result<ByteView> byte_view_of(const ByteView view) noexcept { return view; }
+
+    template<class T> Result<ByteView> byte_view_of(const T &value) noexcept
+        requires(ContiguousRange<T>)
+    {
+        const auto size = byte_view_size(value);
+        if (!size) {
+            return protocyte::unexpected(size.error());
+        }
+        return ByteView {.data = reinterpret_cast<const u8 *>(contiguous_range_data(value)), .size = *size};
+    }
+
     constexpr bool bytes_equal(const ByteView lhs, const ByteView rhs) noexcept {
         if (lhs.size != rhs.size) {
             return false;
         }
-        for (usize i {}; i < lhs.size; ++i) {
-            if (lhs.data[i] != rhs.data[i]) {
-                return false;
-            }
+        if (!lhs.size) {
+            return true;
         }
-        return true;
+        if (::std::is_constant_evaluated()) {
+            for (usize i {}; i < lhs.size; ++i) {
+                if (lhs.data[i] != rhs.data[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return ::std::memcmp(lhs.data, rhs.data, lhs.size) == 0;
     }
 
     constexpr bool bytes_zero(const ByteView view) noexcept {
@@ -1225,29 +1367,22 @@ namespace protocyte {
         return hash;
     }
 
-    inline Status checked_add(const usize lhs, const usize rhs, usize *out) noexcept {
-        const auto value = lhs + rhs;
-        if (value < lhs) {
-            return protocyte::unexpected(ErrorCode::integer_overflow, {});
-        }
-        *out = value;
-        return {};
-    }
-
-    inline Status checked_mul(const usize lhs, const usize rhs, usize *out) noexcept {
-        if (lhs != 0u && rhs > static_cast<usize>(~static_cast<usize>(0u)) / lhs) {
-            return protocyte::unexpected(ErrorCode::integer_overflow, {});
-        }
-        *out = lhs * rhs;
-        return {};
-    }
-
     template<class T> struct AlwaysFalse {
         static constexpr bool value = false;
     };
 
     inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept {
-        for (usize i {}; i < count; ++i) { dst[i] = src[i]; }
+        if (!count || dst == src) {
+            return;
+        }
+        const auto dst_addr = reinterpret_cast<uptr>(dst);
+        const auto src_addr = reinterpret_cast<uptr>(src);
+        if ((dst_addr < src_addr && src_addr - dst_addr < count) ||
+            (src_addr < dst_addr && dst_addr - src_addr < count)) {
+            ::std::memmove(dst, src, count);
+            return;
+        }
+        ::std::memcpy(dst, src, count);
     }
 
     template<class T, class Context> Result<T> copy_value(Context *ctx, const T &value) noexcept {
@@ -1672,11 +1807,11 @@ namespace protocyte {
             if (ctx_ == nullptr) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
-            usize bytes {};
-            if (const auto st = checked_mul(requested, sizeof(T), &bytes); !st) {
-                return st;
+            const auto bytes = checked_mul(requested, sizeof(T));
+            if (!bytes) {
+                return bytes.status();
             }
-            auto *raw = Config::allocate(*ctx_, bytes, alignof(T));
+            auto *raw = Config::allocate(*ctx_, *bytes, alignof(T));
             if (raw == nullptr) {
                 return protocyte::unexpected(ErrorCode::no_memory, {});
             }
@@ -1698,11 +1833,11 @@ namespace protocyte {
                 if (size_ == max_size()) {
                     return protocyte::unexpected(ErrorCode::count_limit, {});
                 }
-                usize requested {};
-                if (const auto st = checked_add(size_, 1u, &requested); !st) {
-                    return protocyte::unexpected(st.error());
+                const auto requested = checked_add(size_, 1u);
+                if (!requested) {
+                    return protocyte::unexpected(requested.error());
                 }
-                const auto next_capacity = growth_capacity_for(requested);
+                const auto next_capacity = growth_capacity_for(*requested);
                 if (!next_capacity) {
                     return protocyte::unexpected(next_capacity.error());
                 }
@@ -1720,24 +1855,105 @@ namespace protocyte {
 
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
+        template<class Range> Status assign(const Range &values) noexcept
+            requires(ContiguousRange<Range>)
+        {
+            Vector temp {ctx_};
+            const auto count = contiguous_range_size(values);
+            if (!count) {
+                return count.status();
+            }
+            if (*count > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            if (const auto st = temp.reserve(*count); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
+                return st;
+            }
+            *this = protocyte::move(temp);
+            return {};
+        }
+
+        template<class Range> Status append(const Range &values) noexcept
+            requires(ContiguousRange<Range>)
+        {
+            const auto count = contiguous_range_size(values);
+            if (!count) {
+                return count.status();
+            }
+            const auto total = checked_add(size_, *count);
+            if (!total) {
+                return total.status();
+            }
+            if (*total > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            Vector temp {ctx_};
+            if (const auto st = temp.reserve(*total); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(data_, size_); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
+                return st;
+            }
+            *this = protocyte::move(temp);
+            return {};
+        }
+
+        template<class Range> Status prepend(const Range &values) noexcept
+            requires(ContiguousRange<Range>)
+        {
+            const auto count = contiguous_range_size(values);
+            if (!count) {
+                return count.status();
+            }
+            const auto total = checked_add(size_, *count);
+            if (!total) {
+                return total.status();
+            }
+            if (*total > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            Vector temp {ctx_};
+            if (const auto st = temp.reserve(*total); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(data_, size_); !st) {
+                return st;
+            }
+            *this = protocyte::move(temp);
+            return {};
+        }
+
         Status copy_from(const Vector &other) noexcept {
             if (this == &other) {
                 return {};
             }
-            clear();
-            if (const auto st = reserve(other.size_); !st) {
-                return st;
-            }
-            for (usize i {}; i < other.size_; ++i) {
-                auto copied = protocyte::copy_value(ctx_, other[i]);
-                if (!copied) {
-                    return copied.status();
-                }
-                if (const auto st = push_back(protocyte::move(*copied)); !st) {
+            if constexpr (::std::is_trivially_copyable_v<T>) {
+                return assign(other);
+            } else {
+                clear();
+                if (const auto st = reserve(other.size_); !st) {
                     return st;
                 }
+                for (const auto &value : other) {
+                    auto copied = protocyte::copy_value(ctx_, value);
+                    if (!copied) {
+                        return copied.status();
+                    }
+                    if (const auto st = push_back(protocyte::move(*copied)); !st) {
+                        return st;
+                    }
+                }
+                return {};
             }
-            return {};
         }
 
         Status resize_default(const usize count) noexcept {
@@ -1759,6 +1975,68 @@ namespace protocyte {
         }
 
     protected:
+        template<class Source> static constexpr bool can_memcpy_range_v =
+            ::std::is_trivially_copyable_v<T> && ::std::same_as<::std::remove_cv_t<Source>, T>;
+
+        template<class Source> Result<T> range_value_from(const Source &value) noexcept {
+            if constexpr (::std::same_as<::std::remove_cvref_t<Source>, T>) {
+                return protocyte::copy_value(ctx_, value);
+            } else if constexpr (ContiguousRange<Source> &&
+                                 requires(T &out, const ByteView view) { out.assign(view); }) {
+                Context *copy_ctx {ctx_};
+                if constexpr (requires(Context *value_ctx) { T {value_ctx}; }) {
+                    T copied {copy_ctx};
+                    const auto view = byte_view_of(value);
+                    if (!view) {
+                        return protocyte::unexpected(view.error());
+                    }
+                    return copied.assign(*view).transform(
+                        [&copied]() noexcept -> T { return protocyte::move(copied); });
+                } else if constexpr (requires { T {}; }) {
+                    T copied {};
+                    const auto view = byte_view_of(value);
+                    if (!view) {
+                        return protocyte::unexpected(view.error());
+                    }
+                    return copied.assign(*view).transform(
+                        [&copied]() noexcept -> T { return protocyte::move(copied); });
+                } else {
+                    static_assert(AlwaysFalse<T>::value,
+                                  "protocyte range assignment requires a default or pointer-context constructor");
+                    return protocyte::unexpected(ErrorCode::invalid_argument, {});
+                }
+            } else if constexpr (requires { T(value); }) {
+                return T(value);
+            } else {
+                static_assert(AlwaysFalse<T>::value, "protocyte range assignment cannot convert this element type");
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+        }
+
+        template<class Source> Status append_range_data(const Source *values, const usize count) noexcept {
+            if (!count) {
+                return {};
+            }
+            if (values == nullptr) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            if constexpr (can_memcpy_range_v<Source>) {
+                ::std::memcpy(&data_[size_], values, count * sizeof(T));
+                size_ += count;
+                return {};
+            } else {
+                for (usize i {}; i < count; ++i) {
+                    auto copied = range_value_from(values[i]);
+                    if (!copied) {
+                        return copied.status();
+                    }
+                    new (&data_[size_]) T {protocyte::move(*copied)};
+                    ++size_;
+                }
+                return {};
+            }
+        }
+
         Result<usize> growth_capacity_for(const usize requested) const noexcept {
             const usize maximum {max_size()};
             if (requested > maximum) {
@@ -1798,8 +2076,10 @@ namespace protocyte {
 
         Array() noexcept = default;
         Array(Array &&other) noexcept {
-            for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
-            size_ = other.size_;
+            for (auto &value : other) {
+                new (ptr(size_)) T {protocyte::move(value)};
+                ++size_;
+            }
             other.clear();
         }
         Array &operator=(Array &&other) noexcept {
@@ -1807,8 +2087,10 @@ namespace protocyte {
                 return *this;
             }
             clear();
-            for (usize i {}; i < other.size_; ++i) { new (ptr(i)) T {protocyte::move(other[i])}; }
-            size_ = other.size_;
+            for (auto &value : other) {
+                new (ptr(size_)) T {protocyte::move(value)};
+                ++size_;
+            }
             other.clear();
             return *this;
         }
@@ -1857,24 +2139,143 @@ namespace protocyte {
         Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
+        template<class Range> Status assign(const Range &values) noexcept
+            requires(ContiguousRange<Range>)
+        {
+            Array temp {};
+            const auto count = contiguous_range_size(values);
+            if (!count) {
+                return count.status();
+            }
+            if (*count > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
+                return st;
+            }
+            *this = protocyte::move(temp);
+            return {};
+        }
+
+        template<class Range> Status append(const Range &values) noexcept
+            requires(ContiguousRange<Range>)
+        {
+            const auto count = contiguous_range_size(values);
+            if (!count) {
+                return count.status();
+            }
+            const auto total = checked_add(size_, *count);
+            if (!total) {
+                return total.status();
+            }
+            if (*total > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            Array temp {};
+            if (const auto st = temp.append_range_data(data(), size_); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
+                return st;
+            }
+            *this = protocyte::move(temp);
+            return {};
+        }
+
+        template<class Range> Status prepend(const Range &values) noexcept
+            requires(ContiguousRange<Range>)
+        {
+            const auto count = contiguous_range_size(values);
+            if (!count) {
+                return count.status();
+            }
+            const auto total = checked_add(size_, *count);
+            if (!total) {
+                return total.status();
+            }
+            if (*total > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            Array temp {};
+            if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
+                return st;
+            }
+            if (const auto st = temp.append_range_data(data(), size_); !st) {
+                return st;
+            }
+            *this = protocyte::move(temp);
+            return {};
+        }
+
         Status copy_from(const Array &other) noexcept {
             if (this == &other) {
                 return {};
             }
-            clear();
-            for (usize i {}; i < other.size_; ++i) {
-                auto copied = protocyte::copy_value(other[i]);
-                if (!copied) {
-                    return copied.status();
+            if constexpr (::std::is_trivially_copyable_v<T>) {
+                return assign(other);
+            } else {
+                clear();
+                for (const auto &value : other) {
+                    auto copied = protocyte::copy_value(value);
+                    if (!copied) {
+                        return copied.status();
+                    }
+                    if (const auto st = push_back(protocyte::move(*copied)); !st) {
+                        return st;
+                    }
                 }
-                if (const auto st = push_back(protocyte::move(*copied)); !st) {
-                    return st;
-                }
+                return {};
             }
-            return {};
         }
 
     protected:
+        template<class Source> static constexpr bool can_memcpy_range_v =
+            ::std::is_trivially_copyable_v<T> && ::std::same_as<::std::remove_cv_t<Source>, T>;
+
+        template<class Source> Result<T> range_value_from(const Source &value) noexcept {
+            if constexpr (::std::same_as<::std::remove_cvref_t<Source>, T>) {
+                return protocyte::copy_value(value);
+            } else if constexpr (
+                ContiguousRange<Source> && requires(T &out, const ByteView view) { out.assign(view); } &&
+                requires { T {}; }) {
+                T copied {};
+                const auto view = byte_view_of(value);
+                if (!view) {
+                    return protocyte::unexpected(view.error());
+                }
+                return copied.assign(*view).transform([&copied]() noexcept -> T { return protocyte::move(copied); });
+            } else if constexpr (requires { T(value); }) {
+                return T(value);
+            } else {
+                static_assert(AlwaysFalse<T>::value, "protocyte range assignment cannot convert this element type");
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+        }
+
+        template<class Source> Status append_range_data(const Source *values, const usize count) noexcept {
+            if (!count) {
+                return {};
+            }
+            if (values == nullptr) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            if constexpr (can_memcpy_range_v<Source>) {
+                ::std::memcpy(ptr(size_), values, count * sizeof(T));
+                size_ += count;
+                return {};
+            } else {
+                for (usize i {}; i < count; ++i) {
+                    auto copied = range_value_from(values[i]);
+                    if (!copied) {
+                        return copied.status();
+                    }
+                    new (ptr(size_)) T {protocyte::move(*copied)};
+                    ++size_;
+                }
+                return {};
+            }
+        }
+
         T *ptr(const usize index) noexcept { return reinterpret_cast<T *>(&storage_[index * sizeof(T)]); }
         const T *ptr(const usize index) const noexcept {
             return reinterpret_cast<const T *>(&storage_[index * sizeof(T)]);
@@ -1893,7 +2294,7 @@ namespace protocyte {
 
         ByteArray() noexcept = default;
         ByteArray(ByteArray &&other) noexcept: size_ {other.size_} {
-            for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
+            copy_bytes(bytes_, other.bytes_, other.size_);
             other.size_ = {};
         }
         ByteArray &operator=(ByteArray &&other) noexcept {
@@ -1901,7 +2302,7 @@ namespace protocyte {
                 return *this;
             }
             size_ = other.size_;
-            for (usize i {}; i < other.size_; ++i) { bytes_[i] = other.bytes_[i]; }
+            copy_bytes(bytes_, other.bytes_, other.size_);
             other.size_ = {};
             return *this;
         }
@@ -1934,7 +2335,7 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             if (count > size_) {
-                for (usize i {size_}; i < count; ++i) { bytes_[i] = 0u; }
+                ::std::memset(bytes_ + size_, 0, count - size_);
             }
             size_ = count;
             return {};
@@ -1964,7 +2365,7 @@ namespace protocyte {
         FixedByteArray() noexcept = default;
         FixedByteArray(FixedByteArray &&other) noexcept: has_ {other.has_} {
             if (other.has_) {
-                for (usize i {}; i < Max; ++i) { bytes_[i] = other.bytes_[i]; }
+                copy_bytes(bytes_, other.bytes_, Max);
             }
             other.has_ = false;
         }
@@ -1974,7 +2375,7 @@ namespace protocyte {
             }
             has_ = other.has_;
             if (other.has_) {
-                for (usize i {}; i < Max; ++i) { bytes_[i] = other.bytes_[i]; }
+                copy_bytes(bytes_, other.bytes_, Max);
             }
             other.has_ = false;
             return *this;
@@ -1986,7 +2387,7 @@ namespace protocyte {
         ByteView view() const noexcept { return has_ ? ByteView {.data = bytes_, .size = Max} : ByteView {}; }
         MutableByteView mutable_view() noexcept {
             if (!has_) {
-                for (usize i {}; i < Max; ++i) { bytes_[i] = 0u; }
+                ::std::memset(bytes_, 0, Max);
             }
             has_ = true;
             return {.data = bytes_, .size = Max};
@@ -2379,7 +2780,7 @@ namespace protocyte {
         const_iterator cbegin() const noexcept { return begin(); }
         const_iterator cend() const noexcept { return end(); }
         void clear() noexcept {
-            for (usize i {}; i < buckets_.size(); ++i) { buckets_[i].reset(); }
+            for (auto &bucket : buckets_) { bucket.reset(); }
             size_ = {};
         }
 
@@ -2430,10 +2831,10 @@ namespace protocyte {
             if (const auto st = next.buckets_.resize_default(desired); !st) {
                 return st;
             }
-            for (usize i {}; i < buckets_.size(); ++i) {
-                if (buckets_[i].has_value()) {
-                    if (const auto st = next.insert_or_assign(protocyte::move((*buckets_[i]).key),
-                                                              protocyte::move((*buckets_[i]).value));
+            for (auto &bucket : buckets_) {
+                if (bucket.has_value()) {
+                    if (const auto st =
+                            next.insert_or_assign(protocyte::move((*bucket).key), protocyte::move((*bucket).value));
                         !st) {
                         return st;
                     }
@@ -2476,15 +2877,15 @@ namespace protocyte {
 
     protected:
         Status ensure_capacity_for_one_more() noexcept {
-            usize next_size {};
-            if (const auto st = checked_add(size_, 1u, &next_size); !st) {
-                return st;
+            const auto next_size = checked_add(size_, 1u);
+            if (!next_size) {
+                return next_size.status();
             }
-            if (next_size > max_size()) {
+            if (*next_size > max_size()) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            if (!buckets_.size() || next_size >= rehash_threshold_for(buckets_.size())) {
-                return reserve(next_size);
+            if (!buckets_.size() || *next_size >= rehash_threshold_for(buckets_.size())) {
+                return reserve(*next_size);
             }
             return {};
         }
@@ -2525,7 +2926,7 @@ namespace protocyte {
             if (count > size_ - pos_) {
                 return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
             }
-            for (usize i {}; i < count; ++i) { out[i] = data_[pos_ + i]; }
+            copy_bytes(out, data_ + pos_, count);
             pos_ += count;
             return {};
         }
@@ -2703,7 +3104,7 @@ namespace protocyte {
             if (count > capacity_ - pos_) {
                 return protocyte::unexpected(ErrorCode::size_limit, pos_);
             }
-            for (usize i {}; i < count; ++i) { data_[pos_ + i] = data[i]; }
+            copy_bytes(data_ + pos_, data, count);
             pos_ += count;
             return {};
         }
@@ -3255,9 +3656,17 @@ namespace protocyte {
         });
     }
 
+    inline Result<usize> length_delimited_field_size(const u32 field_number, const usize payload_size) noexcept {
+        return checked_add(tag_size(field_number), varint_size(payload_size))
+            .and_then([payload_size](const usize prefix_size) noexcept -> Result<usize> {
+                return checked_add(prefix_size, payload_size);
+            });
+    }
+
     template<class Message> Result<usize> message_field_size(const u32 field_number, const Message &value) noexcept {
-        return value.encoded_size().transform(
-            [field_number](const usize size) noexcept { return tag_size(field_number) + varint_size(size) + size; });
+        return value.encoded_size().and_then([field_number](const usize size) noexcept -> Result<usize> {
+            return length_delimited_field_size(field_number, size);
+        });
     }
 
     template<class Reader> Status skip_group(Reader &reader, u32 start_field_number) noexcept;
@@ -3445,7 +3854,7 @@ namespace protocyte {
         return write_bytes_field(writer, field_number, view);
     }
 
-    inline Status add_size(usize *total, const usize value) noexcept { return checked_add(*total, value, total); }
+    inline Result<usize> add_size(const usize total, const usize value) noexcept { return checked_add(total, value); }
 
 #ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
     inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {
