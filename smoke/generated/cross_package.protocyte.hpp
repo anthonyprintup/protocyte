@@ -57,7 +57,7 @@ namespace test::crosspkg {
 
         ::protocyte::ByteView nested_bytes() const noexcept { return nested_bytes_.view(); }
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
-        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return MIRRORED_COUNT; }
+        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return 15u; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -118,7 +118,7 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > MIRRORED_COUNT) {
+                        if (*len > 15u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -171,7 +171,7 @@ namespace test::crosspkg {
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<MIRRORED_COUNT> nested_bytes_;
+        ::protocyte::ByteArray<15u> nested_bytes_;
     };
 
     template<typename Config> struct CrossPackageConstants {
@@ -236,7 +236,7 @@ namespace test::crosspkg {
 
         ::protocyte::ByteView remote_bytes() const noexcept { return remote_bytes_.view(); }
         ::protocyte::usize remote_bytes_size() const noexcept { return remote_bytes_.size(); }
-        static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 8u + 1u; }
+        static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 9u; }
         ::protocyte::Status resize_remote_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -264,10 +264,8 @@ namespace test::crosspkg {
         }
         void clear_remote_bytes() noexcept { remote_bytes_.clear(); }
 
-        const ::protocyte::Array<::protocyte::i32, NESTED_COUNT> &remote_values() const noexcept {
-            return remote_values_;
-        }
-        ::protocyte::Array<::protocyte::i32, NESTED_COUNT> &mutable_remote_values() noexcept { return remote_values_; }
+        const ::protocyte::Array<::protocyte::i32, 9u> &remote_values() const noexcept { return remote_values_; }
+        ::protocyte::Array<::protocyte::i32, 9u> &mutable_remote_values() noexcept { return remote_values_; }
         void clear_remote_values() noexcept { remote_values_.clear(); }
 
         bool has_nested() const noexcept { return nested_.has_value(); }
@@ -319,7 +317,7 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > 8u + 1u) {
+                        if (*len > 9u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -488,8 +486,8 @@ namespace test::crosspkg {
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<8u + 1u> remote_bytes_;
-        ::protocyte::Array<::protocyte::i32, NESTED_COUNT> remote_values_;
+        ::protocyte::ByteArray<9u> remote_bytes_;
+        ::protocyte::Array<::protocyte::i32, 9u> remote_values_;
         typename Config::template Optional<::test::crosspkg::CrossPackageConstants_Nested<Config>> nested_;
     };
 

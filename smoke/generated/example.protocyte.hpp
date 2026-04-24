@@ -1430,7 +1430,7 @@ namespace test::ultimate {
             UltimateComplexMessage_FixedRepeatedBytesHolder<NestedConfig>;
         template<typename NestedConfig = Config> using LevelA = UltimateComplexMessage_LevelA<NestedConfig>;
 
-        static constexpr ::protocyte::i64 SHIFTED_COUNT {5000000000};
+        static constexpr ::protocyte::i64 SHIFTED_COUNT {5000000000ll};
         static constexpr ::protocyte::u64 MASK_BITS {1234567890123456789ull};
         static constexpr ::protocyte::f32 FLOAT_SCALE {1.25f};
         static constexpr ::protocyte::f64 DOUBLE_SCALE {3.75};
@@ -1609,7 +1609,7 @@ namespace test::ultimate {
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                    new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {
                         ::protocyte::move(other.special_oneof.oneof_bytes)};
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
@@ -1628,13 +1628,13 @@ namespace test::ultimate {
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
-                    new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                    new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {
                         ::protocyte::move(other.crazy_bytes_oneof.crazy_bounded_bytes)};
                     crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
-                    new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {
+                    new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {
                         ::protocyte::move(other.crazy_bytes_oneof.crazy_fixed_bytes)};
                     crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
                     break;
@@ -1735,7 +1735,7 @@ namespace test::ultimate {
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                    new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {
                         ::protocyte::move(other.special_oneof.oneof_bytes)};
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
@@ -1754,13 +1754,13 @@ namespace test::ultimate {
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
-                    new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
+                    new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {
                         ::protocyte::move(other.crazy_bytes_oneof.crazy_bounded_bytes)};
                     crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
-                    new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {
+                    new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {
                         ::protocyte::move(other.crazy_bytes_oneof.crazy_fixed_bytes)};
                     crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
                     break;
@@ -2375,12 +2375,12 @@ namespace test::ultimate {
             if (view->size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
-            ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
+            ::protocyte::ByteArray<4u> temp {};
             if (const auto st = temp.assign(*view); !st) {
                 return st;
             }
             clear_special_oneof();
-            new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {::protocyte::move(temp)};
+            new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {::protocyte::move(temp)};
             special_oneof_case_ = Special_oneofCase::oneof_bytes;
             return {};
         }
@@ -2424,13 +2424,12 @@ namespace test::ultimate {
             if (view->size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
-            ::protocyte::ByteArray<BYTE_ARRAY_CAP> temp {};
+            ::protocyte::ByteArray<4u> temp {};
             if (const auto st = temp.assign(*view); !st) {
                 return st;
             }
             clear_crazy_bytes_oneof();
-            new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {
-                ::protocyte::move(temp)};
+            new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {::protocyte::move(temp)};
             crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
             return {};
         }
@@ -2451,13 +2450,12 @@ namespace test::ultimate {
             if (view->size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
-            ::protocyte::FixedByteArray<BYTE_ARRAY_CAP> temp {};
+            ::protocyte::FixedByteArray<4u> temp {};
             if (const auto st = temp.assign(*view); !st) {
                 return st;
             }
             clear_crazy_bytes_oneof();
-            new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {
-                ::protocyte::move(temp)};
+            new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {::protocyte::move(temp)};
             crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
             return {};
         }
@@ -2688,7 +2686,7 @@ namespace test::ultimate {
         bool has_sha256() const noexcept { return sha256_.has_value(); }
         ::protocyte::ByteView sha256() const noexcept { return sha256_.view(); }
         ::protocyte::MutableByteView mutable_sha256() noexcept {
-            if (ctx_->limits.max_string_bytes < INTEGER_ARRAY_CAP * 4u) {
+            if (ctx_->limits.max_string_bytes < 32u) {
                 return ::protocyte::MutableByteView {};
             }
             return sha256_.mutable_view();
@@ -2707,17 +2705,13 @@ namespace test::ultimate {
         }
         void clear_sha256() noexcept { sha256_.clear(); }
 
-        const ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> &integer_array() const noexcept {
-            return integer_array_;
-        }
-        ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> &mutable_integer_array() noexcept {
-            return integer_array_;
-        }
+        const ::protocyte::Array<::protocyte::i32, 8u> &integer_array() const noexcept { return integer_array_; }
+        ::protocyte::Array<::protocyte::i32, 8u> &mutable_integer_array() noexcept { return integer_array_; }
         void clear_integer_array() noexcept { integer_array_.clear(); }
 
         ::protocyte::ByteView byte_array() const noexcept { return byte_array_.view(); }
         ::protocyte::usize byte_array_size() const noexcept { return byte_array_.size(); }
-        static constexpr ::protocyte::usize byte_array_max_size() noexcept { return BYTE_ARRAY_CAP; }
+        static constexpr ::protocyte::usize byte_array_max_size() noexcept { return 4u; }
         ::protocyte::Status resize_byte_array(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -2745,17 +2739,17 @@ namespace test::ultimate {
         }
         void clear_byte_array() noexcept { byte_array_.clear(); }
 
-        const ::protocyte::Array<::protocyte::u32, FIXED_INTEGER_ARRAY_CAP> &fixed_integer_array() const noexcept {
+        const ::protocyte::Array<::protocyte::u32, 3u> &fixed_integer_array() const noexcept {
             return fixed_integer_array_;
         }
-        ::protocyte::Array<::protocyte::u32, FIXED_INTEGER_ARRAY_CAP> &mutable_fixed_integer_array() noexcept {
+        ::protocyte::Array<::protocyte::u32, 3u> &mutable_fixed_integer_array() noexcept {
             return fixed_integer_array_;
         }
         void clear_fixed_integer_array() noexcept { fixed_integer_array_.clear(); }
 
         ::protocyte::ByteView float_expr_array() const noexcept { return float_expr_array_.view(); }
         ::protocyte::usize float_expr_array_size() const noexcept { return float_expr_array_.size(); }
-        static constexpr ::protocyte::usize float_expr_array_max_size() noexcept { return FLOATISH_BOUND; }
+        static constexpr ::protocyte::usize float_expr_array_max_size() noexcept { return 2u; }
         ::protocyte::Status resize_float_expr_array(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -3122,7 +3116,7 @@ namespace test::ultimate {
                                                            field_number);
                         }
                         clear_special_oneof();
-                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {};
+                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {};
                         special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
@@ -3132,7 +3126,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > BYTE_ARRAY_CAP) {
+                        if (*len > 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -3601,7 +3595,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len != INTEGER_ARRAY_CAP * 4u) {
+                        if (*len != 32u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
@@ -3658,7 +3652,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > BYTE_ARRAY_CAP) {
+                        if (*len > 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -3717,7 +3711,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > FLOATISH_BOUND) {
+                        if (*len > 2u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -3790,7 +3784,7 @@ namespace test::ultimate {
                                                            field_number);
                         }
                         clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<BYTE_ARRAY_CAP> {};
+                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {};
                         crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
@@ -3800,7 +3794,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > BYTE_ARRAY_CAP) {
+                        if (*len > 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -3820,7 +3814,7 @@ namespace test::ultimate {
                                                            field_number);
                         }
                         clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<BYTE_ARRAY_CAP> {};
+                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {};
                         crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
@@ -3830,7 +3824,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len != BYTE_ARRAY_CAP) {
+                        if (*len != 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
@@ -3891,7 +3885,7 @@ namespace test::ultimate {
                     }
                 }
             }
-            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
@@ -3903,7 +3897,7 @@ namespace test::ultimate {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
-            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
@@ -4570,7 +4564,7 @@ namespace test::ultimate {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
-            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP) {
+            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
@@ -5336,15 +5330,15 @@ namespace test::ultimate {
             typename Config::String oneof_string;
             ::protocyte::i32 oneof_int32;
             typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> oneof_msg;
-            ::protocyte::ByteArray<BYTE_ARRAY_CAP> oneof_bytes;
+            ::protocyte::ByteArray<4u> oneof_bytes;
         } special_oneof;
         Crazy_bytes_oneofCase crazy_bytes_oneof_case_ {Crazy_bytes_oneofCase::none};
         union Crazy_bytes_oneofStorage {
             Crazy_bytes_oneofStorage() noexcept {}
             ~Crazy_bytes_oneofStorage() noexcept {}
             typename Config::Bytes crazy_plain_bytes;
-            ::protocyte::ByteArray<BYTE_ARRAY_CAP> crazy_bounded_bytes;
-            ::protocyte::FixedByteArray<BYTE_ARRAY_CAP> crazy_fixed_bytes;
+            ::protocyte::ByteArray<4u> crazy_bounded_bytes;
+            ::protocyte::FixedByteArray<4u> crazy_fixed_bytes;
             typename Config::template Optional<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>
                 crazy_repeated_bytes;
             typename Config::template Optional<
@@ -5373,11 +5367,11 @@ namespace test::ultimate {
         typename Config::template Optional<
             ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>>
             extreme_nesting_;
-        ::protocyte::FixedByteArray<INTEGER_ARRAY_CAP * 4u> sha256_;
-        ::protocyte::Array<::protocyte::i32, INTEGER_ARRAY_CAP> integer_array_;
-        ::protocyte::ByteArray<BYTE_ARRAY_CAP> byte_array_;
-        ::protocyte::Array<::protocyte::u32, FIXED_INTEGER_ARRAY_CAP> fixed_integer_array_;
-        ::protocyte::ByteArray<FLOATISH_BOUND> float_expr_array_;
+        ::protocyte::FixedByteArray<32u> sha256_;
+        ::protocyte::Array<::protocyte::i32, 8u> integer_array_;
+        ::protocyte::ByteArray<4u> byte_array_;
+        ::protocyte::Array<::protocyte::u32, 3u> fixed_integer_array_;
+        ::protocyte::ByteArray<2u> float_expr_array_;
         typename Config::template Vector<typename Config::Bytes> repeated_byte_array_;
         ::protocyte::Array<typename Config::Bytes, 3u> bounded_repeated_byte_array_;
         ::protocyte::Array<typename Config::Bytes, 3u> fixed_repeated_byte_array_;
@@ -5882,7 +5876,7 @@ namespace test::ultimate {
 
         ::protocyte::ByteView nested_bytes() const noexcept { return nested_bytes_.view(); }
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
-        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return EXTERNAL_CAP; }
+        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return 8u; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -5943,7 +5937,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > EXTERNAL_CAP) {
+                        if (*len > 8u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -5996,7 +5990,7 @@ namespace test::ultimate {
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<EXTERNAL_CAP> nested_bytes_;
+        ::protocyte::ByteArray<8u> nested_bytes_;
     };
 
     template<typename Config> struct CrossMessageConstants {
@@ -6060,7 +6054,7 @@ namespace test::ultimate {
 
         ::protocyte::ByteView external_bytes() const noexcept { return external_bytes_.view(); }
         ::protocyte::usize external_bytes_size() const noexcept { return external_bytes_.size(); }
-        static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return BYTE_ARRAY_CAP + 2u; }
+        static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return 6u; }
         ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -6088,12 +6082,8 @@ namespace test::ultimate {
         }
         void clear_external_bytes() noexcept { external_bytes_.clear(); }
 
-        const ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> &mirrored_values() const noexcept {
-            return mirrored_values_;
-        }
-        ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> &mutable_mirrored_values() noexcept {
-            return mirrored_values_;
-        }
+        const ::protocyte::Array<::protocyte::i32, 10u> &mirrored_values() const noexcept { return mirrored_values_; }
+        ::protocyte::Array<::protocyte::i32, 10u> &mutable_mirrored_values() noexcept { return mirrored_values_; }
         void clear_mirrored_values() noexcept { mirrored_values_.clear(); }
 
         bool has_nested() const noexcept { return nested_.has_value(); }
@@ -6145,7 +6135,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > BYTE_ARRAY_CAP + 2u) {
+                        if (*len > 6u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -6316,8 +6306,8 @@ namespace test::ultimate {
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<BYTE_ARRAY_CAP + 2u> external_bytes_;
-        ::protocyte::Array<::protocyte::i32, ROOT_MIRROR> mirrored_values_;
+        ::protocyte::ByteArray<6u> external_bytes_;
+        ::protocyte::Array<::protocyte::i32, 10u> mirrored_values_;
         typename Config::template Optional<::test::ultimate::CrossMessageConstants_Nested<Config>> nested_;
     };
 
