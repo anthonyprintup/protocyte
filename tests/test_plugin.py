@@ -61,7 +61,8 @@ def test_runtime_container_growth_checks_capacity_limits() -> None:
         in runtime_header
     )
     assert "if (size_ == max_size())" in runtime_header
-    assert "if (const auto st = checked_add(size_, 1u, &requested); !st)" in runtime_header
+    assert "const auto requested = checked_add(size_, 1u);" in runtime_header
+    assert "if (!requested)" in runtime_header
     assert (
         "if (capacity_ > maximum - capacity_ / 2u) {\n"
         "                return maximum;\n"
@@ -77,8 +78,82 @@ def test_runtime_container_growth_checks_capacity_limits() -> None:
     assert "static constexpr usize rehash_threshold_for(const usize bucket_count) noexcept" in runtime_header
     assert "capacity_ * 2u" not in runtime_header
     assert "checked_mul(count, 2u, &target)" not in runtime_header
+    assert "checked_add(size_, 1u, &requested)" not in runtime_header
     assert "(size_ + 1u) * 10u" not in runtime_header
     assert "buckets_.size() * 7u" not in runtime_header
+
+
+def test_runtime_sequence_containers_accept_contiguous_ranges() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+    vector_body = runtime_header.split("template<class T, class Config> struct Vector {", maxsplit=1)[1].split(
+        "template<class T, usize Max> struct Array {", maxsplit=1
+    )[0]
+    array_body = runtime_header.split("template<class T, usize Max> struct Array {", maxsplit=1)[1].split(
+        "template<usize Max> struct ByteArray {", maxsplit=1
+    )[0]
+
+    assert "concept ContiguousRange" in runtime_header
+    assert "concept DataSizeContiguousRange" in runtime_header
+    assert "concept PointerContiguousRange" in runtime_header
+    assert "constexpr auto contiguous_range_data(const T &value) noexcept" in runtime_header
+    assert "Result<usize> contiguous_range_size(const T &value) noexcept" in runtime_header
+    assert "const auto first_addr = reinterpret_cast<uptr>(first);" in runtime_header
+    assert "const auto last_addr = reinterpret_cast<uptr>(last);" in runtime_header
+    assert "if (last < first)" not in runtime_header
+    assert "last - first" not in runtime_header
+    assert "template<class T> inline Result<usize> contiguous_range_size" not in runtime_header
+    assert "template<class Range> Status assign(const Range &values) noexcept" in vector_body
+    assert "template<class Range> Status append(const Range &values) noexcept" in vector_body
+    assert "template<class Range> Status prepend(const Range &values) noexcept" in vector_body
+    assert "temp.append_range_data(contiguous_range_data(values), *count)" in vector_body
+    assert "::std::memcpy(&data_[size_], values, count * sizeof(T));" in vector_body
+    assert "if constexpr (::std::is_trivially_copyable_v<T>) {\n                return assign(other);\n            } else {" in vector_body
+    assert "if (*total > max_size())" in vector_body
+    assert "template<class Range> Status assign(const Range &values) noexcept" in array_body
+    assert "template<class Range> Status append(const Range &values) noexcept" in array_body
+    assert "template<class Range> Status prepend(const Range &values) noexcept" in array_body
+    assert "temp.append_range_data(contiguous_range_data(values), *count)" in array_body
+    assert "::std::memcpy(ptr(size_), values, count * sizeof(T));" in array_body
+    assert "if constexpr (::std::is_trivially_copyable_v<T>) {\n                return assign(other);\n            } else {" in array_body
+    assert "if (*total > Max)" in array_body
+
+
+def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+    byte_array_body = runtime_header.split("template<usize Max> struct ByteArray {", maxsplit=1)[1].split(
+        "template<usize Max> struct FixedByteArray {", maxsplit=1
+    )[0]
+    fixed_byte_array_body = runtime_header.split("template<usize Max> struct FixedByteArray {", maxsplit=1)[1].split(
+        "template<class Config> struct Bytes {", maxsplit=1
+    )[0]
+    bytes_body = runtime_header.split("template<class Config> struct Bytes {", maxsplit=1)[1].split(
+        "template<class Config> struct String {", maxsplit=1
+    )[0]
+    slice_reader_body = runtime_header.split("struct SliceReader {", maxsplit=1)[1].split(
+        "struct ReaderRef {", maxsplit=1
+    )[0]
+    slice_writer_body = runtime_header.split("struct SliceWriter {", maxsplit=1)[1].split(
+        "template<class Reader> Result<u64> read_varint", maxsplit=1
+    )[0]
+
+    assert "#include <cstring>" in runtime_header
+    assert "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept" in runtime_header
+    assert "if (!count || dst == src)" in runtime_header
+    assert "::std::memmove(dst, src, count);" in runtime_header
+    assert "::std::memcpy(dst, src, count);" in runtime_header
+    assert "constexpr bool bytes_equal(const ByteView lhs, const ByteView rhs) noexcept" in runtime_header
+    assert "if (!lhs.size)" in runtime_header
+    assert "if (::std::is_constant_evaluated())" in runtime_header
+    assert "return ::std::memcmp(lhs.data, rhs.data, lhs.size) == 0;" in runtime_header
+    assert "copy_bytes(bytes_, other.bytes_, other.size_);" in byte_array_body
+    assert "::std::memset(bytes_ + size_, 0, count - size_);" in byte_array_body
+    assert "copy_bytes(bytes_, other.bytes_, Max);" in fixed_byte_array_body
+    assert "::std::memset(bytes_, 0, Max);" in fixed_byte_array_body
+    assert "copy_bytes(temp.data(), view.data, view.size);" in bytes_body
+    assert "copy_bytes(out, data_ + pos_, count);" in slice_reader_body
+    assert "copy_bytes(data_ + pos_, data, count);" in slice_writer_body
+    assert "for (usize i {}; i < count; ++i)" not in slice_reader_body
+    assert "for (usize i {}; i < count; ++i)" not in slice_writer_body
 
 
 def test_runtime_discriminators_follow_payload_storage() -> None:
@@ -193,12 +268,22 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "u8 bytes[4u];" in files["protocyte/runtime/runtime.hpp"]
     assert "u8 bytes[8u];" in files["protocyte/runtime/runtime.hpp"]
     assert "u8 bytes[8u] {\n" in files["protocyte/runtime/runtime.hpp"]
-    assert "for (usize i {}; i < lhs.size; ++i)" in files["protocyte/runtime/runtime.hpp"]
+    assert "return ::std::memcmp(lhs.data, rhs.data, lhs.size) == 0;" in files["protocyte/runtime/runtime.hpp"]
     assert "if (!size)" in files["protocyte/runtime/runtime.hpp"]
-    assert "other.size_ = {};" in files["protocyte/runtime/runtime.hpp"]
-    assert "if (const auto st = checked_mul(requested, sizeof(T), &bytes); !st)" in files[
+    assert "concept ByteViewConvertible" not in files["protocyte/runtime/runtime.hpp"]
+    assert "inline Result<usize> checked_add(const usize lhs, const usize rhs) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "inline Result<usize> checked_mul(const usize lhs, const usize rhs) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "const auto count = contiguous_range_size(value);" in files["protocyte/runtime/runtime.hpp"]
+    assert "return checked_mul(*count, sizeof(ContiguousRangeElement<T>));" in files["protocyte/runtime/runtime.hpp"]
+    assert "concept ByteViewRange" in files["protocyte/runtime/runtime.hpp"]
+    assert "inline Result<ByteView> byte_view_of(const ByteView view) noexcept" in files["protocyte/runtime/runtime.hpp"]
+    assert "Result<ByteView> byte_view_of(const T &value) noexcept" in files["protocyte/runtime/runtime.hpp"]
+    assert "other.size_ = {};" in files["protocyte/runtime/runtime.hpp"]
+    assert "const auto bytes = checked_mul(requested, sizeof(T));" in files["protocyte/runtime/runtime.hpp"]
     assert "explicit Vector(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}" in files["protocyte/runtime/runtime.hpp"]
     assert "void bind(Context *ctx) noexcept { ctx_ = ctx; }" in files["protocyte/runtime/runtime.hpp"]
     assert "constexpr usize capacity() const noexcept { return Max; }" in files["protocyte/runtime/runtime.hpp"]
@@ -300,15 +385,20 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "Result<usize> message_field_size(const u32 field_number, const Message &value) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "inline Result<usize> length_delimited_field_size(const u32 field_number, const usize payload_size) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "return checked_add(prefix_size, payload_size);" in files["protocyte/runtime/runtime.hpp"]
     assert "return copied.assign(value.view()).transform([&copied]() noexcept -> T {" in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert "return expect_wire_type(reader, wire_type, WireType::VARINT, field_number)" in files[
         "protocyte/runtime/runtime.hpp"
     ]
-    assert "return value.encoded_size().transform(" in files[
+    assert "return value.encoded_size().and_then([field_number](const usize size) noexcept -> Result<usize> {" in files[
         "protocyte/runtime/runtime.hpp"
     ]
+    assert "return length_delimited_field_size(field_number, size);" in files["protocyte/runtime/runtime.hpp"]
     assert (
         "constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept"
         in files["protocyte/runtime/runtime.hpp"]
@@ -530,15 +620,18 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "mutable_items().copy_from(other.items())" in header
     assert "mutable_samples().copy_from(other.samples())" in header
     assert "mutable_message_items().copy_from(other.message_items())" in header
-    assert "::protocyte::checked_add(samples_.size(), *len / 4u, &packed_reserve_samples)" in header
-    assert "samples_.reserve(packed_reserve_samples)" in header
-    assert "if (const auto st_size = ::protocyte::checked_mul(samples_.size(), 4u, &packed_size_samples); !st_size)" in header
+    assert "const auto packed_reserve_samples = ::protocyte::checked_add(samples_.size(), *len / 4u);" in header
+    assert "samples_.reserve(*packed_reserve_samples)" in header
+    assert "const auto packed_size_samples_result = ::protocyte::checked_mul(samples_.size(), 4u);" in header
 
 
 def test_checked_smoke_output_reflects_copy_propagation() -> None:
     header = (Path(__file__).resolve().parents[1] / "smoke" / "generated" / "example.protocyte.hpp").read_text(
         encoding="utf-8"
     )
+    cross_header = (
+        Path(__file__).resolve().parents[1] / "smoke" / "generated" / "cross_package.protocyte.hpp"
+    ).read_text(encoding="utf-8")
 
     assert "copy_from(const UltimateComplexMessage &other) noexcept" in header
     assert "if (this == &other) {" in header
@@ -553,6 +646,27 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "static_cast<::protocyte::u32>(FieldNumber::recursive_self), *recursive_self_" in header
     assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != FIXED_INTEGER_ARRAY_CAP" in header
     assert "fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u" in header
+    assert (
+        "for (const auto &packed_value_remote_values : remote_values_) {\n"
+        "                    {\n"
+        "                        {"
+        not in cross_header
+    )
+    assert (
+        "for (const auto &packed_value_remote_values : remote_values_) {\n"
+        "                    {"
+        not in cross_header
+    )
+    assert (
+        "for (const auto &remote_values_value : remote_values_) {\n"
+        "                    {"
+        not in cross_header
+    )
+    assert (
+        "if (!remote_bytes_.empty()) {\n"
+        "                {"
+        not in cross_header
+    )
 
 
 def test_model_decodes_constants_and_array_options() -> None:
@@ -690,6 +804,15 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "digest_max_size" not in header
     assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
     assert "::protocyte::ByteView digest() const noexcept { return digest_.view(); }" in header
+    assert "template<class Value>\n  ::protocyte::Status set_digest(const Value &value) noexcept" in header
+    assert "template<class Value>\n  ::protocyte::Status set_blob(const Value &value) noexcept" in header
+    assert "requires(::protocyte::ByteViewRange<Value>)" in header
+    assert "::protocyte::ByteViewConvertible" not in header
+    assert "::protocyte::Status set_blob(const ::protocyte::ByteView value) noexcept" not in header
+    assert "const auto view = ::protocyte::byte_view_of(value);" in header
+    assert "if (!view)" in header
+    assert "return view.status();" in header
+    assert "if (const auto st = blob_.assign(*view); !st)" in header
     assert "if (*len != DOUBLE_MAGIC)" in header
     assert "if (values_.size() != 0u && values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
@@ -720,7 +843,12 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     assert "Array &operator=(Array &&other) noexcept" in runtime_header
     assert "Status copy_from(const Array &other) noexcept" in runtime_header
     assert "Status copy_from(const Vector &other) noexcept" in runtime_header
+    assert "for (auto &value : other)" in runtime_header
+    assert runtime_header.count("for (const auto &value : other)") >= 2
+    assert "for (usize i {}; i < other.size_; ++i)" not in runtime_header
     assert "Status copy_from(const HashMap &other) noexcept" in runtime_header
+    assert "for (auto &bucket : buckets_)" in runtime_header
+    assert "for (usize i {}; i < buckets_.size(); ++i)" not in runtime_header
     assert "ByteArray(ByteArray &&other) noexcept" in runtime_header
     assert "ByteArray &operator=(ByteArray &&other) noexcept" in runtime_header
     assert "FixedByteArray(FixedByteArray &&other) noexcept" in runtime_header
@@ -1027,6 +1155,11 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
 
     assert not response.error
     header = next(file.content for file in response.file if file.name == "oneof_array.protocyte.hpp")
+    assert "template<class Value>\n  ::protocyte::Status set_data(const Value &value) noexcept" in header
+    assert "requires(::protocyte::ByteViewRange<Value>)" in header
+    assert "const auto view = ::protocyte::byte_view_of(value);" in header
+    assert "if (const auto st = temp.assign(*view); !st)" in header
+    assert "::protocyte::Status set_data(const ::protocyte::ByteView value) noexcept" not in header
     assert "new (&choice.data) ::protocyte::ByteArray<8u> {};" in header
     assert "choice_case_ = ChoiceCase::data;" in header
     assert "if (const auto st = choice.data.resize(*len); !st) {" in header

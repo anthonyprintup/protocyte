@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -5,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -1663,10 +1665,28 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         check_scalar_sequence(values, expected_values);
         check_scalar_reverse_sequence(values, expected_values);
 
-        protocyte::Array<protocyte::i32, 3u> bounded;
-        for (const auto value : expected_values) { require_success(bounded.push_back(value)); }
-        check_scalar_sequence(bounded, expected_values);
-        check_scalar_reverse_sequence(bounded, expected_values);
+        const std::vector<int> assigned_values {20, 30};
+        require_success(values.assign(assigned_values));
+        const std::array<short, 1u> appended_values {40};
+        require_success(values.append(appended_values));
+        const std::array<int, 2u> prepended_values {0, 10};
+        require_success(values.prepend(prepended_values));
+        const protocyte::i32 expected_range_values[] = {0, 10, 20, 30, 40};
+        check_scalar_sequence(values, expected_range_values);
+
+        protocyte::Array<protocyte::i32, 6u> bounded;
+        require_success(bounded.assign(assigned_values));
+        require_success(bounded.append(appended_values));
+        require_success(bounded.prepend(prepended_values));
+        check_scalar_sequence(bounded, expected_range_values);
+        const std::array<int, 2u> overflowing_values {50, 60};
+        require_failure(bounded.append(overflowing_values), protocyte::ErrorCode::count_limit);
+        check_scalar_sequence(bounded, expected_range_values);
+
+        protocyte::Array<protocyte::i32, 3u> bounded_traversal;
+        for (const auto value : expected_values) { require_success(bounded_traversal.push_back(value)); }
+        check_scalar_sequence(bounded_traversal, expected_values);
+        check_scalar_reverse_sequence(bounded_traversal, expected_values);
     }
 
     SECTION("byte containers and views iterate in const and mutable contexts") {
@@ -1761,6 +1781,27 @@ TEST_CASE("HashMap iterators expose key/value proxies", "[smoke][iterators][map]
         }
     }
     CHECK(saw_iterator);
+
+    typename Config::template Map<protocyte::i32, protocyte::i32> numbers {&ctx};
+    for (protocyte::i32 i {}; i < 32; ++i) {
+        require_success(numbers.insert_or_assign(static_cast<protocyte::i32>(i), static_cast<protocyte::i32>(i * 10)));
+    }
+    CHECK(numbers.size() == 32u);
+
+    protocyte::usize seen {};
+    for (const auto entry : numbers) {
+        CHECK(entry.value == entry.key * 10);
+        ++seen;
+    }
+    CHECK(seen == 32u);
+
+    numbers.clear();
+    CHECK(numbers.empty());
+    CHECK(numbers.begin() == numbers.end());
+    require_success(numbers.insert_or_assign(7, 70));
+    REQUIRE(numbers.size() == 1u);
+    CHECK((*numbers.begin()).key == 7);
+    CHECK((*numbers.begin()).value == 70);
 }
 
 TEST_CASE("Cross-message constants resolve into arrays", "[smoke][constants]") {
@@ -1970,6 +2011,126 @@ TEST_CASE("Result<void> carries status without a payload", "[smoke][runtime]") {
         return protocyte::unexpected(protocyte::ErrorCode::invalid_argument, 4u, 2u);
     };
     require_failure(fail_status(), protocyte::ErrorCode::invalid_argument);
+}
+
+TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][bytes]") {
+    auto ctx = make_context();
+    auto created = Message::create(ctx);
+    REQUIRE(created);
+    auto &message = *created;
+
+    constexpr std::array<unsigned char, 5> bytes_payload {0x00u, 0x01u, 0x02u, 0x03u, 0x04u};
+    require_success(message.set_f_bytes(bytes_payload));
+    const auto bytes_view = protocyte::byte_view_of(bytes_payload);
+    REQUIRE(bytes_view);
+    CHECK(view_equal(message.f_bytes(), *bytes_view));
+
+    constexpr std::array<char, 5> string_payload {'h', 'e', 'l', 'l', 'o'};
+    require_success(message.set_f_string(string_payload));
+    const auto string_view = protocyte::byte_view_of(string_payload);
+    REQUIRE(string_view);
+    CHECK(view_equal(message.f_string(), *string_view));
+
+    constexpr std::array<unsigned char, 4> bounded_payload {0x10u, 0x11u, 0x12u, 0x13u};
+    require_success(message.set_byte_array(bounded_payload));
+    const auto bounded_view = protocyte::byte_view_of(bounded_payload);
+    REQUIRE(bounded_view);
+    CHECK(view_equal(message.byte_array(), *bounded_view));
+
+    struct PointerByteRange {
+        const unsigned char *first;
+        const unsigned char *last;
+        const unsigned char *begin() const noexcept { return first; }
+        const unsigned char *end() const noexcept { return last; }
+    };
+    const PointerByteRange bounded_pointer_range {bounded_payload.data(),
+                                                  bounded_payload.data() + bounded_payload.size()};
+    require_success(message.set_f_bytes(bounded_pointer_range));
+    const auto bounded_pointer_view = protocyte::byte_view_of(bounded_pointer_range);
+    REQUIRE(bounded_pointer_view);
+    CHECK(view_equal(message.f_bytes(), *bounded_pointer_view));
+
+    const std::vector<std::uint16_t> word_payload {0x1514u, 0x1716u};
+    require_success(message.set_byte_array(word_payload));
+    const auto word_bytes = reinterpret_cast<const protocyte::u8 *>(word_payload.data());
+    CHECK(message.byte_array().size == word_payload.size() * sizeof(word_payload[0]));
+    REQUIRE(message.byte_array().size >= 4u);
+    CHECK(message.byte_array().data[0] == word_bytes[0]);
+    CHECK(message.byte_array().data[1] == word_bytes[1]);
+    CHECK(message.byte_array().data[2] == word_bytes[2]);
+    CHECK(message.byte_array().data[3] == word_bytes[3]);
+    require_success(message.set_byte_array(message.byte_array()));
+    CHECK(message.byte_array().size == word_payload.size() * sizeof(word_payload[0]));
+
+    const PointerByteRange reversed_pointer_range {bounded_payload.data() + bounded_payload.size(),
+                                                   bounded_payload.data()};
+    require_failure(message.set_f_bytes(reversed_pointer_range), protocyte::ErrorCode::count_limit);
+    CHECK(view_equal(message.f_bytes(), *bounded_pointer_view));
+
+    require_success(message.set_oneof_bytes(bounded_payload));
+    CHECK(message.has_oneof_bytes());
+    CHECK(view_equal(message.oneof_bytes(), *bounded_view));
+}
+
+TEST_CASE("generated repeated fields accept contiguous range operations", "[smoke][runtime][repeated]") {
+    auto ctx = make_context();
+    auto created = Message::create(ctx);
+    REQUIRE(created);
+    auto &message = *created;
+
+    using RepeatedInt = std::remove_reference_t<decltype(message.mutable_r_int32_unpacked())>;
+    static_assert(std::is_trivially_copyable_v<RepeatedInt::value_type>);
+
+    const std::vector<int> assigned_values {20, 30};
+    require_success(message.mutable_r_int32_unpacked().assign(assigned_values));
+    const std::array<short, 1u> appended_values {40};
+    require_success(message.mutable_r_int32_unpacked().append(appended_values));
+    const std::array<int, 2u> prepended_values {0, 10};
+    require_success(message.mutable_r_int32_unpacked().prepend(prepended_values));
+    const protocyte::i32 expected_values[] = {0, 10, 20, 30, 40};
+    check_scalar_sequence(message.r_int32_unpacked(), expected_values);
+
+    struct PointerIntRange {
+        const int *first;
+        const int *last;
+        const int *begin() const noexcept { return first; }
+        const int *end() const noexcept { return last; }
+    };
+    const int pointer_values[] = {7, 8, 9};
+    require_success(message.mutable_r_int32_unpacked().assign(
+        PointerIntRange {pointer_values, pointer_values + sizeof(pointer_values) / sizeof(pointer_values[0])}));
+    check_scalar_sequence(message.r_int32_unpacked(), pointer_values);
+
+    const std::array<int, 3u> array_values {1, 2, 3};
+    require_success(message.mutable_integer_array().assign(array_values));
+    const std::array<int, 2u> extra_values {4, 5};
+    require_success(message.mutable_integer_array().append(extra_values));
+    const protocyte::i32 expected_array_values[] = {1, 2, 3, 4, 5};
+    check_scalar_sequence(message.integer_array(), expected_array_values);
+    const std::array<int, 4u> overflowing_values {6, 7, 8, 9};
+    require_failure(message.mutable_integer_array().append(overflowing_values), protocyte::ErrorCode::count_limit);
+    check_scalar_sequence(message.integer_array(), expected_array_values);
+}
+
+TEST_CASE("generated message copy uses memcpyable repeated int storage", "[smoke][runtime][copy]") {
+    auto ctx = make_context();
+    auto source = Message::create(ctx);
+    auto target = Message::create(ctx);
+    REQUIRE(source);
+    REQUIRE(target);
+
+    using RepeatedInt = std::remove_reference_t<decltype(source->mutable_r_int32_unpacked())>;
+    static_assert(std::is_trivially_copyable_v<RepeatedInt::value_type>);
+
+    const std::array<int, 4u> values {11, 22, 33, 44};
+    require_success(source->mutable_r_int32_unpacked().assign(values));
+    require_success(source->mutable_r_int32_packed().assign(values));
+
+    require_success(target->copy_from(*source));
+
+    const protocyte::i32 expected_values[] = {11, 22, 33, 44};
+    check_scalar_sequence(target->r_int32_unpacked(), expected_values);
+    check_scalar_sequence(target->r_int32_packed(), expected_values);
 }
 
 TEST_CASE("monadic runtime operations compose for status, result, and optional", "[smoke][runtime]") {
