@@ -686,6 +686,9 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         file_model.constants = _build_file_constants(file_model, custom_options)
         _validate_package_constant_collisions(file_model)
 
+    _validate_enum_value_collisions(enums.values())
+    _validate_type_cpp_name_collisions(files)
+
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
             _fill_message_details(message, files, messages, enums, custom_options)
@@ -876,6 +879,7 @@ def _fill_message_details(
             oneof_fields[field_model.oneof_index].fields.append(field_model)
 
     message.oneofs = [oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields]
+    _validate_nested_alias_collisions(message)
     _validate_constant_collisions(message)
     _validate_field_collisions(message)
     if files[message.file_name].syntax == "proto3":
@@ -932,8 +936,7 @@ def _validate_constant_collisions(message: MessageModel) -> None:
         "serialize",
         "encoded_size",
     }
-    reserved.update(enum.name for enum in message.nested_enums)
-    reserved.update(nested.name for nested in message.nested_messages if not nested.is_map_entry)
+    reserved.update(_nested_alias_cpp_names(message))
     reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
     reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
     for field_model in message.fields:
@@ -972,8 +975,7 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
     top_level_cpp_names: dict[str, set[str]] = {}
     for file_model in files.values():
         reserved = top_level_cpp_names.setdefault(file_model.package, {"protocyte_reflection"})
-        reserved.update(enum.cpp_name for enum in file_model.enums)
-        reserved.update(message.cpp_name for message in file_model.messages if not message.is_map_entry)
+        reserved.update(_file_type_cpp_names(file_model))
 
     seen_names: dict[str, set[str]] = {}
     seen_cpp_names: dict[str, set[str]] = {}
@@ -992,6 +994,99 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
             cpp_names.add(constant.cpp_name)
 
 
+def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
+    for enum in enums:
+        seen_cpp_names: dict[str, str] = {}
+        for value in enum.values:
+            if not value.cpp_name or value.cpp_name == "_":
+                raise ProtocyteError(f"{enum.full_name}.{value.name}: enum value name is not a valid C++ identifier")
+            if value.cpp_name in seen_cpp_names:
+                first = seen_cpp_names[value.cpp_name]
+                raise ProtocyteError(
+                    f"{enum.full_name}.{value.name}: enum value collides with {first!r} after C++ identifier normalization"
+                )
+            seen_cpp_names[value.cpp_name] = value.name
+
+
+def _validate_type_cpp_name_collisions(files: dict[str, FileModel]) -> None:
+    seen_cpp_names: dict[str, dict[str, str]] = {}
+    for file_model in files.values():
+        package_names = seen_cpp_names.setdefault(file_model.package, {})
+        for full_name, cpp_name in _file_type_cpp_items(file_model):
+            _reserve_type_cpp_name(package_names, full_name, cpp_name)
+
+
+def _file_type_cpp_names(file_model: FileModel) -> set[str]:
+    return {cpp_name for _, cpp_name in _file_type_cpp_items(file_model)}
+
+
+def _file_type_cpp_items(file_model: FileModel) -> Iterable[tuple[str, str]]:
+    for enum in file_model.enums:
+        yield enum.full_name, enum.cpp_name
+    for message in _walk_messages(file_model.messages):
+        if not message.is_map_entry:
+            yield message.full_name, message.cpp_name
+        for enum in message.nested_enums:
+            yield enum.full_name, enum.cpp_name
+
+
+def _reserve_type_cpp_name(seen_cpp_names: dict[str, str], full_name: str, cpp_name: str) -> None:
+    if not cpp_name or cpp_name == "_":
+        raise ProtocyteError(f"{full_name}: type name is not a valid C++ identifier")
+    if cpp_name in seen_cpp_names:
+        first = seen_cpp_names[cpp_name]
+        raise ProtocyteError(f"{full_name}: type collides with {first!r} after C++ identifier normalization")
+    seen_cpp_names[cpp_name] = full_name
+
+
+def _validate_nested_alias_collisions(message: MessageModel) -> None:
+    seen_cpp_names: dict[str, str] = {}
+    reserved = _message_generated_cpp_names(message)
+    for name, cpp_name in _nested_alias_cpp_items(message):
+        if not cpp_name or cpp_name == "_":
+            raise ProtocyteError(f"{message.full_name}.{name}: nested type alias is not a valid C++ identifier")
+        if cpp_name in seen_cpp_names:
+            first = seen_cpp_names[cpp_name]
+            raise ProtocyteError(
+                f"{message.full_name}.{name}: nested type alias collides with {first!r} after C++ identifier normalization"
+            )
+        if cpp_name in reserved:
+            raise ProtocyteError(f"{message.full_name}.{name}: nested type alias collides with generated API")
+        seen_cpp_names[cpp_name] = name
+
+
+def _nested_alias_cpp_names(message: MessageModel) -> set[str]:
+    return {cpp_name for _, cpp_name in _nested_alias_cpp_items(message)}
+
+
+def _nested_alias_cpp_items(message: MessageModel) -> Iterable[tuple[str, str]]:
+    for enum in message.nested_enums:
+        yield enum.name, cpp_identifier(enum.name)
+    for nested in message.nested_messages:
+        if not nested.is_map_entry:
+            yield nested.name, cpp_identifier(nested.name)
+
+
+def _message_generated_cpp_names(message: MessageModel) -> set[str]:
+    names = {
+        "Context",
+        "FieldNumber",
+        "create",
+        "clone",
+        "copy_from",
+        "parse",
+        "merge_from",
+        "serialize",
+        "encoded_size",
+    }
+    names.update(constant.cpp_name for constant in message.constants)
+    names.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
+    names.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
+    for field_model in message.fields:
+        names.update(_field_generated_cpp_names(field_model))
+    return names
+
+
 def _validate_field_collisions(message: MessageModel) -> None:
     if message.is_map_entry:
         return
@@ -1008,8 +1103,7 @@ def _validate_field_collisions(message: MessageModel) -> None:
         "serialize",
         "encoded_size",
     }
-    reserved.update(enum.name for enum in message.nested_enums)
-    reserved.update(nested.name for nested in message.nested_messages if not nested.is_map_entry)
+    reserved.update(_nested_alias_cpp_names(message))
     reserved.update(constant.cpp_name for constant in message.constants)
     reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
     reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
@@ -1357,10 +1451,7 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
                     f"{message.full_name}.{field_model.name}: protocyte.array.expr must resolve to a positive integer"
                 )
             field_model.array_max = numeric
-            if type(value.value) is int:
-                field_model.array_cpp_max = value.cpp_expr
-            else:
-                field_model.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
+            field_model.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
 
 
 def _validate_references(
@@ -1743,8 +1834,13 @@ def _cpp_constant_type(kind: str) -> str:
 def _cpp_constant_value(kind: str, value: object) -> str:
     if kind == CONSTANT_KIND_BOOL:
         return "true" if value else "false"
-    if kind in {CONSTANT_KIND_INT32, CONSTANT_KIND_INT64}:
+    if kind == CONSTANT_KIND_INT32:
         return str(value)
+    if kind == CONSTANT_KIND_INT64:
+        numeric = int(value)
+        if numeric == -(2**63):
+            return "(-9223372036854775807ll - 1ll)"
+        return f"{numeric}ll"
     if kind == CONSTANT_KIND_UINT32:
         return f"{value}u"
     if kind == CONSTANT_KIND_UINT64:

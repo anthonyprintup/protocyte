@@ -708,13 +708,13 @@ def test_model_decodes_constants_and_array_options() -> None:
     assert fields["digest"].array_max == 32
     assert fields["digest"].array_fixed is True
     assert fields["blob"].array_max == 16
-    assert fields["blob"].array_cpp_max == "FILE_CAP"
+    assert fields["blob"].array_cpp_max == "16u"
     assert fields["hex_blob"].array_max == 16
-    assert fields["hex_blob"].array_cpp_max == "0x8u + 0x8u"
+    assert fields["hex_blob"].array_cpp_max == "16u"
     assert fields["values"].array_max == 4
     assert fields["values"].repeated_array is True
     assert nested_fields["payload"].array_max == 16
-    assert nested_fields["payload"].array_cpp_max == "FILE_CAP"
+    assert nested_fields["payload"].array_cpp_max == "16u"
 
 
 def test_rejects_field_cpp_name_collisions() -> None:
@@ -768,6 +768,73 @@ def test_field_collision_checks_only_emitted_accessors() -> None:
     assert "::protocyte::Status set_set_values(const ::protocyte::i32 value) noexcept" in header
 
 
+def test_rejects_top_level_cpp_type_name_collisions() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("type_collision.proto")
+    file = request.proto_file.add()
+    file.name = "type_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    for name in ("foo", "Foo"):
+        message = file.message_type.add()
+        message.name = name
+
+    response = generate_response(request)
+
+    assert "type collides with" in response.error
+    assert "after C++ identifier normalization" in response.error
+
+
+def test_rejects_enum_value_cpp_name_collisions() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("enum_value_collision.proto")
+    file = request.proto_file.add()
+    file.name = "enum_value_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    enum = file.enum_type.add()
+    enum.name = "Broken"
+    for number, name in enumerate(("class", "class_")):
+        value = enum.value.add()
+        value.name = name
+        value.number = number
+
+    response = generate_response(request)
+
+    assert "enum value collides with" in response.error
+    assert "after C++ identifier normalization" in response.error
+
+
+def test_nested_aliases_use_cpp_identifiers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("nested_alias.proto")
+    file = request.proto_file.add()
+    file.name = "nested_alias.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    message = file.message_type.add()
+    message.name = "HasNested"
+
+    enum = message.enum_type.add()
+    enum.name = "enum"
+    value = enum.value.add()
+    value.name = "zero"
+    value.number = 0
+
+    nested = message.nested_type.add()
+    nested.name = "class"
+
+    response = generate_response(request)
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["nested_alias.protocyte.hpp"]
+    assert "using enum_ = HasNested_Enum_;" in header
+    assert "using class_ = HasNested_Class_<NestedConfig>;" in header
+    assert "using enum = " not in header
+    assert "using class = " not in header
+
+
 def test_len_array_expression_emits_numeric_bound() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("len_bound.proto")
@@ -783,6 +850,36 @@ def test_len_array_expression_emits_numeric_bound() -> None:
     assert not response.error
     assert "::protocyte::ByteArray<4u> data_;" in files["len_bound.protocyte.hpp"]
     assert '".size()' not in files["len_bound.protocyte.hpp"]
+
+
+def test_array_expression_emits_validated_numeric_bound_for_cpp_semantics() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("negative_mod_bound.proto")
+    request.proto_file.extend([_options_file(), _array_bound_expr_file("negative_mod_bound.proto", "(-5 % 3) + 1")])
+
+    model = build_model(request)
+    field = model.messages["demo.ArrayBound"].fields[0]
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert field.array_max == 2
+    assert field.array_cpp_max == "2u"
+    assert not response.error
+    assert "::protocyte::ByteArray<2u> data_;" in files["negative_mod_bound.protocyte.hpp"]
+    assert "-5u" not in files["negative_mod_bound.protocyte.hpp"]
+
+
+def test_array_expression_same_package_file_constant_is_inlined() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("same_package_user.proto")
+    request.proto_file.extend([_options_file(), _same_package_constant_provider_file(), _same_package_constant_user_file()])
+
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert not response.error
+    assert "::protocyte::ByteArray<6u> data_;" in files["same_package_user.protocyte.hpp"]
+    assert "ByteArray<CAP + 1u>" not in files["same_package_user.protocyte.hpp"]
 
 
 def test_large_integer_division_preserves_precision() -> None:
@@ -809,13 +906,13 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "static constexpr ::protocyte::i32 HEX_EXPR {24};" in header
     assert 'static constexpr ::std::string_view LABEL {"ell", 3u};' in header
     assert "static constexpr bool HAS_PREFIX {true};" in header
-    assert "::protocyte::FixedByteArray<DOUBLE_MAGIC> digest_;" in header
-    assert "::protocyte::ByteArray<FILE_CAP> blob_;" in header
-    assert "::protocyte::ByteArray<0x8u + 0x8u> hex_blob_;" in header
+    assert "::protocyte::FixedByteArray<32u> digest_;" in header
+    assert "::protocyte::ByteArray<16u> blob_;" in header
+    assert "::protocyte::ByteArray<16u> hex_blob_;" in header
     assert "::protocyte::Array<::protocyte::i32, 4u> values_;" in header
     assert "bool has_digest() const noexcept { return digest_.has_value(); }" in header
     assert "::protocyte::MutableByteView mutable_digest() noexcept {" in header
-    assert "if (ctx_->limits.max_string_bytes < DOUBLE_MAGIC) {" in header
+    assert "if (ctx_->limits.max_string_bytes < 32u) {" in header
     assert "::protocyte::usize digest_size() const noexcept" not in header
     assert "digest_max_size" not in header
     assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
@@ -829,7 +926,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "if (!view)" in header
     assert "return view.status();" in header
     assert "if (const auto st = blob_.assign(*view); !st)" in header
-    assert "if (*len != DOUBLE_MAGIC)" in header
+    assert "if (*len != 32u)" in header
     assert "if (values_.size() != 0u && values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
     assert "template<usize Max> struct ByteArray" in runtime_header
@@ -840,6 +937,21 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "const_iterator end() const noexcept { return bytes_ + size(); }" in runtime_header
     assert "u8 bytes_[Max];" in runtime_header
     assert "u8 bytes_[Max] {};" not in runtime_header
+
+
+def test_generated_header_emits_portable_i64_min_constant() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("i64_min.proto")
+    request.proto_file.extend([_options_file(), _i64_min_constant_file()])
+
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert not response.error
+    assert "static constexpr ::protocyte::i64 MIN {(-9223372036854775807ll - 1ll)};" in files[
+        "i64_min.protocyte.hpp"
+    ]
+    assert "{-9223372036854775808}" not in files["i64_min.protocyte.hpp"]
 
 
 def test_generated_header_copies_and_moves_bounded_arrays() -> None:
@@ -993,9 +1105,9 @@ def test_resolves_constants_across_messages() -> None:
     assert nested_constants["NESTED_CAP"].value == 9
     assert sink_fields["payload"].array_max == 8
     assert sink_fields["values"].array_max == 18
-    assert sink_fields["values"].array_cpp_max == "MIRRORED_CAP"
+    assert sink_fields["values"].array_cpp_max == "18u"
     assert nested_fields["nested_payload"].array_max == 9
-    assert nested_fields["nested_payload"].array_cpp_max == "NESTED_CAP"
+    assert nested_fields["nested_payload"].array_cpp_max == "9u"
 
 
 def test_generated_header_emits_cross_message_constant_arrays() -> None:
@@ -1012,9 +1124,9 @@ def test_generated_header_emits_cross_message_constant_arrays() -> None:
     assert "static constexpr ::protocyte::u32 DIRECT_CAP {8u};" in header
     assert 'static constexpr ::std::string_view PREFIX {"cross-sink", 10u};' in header
     assert "static constexpr bool READY {true};" in header
-    assert "::protocyte::ByteArray<6u + 2u> payload_;" in header
-    assert "::protocyte::Array<::protocyte::i32, MIRRORED_CAP> values_;" in header
-    assert "::protocyte::ByteArray<NESTED_CAP> nested_payload_;" in header
+    assert "::protocyte::ByteArray<8u> payload_;" in header
+    assert "::protocyte::Array<::protocyte::i32, 18u> values_;" in header
+    assert "::protocyte::ByteArray<9u> nested_payload_;" in header
 
 
 def test_resolves_package_constants_across_packages() -> None:
@@ -1029,7 +1141,7 @@ def test_resolves_package_constants_across_packages() -> None:
     assert message_constants["NAME"].value == "pkg-label-ok"
     assert fields["payload"].array_max == 8
     assert fields["values"].array_max == 15
-    assert fields["values"].array_cpp_max == "FROM_EXTERNAL"
+    assert fields["values"].array_cpp_max == "15u"
 
 
 def test_generated_header_emits_cross_package_package_constant_arrays() -> None:
@@ -1042,8 +1154,8 @@ def test_generated_header_emits_cross_package_package_constant_arrays() -> None:
     assert "inline constexpr ::protocyte::u32 FROM_EXTERNAL {15u};" in header
     assert "static constexpr ::protocyte::u32 MIRROR {30u};" in header
     assert 'static constexpr ::std::string_view NAME {"pkg-label-ok", 12u};' in header
-    assert "::protocyte::ByteArray<7u + 1u> payload_;" in header
-    assert "::protocyte::Array<::protocyte::i32, FROM_EXTERNAL> values_;" in header
+    assert "::protocyte::ByteArray<8u> payload_;" in header
+    assert "::protocyte::Array<::protocyte::i32, 15u> values_;" in header
 
 
 def test_resolves_constants_across_packages_and_messages() -> None:
@@ -1057,7 +1169,7 @@ def test_resolves_constants_across_packages_and_messages() -> None:
     assert message_constants["NESTED"].value == 18
     assert fields["payload"].array_max == 17
     assert fields["values"].array_max == 18
-    assert fields["values"].array_cpp_max == "NESTED"
+    assert fields["values"].array_cpp_max == "18u"
 
 
 def test_generated_header_emits_cross_package_message_constant_arrays() -> None:
@@ -1070,8 +1182,8 @@ def test_generated_header_emits_cross_package_message_constant_arrays() -> None:
     assert "static constexpr ::protocyte::u32 MIRROR {32u};" in header
     assert 'static constexpr ::std::string_view NAME {"pkg-label-source-ok", 19u};' in header
     assert "static constexpr ::protocyte::u32 NESTED {18u};" in header
-    assert "::protocyte::ByteArray<16u + 1u> payload_;" in header
-    assert "::protocyte::Array<::protocyte::i32, NESTED> values_;" in header
+    assert "::protocyte::ByteArray<17u> payload_;" in header
+    assert "::protocyte::Array<::protocyte::i32, 18u> values_;" in header
 
 
 def test_canonicalizes_floatish_array_bounds() -> None:
@@ -1842,6 +1954,65 @@ def _len_bound_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_BYTES
     field.options.ParseFromString(_array_option_bytes(expr='len("abcd")'))
+    return file
+
+
+def _array_bound_expr_file(name: str, expr: str) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = name
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "ArrayBound"
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr=expr))
+    return file
+
+
+def _same_package_constant_provider_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "same_package_provider.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(_package_constant_options_bytes([("CAP", "u32", 5)]))
+    return file
+
+
+def _same_package_constant_user_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "same_package_user.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.extend(["protocyte/options.proto", "same_package_provider.proto"])
+
+    message = file.message_type.add()
+    message.name = "UsesSamePackageConstant"
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="CAP + 1"))
+    return file
+
+
+def _i64_min_constant_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "i64_min.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "Limits"
+    message.options.ParseFromString(_constant_options_bytes([("MIN", "i64", -(2**63))]))
     return file
 
 

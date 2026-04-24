@@ -297,11 +297,11 @@ def _emit_message(w: CppWriter, message: MessageModel, options: GeneratorOptions
     with w.indent():
         w.line("using Context = typename Config::Context;")
         for enum in message.nested_enums:
-            w.line(f"using {enum.name} = {enum.cpp_name};")
+            w.line(f"using {cpp_identifier(enum.name)} = {enum.cpp_name};")
         for nested in message.nested_messages:
             if not nested.is_map_entry:
                 w.line("template <typename NestedConfig = Config>")
-                w.line(f"using {nested.name} = {nested.cpp_name}<NestedConfig>;")
+                w.line(f"using {cpp_identifier(nested.name)} = {nested.cpp_name}<NestedConfig>;")
         if message.nested_enums or message.nested_messages:
             w.line()
         _emit_constants(w, message)
