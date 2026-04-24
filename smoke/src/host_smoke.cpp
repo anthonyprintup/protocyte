@@ -451,6 +451,36 @@ namespace {
         REQUIRE(protocyte_bytes == expected);
     }
 
+    template<size_t N>
+    CompatMessage parse_compat_bytes(Config::Context &ctx, const std::array<unsigned char, N> &bytes) {
+        CompatMessage parsed(ctx);
+        protocyte::SliceReader reader(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
+        require_success(parsed.merge_from(reader));
+        REQUIRE(reader.eof());
+        CHECK(ctx.recursion_depth == 0u);
+        return parsed;
+    }
+
+    bool compat_map_str_int32_contains(const CompatMessage &message, protocyte::ByteView key,
+                                       const int32_t expected_value) noexcept {
+        for (const auto entry : message.map_str_int32()) {
+            if (view_equal(entry.key.view(), key) && entry.value == expected_value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool compat_map_int32_str_contains(const CompatMessage &message, const int32_t key,
+                                       protocyte::ByteView expected_value) noexcept {
+        for (const auto entry : message.map_int32_str()) {
+            if (entry.key == key && view_equal(entry.value.view(), expected_value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void populate_compat_nested(CompatNested &nested, const int32_t value, const protocyte::ByteView label) {
         require_success(nested.set_value(value));
         require_success(nested.set_label(label));
@@ -1820,6 +1850,12 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("empty message") {
         CompatMessage protocyte_message(ctx);
         require_same_compat_bytes("empty", protocyte_message, compat_cases::empty);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::empty);
+        CHECK(parsed.f_int32() == 0);
+        CHECK_FALSE(parsed.has_opt_int32());
+        CHECK_FALSE(parsed.has_opt_string());
+        CHECK(parsed.special_oneof_case() == CompatMessage::Special_oneofCase::none);
     }
 
     SECTION("varint scalars") {
@@ -1835,6 +1871,16 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         require_success(protocyte_message.set_mode(CompatMode::SECOND));
 
         require_same_compat_bytes("varint", protocyte_message, compat_cases::varint);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::varint);
+        CHECK(parsed.f_int32() == std::numeric_limits<int32_t>::min());
+        CHECK(parsed.f_int64() == std::numeric_limits<int64_t>::min());
+        CHECK(parsed.f_uint32() == std::numeric_limits<uint32_t>::max());
+        CHECK(parsed.f_uint64() == std::numeric_limits<uint64_t>::max());
+        CHECK(parsed.f_sint32() == -17);
+        CHECK(parsed.f_sint64() == -17000000000ll);
+        CHECK(parsed.f_bool());
+        CHECK(parsed.mode() == CompatMode::SECOND);
     }
 
     SECTION("fixed scalars") {
@@ -1848,6 +1894,14 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         require_success(protocyte_message.set_f_double(123.5));
 
         require_same_compat_bytes("fixed", protocyte_message, compat_cases::fixed);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::fixed);
+        CHECK(parsed.f_fixed32() == 0x11223344u);
+        CHECK(parsed.f_fixed64() == 0x1122334455667788ull);
+        CHECK(parsed.f_sfixed32() == -1234567);
+        CHECK(parsed.f_sfixed64() == -1234567890123ll);
+        CHECK(parsed.f_float() == -0.0f);
+        CHECK(parsed.f_double() == 123.5);
     }
 
     SECTION("length delimited fields") {
@@ -1862,6 +1916,13 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         }
 
         require_same_compat_bytes("length-delimited", protocyte_message, compat_cases::length_delimited);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::length_delimited);
+        CHECK(view_equal(parsed.f_string(), view_of(string_bytes)));
+        CHECK(view_equal(parsed.f_bytes(), view_of(bytes_data)));
+        REQUIRE(parsed.has_nested());
+        CHECK(parsed.nested()->value() == 417);
+        CHECK(view_equal(parsed.nested()->label(), view_of(nested_name)));
     }
 
     SECTION("repeated fields") {
@@ -1877,6 +1938,13 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         require_success(protocyte_message.mutable_r_double().push_back(-0.0));
 
         require_same_compat_bytes("repeated", protocyte_message, compat_cases::repeated);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::repeated);
+        const int32_t expected_ints[] = {-1, 0, 150};
+        const double expected_doubles[] = {23.5, -0.0};
+        check_scalar_sequence(parsed.r_int32_unpacked(), expected_ints);
+        check_scalar_sequence(parsed.r_int32_packed(), expected_ints);
+        check_scalar_sequence(parsed.r_double(), expected_doubles);
     }
 
     SECTION("oneof string") {
@@ -1884,6 +1952,10 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
 
         require_success(protocyte_message.set_oneof_string(view_of(oneof_string)));
         require_same_compat_bytes("oneof-string", protocyte_message, compat_cases::oneof_string);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::oneof_string);
+        REQUIRE(parsed.has_oneof_string());
+        CHECK(view_equal(parsed.oneof_string(), view_of(oneof_string)));
     }
 
     SECTION("oneof int32") {
@@ -1891,6 +1963,10 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
 
         require_success(protocyte_message.set_oneof_int32(-2701));
         require_same_compat_bytes("oneof-int32", protocyte_message, compat_cases::oneof_int32);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::oneof_int32);
+        REQUIRE(parsed.has_oneof_int32());
+        CHECK(parsed.oneof_int32() == -2701);
     }
 
     SECTION("oneof nested") {
@@ -1902,6 +1978,12 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
             require_success(nested);
         }
         require_same_compat_bytes("oneof-nested", protocyte_message, compat_cases::oneof_nested);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::oneof_nested);
+        REQUIRE(parsed.has_oneof_nested());
+        REQUIRE(parsed.oneof_nested() != nullptr);
+        CHECK(parsed.oneof_nested()->value() == 90210);
+        CHECK(view_equal(parsed.oneof_nested()->label(), view_of(nested_description)));
     }
 
     SECTION("oneof bytes") {
@@ -1909,6 +1991,10 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
 
         require_success(protocyte_message.set_oneof_bytes(view_of(oneof_bytes)));
         require_same_compat_bytes("oneof-bytes", protocyte_message, compat_cases::oneof_bytes);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::oneof_bytes);
+        REQUIRE(parsed.has_oneof_bytes());
+        CHECK(view_equal(parsed.oneof_bytes(), view_of(oneof_bytes)));
     }
 
     SECTION("optional fields") {
@@ -1917,6 +2003,62 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         require_success(protocyte_message.set_opt_int32(-99));
         require_success(protocyte_message.set_opt_string(view_of(optional_string)));
         require_same_compat_bytes("optional", protocyte_message, compat_cases::optional_case);
+
+        auto parsed = parse_compat_bytes(ctx, compat_cases::optional_case);
+        REQUIRE(parsed.has_opt_int32());
+        REQUIRE(parsed.has_opt_string());
+        CHECK(parsed.opt_int32() == -99);
+        CHECK(view_equal(parsed.opt_string(), view_of(optional_string)));
+    }
+
+    SECTION("map fields parse protobuf runtime bytes") {
+        auto parsed = parse_compat_bytes(ctx, compat_cases::map_runtime);
+
+        CHECK(parsed.map_str_int32().size() == 1u);
+        CHECK(compat_map_str_int32_contains(parsed, view_of(map_key), 301));
+        CHECK(parsed.map_int32_str().size() == 1u);
+        CHECK(compat_map_int32_str_contains(parsed, 302, view_of(map_value)));
+    }
+
+    SECTION("map duplicate keys use the last entry") {
+        auto parsed = parse_compat_bytes(ctx, compat_cases::map_duplicate_key);
+
+        constexpr uint8_t duplicate_key[] = {'d', 'u', 'p'};
+        CHECK(parsed.map_str_int32().size() == 1u);
+        CHECK(compat_map_str_int32_contains(parsed, view_of(duplicate_key), 2));
+    }
+
+    SECTION("map default entries are retained") {
+        auto parsed = parse_compat_bytes(ctx, compat_cases::map_default_entries);
+
+        CHECK(parsed.map_int32_str().size() == 2u);
+        CHECK(compat_map_int32_str_contains(parsed, 0, protocyte::ByteView {}));
+        CHECK(compat_map_int32_str_contains(parsed, 7, protocyte::ByteView {}));
+    }
+
+    SECTION("unknown fields inside map entries are skipped") {
+        auto parsed = parse_compat_bytes(ctx, compat_cases::map_unknown_entry_field);
+
+        constexpr uint8_t mystery_key[] = {'m', 'y', 's', 't', 'e', 'r', 'y'};
+        CHECK(parsed.map_str_int32().size() == 1u);
+        CHECK(compat_map_str_int32_contains(parsed, view_of(mystery_key), 33));
+    }
+
+    SECTION("mixed packed and unpacked repeated numeric encodings parse") {
+        auto parsed = parse_compat_bytes(ctx, compat_cases::mixed_repeated_numeric);
+
+        const int32_t expected_unpacked[] = {1, 2, 3};
+        const int32_t expected_packed[] = {4, 5};
+        check_scalar_sequence(parsed.r_int32_unpacked(), expected_unpacked);
+        check_scalar_sequence(parsed.r_int32_packed(), expected_packed);
+    }
+
+    SECTION("unknown top-level fields are skipped") {
+        auto parsed = parse_compat_bytes(ctx, compat_cases::unknown_fields);
+
+        CHECK(parsed.f_int32() == 321);
+        CHECK(parsed.map_str_int32().size() == 0u);
+        CHECK(parsed.map_int32_str().size() == 0u);
     }
 }
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ from protocyte.model import (
     MessageModel,
     OneofModel,
     cpp_identifier,
+    cpp_pascal_identifier,
 )
 from protocyte.parameters import GeneratorOptions
 from protocyte.runtime import runtime_files
@@ -397,7 +399,10 @@ def _emit_constructor_initializers(w: CppWriter, message: MessageModel) -> None:
         if item.oneof_name is not None:
             continue
         member = _member(item)
-        if item.repeated_array or item.array_enabled:
+        if item.repeated_array:
+            initializers.append(f"{member}{{&ctx}}")
+            continue
+        if item.array_enabled:
             continue
         if item.repeated and item.kind != "map":
             initializers.append(f"{member}{{&ctx}}")
@@ -1225,7 +1230,7 @@ def _emit_read_scalar(
 def _emit_serialize_statement(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     condition = _presence(item)
     if item.oneof_name:
-        condition = f"{cpp_identifier(item.oneof_name)}_case_ == {item.oneof_name[0].upper() + item.oneof_name[1:]}Case::{item.cpp_name}"
+        condition = f"{_oneof_case_member(item.oneof_name)} == {_oneof_case_type(item.oneof_name)}::{item.cpp_name}"
     if item.repeated and item.kind != "map":
         value_name = f"{item.cpp_name}_value"
         if item.packed:
@@ -1364,7 +1369,7 @@ def _emit_write_scalar(w: CppWriter, item: FieldModel, value: str) -> None:
 def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     condition = _presence(item)
     if item.oneof_name:
-        condition = f"{cpp_identifier(item.oneof_name)}_case_ == {item.oneof_name[0].upper() + item.oneof_name[1:]}Case::{item.cpp_name}"
+        condition = f"{_oneof_case_member(item.oneof_name)} == {_oneof_case_type(item.oneof_name)}::{item.cpp_name}"
     if item.repeated and item.kind != "map":
         value_name = f"{item.cpp_name}_value"
         if item.packed:
@@ -1696,7 +1701,7 @@ def _member(item: FieldModel) -> str:
 
 
 def _oneof_case_type(oneof_name: str) -> str:
-    return f"{oneof_name[0].upper() + oneof_name[1:]}Case"
+    return f"{cpp_pascal_identifier(oneof_name)}Case"
 
 
 def _oneof_case_member(oneof_name: str) -> str:
@@ -1875,7 +1880,9 @@ def _include_path(proto_name: str, options: GeneratorOptions) -> str:
 
 
 def _include_guard(proto_name: str) -> str:
-    return "PROTOCYTE_GENERATED_" + "".join(ch if ch.isalnum() else "_" for ch in proto_name.upper()) + "_HPP"
+    sanitized = "".join(ch if ch.isalnum() else "_" for ch in proto_name.upper())
+    digest = hashlib.sha1(proto_name.encode("utf-8")).hexdigest().upper()[:12]
+    return f"PROTOCYTE_GENERATED_{sanitized}_{digest}_HPP"
 
 
 def _namespace_parts(file_model: FileModel, options: GeneratorOptions) -> list[str]:

@@ -1460,6 +1460,34 @@ namespace protocyte {
         }
     }
 
+    template<class T> struct ValueContext {
+        using type = void;
+    };
+
+    template<class T>
+        requires(requires(const T &value) {
+            value.context();
+            requires ::std::is_pointer_v<decltype(value.context())>;
+        })
+    struct ValueContext<T> {
+        using type = ::std::remove_pointer_t<decltype(protocyte::declval<const T &>().context())>;
+    };
+
+    template<class Context> struct ValueContextStorage {
+        explicit ValueContextStorage(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}
+        Context *context() const noexcept { return ctx_; }
+        void bind(Context *ctx) noexcept { ctx_ = ctx; }
+
+    protected:
+        Context *ctx_ {};
+    };
+
+    template<> struct ValueContextStorage<void> {
+        explicit ValueContextStorage(void * = nullptr) noexcept {}
+        void *context() const noexcept { return nullptr; }
+        void bind(void *) noexcept {}
+    };
+
     struct Limits {
         static constexpr usize default_max_recursion_depth = 100u;
         static constexpr usize default_max_message_bytes = 0x7fffffffu;
@@ -2073,9 +2101,11 @@ namespace protocyte {
         using const_iterator = const T *;
         using reverse_iterator = ReverseIterator<T>;
         using const_reverse_iterator = ReverseIterator<const T>;
+        using Context = typename ValueContext<T>::type;
+        using ContextStorage = ValueContextStorage<Context>;
 
-        Array() noexcept = default;
-        Array(Array &&other) noexcept {
+        explicit Array(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}
+        Array(Array &&other) noexcept: ctx_ {other.context()} {
             for (auto &value : other) {
                 new (ptr(size_)) T {protocyte::move(value)};
                 ++size_;
@@ -2087,6 +2117,7 @@ namespace protocyte {
                 return *this;
             }
             clear();
+            ctx_.bind(other.context());
             for (auto &value : other) {
                 new (ptr(size_)) T {protocyte::move(value)};
                 ++size_;
@@ -2100,6 +2131,8 @@ namespace protocyte {
 
         static constexpr usize max_size() noexcept { return Max; }
         constexpr usize capacity() const noexcept { return Max; }
+        Context *context() const noexcept { return ctx_.context(); }
+        void bind(Context *ctx) noexcept { ctx_.bind(ctx); }
         usize size() const noexcept { return size_; }
         bool empty() const noexcept { return !size_; }
         T *data() noexcept { return size_ ? ptr(0u) : nullptr; }
@@ -2130,7 +2163,11 @@ namespace protocyte {
             if (size_ >= Max) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            new (ptr(size_)) T {protocyte::forward<Args>(args)...};
+            if constexpr (sizeof...(Args) == 0u && requires(Context *value_ctx) { T {value_ctx}; }) {
+                new (ptr(size_)) T {context()};
+            } else {
+                new (ptr(size_)) T {protocyte::forward<Args>(args)...};
+            }
             Ref<T> ref {*ptr(size_)};
             ++size_;
             return ref;
@@ -2142,7 +2179,7 @@ namespace protocyte {
         template<class Range> Status assign(const Range &values) noexcept
             requires(ContiguousRange<Range>)
         {
-            Array temp {};
+            Array temp {context()};
             const auto count = contiguous_range_size(values);
             if (!count) {
                 return count.status();
@@ -2171,7 +2208,7 @@ namespace protocyte {
             if (*total > Max) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            Array temp {};
+            Array temp {context()};
             if (const auto st = temp.append_range_data(data(), size_); !st) {
                 return st;
             }
@@ -2196,7 +2233,7 @@ namespace protocyte {
             if (*total > Max) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            Array temp {};
+            Array temp {context()};
             if (const auto st = temp.append_range_data(contiguous_range_data(values), *count); !st) {
                 return st;
             }
@@ -2216,7 +2253,7 @@ namespace protocyte {
             } else {
                 clear();
                 for (const auto &value : other) {
-                    auto copied = protocyte::copy_value(value);
+                    auto copied = protocyte::copy_value(context(), value);
                     if (!copied) {
                         return copied.status();
                     }
@@ -2234,11 +2271,17 @@ namespace protocyte {
 
         template<class Source> Result<T> range_value_from(const Source &value) noexcept {
             if constexpr (::std::same_as<::std::remove_cvref_t<Source>, T>) {
-                return protocyte::copy_value(value);
-            } else if constexpr (
-                ContiguousRange<Source> && requires(T &out, const ByteView view) { out.assign(view); } &&
-                requires { T {}; }) {
-                T copied {};
+                return protocyte::copy_value(context(), value);
+            } else if constexpr (ContiguousRange<Source> && requires(T &out, const ByteView view) {
+                                     out.assign(view);
+                                 } && (requires(Context *value_ctx) { T {value_ctx}; } || requires { T {}; })) {
+                auto copied = [&]() noexcept {
+                    if constexpr (requires(Context *value_ctx) { T {value_ctx}; }) {
+                        return T {context()};
+                    } else {
+                        return T {};
+                    }
+                }();
                 const auto view = byte_view_of(value);
                 if (!view) {
                     return protocyte::unexpected(view.error());
@@ -2281,6 +2324,7 @@ namespace protocyte {
             return reinterpret_cast<const T *>(&storage_[index * sizeof(T)]);
         }
 
+        ContextStorage ctx_;
         alignas(T) unsigned char storage_[sizeof(T) * Max];
         usize size_ {};
     };
@@ -2525,6 +2569,9 @@ namespace protocyte {
         void clear() noexcept { bytes_.clear(); }
 
         Status assign(const ByteView view) noexcept {
+            if (const auto st = check_size_limit(view.size); !st) {
+                return st;
+            }
             if (!validate_utf8(view)) {
                 return protocyte::unexpected(ErrorCode::invalid_utf8, {});
             }
@@ -2532,6 +2579,9 @@ namespace protocyte {
         }
 
         Status assign_owned(typename Config::Bytes &&bytes) noexcept {
+            if (const auto st = check_size_limit(bytes.size()); !st) {
+                return st;
+            }
             if (!validate_utf8(bytes.view())) {
                 return protocyte::unexpected(ErrorCode::invalid_utf8, {});
             }
@@ -2540,6 +2590,13 @@ namespace protocyte {
         }
 
     protected:
+        Status check_size_limit(const usize size) const noexcept {
+            if (const auto ctx = bytes_.context(); ctx != nullptr && size > ctx->limits.max_string_bytes) {
+                return protocyte::unexpected(ErrorCode::size_limit, {});
+            }
+            return {};
+        }
+
         static bool validate_utf8(const ByteView view) noexcept {
             usize i {};
             while (i < view.size) {

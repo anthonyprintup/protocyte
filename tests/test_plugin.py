@@ -215,7 +215,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "simple.protocyte.cpp" in files
     assert "protocyte/runtime/runtime.hpp" in files
     assert "struct Sample;" in files["simple.protocyte.hpp"]
-    assert files["simple.protocyte.hpp"].startswith("#pragma once\n\n#ifndef PROTOCYTE_GENERATED_SIMPLE_PROTO_HPP")
+    assert files["simple.protocyte.hpp"].startswith("#pragma once\n\n#ifndef PROTOCYTE_GENERATED_SIMPLE_PROTO_")
     assert "#include <cstddef>" not in files["simple.protocyte.hpp"]
     assert "#include <cstdint>" not in files["simple.protocyte.hpp"]
     assert "#include <cstdlib>" not in files["simple.protocyte.hpp"]
@@ -405,6 +405,25 @@ def test_generates_proto3_files_and_runtime() -> None:
     )
     assert "return wire_type == WireType::SGROUP ? size * 2u : size;" in files["protocyte/runtime/runtime.hpp"]
     assert "FEATURE_PROTO3_OPTIONAL" not in files["simple.protocyte.hpp"]
+
+
+def test_runtime_string_assign_checks_size_limit_before_utf8_validation() -> None:
+    files = runtime_files()
+    header = files["protocyte/runtime/runtime.hpp"]
+
+    assign_body = header.split("Status assign(const ByteView view) noexcept {", maxsplit=1)[1]
+    assign_body = assign_body.split("Status assign_owned", maxsplit=1)[0]
+
+    assert "if (const auto st = check_size_limit(view.size); !st)" in assign_body
+    assert assign_body.index("check_size_limit(view.size)") < assign_body.index("validate_utf8(view)")
+
+    assign_owned_body = header.split("Status assign_owned(typename Config::Bytes &&bytes) noexcept {", maxsplit=1)[1]
+    assign_owned_body = assign_owned_body.split("protected:", maxsplit=1)[0]
+
+    assert "if (const auto st = check_size_limit(bytes.size()); !st)" in assign_owned_body
+    assert assign_owned_body.index("check_size_limit(bytes.size())") < assign_owned_body.index(
+        "validate_utf8(bytes.view())"
+    )
 
 
 def test_rejects_non_proto3_target() -> None:
@@ -805,6 +824,47 @@ def test_rejects_enum_value_cpp_name_collisions() -> None:
     assert "after C++ identifier normalization" in response.error
 
 
+def test_rejects_cpp_namespace_type_collisions() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    for proto_name, package in (("and.proto", "and"), ("and_.proto", "and_")):
+        request.file_to_generate.append(proto_name)
+        file = request.proto_file.add()
+        file.name = proto_name
+        file.package = package
+        file.syntax = "proto3"
+        message = file.message_type.add()
+        message.name = "M"
+
+    response = generate_response(request)
+
+    assert "type collides with" in response.error
+    assert "after C++ identifier normalization" in response.error
+
+
+def test_generated_include_guards_are_unique_for_normalized_path_collisions() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    for proto_name, message_name in (("foo-bar.proto", "Hyphen"), ("foo_bar.proto", "Underscore")):
+        request.file_to_generate.append(proto_name)
+        file = request.proto_file.add()
+        file.name = proto_name
+        file.package = "demo"
+        file.syntax = "proto3"
+        message = file.message_type.add()
+        message.name = message_name
+
+    response = generate_response(request)
+
+    assert not response.error
+    guards = {
+        item.name: item.content.split("#ifndef ", maxsplit=1)[1].splitlines()[0]
+        for item in response.file
+        if item.name.endswith(".hpp")
+    }
+    assert guards["foo-bar.protocyte.hpp"] != guards["foo_bar.protocyte.hpp"]
+    assert guards["foo-bar.protocyte.hpp"].startswith("PROTOCYTE_GENERATED_FOO_BAR_PROTO_")
+    assert guards["foo_bar.protocyte.hpp"].startswith("PROTOCYTE_GENERATED_FOO_BAR_PROTO_")
+
+
 def test_nested_aliases_use_cpp_identifiers() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("nested_alias.proto")
@@ -966,10 +1026,21 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     assert "set_digest(other.digest())" in header
     assert "set_blob(other.blob())" in header
     assert "set_hex_blob(other.hex_blob())" in header
+    assert "values_{&ctx}" in header
     assert "mutable_values().copy_from(other.values())" in header
     assert "Array(Array &&other) noexcept" in runtime_header
     assert "Array &operator=(Array &&other) noexcept" in runtime_header
     assert "Status copy_from(const Array &other) noexcept" in runtime_header
+    assert "template<class T> struct ValueContext" in runtime_header
+    assert "using Context = typename ValueContext<T>::type;" in runtime_header
+    assert "explicit Array(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}" in runtime_header
+    assert "Context *context() const noexcept { return ctx_.context(); }" in runtime_header
+    assert "void bind(Context *ctx) noexcept { ctx_.bind(ctx); }" in runtime_header
+    assert "ctx_.bind(other.context());" in runtime_header
+    assert "new (ptr(size_)) T {context()};" in runtime_header
+    assert "Array temp {context()};" in runtime_header
+    assert "auto copied = protocyte::copy_value(context(), value);" in runtime_header
+    assert "auto copied = protocyte::copy_value(value);" not in runtime_header
     assert "Status copy_from(const Vector &other) noexcept" in runtime_header
     assert "for (auto &value : other)" in runtime_header
     assert runtime_header.count("for (const auto &value : other)") >= 2
@@ -1276,6 +1347,43 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert protected.index("ChoiceCase choice_case_ {ChoiceCase::none};") < protected.index("union ChoiceStorage {")
     assert protected.index("} choice;") < protected.index("::protocyte::i32 after_{};")
     assert "typename Config::String text = " not in header
+
+
+def test_generated_header_uses_normalized_oneof_case_type() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("keyword_oneof.proto")
+    request.proto_file.append(_keyword_oneof_file())
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "keyword_oneof.protocyte.hpp")
+    assert "enum struct And_Case" in header
+    assert "constexpr And_Case and__case() const noexcept" in header
+    assert "and__case_ == And_Case::value" in header
+    assert "AndCase" not in header
+
+
+def test_rejects_oneof_cpp_name_collisions() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("oneof_collision.proto")
+    request.proto_file.append(_oneof_collision_file())
+
+    response = generate_response(request)
+
+    assert "oneof collides with" in response.error
+    assert "after C++ identifier normalization" in response.error
+
+
+@pytest.mark.parametrize("field_name", ["choice_case_", "none"])
+def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("oneof_member_collision.proto")
+    request.proto_file.append(_oneof_member_collision_file(field_name))
+
+    response = generate_response(request)
+
+    assert "field collides with generated API" in response.error
 
 
 def test_generated_header_parses_bounded_oneof_bytes() -> None:
@@ -2265,6 +2373,68 @@ def _oneof_file(*, array_bytes: bool = False) -> descriptor_pb2.FileDescriptorPr
         field.type = F.TYPE_BYTES
         field.oneof_index = 0
         field.options.ParseFromString(_array_option_bytes(max_value=8))
+
+    return file
+
+
+def _keyword_oneof_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "keyword_oneof.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "KeywordOneof"
+    message.oneof_decl.add().name = "and"
+
+    field = message.field.add()
+    field.name = "value"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.oneof_index = 0
+
+    return file
+
+
+def _oneof_collision_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "oneof_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    for name in ("and", "and_"):
+        message.oneof_decl.add().name = name
+
+    for index, name in enumerate(("first", "second")):
+        field = message.field.add()
+        field.name = name
+        field.number = index + 1
+        field.label = F.LABEL_OPTIONAL
+        field.type = F.TYPE_INT32
+        field.oneof_index = index
+
+    return file
+
+
+def _oneof_member_collision_file(field_name: str) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "oneof_member_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.oneof_decl.add().name = "choice"
+
+    field = message.field.add()
+    field.name = field_name
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.oneof_index = 0
 
     return file
 

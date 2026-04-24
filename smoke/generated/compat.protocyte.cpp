@@ -45,6 +45,8 @@ namespace protocyte_smoke::test::compat {
             {"oneof_bytes", 24u, "bytes", false, true, false},
             {"opt_int32", 25u, "scalar", false, true, false},
             {"opt_string", 26u, "string", false, true, false},
+            {"map_str_int32", 27u, "map", true, false, false},
+            {"map_int32_str", 28u, "map", true, false, false},
         };
 
     } // namespace protocyte_reflection

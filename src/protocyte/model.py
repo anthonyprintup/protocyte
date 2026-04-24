@@ -879,6 +879,7 @@ def _fill_message_details(
             oneof_fields[field_model.oneof_index].fields.append(field_model)
 
     message.oneofs = [oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields]
+    _validate_oneof_collisions(message)
     _validate_nested_alias_collisions(message)
     _validate_constant_collisions(message)
     _validate_field_collisions(message)
@@ -937,8 +938,8 @@ def _validate_constant_collisions(message: MessageModel) -> None:
         "encoded_size",
     }
     reserved.update(_nested_alias_cpp_names(message))
-    reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
-    reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
+    for oneof in message.oneofs:
+        reserved.update(_oneof_generated_cpp_names(oneof))
     for field_model in message.fields:
         reserved.update(_field_generated_cpp_names(field_model))
 
@@ -972,17 +973,19 @@ def _validate_package_constant_collisions(file_model: FileModel) -> None:
 
 
 def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
-    top_level_cpp_names: dict[str, set[str]] = {}
+    top_level_cpp_names: dict[tuple[str, ...], set[str]] = {}
     for file_model in files.values():
-        reserved = top_level_cpp_names.setdefault(file_model.package, {"protocyte_reflection"})
+        package_key = _cpp_package_key(file_model.package)
+        reserved = top_level_cpp_names.setdefault(package_key, {"protocyte_reflection"})
         reserved.update(_file_type_cpp_names(file_model))
 
-    seen_names: dict[str, set[str]] = {}
-    seen_cpp_names: dict[str, set[str]] = {}
+    seen_names: dict[tuple[str, ...], set[str]] = {}
+    seen_cpp_names: dict[tuple[str, ...], set[str]] = {}
     for file_model in files.values():
-        names = seen_names.setdefault(file_model.package, set())
-        cpp_names = seen_cpp_names.setdefault(file_model.package, set())
-        reserved = top_level_cpp_names[file_model.package]
+        package_key = _cpp_package_key(file_model.package)
+        names = seen_names.setdefault(package_key, set())
+        cpp_names = seen_cpp_names.setdefault(package_key, set())
+        reserved = top_level_cpp_names[package_key]
         for constant in file_model.constants:
             if constant.name in names:
                 raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
@@ -1009,9 +1012,9 @@ def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
 
 
 def _validate_type_cpp_name_collisions(files: dict[str, FileModel]) -> None:
-    seen_cpp_names: dict[str, dict[str, str]] = {}
+    seen_cpp_names: dict[tuple[str, ...], dict[str, str]] = {}
     for file_model in files.values():
-        package_names = seen_cpp_names.setdefault(file_model.package, {})
+        package_names = seen_cpp_names.setdefault(_cpp_package_key(file_model.package), {})
         for full_name, cpp_name in _file_type_cpp_items(file_model):
             _reserve_type_cpp_name(package_names, full_name, cpp_name)
 
@@ -1055,6 +1058,41 @@ def _validate_nested_alias_collisions(message: MessageModel) -> None:
         seen_cpp_names[cpp_name] = name
 
 
+def _validate_oneof_collisions(message: MessageModel) -> None:
+    if message.is_map_entry:
+        return
+    seen_generated_names: dict[str, str] = {}
+    reserved = {
+        "Context",
+        "FieldNumber",
+        "create",
+        "clone",
+        "copy_from",
+        "parse",
+        "merge_from",
+        "serialize",
+        "encoded_size",
+    }
+    reserved.update(_nested_alias_cpp_names(message))
+    reserved.update(constant.cpp_name for constant in message.constants)
+
+    for oneof in message.oneofs:
+        lower = cpp_identifier(oneof.name)
+        if not lower or lower == "_":
+            raise ProtocyteError(f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier")
+        generated_names = _oneof_generated_cpp_names(oneof)
+        if generated_names & reserved:
+            raise ProtocyteError(f"{message.full_name}.{oneof.name}: oneof collides with generated API")
+        for generated_name in generated_names:
+            if generated_name in seen_generated_names:
+                first = seen_generated_names[generated_name]
+                raise ProtocyteError(
+                    f"{message.full_name}.{oneof.name}: oneof collides with {first!r} after C++ identifier normalization"
+                )
+        for generated_name in generated_names:
+            seen_generated_names[generated_name] = oneof.name
+
+
 def _nested_alias_cpp_names(message: MessageModel) -> set[str]:
     return {cpp_name for _, cpp_name in _nested_alias_cpp_items(message)}
 
@@ -1080,8 +1118,8 @@ def _message_generated_cpp_names(message: MessageModel) -> set[str]:
         "encoded_size",
     }
     names.update(constant.cpp_name for constant in message.constants)
-    names.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
-    names.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
+    for oneof in message.oneofs:
+        names.update(_oneof_generated_cpp_names(oneof))
     for field_model in message.fields:
         names.update(_field_generated_cpp_names(field_model))
     return names
@@ -1105,8 +1143,8 @@ def _validate_field_collisions(message: MessageModel) -> None:
     }
     reserved.update(_nested_alias_cpp_names(message))
     reserved.update(constant.cpp_name for constant in message.constants)
-    reserved.update(cpp_identifier(oneof.name) for oneof in message.oneofs)
-    reserved.update(cpp_pascal_identifier(oneof.name) + "Case" for oneof in message.oneofs)
+    for oneof in message.oneofs:
+        reserved.update(_oneof_generated_cpp_names(oneof))
 
     for field_model in message.fields:
         if not field_model.cpp_name or field_model.cpp_name == "_":
@@ -1116,6 +1154,8 @@ def _validate_field_collisions(message: MessageModel) -> None:
             raise ProtocyteError(
                 f"{message.full_name}.{field_model.name}: field collides with {first!r} after C++ identifier normalization"
             )
+        if field_model.oneof_name is not None and field_model.cpp_name == "none":
+            raise ProtocyteError(f"{message.full_name}.{field_model.name}: field collides with generated API")
         generated_names = _field_generated_cpp_names(field_model)
         if generated_names & reserved:
             raise ProtocyteError(f"{message.full_name}.{field_model.name}: field collides with generated API")
@@ -1177,6 +1217,24 @@ def _field_generated_cpp_names(field_model: FieldModel) -> set[str]:
         if field_model.proto3_optional:
             names.add(f"has_{cpp_name}")
     return names
+
+
+def _oneof_generated_cpp_names(oneof: OneofModel) -> set[str]:
+    lower = cpp_identifier(oneof.name)
+    return {
+        lower,
+        f"{lower}_case",
+        f"{lower}_case_",
+        f"clear_{lower}",
+        f"{oneof.cpp_name}Case",
+        f"{oneof.cpp_name}Storage",
+    }
+
+
+def _cpp_package_key(package: str) -> tuple[str, ...]:
+    if not package:
+        return ()
+    return tuple(cpp_identifier(part) for part in package.split("."))
 
 
 def _build_field(

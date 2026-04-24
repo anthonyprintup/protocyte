@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef PROTOCYTE_GENERATED_EXAMPLE_PROTO_HPP
-#define PROTOCYTE_GENERATED_EXAMPLE_PROTO_HPP
+#ifndef PROTOCYTE_GENERATED_EXAMPLE_PROTO_69F808DB6B7B_HPP
+#define PROTOCYTE_GENERATED_EXAMPLE_PROTO_69F808DB6B7B_HPP
 
 #include <protocyte/runtime/runtime.hpp>
 
@@ -670,7 +670,8 @@ namespace test::ultimate {
             values = 1u,
         };
 
-        explicit UltimateComplexMessage_BoundedRepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit UltimateComplexMessage_BoundedRepeatedBytesHolder(Context &ctx) noexcept:
+            ctx_ {&ctx}, values_ {&ctx} {}
 
         static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> create(Context &ctx) noexcept {
             return UltimateComplexMessage_BoundedRepeatedBytesHolder {ctx};
@@ -795,7 +796,7 @@ namespace test::ultimate {
             values = 1u,
         };
 
-        explicit UltimateComplexMessage_FixedRepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit UltimateComplexMessage_FixedRepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx}, values_ {&ctx} {}
 
         static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> create(Context &ctx) noexcept {
             return UltimateComplexMessage_FixedRepeatedBytesHolder {ctx};
@@ -1540,7 +1541,11 @@ namespace test::ultimate {
             lots_of_nested_ {&ctx},
             colors_ {&ctx},
             opt_string_ {&ctx},
-            repeated_byte_array_ {&ctx} {}
+            integer_array_ {&ctx},
+            fixed_integer_array_ {&ctx},
+            repeated_byte_array_ {&ctx},
+            bounded_repeated_byte_array_ {&ctx},
+            fixed_repeated_byte_array_ {&ctx} {}
 
         static ::protocyte::Result<UltimateComplexMessage> create(Context &ctx) noexcept {
             return UltimateComplexMessage {ctx};
@@ -6007,7 +6012,7 @@ namespace test::ultimate {
             nested = 3u,
         };
 
-        explicit CrossMessageConstants(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit CrossMessageConstants(Context &ctx) noexcept: ctx_ {&ctx}, mirrored_values_ {&ctx} {}
 
         static ::protocyte::Result<CrossMessageConstants> create(Context &ctx) noexcept {
             return CrossMessageConstants {ctx};
@@ -6313,4 +6318,4 @@ namespace test::ultimate {
 
 } // namespace test::ultimate
 
-#endif // PROTOCYTE_GENERATED_EXAMPLE_PROTO_HPP
+#endif // PROTOCYTE_GENERATED_EXAMPLE_PROTO_69F808DB6B7B_HPP

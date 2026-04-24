@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from urllib.request import urlopen
 
 
@@ -47,6 +47,21 @@ def download_archive(url: str, archive_path: Path) -> None:
         shutil.copyfileobj(response, output)
 
 
+def _reject_unsafe_archive_member(member_name: str) -> None:
+    posix_path = PurePosixPath(member_name)
+    windows_path = PureWindowsPath(member_name)
+    if posix_path.is_absolute() or windows_path.root or windows_path.drive:
+        raise RuntimeError(f"downloaded archive contains unsafe absolute path: {member_name}")
+    if ".." in posix_path.parts or ".." in windows_path.parts:
+        raise RuntimeError(f"downloaded archive contains unsafe parent traversal path: {member_name}")
+
+
+def extract_archive_safely(archive: zipfile.ZipFile, destination: Path) -> None:
+    for member in archive.infolist():
+        _reject_unsafe_archive_member(member.filename)
+    archive.extractall(destination)
+
+
 def main() -> int:
     args = parse_args()
     version = args.version or load_default_version()
@@ -62,7 +77,7 @@ def main() -> int:
         archive_path = Path(temp_dir) / archive_name
         download_archive(url, archive_path)
         with zipfile.ZipFile(archive_path) as archive:
-            archive.extractall(destination)
+            extract_archive_safely(archive, destination)
 
     protoc = destination / "bin" / "protoc"
     descriptor = destination / "include" / "google" / "protobuf" / "descriptor.proto"

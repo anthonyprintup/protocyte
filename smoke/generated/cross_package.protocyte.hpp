@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_HPP
-#define PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_HPP
+#ifndef PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_1F7F3252503C_HPP
+#define PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_1F7F3252503C_HPP
 
 #include <protocyte/runtime/runtime.hpp>
 
@@ -189,7 +189,7 @@ namespace test::crosspkg {
             nested = 3u,
         };
 
-        explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx}, remote_values_ {&ctx} {}
 
         static ::protocyte::Result<CrossPackageConstants> create(Context &ctx) noexcept {
             return CrossPackageConstants {ctx};
@@ -493,4 +493,4 @@ namespace test::crosspkg {
 
 } // namespace test::crosspkg
 
-#endif // PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_HPP
+#endif // PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_1F7F3252503C_HPP
