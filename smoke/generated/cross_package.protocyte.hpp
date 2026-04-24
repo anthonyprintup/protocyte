@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_HPP
-#define PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_HPP
+#ifndef PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_1F7F3252503C_HPP
+#define PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_1F7F3252503C_HPP
 
 #include <protocyte/runtime/runtime.hpp>
 
@@ -17,7 +17,6 @@ namespace test::crosspkg {
 
     template<typename Config> struct CrossPackageConstants_Nested {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         static constexpr ::protocyte::u32 MIRRORED_COUNT {15u};
 
         enum struct FieldNumber : ::protocyte::u32 {
@@ -58,7 +57,7 @@ namespace test::crosspkg {
 
         ::protocyte::ByteView nested_bytes() const noexcept { return nested_bytes_.view(); }
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
-        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return MIRRORED_COUNT; }
+        static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return 15u; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -69,11 +68,17 @@ namespace test::crosspkg {
             return {};
         }
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
-        ::protocyte::Status set_nested_bytes(const ::protocyte::ByteView value) noexcept {
-            if (value.size > ctx_->limits.max_string_bytes) {
+        template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
+            requires(::protocyte::ByteViewRange<Value>)
+        {
+            const auto view = ::protocyte::byte_view_of(value);
+            if (!view) {
+                return view.status();
+            }
+            if (view->size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
-            if (const auto st = nested_bytes_.assign(value); !st) {
+            if (const auto st = nested_bytes_.assign(*view); !st) {
                 return st;
             }
             return {};
@@ -92,7 +97,7 @@ namespace test::crosspkg {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -113,7 +118,7 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > MIRRORED_COUNT) {
+                        if (*len > 15u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -137,7 +142,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!nested_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::nested_bytes), nested_bytes_.view());
@@ -151,23 +156,26 @@ namespace test::crosspkg {
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
             ::protocyte::usize total {};
             if (!nested_bytes_.empty()) {
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::nested_bytes)) +
-                                    ::protocyte::varint_size(nested_bytes_.size()) + nested_bytes_.size());
-                    !st) {
-                    return ::protocyte::unexpected(st.error());
+                const auto st_size = ::protocyte::length_delimited_field_size(
+                                         static_cast<::protocyte::u32>(FieldNumber::nested_bytes), nested_bytes_.size())
+                                         .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                       -> ::protocyte::Result<::protocyte::usize> {
+                                             return ::protocyte::add_size(total, field_size);
+                                         });
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
                 }
+                total = *st_size;
             }
             return total;
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<MIRRORED_COUNT> nested_bytes_;
+        ::protocyte::ByteArray<15u> nested_bytes_;
     };
 
     template<typename Config> struct CrossPackageConstants {
         using Context = typename Config::Context;
-        using RuntimeStatus = ::protocyte::Status;
         template<typename NestedConfig = Config> using Nested = CrossPackageConstants_Nested<NestedConfig>;
 
         static constexpr ::protocyte::u32 REMOTE_COUNT {16u};
@@ -181,7 +189,7 @@ namespace test::crosspkg {
             nested = 3u,
         };
 
-        explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx}, remote_values_ {&ctx} {}
 
         static ::protocyte::Result<CrossPackageConstants> create(Context &ctx) noexcept {
             return CrossPackageConstants {ctx};
@@ -228,7 +236,7 @@ namespace test::crosspkg {
 
         ::protocyte::ByteView remote_bytes() const noexcept { return remote_bytes_.view(); }
         ::protocyte::usize remote_bytes_size() const noexcept { return remote_bytes_.size(); }
-        static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 8u + 1u; }
+        static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 9u; }
         ::protocyte::Status resize_remote_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
@@ -239,21 +247,25 @@ namespace test::crosspkg {
             return {};
         }
         ::protocyte::MutableByteView mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
-        ::protocyte::Status set_remote_bytes(const ::protocyte::ByteView value) noexcept {
-            if (value.size > ctx_->limits.max_string_bytes) {
+        template<class Value>::protocyte::Status set_remote_bytes(const Value &value) noexcept
+            requires(::protocyte::ByteViewRange<Value>)
+        {
+            const auto view = ::protocyte::byte_view_of(value);
+            if (!view) {
+                return view.status();
+            }
+            if (view->size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
-            if (const auto st = remote_bytes_.assign(value); !st) {
+            if (const auto st = remote_bytes_.assign(*view); !st) {
                 return st;
             }
             return {};
         }
         void clear_remote_bytes() noexcept { remote_bytes_.clear(); }
 
-        const ::protocyte::Array<::protocyte::i32, NESTED_COUNT> &remote_values() const noexcept {
-            return remote_values_;
-        }
-        ::protocyte::Array<::protocyte::i32, NESTED_COUNT> &mutable_remote_values() noexcept { return remote_values_; }
+        const ::protocyte::Array<::protocyte::i32, 9u> &remote_values() const noexcept { return remote_values_; }
+        ::protocyte::Array<::protocyte::i32, 9u> &mutable_remote_values() noexcept { return remote_values_; }
         void clear_remote_values() noexcept { remote_values_.clear(); }
 
         bool has_nested() const noexcept { return nested_.has_value(); }
@@ -284,7 +296,7 @@ namespace test::crosspkg {
             return out;
         }
 
-        template<typename Reader> RuntimeStatus merge_from(Reader &reader) noexcept {
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -305,7 +317,7 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
                                                            field_number);
                         }
-                        if (*len > 8u + 1u) {
+                        if (*len > 9u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
@@ -376,7 +388,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        template<typename Writer> RuntimeStatus serialize(Writer &writer) const noexcept {
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (!remote_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::remote_bytes), remote_bytes_.view());
@@ -387,14 +399,13 @@ namespace test::crosspkg {
             if (!remote_values_.empty()) {
                 ::protocyte::usize packed_size_remote_values {};
                 for (const auto &packed_value_remote_values : remote_values_) {
-                    {
-                        if (const auto st_size = ::protocyte::add_size(
-                                &packed_size_remote_values,
-                                ::protocyte::varint_size(static_cast<::protocyte::u64>(packed_value_remote_values)));
-                            !st_size) {
-                            return st_size;
-                        }
+                    const auto st_size = ::protocyte::add_size(
+                        packed_size_remote_values,
+                        ::protocyte::varint_size(static_cast<::protocyte::u64>(packed_value_remote_values)));
+                    if (!st_size) {
+                        return st_size.status();
                     }
+                    packed_size_remote_values = *st_size;
                 }
                 if (const auto st = ::protocyte::write_tag(
                         writer, static_cast<::protocyte::u32>(FieldNumber::remote_values), ::protocyte::WireType::LEN);
@@ -425,51 +436,61 @@ namespace test::crosspkg {
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
             ::protocyte::usize total {};
             if (!remote_bytes_.empty()) {
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::remote_bytes)) +
-                                    ::protocyte::varint_size(remote_bytes_.size()) + remote_bytes_.size());
-                    !st) {
-                    return ::protocyte::unexpected(st.error());
+                const auto st_size = ::protocyte::length_delimited_field_size(
+                                         static_cast<::protocyte::u32>(FieldNumber::remote_bytes), remote_bytes_.size())
+                                         .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                       -> ::protocyte::Result<::protocyte::usize> {
+                                             return ::protocyte::add_size(total, field_size);
+                                         });
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
                 }
+                total = *st_size;
             }
             if (!remote_values_.empty()) {
                 ::protocyte::usize packed_size_remote_values {};
                 for (const auto &remote_values_value : remote_values_) {
-                    {
-                        if (const auto st_size = ::protocyte::add_size(
-                                &packed_size_remote_values,
-                                ::protocyte::varint_size(static_cast<::protocyte::u64>(remote_values_value)));
-                            !st_size) {
-                            return ::protocyte::unexpected(st_size.error());
-                        }
+                    const auto st_size = ::protocyte::add_size(
+                        packed_size_remote_values,
+                        ::protocyte::varint_size(static_cast<::protocyte::u64>(remote_values_value)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
                     }
+                    packed_size_remote_values = *st_size;
                 }
-                if (const auto st = ::protocyte::add_size(
-                        &total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::remote_values)) +
-                                    ::protocyte::varint_size(packed_size_remote_values) + packed_size_remote_values);
-                    !st) {
-                    return ::protocyte::unexpected(st.error());
+                const auto st_size =
+                    ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::remote_values),
+                                                             packed_size_remote_values)
+                        .and_then([&](const ::protocyte::usize field_size) noexcept
+                                      -> ::protocyte::Result<::protocyte::usize> {
+                            return ::protocyte::add_size(total, field_size);
+                        });
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
                 }
+                total = *st_size;
             }
             if (nested_.has_value()) {
-                if (const auto st =
-                        ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_)
-                            .and_then([&](const ::protocyte::usize nested_size) noexcept -> ::protocyte::Status {
-                                return ::protocyte::add_size(&total, nested_size);
-                            });
-                    !st) {
-                    return ::protocyte::unexpected(st.error());
+                const auto st_size =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_)
+                        .and_then([&](const ::protocyte::usize nested_size) noexcept
+                                      -> ::protocyte::Result<::protocyte::usize> {
+                            return ::protocyte::add_size(total, nested_size);
+                        });
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
                 }
+                total = *st_size;
             }
             return total;
         }
     protected:
         Context *ctx_;
-        ::protocyte::ByteArray<8u + 1u> remote_bytes_;
-        ::protocyte::Array<::protocyte::i32, NESTED_COUNT> remote_values_;
+        ::protocyte::ByteArray<9u> remote_bytes_;
+        ::protocyte::Array<::protocyte::i32, 9u> remote_values_;
         typename Config::template Optional<::test::crosspkg::CrossPackageConstants_Nested<Config>> nested_;
     };
 
 } // namespace test::crosspkg
 
-#endif // PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_HPP
+#endif // PROTOCYTE_GENERATED_CROSS_PACKAGE_PROTO_1F7F3252503C_HPP

@@ -552,10 +552,11 @@ class HashMapSyntheticProvider:
             return
         for bucket_index in range(bucket_count):
             bucket = self.value.CreateValueFromAddress(f"bucket[{bucket_index}]", base + bucket_index * bucket_size, bucket_type)
-            if not _bool(_child(bucket, "occupied")):
+            entry = _optional_payload(bucket, f"entry[{bucket_index}]")
+            if not entry.IsValid():
                 continue
-            key = _optional_payload(_child(bucket, "key"), "key")
-            value = _optional_payload(_child(bucket, "value"), f"{_value_label(key)} =>")
+            key = _child(entry, "key")
+            value = _renamed_value(self.value, _child(entry, "value"), f"{_value_label(key)} =>")
             if value.IsValid():
                 self.entries.append(value)
 

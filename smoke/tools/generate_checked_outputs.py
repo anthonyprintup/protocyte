@@ -400,9 +400,13 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     )
 
     msg.oneof_decl.add().name = "_opt_int32"
+    opt_int32_oneof_index = len(msg.oneof_decl) - 1
     msg.oneof_decl.add().name = "_opt_string"
-    add_field(msg, "opt_int32", 38, F.TYPE_INT32, oneof_index=1, proto3_optional=True)
-    add_field(msg, "opt_string", 39, F.TYPE_STRING, oneof_index=2, proto3_optional=True)
+    opt_string_oneof_index = len(msg.oneof_decl) - 1
+    add_field(msg, "opt_int32", 38, F.TYPE_INT32, oneof_index=opt_int32_oneof_index,
+              proto3_optional=True)
+    add_field(msg, "opt_string", 39, F.TYPE_STRING, oneof_index=opt_string_oneof_index,
+              proto3_optional=True)
 
     level_a = msg.nested_type.add()
     level_a.name = "LevelA"
@@ -543,9 +547,29 @@ def compat_file() -> descriptor_pb2.FileDescriptorProto:
     add_field(msg, "oneof_bytes", 24, F.TYPE_BYTES, oneof_index=0)
 
     msg.oneof_decl.add().name = "_opt_int32"
+    opt_int32_oneof_index = len(msg.oneof_decl) - 1
     msg.oneof_decl.add().name = "_opt_string"
-    add_field(msg, "opt_int32", 25, F.TYPE_INT32, oneof_index=1, proto3_optional=True)
-    add_field(msg, "opt_string", 26, F.TYPE_STRING, oneof_index=2, proto3_optional=True)
+    opt_string_oneof_index = len(msg.oneof_decl) - 1
+    add_field(msg, "opt_int32", 25, F.TYPE_INT32, oneof_index=opt_int32_oneof_index,
+              proto3_optional=True)
+    add_field(msg, "opt_string", 26, F.TYPE_STRING, oneof_index=opt_string_oneof_index,
+              proto3_optional=True)
+    map_str_int32 = add_map_entry(
+        msg,
+        "MapStrInt32Entry",
+        F.TYPE_STRING,
+        F.TYPE_INT32,
+        parent_type_name=".test.compat.EncodingMatrix",
+    )
+    map_int32_str = add_map_entry(
+        msg,
+        "MapInt32StrEntry",
+        F.TYPE_INT32,
+        F.TYPE_STRING,
+        parent_type_name=".test.compat.EncodingMatrix",
+    )
+    add_field(msg, "map_str_int32", 27, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_str_int32)
+    add_field(msg, "map_int32_str", 28, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_int32_str)
 
     return file
 
@@ -611,6 +635,37 @@ def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
 
 
 def compat_cases_header() -> str:
+    def encode_varint(value: int) -> bytes:
+        out = bytearray()
+        while value > 0x7F:
+            out.append((value & 0x7F) | 0x80)
+            value >>= 7
+        out.append(value)
+        return bytes(out)
+
+    def key(field_number: int, wire_type: int) -> bytes:
+        return encode_varint((field_number << 3) | wire_type)
+
+    def length_delimited_field(field_number: int, payload: bytes) -> bytes:
+        return key(field_number, 2) + encode_varint(len(payload)) + payload
+
+    def int32_field(field_number: int, value: int) -> bytes:
+        return key(field_number, 0) + encode_varint(value)
+
+    def string_field(field_number: int, value: str) -> bytes:
+        return length_delimited_field(field_number, value.encode("utf-8"))
+
+    def map_str_int32_entry(key_value: str, value: int, *, extra: bytes = b"") -> bytes:
+        return length_delimited_field(27, string_field(1, key_value) + extra + int32_field(2, value))
+
+    def map_int32_str_entry(key_value: int | None = None, value: str | None = None) -> bytes:
+        payload = b""
+        if key_value is not None:
+            payload += int32_field(1, key_value)
+        if value is not None:
+            payload += string_field(2, value)
+        return length_delimited_field(28, payload)
+
     file = compat_file()
     pool = descriptor_pool.DescriptorPool()
     pool.Add(file)
@@ -675,6 +730,29 @@ def compat_cases_header() -> str:
     message.opt_int32 = -99
     message.opt_string = "opt"
     cases.append(("optional_case", message.SerializeToString()))
+
+    message = message_cls()
+    message.map_str_int32["map-key"] = 301
+    message.map_int32_str[302] = "map-val"
+    cases.append(("map_runtime", message.SerializeToString()))
+
+    cases.append(("map_duplicate_key", map_str_int32_entry("dup", 1) + map_str_int32_entry("dup", 2)))
+    cases.append(("map_default_entries", map_int32_str_entry() + map_int32_str_entry(7)))
+    cases.append(("map_unknown_entry_field", map_str_int32_entry("mystery", 33, extra=int32_field(9, 123))))
+    cases.append(
+        (
+            "mixed_repeated_numeric",
+            int32_field(18, 1) + length_delimited_field(18, encode_varint(2) + encode_varint(3)) +
+            length_delimited_field(19, encode_varint(4)) + int32_field(19, 5),
+        )
+    )
+    cases.append(
+        (
+            "unknown_fields",
+            int32_field(99, 123) + length_delimited_field(100, b"skip-me") + key(101, 5) +
+            bytes([0x44, 0x33, 0x22, 0x11]) + int32_field(1, 321),
+        )
+    )
 
     lines = [
         "#pragma once",

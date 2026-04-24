@@ -116,7 +116,7 @@ function(_protocyte_write_plugin_wrapper)
         message(FATAL_ERROR "protocyte is missing PROTOCYTE_PYTHON_SOURCE_ROOT")
     endif()
 
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
 
     if(WIN32)
         set(wrapper "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte.cmd")
@@ -229,8 +229,19 @@ function(protocyte_generate)
         message(FATAL_ERROR "protocyte_generate accepts either DISCOVER or PROTOS, not both")
     endif()
 
+    if(IS_ABSOLUTE "${PROTOCYTE_PROTO_ROOT}")
+        set(protocyte_proto_root "${PROTOCYTE_PROTO_ROOT}")
+    else()
+        cmake_path(
+            ABSOLUTE_PATH PROTOCYTE_PROTO_ROOT
+            BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            NORMALIZE
+            OUTPUT_VARIABLE protocyte_proto_root
+        )
+    endif()
+
     if(PROTOCYTE_DISCOVER)
-        file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${PROTOCYTE_PROTO_ROOT}/*.proto")
+        file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${protocyte_proto_root}/*.proto")
     else()
         set(protocyte_proto_files ${PROTOCYTE_PROTOS})
     endif()
@@ -252,9 +263,9 @@ function(protocyte_generate)
             cmake_path(ABSOLUTE_PATH proto_file BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE proto_abs)
         endif()
 
-        file(RELATIVE_PATH proto_rel "${PROTOCYTE_PROTO_ROOT}" "${proto_abs}")
+        file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_abs}")
         if(proto_rel MATCHES "^[.][.]")
-            message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${PROTOCYTE_PROTO_ROOT}'")
+            message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
         endif()
 
         list(APPEND normalized_proto_files "${proto_abs}")
@@ -291,7 +302,7 @@ function(protocyte_generate)
     set(protocyte_generated_headers)
     set(protocyte_generated_sources)
     foreach(proto_file IN LISTS normalized_proto_files)
-        file(RELATIVE_PATH proto_rel "${PROTOCYTE_PROTO_ROOT}" "${proto_file}")
+        file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
         get_filename_component(proto_rel_dir "${proto_rel}" DIRECTORY)
         get_filename_component(proto_stem "${proto_rel}" NAME_WLE)
 
@@ -316,7 +327,7 @@ function(protocyte_generate)
 
     set(
         protocyte_import_dirs
-        "${PROTOCYTE_PROTO_ROOT}"
+        "${protocyte_proto_root}"
         ${PROTOCYTE_IMPORT_DIRS}
         "${protocyte_proto_dir}"
         "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"

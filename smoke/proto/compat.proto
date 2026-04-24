@@ -49,4 +49,7 @@ message EncodingMatrix {
 
   optional int32 opt_int32 = 25;
   optional string opt_string = 26;
+
+  map<string, int32> map_str_int32 = 27;
+  map<int32, string> map_int32_str = 28;
 }

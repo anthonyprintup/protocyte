@@ -49,6 +49,11 @@ def test_rejects_mixed_encoded_transport_parameter() -> None:
         parse_parameter(f"_protocyte_options_hex={encoded},include_prefix=generated")
 
 
+def test_rejects_bare_encoded_transport_parameter() -> None:
+    with pytest.raises(ProtocyteError, match=r"invalid protocyte parameter '_protocyte_options_hex'; expected key=value"):
+        parse_parameter("_protocyte_options_hex")
+
+
 def test_rejects_duplicate_parameters() -> None:
     with pytest.raises(ProtocyteError, match="duplicate protocyte parameter: runtime"):
         parse_parameter("runtime=emit,runtime=omit")
