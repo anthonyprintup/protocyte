@@ -1272,23 +1272,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto st_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(entry_payload, field_size);
-                                         });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
                 if (const auto st = ::protocyte::write_tag(
                         writer, static_cast<::protocyte::u32>(FieldNumber::weird_map), ::protocyte::WireType::LEN);
                     !st) {
@@ -1298,19 +1302,15 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_int32_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
+                    !st) {
+                    return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_string_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
+                    !st) {
+                    return st;
                 }
             }
             if (deep_oneof_case_ == Deep_oneofCase::val) {
@@ -1350,23 +1350,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto key_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!key_size) {
-                    return ::protocyte::unexpected(key_size.error());
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *key_size;
-                const auto value_size = ::protocyte::length_delimited_field_size(
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                            .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                          -> ::protocyte::Result<::protocyte::usize> {
-                                                return ::protocyte::add_size(entry_payload, field_size);
-                                            });
-                if (!value_size) {
-                    return ::protocyte::unexpected(value_size.error());
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *value_size;
                 const auto st_size = ::protocyte::length_delimited_field_size(
                                          static_cast<::protocyte::u32>(FieldNumber::weird_map), entry_payload)
                                          .and_then([&](const ::protocyte::usize field_size) noexcept
@@ -4119,23 +4123,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(entry_payload, field_size);
-                                         });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
-                const auto st_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
                 if (const auto st = ::protocyte::write_tag(
                         writer, static_cast<::protocyte::u32>(FieldNumber::map_str_int32), ::protocyte::WireType::LEN);
                     !st) {
@@ -4145,19 +4153,15 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_string_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.view());
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.view());
+                    !st) {
+                    return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_int32_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
+                    !st) {
+                    return st;
                 }
             }
             for (const auto entry : map_int32_str_) {
@@ -4166,23 +4170,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto st_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(entry_payload, field_size);
-                                         });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
                 if (const auto st = ::protocyte::write_tag(
                         writer, static_cast<::protocyte::u32>(FieldNumber::map_int32_str), ::protocyte::WireType::LEN);
                     !st) {
@@ -4192,19 +4200,15 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_int32_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_int32_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
+                    !st) {
+                    return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_string_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
+                    !st) {
+                    return st;
                 }
             }
             for (const auto entry : map_bool_bytes_) {
@@ -4213,23 +4217,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto st_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(entry_payload, field_size);
-                                         });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
                 if (const auto st = ::protocyte::write_tag(
                         writer, static_cast<::protocyte::u32>(FieldNumber::map_bool_bytes), ::protocyte::WireType::LEN);
                     !st) {
@@ -4239,19 +4247,15 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_bool_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_bool_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
+                    !st) {
+                    return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_bytes_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
+                    !st) {
+                    return st;
                 }
             }
             for (const auto entry : map_uint64_msg_) {
@@ -4260,23 +4264,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto st_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
-                const auto st_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
-                        .and_then([&](const ::protocyte::usize nested_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(entry_payload, nested_size);
-                        });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::message_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
+                                             .and_then([&](const ::protocyte::usize nested_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, nested_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
                 if (const auto st = ::protocyte::write_tag(
                         writer, static_cast<::protocyte::u32>(FieldNumber::map_uint64_msg), ::protocyte::WireType::LEN);
                     !st) {
@@ -4286,19 +4294,15 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_uint64_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_uint64_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
+                    !st) {
+                    return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_message_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
+                    !st) {
+                    return st;
                 }
             }
             for (const auto entry : very_nested_map_) {
@@ -4307,26 +4311,30 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(entry_payload, field_size);
-                                         });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
-                const auto st_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
-                        .and_then([&](const ::protocyte::usize nested_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(entry_payload, nested_size);
-                        });
-                if (!st_size) {
-                    return st_size.status();
+                {
+                    const auto st_size = ::protocyte::message_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
+                                             .and_then([&](const ::protocyte::usize nested_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, nested_size);
+                                             });
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *st_size;
                 if (const auto st =
                         ::protocyte::write_tag(writer, static_cast<::protocyte::u32>(FieldNumber::very_nested_map),
                                                ::protocyte::WireType::LEN);
@@ -4337,19 +4345,15 @@ namespace test::ultimate {
                     !st) {
                     return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_string_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.view());
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.view());
+                    !st) {
+                    return st;
                 }
-                {
-                    if (const auto st = ::protocyte::write_message_field(
-                            writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
-                        !st) {
-                        return st;
-                    }
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
+                    !st) {
+                    return st;
                 }
             }
             if (recursive_self_.has_value()) {
@@ -4835,23 +4839,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto key_size = ::protocyte::length_delimited_field_size(
-                                          static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
-                                          .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                        -> ::protocyte::Result<::protocyte::usize> {
-                                              return ::protocyte::add_size(entry_payload, field_size);
-                                          });
-                if (!key_size) {
-                    return ::protocyte::unexpected(key_size.error());
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *key_size;
-                const auto value_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
-                if (!value_size) {
-                    return ::protocyte::unexpected(value_size.error());
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *value_size;
                 const auto st_size = ::protocyte::length_delimited_field_size(
                                          static_cast<::protocyte::u32>(FieldNumber::map_str_int32), entry_payload)
                                          .and_then([&](const ::protocyte::usize field_size) noexcept
@@ -4869,23 +4877,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto key_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!key_size) {
-                    return ::protocyte::unexpected(key_size.error());
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *key_size;
-                const auto value_size = ::protocyte::length_delimited_field_size(
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                            .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                          -> ::protocyte::Result<::protocyte::usize> {
-                                                return ::protocyte::add_size(entry_payload, field_size);
-                                            });
-                if (!value_size) {
-                    return ::protocyte::unexpected(value_size.error());
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *value_size;
                 const auto st_size = ::protocyte::length_delimited_field_size(
                                          static_cast<::protocyte::u32>(FieldNumber::map_int32_str), entry_payload)
                                          .and_then([&](const ::protocyte::usize field_size) noexcept
@@ -4903,23 +4915,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto key_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!key_size) {
-                    return ::protocyte::unexpected(key_size.error());
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *key_size;
-                const auto value_size = ::protocyte::length_delimited_field_size(
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                            .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                          -> ::protocyte::Result<::protocyte::usize> {
-                                                return ::protocyte::add_size(entry_payload, field_size);
-                                            });
-                if (!value_size) {
-                    return ::protocyte::unexpected(value_size.error());
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *value_size;
                 const auto st_size = ::protocyte::length_delimited_field_size(
                                          static_cast<::protocyte::u32>(FieldNumber::map_bool_bytes), entry_payload)
                                          .and_then([&](const ::protocyte::usize field_size) noexcept
@@ -4937,23 +4953,27 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto key_size = ::protocyte::add_size(
-                    entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                       ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
-                if (!key_size) {
-                    return ::protocyte::unexpected(key_size.error());
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *key_size;
-                const auto value_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
-                        .and_then([&](const ::protocyte::usize nested_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(entry_payload, nested_size);
-                        });
-                if (!value_size) {
-                    return ::protocyte::unexpected(value_size.error());
+                {
+                    const auto st_size = ::protocyte::message_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
+                                             .and_then([&](const ::protocyte::usize nested_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, nested_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *value_size;
                 const auto st_size = ::protocyte::length_delimited_field_size(
                                          static_cast<::protocyte::u32>(FieldNumber::map_uint64_msg), entry_payload)
                                          .and_then([&](const ::protocyte::usize field_size) noexcept
@@ -4971,26 +4991,30 @@ namespace test::ultimate {
                     value = 2u,
                 };
                 ::protocyte::usize entry_payload {};
-                const auto key_size = ::protocyte::length_delimited_field_size(
-                                          static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
-                                          .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                        -> ::protocyte::Result<::protocyte::usize> {
-                                              return ::protocyte::add_size(entry_payload, field_size);
-                                          });
-                if (!key_size) {
-                    return ::protocyte::unexpected(key_size.error());
+                {
+                    const auto st_size = ::protocyte::length_delimited_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
+                                             .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, field_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *key_size;
-                const auto value_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
-                        .and_then([&](const ::protocyte::usize nested_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(entry_payload, nested_size);
-                        });
-                if (!value_size) {
-                    return ::protocyte::unexpected(value_size.error());
+                {
+                    const auto st_size = ::protocyte::message_field_size(
+                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value)
+                                             .and_then([&](const ::protocyte::usize nested_size) noexcept
+                                                           -> ::protocyte::Result<::protocyte::usize> {
+                                                 return ::protocyte::add_size(entry_payload, nested_size);
+                                             });
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
                 }
-                entry_payload = *value_size;
                 const auto st_size = ::protocyte::length_delimited_field_size(
                                          static_cast<::protocyte::u32>(FieldNumber::very_nested_map), entry_payload)
                                          .and_then([&](const ::protocyte::usize field_size) noexcept

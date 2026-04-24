@@ -667,6 +667,22 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
         "                {"
         not in cross_header
     )
+    weird_map_serialize = header.split("for (const auto entry : weird_map_) {", maxsplit=1)[1].split(
+        "if (deep_oneof_case_", maxsplit=1
+    )[0]
+    assert weird_map_serialize.count("                {\n                    const auto st_size =") == 2
+    assert "const auto key_size" not in header
+    assert "const auto value_size" not in header
+    assert (
+        "                {\n"
+        "                    if (const auto st = ::protocyte::write_int32_field("
+        not in weird_map_serialize
+    )
+    assert (
+        "                {\n"
+        "                    if (const auto st = ::protocyte::write_string_field("
+        not in weird_map_serialize
+    )
 
 
 def test_model_decodes_constants_and_array_options() -> None:

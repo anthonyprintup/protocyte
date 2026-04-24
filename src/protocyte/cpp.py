@@ -73,6 +73,7 @@ _SCALAR_WRITE_HELPERS = {
 class CppWriter:
     indent_level: int = 0
     lines: list[str] = field(default_factory=list)
+    declared_names: list[set[str]] = field(default_factory=lambda: [set()])
 
     def line(self, text: str = "") -> None:
         self.lines.append(("  " * self.indent_level + text) if text else "")
@@ -96,6 +97,30 @@ class CppWriter:
             yield
         finally:
             self.pop(level)
+
+    @contextmanager
+    def cpp_scope(self) -> Iterator[None]:
+        self.declared_names.append(set())
+        try:
+            yield
+        finally:
+            self.declared_names.pop()
+
+    @contextmanager
+    def local_decl(self, name: str, *, force_scope: bool = False) -> Iterator[None]:
+        if force_scope or name in self.declared_names[-1]:
+            self.line("{")
+            self.push()
+            self.declared_names.append({name})
+            try:
+                yield
+            finally:
+                self.declared_names.pop()
+                self.pop()
+                self.line("}")
+            return
+        self.declared_names[-1].add(name)
+        yield
 
     def render(self) -> str:
         return "\n".join(self.lines) + "\n"
@@ -1262,7 +1287,7 @@ def _emit_write_field(
 def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     assert item.map_key is not None and item.map_value is not None
     w.line(f"for (const auto entry : {_member(item)}) {{")
-    with w.indent():
+    with w.indent(), w.cpp_scope():
         w.line("enum struct EntryFieldNumber : ::protocyte::u32 {")
         with w.indent():
             w.line(f"{_field_number_name(item.map_key)} = 1u,")
@@ -1270,23 +1295,29 @@ def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line("};")
         w.line("::protocyte::usize entry_payload {};")
         _emit_add_size_status(
-            w, _field_with_number(item.map_key, 1), "entry.key", options, "entry_payload", enum_type="EntryFieldNumber"
+            w,
+            _field_with_number(item.map_key, 1),
+            "entry.key",
+            options,
+            "entry_payload",
+            enum_type="EntryFieldNumber",
+            force_scope=True,
         )
         _emit_add_size_status(
-            w, _field_with_number(item.map_value, 2), "entry.value", options, "entry_payload", enum_type="EntryFieldNumber"
+            w,
+            _field_with_number(item.map_value, 2),
+            "entry.value",
+            options,
+            "entry_payload",
+            enum_type="EntryFieldNumber",
+            force_scope=True,
         )
         w.line(
             f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item)}, ::protocyte::WireType::LEN); !st) {{ return st; }}"
         )
         w.line("if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(entry_payload)); !st) { return st; }")
-        w.line("{")
-        with w.indent():
-            _emit_write_field(w, _field_with_number(item.map_key, 1), "entry.key", options, enum_type="EntryFieldNumber")
-        w.line("}")
-        w.line("{")
-        with w.indent():
-            _emit_write_field(w, _field_with_number(item.map_value, 2), "entry.value", options, enum_type="EntryFieldNumber")
-        w.line("}")
+        _emit_write_field(w, _field_with_number(item.map_key, 1), "entry.key", options, enum_type="EntryFieldNumber")
+        _emit_write_field(w, _field_with_number(item.map_value, 2), "entry.value", options, enum_type="EntryFieldNumber")
     w.line("}")
 
 
@@ -1309,7 +1340,7 @@ def _emit_write_packed_field(
     else:
         packed_value = f"packed_value_{item.cpp_name}"
         w.line(f"for (const auto &{packed_value} : {value}) {{")
-        with w.indent():
+        with w.indent(), w.cpp_scope():
             _emit_add_packed_size_status(w, item, packed_value, packed_name)
         w.line("}")
     w.line(
@@ -1320,7 +1351,7 @@ def _emit_write_packed_field(
     )
     packed_value = f"packed_value_{item.cpp_name}"
     w.line(f"for (const auto &{packed_value} : {value}) {{")
-    with w.indent():
+    with w.indent(), w.cpp_scope():
         _emit_write_scalar(w, item, packed_value)
     w.line("}")
 
@@ -1339,7 +1370,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
         if item.packed:
             packed_name = f"packed_size_{item.cpp_name}"
             w.line(f"if (!{_member(item)}.empty()) {{")
-            with w.indent():
+            with w.indent(), w.cpp_scope():
                 w.line(f"::protocyte::usize {packed_name} {{}};")
                 width = _fixed_scalar_width(item)
                 if width is not None:
@@ -1350,7 +1381,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
                     w.line(f"{packed_name} = *{packed_name}_result;")
                 else:
                     w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
-                    with w.indent():
+                    with w.indent(), w.cpp_scope():
                         _emit_add_packed_size_result(w, item, value_name, packed_name)
                     w.line("}")
                 _emit_size_result_update(
@@ -1362,7 +1393,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
             w.line("}")
             return
         w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
-        with w.indent():
+        with w.indent(), w.cpp_scope():
             _emit_add_size(w, item, value_name, options)
         w.line("}")
         return
@@ -1370,7 +1401,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
         _emit_size_map(w, item, options)
         return
     w.line(f"if ({condition}) {{")
-    with w.indent():
+    with w.indent(), w.cpp_scope():
         _emit_add_size(w, item, _member(item), options)
     w.line("}")
 
@@ -1378,7 +1409,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
 def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     assert item.map_key is not None and item.map_value is not None
     w.line(f"for (const auto entry : {_member(item)}) {{")
-    with w.indent():
+    with w.indent(), w.cpp_scope():
         w.line("enum struct EntryFieldNumber : ::protocyte::u32 {")
         with w.indent():
             w.line(f"{_field_number_name(item.map_key)} = 1u,")
@@ -1393,7 +1424,7 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             "entry_payload",
             enum_type="EntryFieldNumber",
             result=True,
-            temp_name="key_size",
+            force_scope=True,
         )
         _emit_add_size_status(
             w,
@@ -1403,7 +1434,7 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             "entry_payload",
             enum_type="EntryFieldNumber",
             result=True,
-            temp_name="value_size",
+            force_scope=True,
         )
         _emit_size_result_update(
             w,
@@ -1414,10 +1445,13 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
     w.line("}")
 
 
-def _emit_size_result_update(w: CppWriter, total_name: str, result_expr: str, error_return: str, temp_name: str = "st_size") -> None:
-    w.line(f"const auto {temp_name} = {result_expr};")
-    w.line(f"if (!{temp_name}) {{ return {error_return.replace('st_size', temp_name)}; }}")
-    w.line(f"{total_name} = *{temp_name};")
+def _emit_size_result_update(
+    w: CppWriter, total_name: str, result_expr: str, error_return: str, *, force_scope: bool = False
+) -> None:
+    with w.local_decl("st_size", force_scope=force_scope):
+        w.line(f"const auto st_size = {result_expr};")
+        w.line(f"if (!st_size) {{ return {error_return}; }}")
+        w.line(f"{total_name} = *st_size;")
 
 
 def _emit_add_size(
@@ -1462,7 +1496,7 @@ def _emit_add_size_status(
     *,
     enum_type: str = "FieldNumber",
     result: bool = False,
-    temp_name: str = "st_size",
+    force_scope: bool = False,
 ) -> None:
     if item.kind in {"string", "bytes"}:
         _emit_size_result_update(
@@ -1470,7 +1504,7 @@ def _emit_add_size_status(
             total_name,
             f"::protocyte::length_delimited_field_size({_field_number_u32(item, enum_type)}, {value}.size()).and_then([&](const ::protocyte::usize field_size) noexcept -> ::protocyte::Result<::protocyte::usize> {{ return ::protocyte::add_size({total_name}, field_size); }})",
             "::protocyte::unexpected(st_size.error())" if result else "st_size.status()",
-            temp_name,
+            force_scope=force_scope,
         )
         return
     if item.kind == "message":
@@ -1479,7 +1513,7 @@ def _emit_add_size_status(
             total_name,
             f"::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {value}).and_then([&](const ::protocyte::usize nested_size) noexcept -> ::protocyte::Result<::protocyte::usize> {{ return ::protocyte::add_size({total_name}, nested_size); }})",
             "::protocyte::unexpected(st_size.error())" if result else "st_size.status()",
-            temp_name,
+            force_scope=force_scope,
         )
         return
     value_size = f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + {_scalar_size(item, value)}"
@@ -1488,7 +1522,7 @@ def _emit_add_size_status(
         total_name,
         f"::protocyte::add_size({total_name}, {value_size})",
         "::protocyte::unexpected(st_size.error())" if result else "st_size.status()",
-        temp_name,
+        force_scope=force_scope,
     )
 
 
