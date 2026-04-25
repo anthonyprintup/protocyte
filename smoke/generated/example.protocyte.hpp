@@ -3144,9 +3144,6 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        clear_special_oneof();
-                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {};
-                        special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
@@ -3159,12 +3156,23 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const bool was_oneof_bytes = has_oneof_bytes();
+                        if (!was_oneof_bytes) {
+                            clear_special_oneof();
+                            new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {};
+                            special_oneof_case_ = Special_oneofCase::oneof_bytes;
+                        }
+                        const auto old_oneof_bytes_size = special_oneof.oneof_bytes.size();
                         if (const auto st = special_oneof.oneof_bytes.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st =
                                 reader.read(special_oneof.oneof_bytes.data(), special_oneof.oneof_bytes.size());
                             !st) {
+                            (void) special_oneof.oneof_bytes.resize_for_overwrite(old_oneof_bytes_size);
+                            if (!was_oneof_bytes) {
+                                clear_special_oneof();
+                            }
                             return st;
                         }
                         break;
@@ -3628,11 +3636,15 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
+                        const bool had_sha256 = sha256_.has_value();
                         if (const auto st = sha256_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         auto view = sha256_.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
+                            if (!had_sha256) {
+                                sha256_.clear();
+                            }
                             return st;
                         }
                         break;
@@ -3688,10 +3700,12 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const auto old_byte_array_size = byte_array_.size();
                         if (const auto st = byte_array_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(byte_array_.data(), byte_array_.size()); !st) {
+                            (void) byte_array_.resize_for_overwrite(old_byte_array_size);
                             return st;
                         }
                         break;
@@ -3747,10 +3761,12 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const auto old_float_expr_array_size = float_expr_array_.size();
                         if (const auto st = float_expr_array_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(float_expr_array_.data(), float_expr_array_.size()); !st) {
+                            (void) float_expr_array_.resize_for_overwrite(old_float_expr_array_size);
                             return st;
                         }
                         break;
@@ -3815,9 +3831,6 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {};
-                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
@@ -3830,12 +3843,24 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const bool was_crazy_bounded_bytes = has_crazy_bounded_bytes();
+                        if (!was_crazy_bounded_bytes) {
+                            clear_crazy_bytes_oneof();
+                            new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {};
+                            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
+                        }
+                        const auto old_crazy_bounded_bytes_size = crazy_bytes_oneof.crazy_bounded_bytes.size();
                         if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(crazy_bytes_oneof.crazy_bounded_bytes.data(),
                                                         crazy_bytes_oneof.crazy_bounded_bytes.size());
                             !st) {
+                            (void) crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(
+                                old_crazy_bounded_bytes_size);
+                            if (!was_crazy_bounded_bytes) {
+                                clear_crazy_bytes_oneof();
+                            }
                             return st;
                         }
                         break;
@@ -3845,9 +3870,6 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {};
-                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
@@ -3860,11 +3882,24 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
+                        const bool was_crazy_fixed_bytes = has_crazy_fixed_bytes();
+                        if (!was_crazy_fixed_bytes) {
+                            clear_crazy_bytes_oneof();
+                            new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {};
+                            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
+                        }
+                        const bool had_crazy_fixed_bytes = crazy_bytes_oneof.crazy_fixed_bytes.has_value();
                         if (const auto st = crazy_bytes_oneof.crazy_fixed_bytes.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         auto view = crazy_bytes_oneof.crazy_fixed_bytes.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
+                            if (!had_crazy_fixed_bytes) {
+                                crazy_bytes_oneof.crazy_fixed_bytes.clear();
+                            }
+                            if (!was_crazy_fixed_bytes) {
+                                clear_crazy_bytes_oneof();
+                            }
                             return st;
                         }
                         break;
@@ -5985,10 +6020,12 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const auto old_nested_bytes_size = nested_bytes_.size();
                         if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
+                            (void) nested_bytes_.resize_for_overwrite(old_nested_bytes_size);
                             return st;
                         }
                         break;
@@ -6192,10 +6229,12 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const auto old_external_bytes_size = external_bytes_.size();
                         if (const auto st = external_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(external_bytes_.data(), external_bytes_.size()); !st) {
+                            (void) external_bytes_.resize_for_overwrite(old_external_bytes_size);
                             return st;
                         }
                         break;

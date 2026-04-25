@@ -1092,7 +1092,7 @@ def _emit_read_repeated_value(
     w.line(f"if (const auto st = {_member(item)}.push_back(value); !st) {{ return st; }}")
 
 
-def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str) -> None:
+def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
     bound = _array_max_literal(item)
     w.line(f"auto len = ::protocyte::read_length_delimited_size({reader});")
     w.line("if (!len) { return len.status(); }")
@@ -1103,15 +1103,50 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str) -> Non
         w.line(
             f"if (*len != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {reader}.position(), field_number); }}"
         )
-        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-        w.line(f"auto view = {_member(item)}.mutable_view();")
-        w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{ return st; }}")
     else:
         w.line(
             f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
+    rollback_lines: list[str] = []
+    if item.oneof_name:
+        was_name = f"was_{item.cpp_name}"
+        w.line(f"const bool {was_name} = has_{item.cpp_name}();")
+        w.line(f"if (!{was_name}) {{")
+        w.push()
+        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
+        w.line(f"{_oneof_case_member(item.oneof_name)} = {_oneof_case_type(item.oneof_name)}::{item.cpp_name};")
+        w.pop()
+        w.line("}")
+        rollback_lines.append(f"if (!{was_name}) {{ clear_{cpp_identifier(item.oneof_name)}(); }}")
+    if item.array_fixed:
+        had_name = f"had_{item.cpp_name}"
+        w.line(f"const bool {had_name} = {_member(item)}.has_value();")
         w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-        w.line(f"if (const auto st = {reader}.read({_member(item)}.data(), {_member(item)}.size()); !st) {{ return st; }}")
+        w.line(f"auto view = {_member(item)}.mutable_view();")
+        rollback_lines.insert(0, f"if (!{had_name}) {{ {_member(item)}.clear(); }}")
+    else:
+        old_size_name = f"old_{item.cpp_name}_size"
+        w.line(f"const auto {old_size_name} = {_member(item)}.size();")
+        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
+        rollback_lines.insert(0, f"(void){_member(item)}.resize_for_overwrite({old_size_name});")
+        w.line(f"if (const auto st = {reader}.read({_member(item)}.data(), {_member(item)}.size()); !st) {{")
+        w.push()
+        for line in rollback_lines:
+            w.line(line)
+        w.line("return st;")
+        w.pop()
+        w.line("}")
+        if _has_presence_flag(item):
+            w.line(f"has_{item.cpp_name}_ = true;")
+        return
+    w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{")
+    w.push()
+    for line in rollback_lines:
+        w.line(line)
+    w.line("return st;")
+    w.pop()
+    w.line("}")
     if _has_presence_flag(item):
         w.line(f"has_{item.cpp_name}_ = true;")
 
@@ -1121,10 +1156,7 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
         case_type = _oneof_case_type(item.oneof_name)
         case_member = _oneof_case_member(item.oneof_name)
         if item.kind == "bytes" and item.array_enabled:
-            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
-            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
-            w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-            _emit_read_bounded_bytes(w, item, reader)
+            _emit_read_bounded_bytes(w, item, reader, options)
         else:
             w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
             w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
@@ -1133,7 +1165,7 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
             w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {_member(item)}); !st) {{ return st; }}")
         return
     if item.kind == "bytes" and item.array_enabled:
-        _emit_read_bounded_bytes(w, item, reader)
+        _emit_read_bounded_bytes(w, item, reader, options)
         return
     if item.kind in {"string", "bytes"}:
         helper = _length_delimited_read_helper(item, checked=True)

@@ -131,10 +131,12 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const auto old_nested_bytes_size = nested_bytes_.size();
                         if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
+                            (void) nested_bytes_.resize_for_overwrite(old_nested_bytes_size);
                             return st;
                         }
                         break;
@@ -339,10 +341,12 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
+                        const auto old_remote_bytes_size = remote_bytes_.size();
                         if (const auto st = remote_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(remote_bytes_.data(), remote_bytes_.size()); !st) {
+                            (void) remote_bytes_.resize_for_overwrite(old_remote_bytes_size);
                             return st;
                         }
                         break;

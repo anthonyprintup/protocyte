@@ -1403,11 +1403,15 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     assert "const auto view = ::protocyte::byte_view_of(value);" in header
     assert "if (const auto st = temp.assign(*view); !st)" in header
     assert "::protocyte::Status set_data(const ::protocyte::ByteView value) noexcept" not in header
+    assert "const bool was_data = has_data();" in header
     assert "new (&choice.data) ::protocyte::ByteArray<8u> {};" in header
+    assert "const auto old_data_size = choice.data.size();" in header
+    assert "if (const auto st = choice.data.resize_for_overwrite(*len); !st)" in header
+    assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st)" in header
+    assert "(void)choice.data.resize_for_overwrite(old_data_size);" in header
+    assert "if (!was_data) { clear_choice(); }" in header
     assert "choice_case_ = ChoiceCase::data;" in header
-    assert "if (const auto st = choice.data.resize_for_overwrite(*len); !st) {" in header
     assert "if (*len > ctx_->limits.max_string_bytes) {" in header
-    assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st) {" in header
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 

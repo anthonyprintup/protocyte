@@ -1458,6 +1458,34 @@ namespace {
             require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
         }
 
+        SECTION("truncated bounded bytes roll back parsed container state") {
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::byte_array),
+                                                 protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, sizeof(byte_array)));
+            require_success(writer.write(byte_array, 2u));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+            CHECK(parsed.byte_array_size() == 0u);
+        }
+
+        SECTION("truncated bounded oneof bytes roll back parsed container state") {
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_bytes),
+                                                 protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, sizeof(oneof_bytes)));
+            require_success(writer.write(oneof_bytes, 2u));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+            CHECK_FALSE(parsed.has_oneof_bytes());
+        }
+
         SECTION("malformed map entries are rejected while parsing") {
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
