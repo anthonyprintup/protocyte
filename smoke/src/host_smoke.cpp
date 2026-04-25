@@ -1289,8 +1289,14 @@ namespace {
 
             message.clear_byte_array();
             CHECK(message.byte_array_size() == 0u);
+            require_success(message.resize_byte_array_for_overwrite(sizeof(byte_array)));
+            auto view = message.mutable_byte_array();
+            for (size_t i {}; i < view.size; ++i) { view.data[i] = byte_array[i]; }
+            CHECK(view_equal(message.byte_array(), view_of(byte_array)));
 
             require_failure(message.resize_byte_array(test::ultimate::BYTE_ARRAY_CAP + 1u),
+                            protocyte::ErrorCode::count_limit);
+            require_failure(message.resize_byte_array_for_overwrite(test::ultimate::BYTE_ARRAY_CAP + 1u),
                             protocyte::ErrorCode::count_limit);
             require_failure(message.set_byte_array(view_of(large_byte_array)), protocyte::ErrorCode::count_limit);
             require_success(message.set_float_expr_array(view_of(float_expr_array)));
@@ -1772,6 +1778,15 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         }
         CHECK(index == sizeof(bytes_data));
 
+        Config::Bytes overwritten_payload(&ctx);
+        require_success(overwritten_payload.resize_for_overwrite(sizeof(bytes_data)));
+        index = 0u;
+        for (auto &byte : overwritten_payload.mutable_view()) {
+            byte = bytes_data[index];
+            ++index;
+        }
+        CHECK(view_equal(overwritten_payload.view(), view_of(bytes_data)));
+
         Config::String text(&ctx);
         assign_string(text, view_of(string_bytes));
         index = 0u;
@@ -1787,6 +1802,12 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
             CHECK(*it == string_bytes[index]);
         }
         CHECK(index == 0u);
+
+        Config::String overwritten_text(&ctx);
+        require_success(overwritten_text.resize_for_overwrite(sizeof(string_bytes)));
+        auto text_view = overwritten_text.mutable_view_for_overwrite();
+        for (size_t i {}; i < text_view.size; ++i) { text_view.data[i] = string_bytes[i]; }
+        CHECK(view_equal(overwritten_text.view(), view_of(string_bytes)));
     }
 }
 

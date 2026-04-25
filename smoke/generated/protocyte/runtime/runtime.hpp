@@ -2002,6 +2002,16 @@ namespace protocyte {
             return {};
         }
 
+        Status resize_for_overwrite(const usize count) noexcept
+            requires(::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>)
+        {
+            if (const auto st = reserve(count); !st) {
+                return st;
+            }
+            size_ = count;
+            return {};
+        }
+
     protected:
         template<class Source> static constexpr bool can_memcpy_range_v =
             ::std::is_trivially_copyable_v<T> && ::std::same_as<::std::remove_cv_t<Source>, T>;
@@ -2378,8 +2388,19 @@ namespace protocyte {
             if (count > Max) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            if (count > size_) {
-                ::std::memset(bytes_ + size_, 0, count - size_);
+            const usize old_size {size_};
+            if (const auto st = resize_for_overwrite(count); !st) {
+                return st;
+            }
+            if (count > old_size) {
+                ::std::memset(bytes_ + old_size, 0, count - old_size);
+            }
+            return {};
+        }
+
+        Status resize_for_overwrite(const usize count) noexcept {
+            if (count > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             size_ = count;
             return {};
@@ -2455,6 +2476,14 @@ namespace protocyte {
         const_reverse_iterator crend() const noexcept { return rend(); }
         void clear() noexcept { has_ = false; }
 
+        Status resize_for_overwrite(const usize count) noexcept {
+            if (count != Max) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            has_ = true;
+            return {};
+        }
+
         Status assign(const ByteView view) noexcept {
             if (view.size != Max) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {});
@@ -2518,12 +2547,19 @@ namespace protocyte {
             return bytes_.resize_default(count);
         }
 
+        Status resize_for_overwrite(const usize count) noexcept {
+            if (ctx_ != nullptr && count > ctx_->limits.max_string_bytes) {
+                return protocyte::unexpected(ErrorCode::size_limit, {});
+            }
+            return bytes_.resize_for_overwrite(count);
+        }
+
         Status assign(const ByteView view) noexcept {
             if (ctx_ != nullptr && view.size > ctx_->limits.max_string_bytes) {
                 return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             Bytes temp {ctx_};
-            if (const auto st = temp.resize(view.size); !st) {
+            if (const auto st = temp.resize_for_overwrite(view.size); !st) {
                 return st;
             }
             copy_bytes(temp.data(), view.data, view.size);
@@ -2567,6 +2603,14 @@ namespace protocyte {
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
         void clear() noexcept { bytes_.clear(); }
+        MutableByteView mutable_view_for_overwrite() noexcept { return bytes_.mutable_view(); }
+
+        Status resize_for_overwrite(const usize count) noexcept {
+            if (const auto st = check_size_limit(count); !st) {
+                return st;
+            }
+            return bytes_.resize_for_overwrite(count);
+        }
 
         Status assign(const ByteView view) noexcept {
             if (const auto st = check_size_limit(view.size); !st) {
@@ -3824,7 +3868,7 @@ namespace protocyte {
             return protocyte::unexpected(ErrorCode::size_limit, reader.position());
         }
         typename Config::Bytes temp {&ctx};
-        if (const auto st = temp.resize(size); !st) {
+        if (const auto st = temp.resize_for_overwrite(size); !st) {
             return st;
         }
         auto buffer = temp.mutable_view();
@@ -3860,7 +3904,7 @@ namespace protocyte {
             return protocyte::unexpected(ErrorCode::size_limit, reader.position());
         }
         typename Config::Bytes buffer {&ctx};
-        if (const auto st = buffer.resize(size); !st) {
+        if (const auto st = buffer.resize_for_overwrite(size); !st) {
             return st;
         }
         auto bytes = buffer.mutable_view();

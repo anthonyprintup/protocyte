@@ -705,6 +705,12 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"return {_member(item)}.mutable_view();")
         w.pop()
         w.line("}")
+        w.line(f"::protocyte::Status resize_{item.cpp_name}_for_overwrite(const ::protocyte::usize size) noexcept {{")
+        w.push()
+        w.line("if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
+        w.line(f"return {_member(item)}.resize_for_overwrite(size);")
+        w.pop()
+        w.line("}")
         _emit_byte_range_setter_start(w, item)
         w.line("if (view->size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
         w.line(f"return {_member(item)}.assign(*view);")
@@ -725,6 +731,17 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         if item.array_fixed:
             w.line(f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
         w.line(f"if (const auto st = {_member(item)}.resize(size); !st) {{ return st; }}")
+        if item.proto3_optional:
+            w.line(f"has_{item.cpp_name}_ = true;")
+        w.line("return {};")
+        w.pop()
+        w.line("}")
+        w.line(f"::protocyte::Status resize_{item.cpp_name}_for_overwrite(const ::protocyte::usize size) noexcept {{")
+        w.push()
+        w.line("if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
+        if item.array_fixed:
+            w.line(f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
+        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(size); !st) {{ return st; }}")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
         w.line("return {};")
@@ -1086,13 +1103,14 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str) -> Non
         w.line(
             f"if (*len != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {reader}.position(), field_number); }}"
         )
+        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
         w.line(f"auto view = {_member(item)}.mutable_view();")
         w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{ return st; }}")
     else:
         w.line(
             f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
-        w.line(f"if (const auto st = {_member(item)}.resize(*len); !st) {{ return st; }}")
+        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
         w.line(f"if (const auto st = {reader}.read({_member(item)}.data(), {_member(item)}.size()); !st) {{ return st; }}")
     if _has_presence_flag(item):
         w.line(f"has_{item.cpp_name}_ = true;")

@@ -2696,6 +2696,12 @@ namespace test::ultimate {
             }
             return sha256_.mutable_view();
         }
+        ::protocyte::Status resize_sha256_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            return sha256_.resize_for_overwrite(size);
+        }
         template<class Value>::protocyte::Status set_sha256(const Value &value) noexcept
             requires(::protocyte::ByteViewRange<Value>)
         {
@@ -2722,6 +2728,15 @@ namespace test::ultimate {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = byte_array_.resize(size); !st) {
+                return st;
+            }
+            return {};
+        }
+        ::protocyte::Status resize_byte_array_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = byte_array_.resize_for_overwrite(size); !st) {
                 return st;
             }
             return {};
@@ -2760,6 +2775,15 @@ namespace test::ultimate {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = float_expr_array_.resize(size); !st) {
+                return st;
+            }
+            return {};
+        }
+        ::protocyte::Status resize_float_expr_array_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = float_expr_array_.resize_for_overwrite(size); !st) {
                 return st;
             }
             return {};
@@ -3135,7 +3159,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = special_oneof.oneof_bytes.resize(*len); !st) {
+                        if (const auto st = special_oneof.oneof_bytes.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st =
@@ -3604,6 +3628,9 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
+                        if (const auto st = sha256_.resize_for_overwrite(*len); !st) {
+                            return st;
+                        }
                         auto view = sha256_.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
@@ -3661,7 +3688,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = byte_array_.resize(*len); !st) {
+                        if (const auto st = byte_array_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(byte_array_.data(), byte_array_.size()); !st) {
@@ -3720,7 +3747,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = float_expr_array_.resize(*len); !st) {
+                        if (const auto st = float_expr_array_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(float_expr_array_.data(), float_expr_array_.size()); !st) {
@@ -3803,7 +3830,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize(*len); !st) {
+                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(crazy_bytes_oneof.crazy_bounded_bytes.data(),
@@ -3832,6 +3859,9 @@ namespace test::ultimate {
                         if (*len != 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
+                        }
+                        if (const auto st = crazy_bytes_oneof.crazy_fixed_bytes.resize_for_overwrite(*len); !st) {
+                            return st;
                         }
                         auto view = crazy_bytes_oneof.crazy_fixed_bytes.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
@@ -5891,6 +5921,15 @@ namespace test::ultimate {
             }
             return {};
         }
+        ::protocyte::Status resize_nested_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = nested_bytes_.resize_for_overwrite(size); !st) {
+                return st;
+            }
+            return {};
+        }
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
             requires(::protocyte::ByteViewRange<Value>)
@@ -5946,7 +5985,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = nested_bytes_.resize(*len); !st) {
+                        if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
@@ -6069,6 +6108,15 @@ namespace test::ultimate {
             }
             return {};
         }
+        ::protocyte::Status resize_external_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = external_bytes_.resize_for_overwrite(size); !st) {
+                return st;
+            }
+            return {};
+        }
         ::protocyte::MutableByteView mutable_external_bytes() noexcept { return external_bytes_.mutable_view(); }
         template<class Value>::protocyte::Status set_external_bytes(const Value &value) noexcept
             requires(::protocyte::ByteViewRange<Value>)
@@ -6144,7 +6192,7 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = external_bytes_.resize(*len); !st) {
+                        if (const auto st = external_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(external_bytes_.data(), external_bytes_.size()); !st) {
