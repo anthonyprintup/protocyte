@@ -166,11 +166,13 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
-                            const auto packed_reserve_values = ::protocyte::checked_add(values_.size(), *len / 4u);
+                            typename Config::template Vector<::protocyte::f32> packed_values_values {ctx_};
+                            const auto packed_reserve_values =
+                                ::protocyte::checked_add(packed_values_values.size(), *len / 4u);
                             if (!packed_reserve_values) {
                                 return packed_reserve_values.status();
                             }
-                            if (const auto st = values_.reserve(*packed_reserve_values); !st) {
+                            if (const auto st = packed_values_values.reserve(*packed_reserve_values); !st) {
                                 return st;
                             }
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
@@ -181,12 +183,22 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = values_.push_back(value); !st) {
+                                if (const auto st = packed_values_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_values_values_commit_size =
+                                ::protocyte::checked_add(values_.size(), packed_values_values.size());
+                            if (!packed_values_values_commit_size) {
+                                return packed_values_values_commit_size.status();
+                            }
+                            if (const auto st = values_.reserve(*packed_values_values_commit_size); !st) {
+                                return st;
+                            }
+                            for (const auto &value : packed_values_values) {
+                                if (const auto st = values_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -454,10 +466,17 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = ensure_inner().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                            });
+                        ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> inner_value {*ctx_};
+                        if (inner_.has_value()) {
+                            if (const auto st = inner_value.copy_from(*inner_); !st) {
+                                return st;
+                            }
+                        }
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, inner_value);
                             !st) {
+                            return st;
+                        }
+                        if (const auto st = inner_.emplace(::protocyte::move(inner_value)); !st) {
                             return st;
                         }
                         break;
@@ -1225,26 +1244,27 @@ namespace test::ultimate {
                         break;
                     }
                     case FieldNumber::val: {
-                        clear_deep_oneof();
-                        new (&deep_oneof.val)::protocyte::i64 {0};
-                        deep_oneof_case_ = Deep_oneofCase::val;
-                        if (const auto st =
-                                ::protocyte::read_int64_field(reader, wire_type, field_number)
-                                    .transform([&](const auto decoded) noexcept { deep_oneof.val = decoded; });
+                        ::protocyte::i64 val_value {};
+                        if (const auto st = ::protocyte::read_int64_field(reader, wire_type, field_number)
+                                                .transform([&](const auto decoded) noexcept { val_value = decoded; });
                             !st) {
                             return st;
                         }
+                        clear_deep_oneof();
+                        new (&deep_oneof.val)::protocyte::i64 {::protocyte::move(val_value)};
+                        deep_oneof_case_ = Deep_oneofCase::val;
                         break;
                     }
                     case FieldNumber::text: {
-                        clear_deep_oneof();
-                        new (&deep_oneof.text) typename Config::String {ctx_};
-                        deep_oneof_case_ = Deep_oneofCase::text;
+                        typename Config::String text_value {ctx_};
                         if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
-                                                                                   field_number, deep_oneof.text);
+                                                                                   field_number, text_value);
                             !st) {
                             return st;
                         }
+                        clear_deep_oneof();
+                        new (&deep_oneof.text) typename Config::String {::protocyte::move(text_value)};
+                        deep_oneof_case_ = Deep_oneofCase::text;
                         break;
                     }
                     default: {
@@ -2976,6 +2996,7 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
+                            typename Config::template Vector<::protocyte::i32> packed_r_int32_unpacked_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
@@ -2984,12 +3005,23 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = r_int32_unpacked_.push_back(value); !st) {
+                                if (const auto st = packed_r_int32_unpacked_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_r_int32_unpacked_values_commit_size = ::protocyte::checked_add(
+                                r_int32_unpacked_.size(), packed_r_int32_unpacked_values.size());
+                            if (!packed_r_int32_unpacked_values_commit_size) {
+                                return packed_r_int32_unpacked_values_commit_size.status();
+                            }
+                            if (const auto st = r_int32_unpacked_.reserve(*packed_r_int32_unpacked_values_commit_size);
+                                !st) {
+                                return st;
+                            }
+                            for (const auto &value : packed_r_int32_unpacked_values) {
+                                if (const auto st = r_int32_unpacked_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -3010,6 +3042,7 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
+                            typename Config::template Vector<::protocyte::i32> packed_r_int32_packed_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
@@ -3018,12 +3051,23 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = r_int32_packed_.push_back(value); !st) {
+                                if (const auto st = packed_r_int32_packed_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_r_int32_packed_values_commit_size =
+                                ::protocyte::checked_add(r_int32_packed_.size(), packed_r_int32_packed_values.size());
+                            if (!packed_r_int32_packed_values_commit_size) {
+                                return packed_r_int32_packed_values_commit_size.status();
+                            }
+                            if (const auto st = r_int32_packed_.reserve(*packed_r_int32_packed_values_commit_size);
+                                !st) {
+                                return st;
+                            }
+                            for (const auto &value : packed_r_int32_packed_values) {
+                                if (const auto st = r_int32_packed_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -3044,11 +3088,13 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
-                            const auto packed_reserve_r_double = ::protocyte::checked_add(r_double_.size(), *len / 8u);
+                            typename Config::template Vector<::protocyte::f64> packed_r_double_values {ctx_};
+                            const auto packed_reserve_r_double =
+                                ::protocyte::checked_add(packed_r_double_values.size(), *len / 8u);
                             if (!packed_reserve_r_double) {
                                 return packed_reserve_r_double.status();
                             }
-                            if (const auto st = r_double_.reserve(*packed_reserve_r_double); !st) {
+                            if (const auto st = packed_r_double_values.reserve(*packed_reserve_r_double); !st) {
                                 return st;
                             }
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
@@ -3059,12 +3105,22 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = r_double_.push_back(value); !st) {
+                                if (const auto st = packed_r_double_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_r_double_values_commit_size =
+                                ::protocyte::checked_add(r_double_.size(), packed_r_double_values.size());
+                            if (!packed_r_double_values_commit_size) {
+                                return packed_r_double_values_commit_size.status();
+                            }
+                            if (const auto st = r_double_.reserve(*packed_r_double_values_commit_size); !st) {
+                                return st;
+                            }
+                            for (const auto &value : packed_r_double_values) {
+                                if (const auto st = r_double_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -3092,37 +3148,46 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> nested1_value {*ctx_};
+                        if (nested1_.has_value()) {
+                            if (const auto st = nested1_value.copy_from(*nested1_); !st) {
+                                return st;
+                            }
+                        }
                         if (const auto st =
-                                ensure_nested1().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested1_value);
                             !st) {
+                            return st;
+                        }
+                        if (const auto st = nested1_.emplace(::protocyte::move(nested1_value)); !st) {
                             return st;
                         }
                         break;
                     }
                     case FieldNumber::oneof_string: {
-                        clear_special_oneof();
-                        new (&special_oneof.oneof_string) typename Config::String {ctx_};
-                        special_oneof_case_ = Special_oneofCase::oneof_string;
-                        if (const auto st = ::protocyte::read_string_field<Config>(
-                                *ctx_, reader, wire_type, field_number, special_oneof.oneof_string);
+                        typename Config::String oneof_string_value {ctx_};
+                        if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
+                                                                                   field_number, oneof_string_value);
                             !st) {
                             return st;
                         }
+                        clear_special_oneof();
+                        new (&special_oneof.oneof_string)
+                            typename Config::String {::protocyte::move(oneof_string_value)};
+                        special_oneof_case_ = Special_oneofCase::oneof_string;
                         break;
                     }
                     case FieldNumber::oneof_int32: {
-                        clear_special_oneof();
-                        new (&special_oneof.oneof_int32)::protocyte::i32 {0};
-                        special_oneof_case_ = Special_oneofCase::oneof_int32;
-                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept {
-                                                    special_oneof.oneof_int32 = decoded;
-                                                });
+                        ::protocyte::i32 oneof_int32_value {};
+                        if (const auto st =
+                                ::protocyte::read_int32_field(reader, wire_type, field_number)
+                                    .transform([&](const auto decoded) noexcept { oneof_int32_value = decoded; });
                             !st) {
                             return st;
                         }
+                        clear_special_oneof();
+                        new (&special_oneof.oneof_int32)::protocyte::i32 {::protocyte::move(oneof_int32_value)};
+                        special_oneof_case_ = Special_oneofCase::oneof_int32;
                         break;
                     }
                     case FieldNumber::oneof_msg: {
@@ -3130,13 +3195,28 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> oneof_msg_value {*ctx_};
+                        if (has_oneof_msg() && special_oneof.oneof_msg.has_value()) {
+                            if (const auto st = oneof_msg_value.copy_from(*special_oneof.oneof_msg); !st) {
+                                return st;
+                            }
+                        }
                         if (const auto st =
-                                ensure_oneof_msg().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, oneof_msg_value);
                             !st) {
                             return st;
                         }
+                        typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>
+                            oneof_msg_committed {};
+                        if (const auto st = oneof_msg_committed.emplace(::protocyte::move(oneof_msg_value)); !st) {
+                            return st;
+                        }
+                        clear_special_oneof();
+                        new (&special_oneof.oneof_msg) typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
+                            ::protocyte::move(oneof_msg_committed)};
+                        special_oneof_case_ = Special_oneofCase::oneof_msg;
                         break;
                     }
                     case FieldNumber::oneof_bytes: {
@@ -3156,25 +3236,21 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        const bool was_oneof_bytes = has_oneof_bytes();
-                        if (!was_oneof_bytes) {
-                            clear_special_oneof();
-                            new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {};
-                            special_oneof_case_ = Special_oneofCase::oneof_bytes;
-                        }
-                        const auto old_oneof_bytes_size = special_oneof.oneof_bytes.size();
-                        if (const auto st = special_oneof.oneof_bytes.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st =
-                                reader.read(special_oneof.oneof_bytes.data(), special_oneof.oneof_bytes.size());
-                            !st) {
-                            static_cast<void>(special_oneof.oneof_bytes.resize_for_overwrite(old_oneof_bytes_size));
-                            if (!was_oneof_bytes) {
-                                clear_special_oneof();
-                            }
+                        ::protocyte::ByteArray<4u> oneof_bytes_value {};
+                        if (const auto st = oneof_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
+                        const auto view = oneof_bytes_value.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        clear_special_oneof();
+                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {
+                            ::protocyte::move(oneof_bytes_value)};
+                        special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         break;
                     }
                     case FieldNumber::map_str_int32: {
@@ -3529,11 +3605,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        ::test::ultimate::UltimateComplexMessage<Config> recursive_self_value {*ctx_};
+                        if (recursive_self_.has_value()) {
+                            if (const auto st = recursive_self_value.copy_from(*recursive_self_); !st) {
+                                return st;
+                            }
+                        }
                         if (const auto st =
-                                ensure_recursive_self().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, recursive_self_value);
                             !st) {
+                            return st;
+                        }
+                        if (const auto st = recursive_self_.assign(::protocyte::move(recursive_self_value)); !st) {
                             return st;
                         }
                         break;
@@ -3559,6 +3642,7 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
+                            typename Config::template Vector<::protocyte::i32> packed_colors_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
@@ -3567,12 +3651,22 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = colors_.push_back(value); !st) {
+                                if (const auto st = packed_colors_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_colors_values_commit_size =
+                                ::protocyte::checked_add(colors_.size(), packed_colors_values.size());
+                            if (!packed_colors_values_commit_size) {
+                                return packed_colors_values_commit_size.status();
+                            }
+                            if (const auto st = colors_.reserve(*packed_colors_values_commit_size); !st) {
+                                return st;
+                            }
+                            for (const auto &value : packed_colors_values) {
+                                if (const auto st = colors_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -3610,11 +3704,19 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>
+                            extreme_nesting_value {*ctx_};
+                        if (extreme_nesting_.has_value()) {
+                            if (const auto st = extreme_nesting_value.copy_from(*extreme_nesting_); !st) {
+                                return st;
+                            }
+                        }
                         if (const auto st =
-                                ensure_extreme_nesting().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, extreme_nesting_value);
                             !st) {
+                            return st;
+                        }
+                        if (const auto st = extreme_nesting_.emplace(::protocyte::move(extreme_nesting_value)); !st) {
                             return st;
                         }
                         break;
@@ -3636,17 +3738,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
-                        const bool had_sha256 = sha256_.has_value();
-                        if (const auto st = sha256_.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        auto view = sha256_.mutable_view();
+                        ::protocyte::FixedByteArray<32u> sha256_value {};
+                        if (const auto st = sha256_value.resize_for_overwrite(*len); !st) {
+                            return st;
+                        }
+                        const auto view = sha256_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
-                            if (!had_sha256) {
-                                sha256_.clear();
-                            }
                             return st;
                         }
+                        sha256_ = ::protocyte::move(sha256_value);
                         break;
                     }
                     case FieldNumber::integer_array: {
@@ -3655,6 +3758,7 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
+                            ::protocyte::Array<::protocyte::i32, 8u> packed_integer_array_values {};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
@@ -3663,12 +3767,23 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = integer_array_.push_back(value); !st) {
+                                if (const auto st = packed_integer_array_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_integer_array_values_commit_size =
+                                ::protocyte::checked_add(integer_array_.size(), packed_integer_array_values.size());
+                            if (!packed_integer_array_values_commit_size) {
+                                return packed_integer_array_values_commit_size.status();
+                            }
+                            if (*packed_integer_array_values_commit_size > 8u) {
+                                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                               field_number);
+                            }
+                            for (const auto &value : packed_integer_array_values) {
+                                if (const auto st = integer_array_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -3700,14 +3815,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        const auto old_byte_array_size = byte_array_.size();
-                        if (const auto st = byte_array_.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = reader.read(byte_array_.data(), byte_array_.size()); !st) {
-                            static_cast<void>(byte_array_.resize_for_overwrite(old_byte_array_size));
+                        ::protocyte::ByteArray<4u> byte_array_value {};
+                        if (const auto st = byte_array_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
+                        const auto view = byte_array_value.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        byte_array_ = ::protocyte::move(byte_array_value);
                         break;
                     }
                     case FieldNumber::fixed_integer_array: {
@@ -3716,6 +3835,7 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
+                            ::protocyte::Array<::protocyte::u32, 3u> packed_fixed_integer_array_values {};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::u32 value {};
@@ -3724,12 +3844,23 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = fixed_integer_array_.push_back(value); !st) {
+                                if (const auto st = packed_fixed_integer_array_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_fixed_integer_array_values_commit_size = ::protocyte::checked_add(
+                                fixed_integer_array_.size(), packed_fixed_integer_array_values.size());
+                            if (!packed_fixed_integer_array_values_commit_size) {
+                                return packed_fixed_integer_array_values_commit_size.status();
+                            }
+                            if (*packed_fixed_integer_array_values_commit_size > 3u) {
+                                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                               field_number);
+                            }
+                            for (const auto &value : packed_fixed_integer_array_values) {
+                                if (const auto st = fixed_integer_array_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -3761,14 +3892,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        const auto old_float_expr_array_size = float_expr_array_.size();
-                        if (const auto st = float_expr_array_.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = reader.read(float_expr_array_.data(), float_expr_array_.size()); !st) {
-                            static_cast<void>(float_expr_array_.resize_for_overwrite(old_float_expr_array_size));
+                        ::protocyte::ByteArray<2u> float_expr_array_value {};
+                        if (const auto st = float_expr_array_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
+                        const auto view = float_expr_array_value.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        float_expr_array_ = ::protocyte::move(float_expr_array_value);
                         break;
                     }
                     case FieldNumber::repeated_byte_array: {
@@ -3816,14 +3951,16 @@ namespace test::ultimate {
                         break;
                     }
                     case FieldNumber::crazy_plain_bytes: {
-                        clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_plain_bytes) typename Config::Bytes {ctx_};
-                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_plain_bytes;
+                        typename Config::Bytes crazy_plain_bytes_value {ctx_};
                         if (const auto st = ::protocyte::read_bytes_field<Config>(
-                                *ctx_, reader, wire_type, field_number, crazy_bytes_oneof.crazy_plain_bytes);
+                                *ctx_, reader, wire_type, field_number, crazy_plain_bytes_value);
                             !st) {
                             return st;
                         }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_plain_bytes)
+                            typename Config::Bytes {::protocyte::move(crazy_plain_bytes_value)};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_plain_bytes;
                         break;
                     }
                     case FieldNumber::crazy_bounded_bytes: {
@@ -3843,26 +3980,21 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        const bool was_crazy_bounded_bytes = has_crazy_bounded_bytes();
-                        if (!was_crazy_bounded_bytes) {
-                            clear_crazy_bytes_oneof();
-                            new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {};
-                            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
-                        }
-                        const auto old_crazy_bounded_bytes_size = crazy_bytes_oneof.crazy_bounded_bytes.size();
-                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = reader.read(crazy_bytes_oneof.crazy_bounded_bytes.data(),
-                                                        crazy_bytes_oneof.crazy_bounded_bytes.size());
-                            !st) {
-                            static_cast<void>(crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(
-                                old_crazy_bounded_bytes_size));
-                            if (!was_crazy_bounded_bytes) {
-                                clear_crazy_bytes_oneof();
-                            }
+                        ::protocyte::ByteArray<4u> crazy_bounded_bytes_value {};
+                        if (const auto st = crazy_bounded_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
+                        const auto view = crazy_bounded_bytes_value.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {
+                            ::protocyte::move(crazy_bounded_bytes_value)};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
                         break;
                     }
                     case FieldNumber::crazy_fixed_bytes: {
@@ -3882,26 +4014,21 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
                         }
-                        const bool was_crazy_fixed_bytes = has_crazy_fixed_bytes();
-                        if (!was_crazy_fixed_bytes) {
-                            clear_crazy_bytes_oneof();
-                            new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {};
-                            crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
-                        }
-                        const bool had_crazy_fixed_bytes = crazy_bytes_oneof.crazy_fixed_bytes.has_value();
-                        if (const auto st = crazy_bytes_oneof.crazy_fixed_bytes.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        auto view = crazy_bytes_oneof.crazy_fixed_bytes.mutable_view();
+                        ::protocyte::FixedByteArray<4u> crazy_fixed_bytes_value {};
+                        if (const auto st = crazy_fixed_bytes_value.resize_for_overwrite(*len); !st) {
+                            return st;
+                        }
+                        const auto view = crazy_fixed_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
-                            if (!had_crazy_fixed_bytes) {
-                                crazy_bytes_oneof.crazy_fixed_bytes.clear();
-                            }
-                            if (!was_crazy_fixed_bytes) {
-                                clear_crazy_bytes_oneof();
-                            }
                             return st;
                         }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {
+                            ::protocyte::move(crazy_fixed_bytes_value)};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
                         break;
                     }
                     case FieldNumber::crazy_repeated_bytes: {
@@ -3909,13 +4036,33 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = ensure_crazy_repeated_bytes().and_then(
-                                [&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                        ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>
+                            crazy_repeated_bytes_value {*ctx_};
+                        if (has_crazy_repeated_bytes() && crazy_bytes_oneof.crazy_repeated_bytes.has_value()) {
+                            if (const auto st =
+                                    crazy_repeated_bytes_value.copy_from(*crazy_bytes_oneof.crazy_repeated_bytes);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number,
+                                                                              crazy_repeated_bytes_value);
                             !st) {
                             return st;
                         }
+                        typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>
+                            crazy_repeated_bytes_committed {};
+                        if (const auto st =
+                                crazy_repeated_bytes_committed.emplace(::protocyte::move(crazy_repeated_bytes_value));
+                            !st) {
+                            return st;
+                        }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_repeated_bytes) typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
+                            ::protocyte::move(crazy_repeated_bytes_committed)};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_repeated_bytes;
                         break;
                     }
                     case FieldNumber::crazy_bounded_repeated_bytes: {
@@ -3923,13 +4070,34 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = ensure_crazy_bounded_repeated_bytes().and_then(
-                                [&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                        ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>
+                            crazy_bounded_repeated_bytes_value {*ctx_};
+                        if (has_crazy_bounded_repeated_bytes() &&
+                            crazy_bytes_oneof.crazy_bounded_repeated_bytes.has_value()) {
+                            if (const auto st = crazy_bounded_repeated_bytes_value.copy_from(
+                                    *crazy_bytes_oneof.crazy_bounded_repeated_bytes);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number,
+                                                                              crazy_bounded_repeated_bytes_value);
                             !st) {
                             return st;
                         }
+                        typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>>
+                            crazy_bounded_repeated_bytes_committed {};
+                        if (const auto st = crazy_bounded_repeated_bytes_committed.emplace(
+                                ::protocyte::move(crazy_bounded_repeated_bytes_value));
+                            !st) {
+                            return st;
+                        }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_bounded_repeated_bytes) typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
+                            ::protocyte::move(crazy_bounded_repeated_bytes_committed)};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes;
                         break;
                     }
                     case FieldNumber::crazy_fixed_repeated_bytes: {
@@ -3937,13 +4105,34 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = ensure_crazy_fixed_repeated_bytes().and_then(
-                                [&](auto ensured) noexcept -> ::protocyte::Status {
-                                    return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                                });
+                        ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>
+                            crazy_fixed_repeated_bytes_value {*ctx_};
+                        if (has_crazy_fixed_repeated_bytes() &&
+                            crazy_bytes_oneof.crazy_fixed_repeated_bytes.has_value()) {
+                            if (const auto st = crazy_fixed_repeated_bytes_value.copy_from(
+                                    *crazy_bytes_oneof.crazy_fixed_repeated_bytes);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number,
+                                                                              crazy_fixed_repeated_bytes_value);
                             !st) {
                             return st;
                         }
+                        typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>
+                            crazy_fixed_repeated_bytes_committed {};
+                        if (const auto st = crazy_fixed_repeated_bytes_committed.emplace(
+                                ::protocyte::move(crazy_fixed_repeated_bytes_value));
+                            !st) {
+                            return st;
+                        }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_fixed_repeated_bytes) typename Config::template Optional<
+                            ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
+                            ::protocyte::move(crazy_fixed_repeated_bytes_committed)};
+                        crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes;
                         break;
                     }
                     default: {
@@ -5832,10 +6021,17 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = ensure_ref().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                            });
+                        ::test::ultimate::UltimateComplexMessage<Config> ref_value {*ctx_};
+                        if (ref_.has_value()) {
+                            if (const auto st = ref_value.copy_from(*ref_); !st) {
+                                return st;
+                            }
+                        }
+                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, ref_value);
                             !st) {
+                            return st;
+                        }
+                        if (const auto st = ref_.emplace(::protocyte::move(ref_value)); !st) {
                             return st;
                         }
                         break;
@@ -6020,14 +6216,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        const auto old_nested_bytes_size = nested_bytes_.size();
-                        if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
-                            static_cast<void>(nested_bytes_.resize_for_overwrite(old_nested_bytes_size));
+                        ::protocyte::ByteArray<8u> nested_bytes_value {};
+                        if (const auto st = nested_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
+                        const auto view = nested_bytes_value.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        nested_bytes_ = ::protocyte::move(nested_bytes_value);
                         break;
                     }
                     default: {
@@ -6229,14 +6429,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        const auto old_external_bytes_size = external_bytes_.size();
-                        if (const auto st = external_bytes_.resize_for_overwrite(*len); !st) {
+                        if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = reader.read(external_bytes_.data(), external_bytes_.size()); !st) {
-                            static_cast<void>(external_bytes_.resize_for_overwrite(old_external_bytes_size));
+                        ::protocyte::ByteArray<6u> external_bytes_value {};
+                        if (const auto st = external_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
+                        const auto view = external_bytes_value.mutable_view();
+                        if (const auto st = reader.read(view.data, view.size); !st) {
+                            return st;
+                        }
+                        external_bytes_ = ::protocyte::move(external_bytes_value);
                         break;
                     }
                     case FieldNumber::mirrored_values: {
@@ -6245,6 +6449,7 @@ namespace test::ultimate {
                             if (!len) {
                                 return len.status();
                             }
+                            ::protocyte::Array<::protocyte::i32, 10u> packed_mirrored_values_values {};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
@@ -6253,12 +6458,23 @@ namespace test::ultimate {
                                     !st) {
                                     return st;
                                 }
-                                if (const auto st = mirrored_values_.push_back(value); !st) {
+                                if (const auto st = packed_mirrored_values_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            if (const auto finish = packed.finish(); !finish) {
-                                return finish;
+                            const auto packed_mirrored_values_values_commit_size =
+                                ::protocyte::checked_add(mirrored_values_.size(), packed_mirrored_values_values.size());
+                            if (!packed_mirrored_values_values_commit_size) {
+                                return packed_mirrored_values_values_commit_size.status();
+                            }
+                            if (*packed_mirrored_values_values_commit_size > 10u) {
+                                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                               field_number);
+                            }
+                            for (const auto &value : packed_mirrored_values_values) {
+                                if (const auto st = mirrored_values_.push_back(value); !st) {
+                                    return st;
+                                }
                             }
                             break;
                         }
@@ -6278,10 +6494,18 @@ namespace test::ultimate {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = ensure_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured);
-                            });
+                        ::test::ultimate::CrossMessageConstants_Nested<Config> nested_value {*ctx_};
+                        if (nested_.has_value()) {
+                            if (const auto st = nested_value.copy_from(*nested_); !st) {
+                                return st;
+                            }
+                        }
+                        if (const auto st =
+                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested_value);
                             !st) {
+                            return st;
+                        }
+                        if (const auto st = nested_.emplace(::protocyte::move(nested_value)); !st) {
                             return st;
                         }
                         break;

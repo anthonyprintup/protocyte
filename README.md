@@ -432,6 +432,74 @@ Common generated operations include:
 - `clone()`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
 
+### Parse Atomicity
+
+`merge_from(reader)` commits parsed data per wire field occurrence. If a field
+occurrence is malformed, truncated, exceeds a configured limit, or otherwise
+fails while it is being read, that field occurrence does not change the visible
+message state. Fields that were parsed successfully before the failing
+occurrence remain committed, so `merge_from()` is not whole-message
+transactional.
+
+For singular message fields, a later valid occurrence still follows protobuf
+merge semantics: it merges into the current field value and then replaces the
+visible field only after the nested occurrence has parsed successfully. Oneof
+fields switch cases only after the incoming occurrence is fully parsed.
+Repeated fields and map fields append or insert only fully parsed elements or
+entries; malformed packed repeated payloads do not append decoded prefix
+values.
+
+For bounded and fixed `bytes` storage, generated parsing may use
+`resize_for_overwrite()` on staged scratch storage before the field is
+committed. The reader's `can_read()` preflight only checks whether the
+length-delimited payload should be available; if the following `read()` still
+fails, the staged storage is discarded and the visible field remains unchanged.
+
+For example, given this shape:
+
+```proto
+message Inner {
+  string name = 1;
+  repeated int32 values = 2 [packed = true];
+}
+
+message Packet {
+  bytes digest = 1 [(protocyte.array) = { max: 32, fixed: true }];
+  oneof choice {
+    int32 code = 2;
+    string label = 3;
+    Inner nested_choice = 4;
+  }
+  Inner nested = 5;
+  repeated int32 samples = 6 [packed = true];
+  map<string, int32> counters = 7;
+}
+```
+
+The contract is:
+
+- If `digest` already contains 32 bytes and the wire stream later contains
+  field `1` with a declared length of 32 but only 4 payload bytes available,
+  `merge_from()` returns an error and the old 32-byte digest remains present
+  and unchanged.
+- If `choice` currently holds `label = "old"` and the wire stream contains a
+  malformed `code` field or a truncated `nested_choice`, the active oneof case
+  remains `label` with value `"old"`.
+- If `nested` already contains `name = "old"` and `values = [1]`, a later
+  valid `nested` occurrence containing `values = [2]` commits as protobuf
+  merge semantics require: the visible field becomes `name = "old"` and
+  `values = [1, 2]`. If that later nested occurrence is truncated, the visible
+  field remains `name = "old"` and `values = [1]`.
+- If `samples` is `[7]` and a later packed payload decodes the first value
+  before failing on a truncated varint, no prefix values from that malformed
+  payload are appended; `samples` remains `[7]`.
+- If `counters` contains `{"ok": 1}` and a later map entry is malformed before
+  the key and value are fully parsed, no partial entry is inserted and existing
+  entries are left alone.
+- If a stream contains a valid `digest` occurrence followed by a malformed
+  `samples` occurrence, the valid `digest` stays committed after
+  `merge_from()` returns the error from `samples`.
+
 ## Runtime Notes
 
 The default runtime does not call `malloc` or `new` globally. Hosted allocation

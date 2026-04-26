@@ -207,6 +207,49 @@ namespace {
         return protocyte::ByteView {data, N};
     }
 
+    struct FailingBulkReader {
+        FailingBulkReader(const uint8_t *data, size_t size) noexcept: data {data}, size {size} {}
+
+        bool eof() const noexcept { return pos >= size; }
+        protocyte::usize position() const noexcept { return pos; }
+
+        protocyte::Status can_read(const protocyte::usize count) const noexcept {
+            if (count > size - pos) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            return {};
+        }
+
+        protocyte::Result<protocyte::u8> read_byte() noexcept {
+            if (pos >= size) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            return data[pos++];
+        }
+
+        protocyte::Status read(protocyte::u8 *out, const protocyte::usize count) noexcept {
+            if (count > size - pos) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            const auto copied = count == 0u ? 0u : (count + 1u) / 2u;
+            for (protocyte::usize i {}; i < copied; ++i) { out[i] = data[pos + i]; }
+            pos += copied;
+            return protocyte::unexpected(protocyte::ErrorCode::invalid_argument, pos);
+        }
+
+        protocyte::Status skip(const protocyte::usize count) noexcept {
+            if (count > size - pos) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            pos += count;
+            return {};
+        }
+
+        const uint8_t *data;
+        protocyte::usize size;
+        protocyte::usize pos {};
+    };
+
     struct ResultTransformQualifier {
         int operator()(int &value) const noexcept { return value + 1; }
         int operator()(const int &value) const noexcept { return value + 2; }
@@ -1707,6 +1750,283 @@ TEST_CASE("Fixed bytes preserve presence semantics", "[smoke][fixed]") {
 TEST_CASE("Array bounds are enforced", "[smoke][array]") {
     auto ctx = make_context();
     check_array_validation(ctx);
+}
+
+TEST_CASE("merge_from keeps field state after malformed field occurrences", "[smoke][parse][atomic]") {
+    auto ctx = make_context();
+
+    SECTION("bounded bytes preserve previous contents after a truncated replacement") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::byte_array),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(byte_array)));
+        require_success(writer.write(byte_array, 2u));
+
+        Message parsed(ctx);
+        require_success(parsed.set_byte_array(view_of(alternate_byte_array)));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        CHECK(view_equal(parsed.byte_array(), view_of(alternate_byte_array)));
+        CHECK(parsed.byte_array_size() == sizeof(alternate_byte_array));
+    }
+
+    SECTION("fixed bytes preserve previous contents after a truncated replacement") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::sha256),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(sha256_bytes)));
+        require_success(writer.write(sha256_bytes, 2u));
+
+        Message parsed(ctx);
+        require_success(parsed.set_sha256(view_of(sha256_bytes)));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        REQUIRE(parsed.has_sha256());
+        CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
+    }
+
+    SECTION("bounded bytes preserve previous contents if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::byte_array),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(byte_array)));
+        require_success(writer.write(byte_array, sizeof(byte_array)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_byte_array(view_of(alternate_byte_array)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(view_equal(parsed.byte_array(), view_of(alternate_byte_array)));
+        CHECK(parsed.byte_array_size() == sizeof(alternate_byte_array));
+    }
+
+    SECTION("fixed bytes preserve previous contents if read fails after can_read") {
+        uint8_t replacement_sha256[sizeof(sha256_bytes)] = {};
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::sha256),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(replacement_sha256)));
+        require_success(writer.write(replacement_sha256, sizeof(replacement_sha256)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_sha256(view_of(sha256_bytes)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        REQUIRE(parsed.has_sha256());
+        CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
+    }
+
+    SECTION("oneof scalar parsing preserves the previous case after invalid wire type") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_int32),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, 1u));
+        require_success(protocyte::write_varint(writer, 0u));
+
+        Message parsed(ctx);
+        require_success(parsed.set_oneof_string(view_of(oneof_string)));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
+        REQUIRE(parsed.has_oneof_string());
+        CHECK(view_equal(parsed.oneof_string(), view_of(oneof_string)));
+    }
+
+    SECTION("oneof string parsing preserves the previous case after truncation") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_string),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(oneof_string)));
+        require_success(writer.write(oneof_string, 2u));
+
+        Message parsed(ctx);
+        require_success(parsed.set_oneof_int32(2701));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        REQUIRE(parsed.has_oneof_int32());
+        CHECK(parsed.oneof_int32() == 2701);
+    }
+
+    SECTION("oneof bounded bytes parsing preserves the previous value after truncation") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(oneof_bytes)));
+        require_success(writer.write(oneof_bytes, 2u));
+
+        Message parsed(ctx);
+        require_success(parsed.set_oneof_bytes(view_of(oneof_bytes)));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        REQUIRE(parsed.has_oneof_bytes());
+        CHECK(view_equal(parsed.oneof_bytes(), view_of(oneof_bytes)));
+    }
+
+    SECTION("oneof bounded bytes preserve previous case if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(oneof_bytes)));
+        require_success(writer.write(oneof_bytes, sizeof(oneof_bytes)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_oneof_string(view_of(oneof_string)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        REQUIRE(parsed.has_oneof_string());
+        CHECK(view_equal(parsed.oneof_string(), view_of(oneof_string)));
+    }
+
+    SECTION("oneof fixed bytes preserve previous case if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::crazy_fixed_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(crazy_fixed_bytes)));
+        require_success(writer.write(crazy_fixed_bytes, sizeof(crazy_fixed_bytes)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_crazy_plain_bytes(view_of(crazy_plain_bytes)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        REQUIRE(parsed.has_crazy_plain_bytes());
+        CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_plain_bytes);
+        CHECK(view_equal(parsed.crazy_plain_bytes(), view_of(crazy_plain_bytes)));
+    }
+
+    SECTION("oneof message parsing preserves the previous value after truncation") {
+        uint8_t nested[64] = {};
+        protocyte::SliceWriter nested_writer(nested, sizeof(nested));
+        require_success(protocyte::write_tag(nested_writer, static_cast<uint32_t>(Nested1::FieldNumber::name),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(nested_writer, sizeof(nested_name)));
+        require_success(nested_writer.write(nested_name, 2u));
+
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_msg),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, nested_writer.position()));
+        require_success(writer.write(nested, nested_writer.position()));
+
+        Message parsed(ctx);
+        auto old = parsed.ensure_oneof_msg();
+        require_success(old);
+        populate_nested1(**old, view_of(nested_name), 2800);
+
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        REQUIRE(parsed.has_oneof_msg());
+        check_nested1(*parsed.oneof_msg(), view_of(nested_name), 2800);
+    }
+
+    SECTION("singular message parsing preserves the previous value after truncation") {
+        uint8_t nested[64] = {};
+        protocyte::SliceWriter nested_writer(nested, sizeof(nested));
+        require_success(protocyte::write_tag(nested_writer, static_cast<uint32_t>(Nested1::FieldNumber::name),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(nested_writer, sizeof(nested_name)));
+        require_success(nested_writer.write(nested_name, 2u));
+
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::nested1),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, nested_writer.position()));
+        require_success(writer.write(nested, nested_writer.position()));
+
+        Message parsed(ctx);
+        auto old = parsed.ensure_nested1();
+        require_success(old);
+        populate_nested1(**old, view_of(nested_name), 25);
+
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        REQUIRE(parsed.has_nested1());
+        check_nested1(*parsed.nested1(), view_of(nested_name), 25);
+
+        Nested1 replacement(ctx);
+        populate_nested1(replacement, view_of(nested_name), 99);
+        uint8_t valid[256] = {};
+        protocyte::SliceWriter valid_writer(valid, sizeof(valid));
+        require_success(protocyte::write_message_field(
+            valid_writer, static_cast<uint32_t>(Message::FieldNumber::nested1), replacement));
+        protocyte::SliceReader valid_reader(valid, valid_writer.position());
+        require_success(parsed.merge_from(valid_reader));
+        REQUIRE(parsed.has_nested1());
+        CHECK(view_equal(parsed.nested1()->name(), view_of(nested_name)));
+        CHECK(parsed.nested1()->id() == 99);
+        REQUIRE(parsed.nested1()->has_inner());
+        const auto &values = parsed.nested1()->inner()->values();
+        REQUIRE(values.size() == 4u);
+        CHECK(values[0] == 1.5f);
+        CHECK(values[1] == 2.5f);
+        CHECK(values[2] == 1.5f);
+        CHECK(values[3] == 2.5f);
+    }
+
+    SECTION("malformed packed fields do not append decoded prefix values") {
+        constexpr uint8_t malformed_packed[] = {0x01u, 0x80u};
+        constexpr int32_t expected_values[] = {7};
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::r_int32_packed),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(malformed_packed)));
+        require_success(writer.write(malformed_packed, sizeof(malformed_packed)));
+
+        Message parsed(ctx);
+        require_success(parsed.mutable_r_int32_packed().push_back(expected_values[0]));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        check_scalar_sequence(parsed.r_int32_packed(), expected_values);
+    }
+
+    SECTION("malformed repeated bytes do not append a partial element") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::repeated_byte_array),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(repeated_bytes_1)));
+        require_success(writer.write(repeated_bytes_1, 1u));
+
+        Message parsed(ctx);
+        append_bytes(parsed.mutable_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        const protocyte::ByteView expected[] = {view_of(repeated_bytes_0)};
+        check_byte_entry_sequence(parsed.repeated_byte_array(), expected);
+    }
+
+    SECTION("malformed map entries do not replace existing entries") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_str_int32),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, 2u));
+        require_success(protocyte::write_tag(writer, 1u, protocyte::WireType::VARINT));
+        require_success(protocyte::write_varint(writer, 7u));
+
+        Message parsed(ctx);
+        insert_map_str_int32(parsed, ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
+        CHECK(parsed.map_str_int32().size() == 1u);
+        bool saw_entry = false;
+        for (const auto entry : parsed.map_str_int32()) {
+            if (view_equal(entry.key.view(), view_of(map_key)) && entry.value == 301) {
+                saw_entry = true;
+            }
+        }
+        CHECK(saw_entry);
+    }
 }
 
 TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
