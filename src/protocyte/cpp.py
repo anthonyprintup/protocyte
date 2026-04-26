@@ -1038,18 +1038,20 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
             with w.indent():
                 w.line("auto len = ::protocyte::read_length_delimited_size(reader);")
                 w.line("if (!len) { return len.status(); }")
+                packed_values_name = f"packed_{item.cpp_name}_values"
+                _emit_repeated_storage_decl(w, item, packed_values_name, options)
                 width = _packed_fixed_width_size(item)
                 if not item.repeated_array and width is not None:
                     reserve_name = f"packed_reserve_{item.cpp_name}"
-                    w.line(f"const auto {reserve_name} = ::protocyte::checked_add({_member(item)}.size(), *len / {width});")
+                    w.line(f"const auto {reserve_name} = ::protocyte::checked_add({packed_values_name}.size(), *len / {width});")
                     w.line(f"if (!{reserve_name}) {{ return {reserve_name}.status(); }}")
-                    w.line(f"if (const auto st = {_member(item)}.reserve(*{reserve_name}); !st) {{ return st; }}")
+                    w.line(f"if (const auto st = {packed_values_name}.reserve(*{reserve_name}); !st) {{ return st; }}")
                 w.line("::protocyte::LimitedReader<Reader> packed{reader, *len};")
                 w.line("while (!packed.eof()) {")
                 with w.indent():
-                    _emit_read_repeated_value(w, item, "packed", options)
+                    _emit_read_repeated_value(w, item, "packed", options, target=packed_values_name)
                 w.line("}")
-                w.line("if (const auto finish = packed.finish(); !finish) { return finish; }")
+                _emit_commit_repeated_values(w, item, packed_values_name)
                 w.line("break;")
             w.line("}")
         if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
@@ -1069,27 +1071,61 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
 
 
 def _emit_read_repeated_value(
-    w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions, *, checked: bool = False
+    w: CppWriter,
+    item: FieldModel,
+    reader: str,
+    options: GeneratorOptions,
+    *,
+    checked: bool = False,
+    target: str | None = None,
 ) -> None:
+    target = _member(item) if target is None else target
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
         w.line(f"{typ} value{{ctx_}};")
         helper = _length_delimited_read_helper(item, checked=checked)
         args = f"*ctx_, {reader}, wire_type, field_number, value" if checked else f"*ctx_, {reader}, value"
         w.line(
-            f"if (const auto st = ::protocyte::{helper}<Config>({args}).and_then([&]() noexcept -> ::protocyte::Status {{ return {_member(item)}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::{helper}<Config>({args}).and_then([&]() noexcept -> ::protocyte::Status {{ return {target}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
         )
         return
     if item.kind == "message":
         typ = _field_type(item, options)
         w.line(f"{typ} value{{*ctx_}};")
         w.line(
-            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, value).and_then([&]() noexcept -> ::protocyte::Status {{ return {_member(item)}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, value).and_then([&]() noexcept -> ::protocyte::Status {{ return {target}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
         )
         return
     w.line(f"{_element_type(item, options)} value{{}};")
     _emit_read_scalar(w, item, reader, "value", options, checked=checked)
-    w.line(f"if (const auto st = {_member(item)}.push_back(value); !st) {{ return st; }}")
+    w.line(f"if (const auto st = {target}.push_back(value); !st) {{ return st; }}")
+
+
+def _emit_repeated_storage_decl(w: CppWriter, item: FieldModel, name: str, options: GeneratorOptions) -> None:
+    typ = _storage_type(item, options)
+    if item.repeated_array:
+        w.line(f"{typ} {name}{{}};")
+    else:
+        w.line(f"{typ} {name}{{ctx_}};")
+
+
+def _emit_commit_repeated_values(w: CppWriter, item: FieldModel, source: str) -> None:
+    commit_size_name = f"{source}_commit_size"
+    w.line(f"const auto {commit_size_name} = ::protocyte::checked_add({_member(item)}.size(), {source}.size());")
+    w.line(f"if (!{commit_size_name}) {{ return {commit_size_name}.status(); }}")
+    if item.repeated_array:
+        w.line(f"if (*{commit_size_name} > {_array_max_literal(item)}) {{")
+        with w.indent():
+            w.line(
+                "return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(), field_number);"
+            )
+        w.line("}")
+    else:
+        w.line(f"if (const auto st = {_member(item)}.reserve(*{commit_size_name}); !st) {{ return st; }}")
+    w.line(f"for (const auto &value : {source}) {{")
+    with w.indent():
+        w.line(f"if (const auto st = {_member(item)}.push_back(value); !st) {{ return st; }}")
+    w.line("}")
 
 
 def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
@@ -1107,62 +1143,87 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str, option
         w.line(
             f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
-    rollback_lines: list[str] = []
+    w.line(f"if (const auto st = {reader}.can_read(*len); !st) {{ return st; }}")
+    _emit_read_bounded_bytes_direct(w, item, reader, options)
+
+
+def _emit_read_bounded_bytes_direct(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
     if item.oneof_name:
-        was_name = f"was_{item.cpp_name}"
-        w.line(f"const bool {was_name} = has_{item.cpp_name}();")
-        w.line(f"if (!{was_name}) {{")
-        w.push()
         w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
+        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
+        w.line(f"const auto view = {_member(item)}.mutable_view();")
+        w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{")
+        with w.indent():
+            w.line(f"destroy_at_(&{_member(item)});")
+            w.line("return st;")
+        w.line("}")
         w.line(f"{_oneof_case_member(item.oneof_name)} = {_oneof_case_type(item.oneof_name)}::{item.cpp_name};")
-        w.pop()
-        w.line("}")
-        rollback_lines.append(f"if (!{was_name}) {{ clear_{cpp_identifier(item.oneof_name)}(); }}")
-    if item.array_fixed:
-        had_name = f"had_{item.cpp_name}"
-        w.line(f"const bool {had_name} = {_member(item)}.has_value();")
-        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-        w.line(f"auto view = {_member(item)}.mutable_view();")
-        rollback_lines.insert(0, f"if (!{had_name}) {{ {_member(item)}.clear(); }}")
-    else:
-        old_size_name = f"old_{item.cpp_name}_size"
-        w.line(f"const auto {old_size_name} = {_member(item)}.size();")
-        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-        rollback_lines.insert(0, f"static_cast<void>({_member(item)}.resize_for_overwrite({old_size_name}));")
-        w.line(f"if (const auto st = {reader}.read({_member(item)}.data(), {_member(item)}.size()); !st) {{")
-        w.push()
-        for line in rollback_lines:
-            w.line(line)
-        w.line("return st;")
-        w.pop()
-        w.line("}")
-        if _has_presence_flag(item):
-            w.line(f"has_{item.cpp_name}_ = true;")
         return
-    w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{")
-    w.push()
-    for line in rollback_lines:
-        w.line(line)
-    w.line("return st;")
-    w.pop()
-    w.line("}")
+    w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
+    w.line(f"const auto view = {_member(item)}.mutable_view();")
+    w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{ return st; }}")
     if _has_presence_flag(item):
         w.line(f"has_{item.cpp_name}_ = true;")
 
 
+def _emit_read_staged_message(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
+    value_name = f"{item.cpp_name}_value"
+    typ = _field_type(item, options)
+    w.line(f"{typ} {value_name}{{*ctx_}};")
+    if item.oneof_name:
+        w.line(f"if (has_{item.cpp_name}() && {_member(item)}.has_value()) {{")
+        with w.indent():
+            w.line(f"if (const auto st = {value_name}.copy_from(*{_member(item)}); !st) {{ return st; }}")
+        w.line("}")
+    else:
+        w.line(f"if ({_member(item)}.has_value()) {{")
+        with w.indent():
+            w.line(f"if (const auto st = {value_name}.copy_from(*{_member(item)}); !st) {{ return st; }}")
+        w.line("}")
+    w.line(
+        f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, {value_name}); !st) {{ return st; }}"
+    )
+    if item.oneof_name:
+        _emit_commit_oneof_value(w, item, value_name, options)
+    elif item.recursive_box:
+        w.line(f"if (const auto st = {_member(item)}.assign(::protocyte::move({value_name})); !st) {{ return st; }}")
+    else:
+        w.line(f"if (const auto st = {_member(item)}.emplace(::protocyte::move({value_name})); !st) {{ return st; }}")
+
+
+def _emit_commit_oneof_value(w: CppWriter, item: FieldModel, value: str, options: GeneratorOptions) -> None:
+    assert item.oneof_name is not None
+    oneof_name = cpp_identifier(item.oneof_name)
+    case_type = _oneof_case_type(item.oneof_name)
+    case_member = _oneof_case_member(item.oneof_name)
+    if item.kind == "message":
+        committed_name = f"{item.cpp_name}_committed"
+        if item.recursive_box:
+            w.line(f"{_storage_type(item, options)} {committed_name}{{ctx_}};")
+            w.line(f"if (const auto st = {committed_name}.assign(::protocyte::move({value})); !st) {{ return st; }}")
+        else:
+            w.line(f"{_storage_type(item, options)} {committed_name}{{}};")
+            w.line(f"if (const auto st = {committed_name}.emplace(::protocyte::move({value})); !st) {{ return st; }}")
+        value = committed_name
+    w.line(f"clear_{oneof_name}();")
+    w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move({value})}};")
+    w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+
+
 def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
     if item.oneof_name and item.kind in {"string", "bytes"}:
-        case_type = _oneof_case_type(item.oneof_name)
-        case_member = _oneof_case_member(item.oneof_name)
         if item.kind == "bytes" and item.array_enabled:
             _emit_read_bounded_bytes(w, item, reader, options)
         else:
-            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
-            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
-            w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+            typ = _field_type(item, options)
+            value_name = f"{item.cpp_name}_value"
+            w.line(f"{typ} {value_name}{{ctx_}};")
             helper = _length_delimited_read_helper(item, checked=True)
-            w.line(f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {_member(item)}); !st) {{ return st; }}")
+            w.line(
+                f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {value_name}); !st) {{ return st; }}"
+            )
+            _emit_commit_oneof_value(w, item, value_name, options)
         return
     if item.kind == "bytes" and item.array_enabled:
         _emit_read_bounded_bytes(w, item, reader, options)
@@ -1174,17 +1235,13 @@ def _emit_read_single_value(w: CppWriter, item: FieldModel, reader: str, options
             w.line(f"has_{item.cpp_name}_ = true;")
         return
     if item.kind == "message":
-        w.line(
-            f"if (const auto st = ensure_{item.cpp_name}().and_then([&](auto ensured) noexcept -> ::protocyte::Status {{ return ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, *ensured); }}); !st) {{ return st; }}"
-        )
+        _emit_read_staged_message(w, item, reader, options)
         return
     if item.oneof_name:
-        case_type = _oneof_case_type(item.oneof_name)
-        case_member = _oneof_case_member(item.oneof_name)
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
-        w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{{_default(item)}}};")
-        w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-        _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
+        value_name = f"{item.cpp_name}_value"
+        w.line(f"{_field_type(item, options)} {value_name}{{}};")
+        _emit_read_scalar(w, item, reader, value_name, options, checked=True)
+        _emit_commit_oneof_value(w, item, value_name, options)
         return
     _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
     if _has_presence_flag(item):

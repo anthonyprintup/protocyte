@@ -636,15 +636,19 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert ".transform([&](const auto decoded) noexcept {" in header
     assert "::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::self), *self_).and_then(" in header
     assert "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);" in header
-    assert "ensure_self().and_then([&](auto ensured) noexcept -> ::protocyte::Status { return ::protocyte::read_message<Config>(*ctx_, reader, field_number, *ensured); });" in header
+    assert "::demo::Sample<Config> self_value{*ctx_};" in header
+    assert "if (self_.has_value()) {" in header
+    assert "if (const auto st = self_value.copy_from(*self_); !st) { return st; }" in header
+    assert "if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, self_value); !st) { return st; }" in header
+    assert "if (const auto st = self_.assign(::protocyte::move(self_value)); !st) { return st; }" in header
     assert "return has_self() ? self_.operator->() : nullptr;" in header
     assert "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value)," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
     assert "mutable_items().copy_from(other.items())" in header
     assert "mutable_samples().copy_from(other.samples())" in header
     assert "mutable_message_items().copy_from(other.message_items())" in header
-    assert "const auto packed_reserve_samples = ::protocyte::checked_add(samples_.size(), *len / 4u);" in header
-    assert "samples_.reserve(*packed_reserve_samples)" in header
+    assert "const auto packed_reserve_samples = ::protocyte::checked_add(packed_samples_values.size(), *len / 4u);" in header
+    assert "packed_samples_values.reserve(*packed_reserve_samples)" in header
     assert "const auto packed_size_samples_result = ::protocyte::checked_mul(samples_.size(), 4u);" in header
 
 
@@ -1403,14 +1407,15 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     assert "const auto view = ::protocyte::byte_view_of(value);" in header
     assert "if (const auto st = temp.assign(*view); !st)" in header
     assert "::protocyte::Status set_data(const ::protocyte::ByteView value) noexcept" not in header
-    assert "const bool was_data = has_data();" in header
+    assert "if (const auto st = reader.can_read(*len); !st) { return st; }" in header
     assert "new (&choice.data) ::protocyte::ByteArray<8u> {};" in header
-    assert "const auto old_data_size = choice.data.size();" in header
     assert "if (const auto st = choice.data.resize_for_overwrite(*len); !st)" in header
-    assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st)" in header
-    assert "static_cast<void>(choice.data.resize_for_overwrite(old_data_size));" in header
-    assert "if (!was_data) { clear_choice(); }" in header
+    assert "const auto view = choice.data.mutable_view();" in header
+    assert "if (const auto st = reader.read(view.data, view.size); !st)" in header
+    assert "destroy_at_(&choice.data);" in header
     assert "choice_case_ = ChoiceCase::data;" in header
+    assert "::protocyte::ByteArray<8u> data_value{};" not in header
+    assert "static_cast<void>(choice.data.resize_for_overwrite(old_data_size));" not in header
     assert "if (*len > ctx_->limits.max_string_bytes) {" in header
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 

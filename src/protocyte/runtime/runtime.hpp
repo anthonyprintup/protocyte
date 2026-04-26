@@ -2732,6 +2732,20 @@ namespace protocyte {
             return Ref<T> {*ptr_};
         }
 
+        Status assign(T &&value) noexcept {
+            if (ctx_ == nullptr) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            auto *raw = Config::allocate(*ctx_, sizeof(T), alignof(T));
+            if (raw == nullptr) {
+                return protocyte::unexpected(ErrorCode::no_memory, {});
+            }
+            auto *next = new (raw) T {protocyte::move(value)};
+            reset();
+            ptr_ = next;
+            return {};
+        }
+
         void reset() noexcept {
             if (ptr_ != nullptr && ctx_ != nullptr) {
                 ptr_->~T();
@@ -3017,6 +3031,12 @@ namespace protocyte {
         SliceReader(const u8 *data, const usize size) noexcept: data_ {data}, size_ {size} {}
         bool eof() const noexcept { return pos_ >= size_; }
         usize position() const noexcept { return pos_; }
+        Status can_read(const usize count) const noexcept {
+            if (count > size_ - pos_) {
+                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+            }
+            return {};
+        }
         Result<u8> read_byte() noexcept {
             if (pos_ >= size_) {
                 return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
@@ -3050,12 +3070,14 @@ namespace protocyte {
             reader_ {&reader},
             eof_ {&eof_impl<Reader>},
             position_ {&position_impl<Reader>},
+            can_read_ {&can_read_impl<Reader>},
             read_byte_ {&read_byte_impl<Reader>},
             read_ {&read_impl<Reader>},
             skip_ {&skip_impl<Reader>} {}
 
         bool eof() const noexcept { return eof_(reader_); }
         usize position() const noexcept { return position_(reader_); }
+        Status can_read(const usize count) const noexcept { return can_read_(reader_, count); }
         Result<u8> read_byte() noexcept { return read_byte_(reader_); }
         Status read(u8 *out, const usize count) noexcept { return read_(reader_, out, count); }
         Status skip(const usize count) noexcept { return skip_(reader_, count); }
@@ -3067,6 +3089,10 @@ namespace protocyte {
 
         template<class Reader> static usize position_impl(void *reader) noexcept {
             return static_cast<Reader *>(reader)->position();
+        }
+
+        template<class Reader> static Status can_read_impl(void *reader, const usize count) noexcept {
+            return static_cast<Reader *>(reader)->can_read(count);
         }
 
         template<class Reader> static Result<u8> read_byte_impl(void *reader) noexcept {
@@ -3084,6 +3110,7 @@ namespace protocyte {
         void *reader_;
         bool (*eof_)(void *) noexcept;
         usize (*position_)(void *) noexcept;
+        Status (*can_read_)(void *, usize) noexcept;
         Result<u8> (*read_byte_)(void *) noexcept;
         Status (*read_)(void *, u8 *, usize) noexcept;
         Status (*skip_)(void *, usize) noexcept;
@@ -3093,6 +3120,12 @@ namespace protocyte {
         LimitedReader(Reader &inner, const usize remaining) noexcept: inner_ {&inner}, remaining_ {remaining} {}
         bool eof() const noexcept { return !remaining_; }
         usize position() const noexcept { return pos_; }
+        Status can_read(const usize count) const noexcept {
+            if (count > remaining_) {
+                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+            }
+            return inner_->can_read(count);
+        }
         Result<u8> read_byte() noexcept {
             if (!remaining_) {
                 return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
