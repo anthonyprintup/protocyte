@@ -432,6 +432,29 @@ Common generated operations include:
 - `clone()`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
 
+### Parse Atomicity
+
+`merge_from(reader)` commits parsed data per wire field occurrence. If a field
+occurrence is malformed, truncated, exceeds a configured limit, or otherwise
+fails while it is being read, that field occurrence does not change the visible
+message state. Fields that were parsed successfully before the failing
+occurrence remain committed, so `merge_from()` is not whole-message
+transactional.
+
+For singular message fields, a later valid occurrence still follows protobuf
+merge semantics: it merges into the current field value and then replaces the
+visible field only after the nested occurrence has parsed successfully. Oneof
+fields switch cases only after the incoming occurrence is fully parsed.
+Repeated fields and map fields append or insert only fully parsed elements or
+entries; malformed packed repeated payloads do not append decoded prefix
+values.
+
+For bounded and fixed `bytes` storage, generated parsing may use
+`resize_for_overwrite()` only after the reader reports that the complete
+length-delimited payload is available. The API is treated as scratch-buffer
+storage for data that is about to be overwritten, not as a partial-parse commit
+operation.
+
 ## Runtime Notes
 
 The default runtime does not call `malloc` or `new` globally. Hosted allocation
