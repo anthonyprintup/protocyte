@@ -1408,13 +1408,15 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     assert "if (const auto st = temp.assign(*view); !st)" in header
     assert "::protocyte::Status set_data(const ::protocyte::ByteView value) noexcept" not in header
     assert "if (const auto st = reader.can_read(*len); !st) { return st; }" in header
-    assert "new (&choice.data) ::protocyte::ByteArray<8u> {};" in header
-    assert "if (const auto st = choice.data.resize_for_overwrite(*len); !st)" in header
-    assert "const auto view = choice.data.mutable_view();" in header
+    assert "::protocyte::ByteArray<8u> data_value{};" in header
+    assert "if (const auto st = data_value.resize_for_overwrite(*len); !st)" in header
+    assert "const auto view = data_value.mutable_view();" in header
     assert "if (const auto st = reader.read(view.data, view.size); !st)" in header
-    assert "destroy_at_(&choice.data);" in header
+    assert "new (&choice.data) ::protocyte::ByteArray<8u> {::protocyte::move(data_value)};" in header
     assert "choice_case_ = ChoiceCase::data;" in header
-    assert "::protocyte::ByteArray<8u> data_value{};" not in header
+    after_read = header.split("if (const auto st = reader.read(view.data, view.size); !st) {", maxsplit=1)[1]
+    before_commit = after_read.split("clear_choice();", maxsplit=1)[0]
+    assert "return st;" in before_commit
     assert "static_cast<void>(choice.data.resize_for_overwrite(old_data_size));" not in header
     assert "if (*len > ctx_->limits.max_string_bytes) {" in header
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header

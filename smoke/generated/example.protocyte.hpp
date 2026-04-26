@@ -3239,16 +3239,17 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        clear_special_oneof();
-                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {};
-                        if (const auto st = special_oneof.oneof_bytes.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<4u> oneof_bytes_value {};
+                        if (const auto st = oneof_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = special_oneof.oneof_bytes.mutable_view();
+                        const auto view = oneof_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
-                            destroy_at_(&special_oneof.oneof_bytes);
                             return st;
                         }
+                        clear_special_oneof();
+                        new (&special_oneof.oneof_bytes)::protocyte::ByteArray<4u> {
+                            ::protocyte::move(oneof_bytes_value)};
                         special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         break;
                     }
@@ -3740,13 +3741,15 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = sha256_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::FixedByteArray<32u> sha256_value {};
+                        if (const auto st = sha256_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = sha256_.mutable_view();
+                        const auto view = sha256_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        sha256_ = ::protocyte::move(sha256_value);
                         break;
                     }
                     case FieldNumber::integer_array: {
@@ -3815,13 +3818,15 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = byte_array_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<4u> byte_array_value {};
+                        if (const auto st = byte_array_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = byte_array_.mutable_view();
+                        const auto view = byte_array_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        byte_array_ = ::protocyte::move(byte_array_value);
                         break;
                     }
                     case FieldNumber::fixed_integer_array: {
@@ -3890,13 +3895,15 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = float_expr_array_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<2u> float_expr_array_value {};
+                        if (const auto st = float_expr_array_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = float_expr_array_.mutable_view();
+                        const auto view = float_expr_array_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        float_expr_array_ = ::protocyte::move(float_expr_array_value);
                         break;
                     }
                     case FieldNumber::repeated_byte_array: {
@@ -3976,16 +3983,17 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {};
-                        if (const auto st = crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<4u> crazy_bounded_bytes_value {};
+                        if (const auto st = crazy_bounded_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = crazy_bytes_oneof.crazy_bounded_bytes.mutable_view();
+                        const auto view = crazy_bounded_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
-                            destroy_at_(&crazy_bytes_oneof.crazy_bounded_bytes);
                             return st;
                         }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_bounded_bytes)::protocyte::ByteArray<4u> {
+                            ::protocyte::move(crazy_bounded_bytes_value)};
                         crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_bytes;
                         break;
                     }
@@ -4009,16 +4017,17 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        clear_crazy_bytes_oneof();
-                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {};
-                        if (const auto st = crazy_bytes_oneof.crazy_fixed_bytes.resize_for_overwrite(*len); !st) {
+                        ::protocyte::FixedByteArray<4u> crazy_fixed_bytes_value {};
+                        if (const auto st = crazy_fixed_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = crazy_bytes_oneof.crazy_fixed_bytes.mutable_view();
+                        const auto view = crazy_fixed_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
-                            destroy_at_(&crazy_bytes_oneof.crazy_fixed_bytes);
                             return st;
                         }
+                        clear_crazy_bytes_oneof();
+                        new (&crazy_bytes_oneof.crazy_fixed_bytes)::protocyte::FixedByteArray<4u> {
+                            ::protocyte::move(crazy_fixed_bytes_value)};
                         crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_bytes;
                         break;
                     }
@@ -6210,13 +6219,15 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<8u> nested_bytes_value {};
+                        if (const auto st = nested_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = nested_bytes_.mutable_view();
+                        const auto view = nested_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        nested_bytes_ = ::protocyte::move(nested_bytes_value);
                         break;
                     }
                     default: {
@@ -6421,13 +6432,15 @@ namespace test::ultimate {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = external_bytes_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<6u> external_bytes_value {};
+                        if (const auto st = external_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = external_bytes_.mutable_view();
+                        const auto view = external_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        external_bytes_ = ::protocyte::move(external_bytes_value);
                         break;
                     }
                     case FieldNumber::mirrored_values: {

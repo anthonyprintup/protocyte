@@ -207,6 +207,49 @@ namespace {
         return protocyte::ByteView {data, N};
     }
 
+    struct FailingBulkReader {
+        FailingBulkReader(const uint8_t *data, size_t size) noexcept: data {data}, size {size} {}
+
+        bool eof() const noexcept { return pos >= size; }
+        protocyte::usize position() const noexcept { return pos; }
+
+        protocyte::Status can_read(const protocyte::usize count) const noexcept {
+            if (count > size - pos) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            return {};
+        }
+
+        protocyte::Result<protocyte::u8> read_byte() noexcept {
+            if (pos >= size) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            return data[pos++];
+        }
+
+        protocyte::Status read(protocyte::u8 *out, const protocyte::usize count) noexcept {
+            if (count > size - pos) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            const auto copied = count == 0u ? 0u : (count + 1u) / 2u;
+            for (protocyte::usize i {}; i < copied; ++i) { out[i] = data[pos + i]; }
+            pos += copied;
+            return protocyte::unexpected(protocyte::ErrorCode::invalid_argument, pos);
+        }
+
+        protocyte::Status skip(const protocyte::usize count) noexcept {
+            if (count > size - pos) {
+                return protocyte::unexpected(protocyte::ErrorCode::unexpected_eof, pos);
+            }
+            pos += count;
+            return {};
+        }
+
+        const uint8_t *data;
+        protocyte::usize size;
+        protocyte::usize pos {};
+    };
+
     struct ResultTransformQualifier {
         int operator()(int &value) const noexcept { return value + 1; }
         int operator()(const int &value) const noexcept { return value + 2; }
@@ -1744,6 +1787,39 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
     }
 
+    SECTION("bounded bytes preserve previous contents if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::byte_array),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(byte_array)));
+        require_success(writer.write(byte_array, sizeof(byte_array)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_byte_array(view_of(alternate_byte_array)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(view_equal(parsed.byte_array(), view_of(alternate_byte_array)));
+        CHECK(parsed.byte_array_size() == sizeof(alternate_byte_array));
+    }
+
+    SECTION("fixed bytes preserve previous contents if read fails after can_read") {
+        uint8_t replacement_sha256[sizeof(sha256_bytes)] = {};
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::sha256),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(replacement_sha256)));
+        require_success(writer.write(replacement_sha256, sizeof(replacement_sha256)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_sha256(view_of(sha256_bytes)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        REQUIRE(parsed.has_sha256());
+        CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
+    }
+
     SECTION("oneof scalar parsing preserves the previous case after invalid wire type") {
         uint8_t encoded[128] = {};
         protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -1790,6 +1866,39 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
         REQUIRE(parsed.has_oneof_bytes());
         CHECK(view_equal(parsed.oneof_bytes(), view_of(oneof_bytes)));
+    }
+
+    SECTION("oneof bounded bytes preserve previous case if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(oneof_bytes)));
+        require_success(writer.write(oneof_bytes, sizeof(oneof_bytes)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_oneof_string(view_of(oneof_string)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        REQUIRE(parsed.has_oneof_string());
+        CHECK(view_equal(parsed.oneof_string(), view_of(oneof_string)));
+    }
+
+    SECTION("oneof fixed bytes preserve previous case if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::crazy_fixed_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(crazy_fixed_bytes)));
+        require_success(writer.write(crazy_fixed_bytes, sizeof(crazy_fixed_bytes)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_crazy_plain_bytes(view_of(crazy_plain_bytes)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        REQUIRE(parsed.has_crazy_plain_bytes());
+        CHECK(parsed.crazy_bytes_oneof_case() == Message::Crazy_bytes_oneofCase::crazy_plain_bytes);
+        CHECK(view_equal(parsed.crazy_plain_bytes(), view_of(crazy_plain_bytes)));
     }
 
     SECTION("oneof message parsing preserves the previous value after truncation") {

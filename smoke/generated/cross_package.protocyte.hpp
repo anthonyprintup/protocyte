@@ -134,13 +134,15 @@ namespace test::crosspkg {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<15u> nested_bytes_value {};
+                        if (const auto st = nested_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = nested_bytes_.mutable_view();
+                        const auto view = nested_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        nested_bytes_ = ::protocyte::move(nested_bytes_value);
                         break;
                     }
                     default: {
@@ -346,13 +348,15 @@ namespace test::crosspkg {
                         if (const auto st = reader.can_read(*len); !st) {
                             return st;
                         }
-                        if (const auto st = remote_bytes_.resize_for_overwrite(*len); !st) {
+                        ::protocyte::ByteArray<9u> remote_bytes_value {};
+                        if (const auto st = remote_bytes_value.resize_for_overwrite(*len); !st) {
                             return st;
                         }
-                        const auto view = remote_bytes_.mutable_view();
+                        const auto view = remote_bytes_value.mutable_view();
                         if (const auto st = reader.read(view.data, view.size); !st) {
                             return st;
                         }
+                        remote_bytes_ = ::protocyte::move(remote_bytes_value);
                         break;
                     }
                     case FieldNumber::remote_values: {

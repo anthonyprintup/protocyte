@@ -1144,25 +1144,17 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str, option
             f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
     w.line(f"if (const auto st = {reader}.can_read(*len); !st) {{ return st; }}")
-    _emit_read_bounded_bytes_direct(w, item, reader, options)
-
-
-def _emit_read_bounded_bytes_direct(w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions) -> None:
+    value_name = f"{item.cpp_name}_value"
+    w.line(f"{_storage_type(item, options)} {value_name}{{}};")
+    w.line(f"if (const auto st = {value_name}.resize_for_overwrite(*len); !st) {{ return st; }}")
+    w.line(f"const auto view = {value_name}.mutable_view();")
+    w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{ return st; }}")
     if item.oneof_name:
         w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
-        w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
-        w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-        w.line(f"const auto view = {_member(item)}.mutable_view();")
-        w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{")
-        with w.indent():
-            w.line(f"destroy_at_(&{_member(item)});")
-            w.line("return st;")
-        w.line("}")
+        w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move({value_name})}};")
         w.line(f"{_oneof_case_member(item.oneof_name)} = {_oneof_case_type(item.oneof_name)}::{item.cpp_name};")
         return
-    w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-    w.line(f"const auto view = {_member(item)}.mutable_view();")
-    w.line(f"if (const auto st = {reader}.read(view.data, view.size); !st) {{ return st; }}")
+    w.line(f"{_member(item)} = ::protocyte::move({value_name});")
     if _has_presence_flag(item):
         w.line(f"has_{item.cpp_name}_ = true;")
 

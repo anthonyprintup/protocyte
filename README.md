@@ -450,10 +450,10 @@ entries; malformed packed repeated payloads do not append decoded prefix
 values.
 
 For bounded and fixed `bytes` storage, generated parsing may use
-`resize_for_overwrite()` only after the reader reports that the complete
-length-delimited payload is available. The API is treated as scratch-buffer
-storage for data that is about to be overwritten, not as a partial-parse commit
-operation.
+`resize_for_overwrite()` on staged scratch storage before the field is
+committed. The reader's `can_read()` preflight only checks whether the
+length-delimited payload should be available; if the following `read()` still
+fails, the staged storage is discarded and the visible field remains unchanged.
 
 For example, given this shape:
 
