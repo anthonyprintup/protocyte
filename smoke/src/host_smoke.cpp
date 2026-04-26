@@ -261,22 +261,22 @@ namespace {
     struct OptionalAndThenQualifier {
         protocyte::Optional<int> operator()(int &value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 10);
+            static_cast<void>(out.emplace(value + 10));
             return out;
         }
         protocyte::Optional<int> operator()(const int &value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 20);
+            static_cast<void>(out.emplace(value + 20));
             return out;
         }
         protocyte::Optional<int> operator()(int &&value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 30);
+            static_cast<void>(out.emplace(value + 30));
             return out;
         }
         protocyte::Optional<int> operator()(const int &&value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 40);
+            static_cast<void>(out.emplace(value + 40));
             return out;
         }
     };
@@ -290,7 +290,7 @@ namespace {
 
         protocyte::Optional<int> maybe() const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 4);
+            static_cast<void>(out.emplace(value + 4));
             return out;
         }
     };
@@ -1289,8 +1289,14 @@ namespace {
 
             message.clear_byte_array();
             CHECK(message.byte_array_size() == 0u);
+            require_success(message.resize_byte_array_for_overwrite(sizeof(byte_array)));
+            auto view = message.mutable_byte_array();
+            for (size_t i {}; i < view.size; ++i) { view.data[i] = byte_array[i]; }
+            CHECK(view_equal(message.byte_array(), view_of(byte_array)));
 
             require_failure(message.resize_byte_array(test::ultimate::BYTE_ARRAY_CAP + 1u),
+                            protocyte::ErrorCode::count_limit);
+            require_failure(message.resize_byte_array_for_overwrite(test::ultimate::BYTE_ARRAY_CAP + 1u),
                             protocyte::ErrorCode::count_limit);
             require_failure(message.set_byte_array(view_of(large_byte_array)), protocyte::ErrorCode::count_limit);
             require_success(message.set_float_expr_array(view_of(float_expr_array)));
@@ -1450,6 +1456,34 @@ namespace {
             Message parsed(ctx);
             protocyte::SliceReader reader(encoded, writer.position());
             require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
+        }
+
+        SECTION("truncated bounded bytes roll back parsed container state") {
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::byte_array),
+                                                 protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, sizeof(byte_array)));
+            require_success(writer.write(byte_array, 2u));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+            CHECK(parsed.byte_array_size() == 0u);
+        }
+
+        SECTION("truncated bounded oneof bytes roll back parsed container state") {
+            uint8_t encoded[128] = {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_bytes),
+                                                 protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, sizeof(oneof_bytes)));
+            require_success(writer.write(oneof_bytes, 2u));
+
+            Message parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+            CHECK_FALSE(parsed.has_oneof_bytes());
         }
 
         SECTION("malformed map entries are rejected while parsing") {
@@ -1772,6 +1806,15 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         }
         CHECK(index == sizeof(bytes_data));
 
+        Config::Bytes overwritten_payload(&ctx);
+        require_success(overwritten_payload.resize_for_overwrite(sizeof(bytes_data)));
+        index = 0u;
+        for (auto &byte : overwritten_payload.mutable_view()) {
+            byte = bytes_data[index];
+            ++index;
+        }
+        CHECK(view_equal(overwritten_payload.view(), view_of(bytes_data)));
+
         Config::String text(&ctx);
         assign_string(text, view_of(string_bytes));
         index = 0u;
@@ -1787,6 +1830,12 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
             CHECK(*it == string_bytes[index]);
         }
         CHECK(index == 0u);
+
+        Config::String overwritten_text(&ctx);
+        require_success(overwritten_text.resize_for_overwrite(sizeof(string_bytes)));
+        auto text_view = overwritten_text.mutable_view_for_overwrite();
+        for (size_t i {}; i < text_view.size; ++i) { text_view.data[i] = string_bytes[i]; }
+        CHECK(view_equal(overwritten_text.view(), view_of(string_bytes)));
     }
 }
 
@@ -2356,7 +2405,7 @@ TEST_CASE("monadic runtime operations compose for status, result, and optional",
 
         auto chained = value.and_then([](const int current) noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(current + 1);
+            static_cast<void>(out.emplace(current + 1));
             return out;
         });
         REQUIRE(chained);
@@ -2369,7 +2418,7 @@ TEST_CASE("monadic runtime operations compose for status, result, and optional",
         protocyte::Optional<int> empty {};
         auto recovered = protocyte::move(empty).or_else([]() noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(42);
+            static_cast<void>(out.emplace(42));
             return out;
         });
         REQUIRE(recovered);
@@ -2550,7 +2599,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         require_success(lvalue.emplace(10));
         const auto const_lvalue = []() noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(10);
+            static_cast<void>(out.emplace(10));
             return out;
         }();
 
@@ -2559,7 +2608,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto rvalue_transform =
             []() noexcept {
                 protocyte::Optional<int> out {};
-                (void) out.emplace(10);
+                static_cast<void>(out.emplace(10));
                 return out;
             }()
                 .transform(OptionalTransformQualifier {});
@@ -2578,7 +2627,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto rvalue_chain =
             []() noexcept {
                 protocyte::Optional<int> out {};
-                (void) out.emplace(10);
+                static_cast<void>(out.emplace(10));
                 return out;
             }()
                 .and_then(OptionalAndThenQualifier {});
@@ -2603,7 +2652,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto chained_empty = empty.and_then([&](const int) noexcept {
             and_then_called = true;
             protocyte::Optional<int> out {};
-            (void) out.emplace(1);
+            static_cast<void>(out.emplace(1));
             return out;
         });
         protocyte::Optional<int> filled {};
@@ -2611,7 +2660,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto recovered_filled = filled.or_else([&]() noexcept {
             or_else_called = true;
             protocyte::Optional<int> out {};
-            (void) out.emplace(7);
+            static_cast<void>(out.emplace(7));
             return out;
         });
         REQUIRE_FALSE(transformed_empty);
@@ -2637,7 +2686,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto move_only_member =
             []() noexcept {
                 protocyte::Optional<MoveOnlyMemberProbe> out {};
-                (void) out.emplace(43);
+                static_cast<void>(out.emplace(43));
                 return out;
             }()
                 .transform(&MoveOnlyMemberProbe::child);

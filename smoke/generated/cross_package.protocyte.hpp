@@ -67,6 +67,15 @@ namespace test::crosspkg {
             }
             return {};
         }
+        ::protocyte::Status resize_nested_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = nested_bytes_.resize_for_overwrite(size); !st) {
+                return st;
+            }
+            return {};
+        }
         ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
             requires(::protocyte::ByteViewRange<Value>)
@@ -122,10 +131,12 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = nested_bytes_.resize(*len); !st) {
+                        const auto old_nested_bytes_size = nested_bytes_.size();
+                        if (const auto st = nested_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
+                            static_cast<void>(nested_bytes_.resize_for_overwrite(old_nested_bytes_size));
                             return st;
                         }
                         break;
@@ -246,6 +257,15 @@ namespace test::crosspkg {
             }
             return {};
         }
+        ::protocyte::Status resize_remote_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = remote_bytes_.resize_for_overwrite(size); !st) {
+                return st;
+            }
+            return {};
+        }
         ::protocyte::MutableByteView mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
         template<class Value>::protocyte::Status set_remote_bytes(const Value &value) noexcept
             requires(::protocyte::ByteViewRange<Value>)
@@ -321,10 +341,12 @@ namespace test::crosspkg {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
                         }
-                        if (const auto st = remote_bytes_.resize(*len); !st) {
+                        const auto old_remote_bytes_size = remote_bytes_.size();
+                        if (const auto st = remote_bytes_.resize_for_overwrite(*len); !st) {
                             return st;
                         }
                         if (const auto st = reader.read(remote_bytes_.data(), remote_bytes_.size()); !st) {
+                            static_cast<void>(remote_bytes_.resize_for_overwrite(old_remote_bytes_size));
                             return st;
                         }
                         break;

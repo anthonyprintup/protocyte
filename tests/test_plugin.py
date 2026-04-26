@@ -146,9 +146,13 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "if (::std::is_constant_evaluated())" in runtime_header
     assert "return ::std::memcmp(lhs.data, rhs.data, lhs.size) == 0;" in runtime_header
     assert "copy_bytes(bytes_, other.bytes_, other.size_);" in byte_array_body
-    assert "::std::memset(bytes_ + size_, 0, count - size_);" in byte_array_body
+    assert "const usize old_size {size_};" in byte_array_body
+    assert "::std::memset(bytes_ + old_size, 0, count - old_size);" in byte_array_body
+    assert "Status resize_for_overwrite(const usize count) noexcept" in byte_array_body
     assert "copy_bytes(bytes_, other.bytes_, Max);" in fixed_byte_array_body
     assert "::std::memset(bytes_, 0, Max);" in fixed_byte_array_body
+    assert "Status resize_for_overwrite(const usize count) noexcept" in fixed_byte_array_body
+    assert "return bytes_.resize_for_overwrite(count);" in bytes_body
     assert "copy_bytes(temp.data(), view.data, view.size);" in bytes_body
     assert "copy_bytes(out, data_ + pos_, count);" in slice_reader_body
     assert "copy_bytes(data_ + pos_, data, count);" in slice_writer_body
@@ -976,6 +980,9 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "::protocyte::usize digest_size() const noexcept" not in header
     assert "digest_max_size" not in header
     assert "::protocyte::Status resize_blob(const ::protocyte::usize size) noexcept" in header
+    assert "::protocyte::Status resize_digest_for_overwrite(const ::protocyte::usize size) noexcept" in header
+    assert "::protocyte::Status resize_blob_for_overwrite(const ::protocyte::usize size) noexcept" in header
+    assert "if (const auto st = blob_.resize_for_overwrite(size); !st)" in header
     assert "::protocyte::ByteView digest() const noexcept { return digest_.view(); }" in header
     assert "template<class Value>\n  ::protocyte::Status set_digest(const Value &value) noexcept" in header
     assert "template<class Value>\n  ::protocyte::Status set_blob(const Value &value) noexcept" in header
@@ -1396,11 +1403,15 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     assert "const auto view = ::protocyte::byte_view_of(value);" in header
     assert "if (const auto st = temp.assign(*view); !st)" in header
     assert "::protocyte::Status set_data(const ::protocyte::ByteView value) noexcept" not in header
+    assert "const bool was_data = has_data();" in header
     assert "new (&choice.data) ::protocyte::ByteArray<8u> {};" in header
+    assert "const auto old_data_size = choice.data.size();" in header
+    assert "if (const auto st = choice.data.resize_for_overwrite(*len); !st)" in header
+    assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st)" in header
+    assert "static_cast<void>(choice.data.resize_for_overwrite(old_data_size));" in header
+    assert "if (!was_data) { clear_choice(); }" in header
     assert "choice_case_ = ChoiceCase::data;" in header
-    assert "if (const auto st = choice.data.resize(*len); !st) {" in header
     assert "if (*len > ctx_->limits.max_string_bytes) {" in header
-    assert "if (const auto st = reader.read(choice.data.data(), choice.data.size()); !st) {" in header
     assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 
