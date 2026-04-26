@@ -455,6 +455,51 @@ length-delimited payload is available. The API is treated as scratch-buffer
 storage for data that is about to be overwritten, not as a partial-parse commit
 operation.
 
+For example, given this shape:
+
+```proto
+message Inner {
+  string name = 1;
+  repeated int32 values = 2 [packed = true];
+}
+
+message Packet {
+  bytes digest = 1 [(protocyte.array) = { max: 32, fixed: true }];
+  oneof choice {
+    int32 code = 2;
+    string label = 3;
+    Inner nested_choice = 4;
+  }
+  Inner nested = 5;
+  repeated int32 samples = 6 [packed = true];
+  map<string, int32> counters = 7;
+}
+```
+
+The contract is:
+
+- If `digest` already contains 32 bytes and the wire stream later contains
+  field `1` with a declared length of 32 but only 4 payload bytes available,
+  `merge_from()` returns an error and the old 32-byte digest remains present
+  and unchanged.
+- If `choice` currently holds `label = "old"` and the wire stream contains a
+  malformed `code` field or a truncated `nested_choice`, the active oneof case
+  remains `label` with value `"old"`.
+- If `nested` already contains `name = "old"` and `values = [1]`, a later
+  valid `nested` occurrence containing `values = [2]` commits as protobuf
+  merge semantics require: the visible field becomes `name = "old"` and
+  `values = [1, 2]`. If that later nested occurrence is truncated, the visible
+  field remains `name = "old"` and `values = [1]`.
+- If `samples` is `[7]` and a later packed payload decodes the first value
+  before failing on a truncated varint, no prefix values from that malformed
+  payload are appended; `samples` remains `[7]`.
+- If `counters` contains `{"ok": 1}` and a later map entry is malformed before
+  the key and value are fully parsed, no partial entry is inserted and existing
+  entries are left alone.
+- If a stream contains a valid `digest` occurrence followed by a malformed
+  `samples` occurrence, the valid `digest` stays committed after
+  `merge_from()` returns the error from `samples`.
+
 ## Runtime Notes
 
 The default runtime does not call `malloc` or `new` globally. Hosted allocation
