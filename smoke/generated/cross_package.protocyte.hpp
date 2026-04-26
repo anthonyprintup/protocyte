@@ -136,7 +136,7 @@ namespace test::crosspkg {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
-                            (void) nested_bytes_.resize_for_overwrite(old_nested_bytes_size);
+                            static_cast<void>(nested_bytes_.resize_for_overwrite(old_nested_bytes_size));
                             return st;
                         }
                         break;
@@ -346,7 +346,7 @@ namespace test::crosspkg {
                             return st;
                         }
                         if (const auto st = reader.read(remote_bytes_.data(), remote_bytes_.size()); !st) {
-                            (void) remote_bytes_.resize_for_overwrite(old_remote_bytes_size);
+                            static_cast<void>(remote_bytes_.resize_for_overwrite(old_remote_bytes_size));
                             return st;
                         }
                         break;

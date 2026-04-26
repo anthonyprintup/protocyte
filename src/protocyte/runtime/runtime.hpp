@@ -1672,7 +1672,7 @@ namespace protocyte {
             using U = ::std::remove_cvref_t<InvokeResult<F, T &>>;
             Optional<U> out {};
             if (has_) {
-                (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), value()));
+                static_cast<void>(out.emplace(protocyte::invoke(protocyte::forward<F>(f), value())));
             }
             return out;
         }
@@ -1687,7 +1687,7 @@ namespace protocyte {
             using U = ::std::remove_cvref_t<InvokeResult<F, const T &>>;
             Optional<U> out {};
             if (has_) {
-                (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), value()));
+                static_cast<void>(out.emplace(protocyte::invoke(protocyte::forward<F>(f), value())));
             }
             return out;
         }
@@ -1704,7 +1704,7 @@ namespace protocyte {
             using U = ::std::remove_cvref_t<InvokeResult<F, T &&>>;
             Optional<U> out {};
             if (has_) {
-                (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr())));
+                static_cast<void>(out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr()))));
             }
             return out;
         }
@@ -1722,7 +1722,7 @@ namespace protocyte {
             using U = ::std::remove_cvref_t<InvokeResult<F, const T &&>>;
             Optional<U> out {};
             if (has_) {
-                (void) out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr())));
+                static_cast<void>(out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr()))));
             }
             return out;
         }
@@ -1738,7 +1738,7 @@ namespace protocyte {
                 return protocyte::invoke(protocyte::forward<F>(f));
             }
             Optional out {};
-            (void) out.emplace(value());
+            static_cast<void>(out.emplace(value()));
             return out;
         }
 
@@ -1753,7 +1753,7 @@ namespace protocyte {
                 return protocyte::invoke(protocyte::forward<F>(f));
             }
             Optional out {};
-            (void) out.emplace(protocyte::move(*ptr()));
+            static_cast<void>(out.emplace(protocyte::move(*ptr())));
             return out;
         }
 

@@ -3169,7 +3169,7 @@ namespace test::ultimate {
                         if (const auto st =
                                 reader.read(special_oneof.oneof_bytes.data(), special_oneof.oneof_bytes.size());
                             !st) {
-                            (void) special_oneof.oneof_bytes.resize_for_overwrite(old_oneof_bytes_size);
+                            static_cast<void>(special_oneof.oneof_bytes.resize_for_overwrite(old_oneof_bytes_size));
                             if (!was_oneof_bytes) {
                                 clear_special_oneof();
                             }
@@ -3705,7 +3705,7 @@ namespace test::ultimate {
                             return st;
                         }
                         if (const auto st = reader.read(byte_array_.data(), byte_array_.size()); !st) {
-                            (void) byte_array_.resize_for_overwrite(old_byte_array_size);
+                            static_cast<void>(byte_array_.resize_for_overwrite(old_byte_array_size));
                             return st;
                         }
                         break;
@@ -3766,7 +3766,7 @@ namespace test::ultimate {
                             return st;
                         }
                         if (const auto st = reader.read(float_expr_array_.data(), float_expr_array_.size()); !st) {
-                            (void) float_expr_array_.resize_for_overwrite(old_float_expr_array_size);
+                            static_cast<void>(float_expr_array_.resize_for_overwrite(old_float_expr_array_size));
                             return st;
                         }
                         break;
@@ -3856,8 +3856,8 @@ namespace test::ultimate {
                         if (const auto st = reader.read(crazy_bytes_oneof.crazy_bounded_bytes.data(),
                                                         crazy_bytes_oneof.crazy_bounded_bytes.size());
                             !st) {
-                            (void) crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(
-                                old_crazy_bounded_bytes_size);
+                            static_cast<void>(crazy_bytes_oneof.crazy_bounded_bytes.resize_for_overwrite(
+                                old_crazy_bounded_bytes_size));
                             if (!was_crazy_bounded_bytes) {
                                 clear_crazy_bytes_oneof();
                             }
@@ -6025,7 +6025,7 @@ namespace test::ultimate {
                             return st;
                         }
                         if (const auto st = reader.read(nested_bytes_.data(), nested_bytes_.size()); !st) {
-                            (void) nested_bytes_.resize_for_overwrite(old_nested_bytes_size);
+                            static_cast<void>(nested_bytes_.resize_for_overwrite(old_nested_bytes_size));
                             return st;
                         }
                         break;
@@ -6234,7 +6234,7 @@ namespace test::ultimate {
                             return st;
                         }
                         if (const auto st = reader.read(external_bytes_.data(), external_bytes_.size()); !st) {
-                            (void) external_bytes_.resize_for_overwrite(old_external_bytes_size);
+                            static_cast<void>(external_bytes_.resize_for_overwrite(old_external_bytes_size));
                             return st;
                         }
                         break;

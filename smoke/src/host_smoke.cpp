@@ -261,22 +261,22 @@ namespace {
     struct OptionalAndThenQualifier {
         protocyte::Optional<int> operator()(int &value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 10);
+            static_cast<void>(out.emplace(value + 10));
             return out;
         }
         protocyte::Optional<int> operator()(const int &value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 20);
+            static_cast<void>(out.emplace(value + 20));
             return out;
         }
         protocyte::Optional<int> operator()(int &&value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 30);
+            static_cast<void>(out.emplace(value + 30));
             return out;
         }
         protocyte::Optional<int> operator()(const int &&value) const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 40);
+            static_cast<void>(out.emplace(value + 40));
             return out;
         }
     };
@@ -290,7 +290,7 @@ namespace {
 
         protocyte::Optional<int> maybe() const noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(value + 4);
+            static_cast<void>(out.emplace(value + 4));
             return out;
         }
     };
@@ -2405,7 +2405,7 @@ TEST_CASE("monadic runtime operations compose for status, result, and optional",
 
         auto chained = value.and_then([](const int current) noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(current + 1);
+            static_cast<void>(out.emplace(current + 1));
             return out;
         });
         REQUIRE(chained);
@@ -2418,7 +2418,7 @@ TEST_CASE("monadic runtime operations compose for status, result, and optional",
         protocyte::Optional<int> empty {};
         auto recovered = protocyte::move(empty).or_else([]() noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(42);
+            static_cast<void>(out.emplace(42));
             return out;
         });
         REQUIRE(recovered);
@@ -2599,7 +2599,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         require_success(lvalue.emplace(10));
         const auto const_lvalue = []() noexcept {
             protocyte::Optional<int> out {};
-            (void) out.emplace(10);
+            static_cast<void>(out.emplace(10));
             return out;
         }();
 
@@ -2608,7 +2608,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto rvalue_transform =
             []() noexcept {
                 protocyte::Optional<int> out {};
-                (void) out.emplace(10);
+                static_cast<void>(out.emplace(10));
                 return out;
             }()
                 .transform(OptionalTransformQualifier {});
@@ -2627,7 +2627,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto rvalue_chain =
             []() noexcept {
                 protocyte::Optional<int> out {};
-                (void) out.emplace(10);
+                static_cast<void>(out.emplace(10));
                 return out;
             }()
                 .and_then(OptionalAndThenQualifier {});
@@ -2652,7 +2652,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto chained_empty = empty.and_then([&](const int) noexcept {
             and_then_called = true;
             protocyte::Optional<int> out {};
-            (void) out.emplace(1);
+            static_cast<void>(out.emplace(1));
             return out;
         });
         protocyte::Optional<int> filled {};
@@ -2660,7 +2660,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto recovered_filled = filled.or_else([&]() noexcept {
             or_else_called = true;
             protocyte::Optional<int> out {};
-            (void) out.emplace(7);
+            static_cast<void>(out.emplace(7));
             return out;
         });
         REQUIRE_FALSE(transformed_empty);
@@ -2686,7 +2686,7 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         auto move_only_member =
             []() noexcept {
                 protocyte::Optional<MoveOnlyMemberProbe> out {};
-                (void) out.emplace(43);
+                static_cast<void>(out.emplace(43));
                 return out;
             }()
                 .transform(&MoveOnlyMemberProbe::child);

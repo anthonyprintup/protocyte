@@ -753,7 +753,7 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             w.line(f"if (ctx_->limits.max_string_bytes < {bound}) {{ return ::protocyte::MutableByteView{{}}; }}")
             w.line(f"if ({_member(item)}.size() != {bound}) {{")
             w.push()
-            w.line(f"(void){_member(item)}.resize({bound});")
+            w.line(f"static_cast<void>({_member(item)}.resize({bound}));")
             w.pop()
             w.line("}")
         if item.proto3_optional:
@@ -1129,7 +1129,7 @@ def _emit_read_bounded_bytes(w: CppWriter, item: FieldModel, reader: str, option
         old_size_name = f"old_{item.cpp_name}_size"
         w.line(f"const auto {old_size_name} = {_member(item)}.size();")
         w.line(f"if (const auto st = {_member(item)}.resize_for_overwrite(*len); !st) {{ return st; }}")
-        rollback_lines.insert(0, f"(void){_member(item)}.resize_for_overwrite({old_size_name});")
+        rollback_lines.insert(0, f"static_cast<void>({_member(item)}.resize_for_overwrite({old_size_name}));")
         w.line(f"if (const auto st = {reader}.read({_member(item)}.data(), {_member(item)}.size()); !st) {{")
         w.push()
         for line in rollback_lines:
