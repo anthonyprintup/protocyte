@@ -89,7 +89,7 @@ def test_runtime_sequence_containers_accept_contiguous_ranges() -> None:
         "template<class T, usize Max> struct Array {", maxsplit=1
     )[0]
     array_body = runtime_header.split("template<class T, usize Max> struct Array {", maxsplit=1)[1].split(
-        "template<usize Max> struct ByteArray {", maxsplit=1
+        "template<usize Max> using ByteArray = Array<u8, Max>;", maxsplit=1
     )[0]
 
     assert "concept ContiguousRange" in runtime_header
@@ -112,6 +112,9 @@ def test_runtime_sequence_containers_accept_contiguous_ranges() -> None:
     assert "template<class Range> Status assign(const Range &values) noexcept" in array_body
     assert "template<class Range> Status append(const Range &values) noexcept" in array_body
     assert "template<class Range> Status prepend(const Range &values) noexcept" in array_body
+    assert "T *data() noexcept { return ptr(0u); }" in array_body
+    assert "const T *data() const noexcept { return ptr(0u); }" in array_body
+    assert "size_ ? ptr(0u) : nullptr" not in array_body
     assert "temp.append_range_data(contiguous_range_data(values), *count)" in array_body
     assert "::std::memcpy(ptr(size_), values, count * sizeof(T));" in array_body
     assert "if constexpr (::std::is_trivially_copyable_v<T>) {\n                return assign(other);\n            } else {" in array_body
@@ -120,8 +123,8 @@ def test_runtime_sequence_containers_accept_contiguous_ranges() -> None:
 
 def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
-    byte_array_body = runtime_header.split("template<usize Max> struct ByteArray {", maxsplit=1)[1].split(
-        "template<usize Max> struct FixedByteArray {", maxsplit=1
+    array_body = runtime_header.split("template<class T, usize Max> struct Array {", maxsplit=1)[1].split(
+        "template<usize Max> using ByteArray = Array<u8, Max>;", maxsplit=1
     )[0]
     fixed_byte_array_body = runtime_header.split("template<usize Max> struct FixedByteArray {", maxsplit=1)[1].split(
         "template<class Config> struct Bytes {", maxsplit=1
@@ -145,10 +148,15 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "if (!lhs.size)" in runtime_header
     assert "if (::std::is_constant_evaluated())" in runtime_header
     assert "return ::std::memcmp(lhs.data, rhs.data, lhs.size) == 0;" in runtime_header
-    assert "copy_bytes(bytes_, other.bytes_, other.size_);" in byte_array_body
-    assert "const usize old_size {size_};" in byte_array_body
-    assert "::std::memset(bytes_ + old_size, 0, count - old_size);" in byte_array_body
-    assert "Status resize_for_overwrite(const usize count) noexcept" in byte_array_body
+    assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
+    assert "ByteArray(ByteArray &&other) noexcept" not in runtime_header
+    assert "Status assign(const ByteView view) noexcept" in array_body
+    assert "copy_bytes(data(), view.data, view.size);" in array_body
+    assert "ByteView view() const noexcept" in array_body
+    assert "MutableByteView mutable_view() noexcept" in array_body
+    assert "const usize old_size {size_};" in array_body
+    assert "::std::memset(data() + old_size, 0, count - old_size);" in array_body
+    assert "Status resize_for_overwrite(const usize count) noexcept" in array_body
     assert "copy_bytes(bytes_, other.bytes_, Max);" in fixed_byte_array_body
     assert "::std::memset(bytes_, 0, Max);" in fixed_byte_array_body
     assert "Status resize_for_overwrite(const usize count) noexcept" in fixed_byte_array_body
@@ -1000,10 +1008,10 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "if (*len != 32u)" in header
     assert "if (values_.size() != 0u && values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
-    assert "template<usize Max> struct ByteArray" in runtime_header
+    assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
     assert "template<usize Max> struct FixedByteArray" in runtime_header
-    assert "iterator end() noexcept { return bytes_ + size_; }" in runtime_header
-    assert "const_iterator end() const noexcept { return bytes_ + size_; }" in runtime_header
+    assert "iterator end() noexcept { return data() + size_; }" in runtime_header
+    assert "const_iterator end() const noexcept { return data() + size_; }" in runtime_header
     assert "iterator end() noexcept { return bytes_ + size(); }" in runtime_header
     assert "const_iterator end() const noexcept { return bytes_ + size(); }" in runtime_header
     assert "u8 bytes_[Max];" in runtime_header
@@ -1059,8 +1067,11 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     assert "Status copy_from(const HashMap &other) noexcept" in runtime_header
     assert "for (auto &bucket : buckets_)" in runtime_header
     assert "for (usize i {}; i < buckets_.size(); ++i)" not in runtime_header
-    assert "ByteArray(ByteArray &&other) noexcept" in runtime_header
-    assert "ByteArray &operator=(ByteArray &&other) noexcept" in runtime_header
+    assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
+    assert "ByteArray(ByteArray &&other) noexcept" not in runtime_header
+    assert "ByteArray &operator=(ByteArray &&other) noexcept" not in runtime_header
+    assert "::std::memcpy(ptr(0u), other.ptr(0u), other.size_ * sizeof(T));" in runtime_header
+    assert "if constexpr (::std::is_trivially_destructible_v<T>)" in runtime_header
     assert "FixedByteArray(FixedByteArray &&other) noexcept" in runtime_header
     assert "FixedByteArray &operator=(FixedByteArray &&other) noexcept" in runtime_header
 
