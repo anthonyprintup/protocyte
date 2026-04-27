@@ -52,7 +52,7 @@ namespace {
 
         template<class T> static protocyte::u64 hash(const T &value) noexcept {
             return protocyte::fnv1a(
-                protocyte::ByteView {.data = reinterpret_cast<const protocyte::u8 *>(&value), .size = sizeof(T)});
+                protocyte::Span<const protocyte::u8> {reinterpret_cast<const protocyte::u8 *>(&value), sizeof(T)});
         }
 
         template<class T> static bool equal(const T &lhs, const T &rhs) noexcept { return lhs == rhs; }
@@ -199,12 +199,12 @@ namespace {
         };
     }
 
-    bool view_equal(protocyte::ByteView lhs, protocyte::ByteView rhs) noexcept {
+    bool view_equal(protocyte::Span<const protocyte::u8> lhs, protocyte::Span<const protocyte::u8> rhs) noexcept {
         return protocyte::bytes_equal(lhs, rhs);
     }
 
-    template<size_t N> protocyte::ByteView view_of(const uint8_t (&data)[N]) noexcept {
-        return protocyte::ByteView {data, N};
+    template<size_t N> protocyte::Span<const protocyte::u8> view_of(const uint8_t (&data)[N]) noexcept {
+        return protocyte::Span<const protocyte::u8> {data, N};
     }
 
     struct FailingBulkReader {
@@ -427,11 +427,16 @@ namespace {
         REQUIRE(error.code == expected);
     }
 
-    void assign_string(Config::String &out, protocyte::ByteView view) { require_success(out.assign(view)); }
+    void assign_string(Config::String &out, protocyte::Span<const protocyte::u8> view) {
+        require_success(out.assign(view));
+    }
 
-    void assign_bytes(Config::Bytes &out, protocyte::ByteView view) { require_success(out.assign(view)); }
+    void assign_bytes(Config::Bytes &out, protocyte::Span<const protocyte::u8> view) {
+        require_success(out.assign(view));
+    }
 
-    template<class Container> void append_bytes(Container &out, Config::Context &ctx, protocyte::ByteView view) {
+    template<class Container>
+    void append_bytes(Container &out, Config::Context &ctx, protocyte::Span<const protocyte::u8> view) {
         Config::Bytes value(&ctx);
         assign_bytes(value, view);
         require_success(out.push_back(protocyte::move(value)));
@@ -461,7 +466,7 @@ namespace {
     }
 
     template<class Container, size_t N>
-    void check_byte_entry_sequence(const Container &values, const protocyte::ByteView (&expected)[N]) {
+    void check_byte_entry_sequence(const Container &values, const protocyte::Span<const protocyte::u8> (&expected)[N]) {
         REQUIRE(values.size() == N);
         size_t index {};
         for (const auto &value : values) {
@@ -504,7 +509,7 @@ namespace {
         return parsed;
     }
 
-    bool compat_map_str_int32_contains(const CompatMessage &message, protocyte::ByteView key,
+    bool compat_map_str_int32_contains(const CompatMessage &message, protocyte::Span<const protocyte::u8> key,
                                        const int32_t expected_value) noexcept {
         for (const auto entry : message.map_str_int32()) {
             if (view_equal(entry.key.view(), key) && entry.value == expected_value) {
@@ -515,7 +520,7 @@ namespace {
     }
 
     bool compat_map_int32_str_contains(const CompatMessage &message, const int32_t key,
-                                       protocyte::ByteView expected_value) noexcept {
+                                       protocyte::Span<const protocyte::u8> expected_value) noexcept {
         for (const auto entry : message.map_int32_str()) {
             if (entry.key == key && view_equal(entry.value.view(), expected_value)) {
                 return true;
@@ -524,7 +529,8 @@ namespace {
         return false;
     }
 
-    void populate_compat_nested(CompatNested &nested, const int32_t value, const protocyte::ByteView label) {
+    void populate_compat_nested(CompatNested &nested, const int32_t value,
+                                const protocyte::Span<const protocyte::u8> label) {
         require_success(nested.set_value(value));
         require_success(nested.set_label(label));
     }
@@ -538,9 +544,11 @@ namespace {
         append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_3));
     }
 
-    template<class Container> void check_three_byte_entries(const Container &values, protocyte::ByteView first,
-                                                            protocyte::ByteView second, protocyte::ByteView third) {
-        const protocyte::ByteView expected[] = {first, second, third};
+    template<class Container> void check_three_byte_entries(const Container &values,
+                                                            protocyte::Span<const protocyte::u8> first,
+                                                            protocyte::Span<const protocyte::u8> second,
+                                                            protocyte::Span<const protocyte::u8> third) {
+        const protocyte::Span<const protocyte::u8> expected[] = {first, second, third};
         check_byte_entry_sequence(values, expected);
     }
 
@@ -577,8 +585,8 @@ namespace {
                                  view_of(repeated_bytes_3));
     }
 
-    bool nested2_matches(const Nested2 &value, protocyte::ByteView description, float first, float second,
-                         InnerMode mode) noexcept {
+    bool nested2_matches(const Nested2 &value, protocyte::Span<const protocyte::u8> description, float first,
+                         float second, InnerMode mode) noexcept {
         const float expected[] = {first, second};
         size_t index {};
         if (!view_equal(value.description(), description) || value.values().size() != 2u || value.mode() != mode) {
@@ -593,15 +601,16 @@ namespace {
         return index == 2u;
     }
 
-    void check_nested2(const Nested2 &value, protocyte::ByteView description, float first, float second,
-                       InnerMode mode) {
+    void check_nested2(const Nested2 &value, protocyte::Span<const protocyte::u8> description, float first,
+                       float second, InnerMode mode) {
         const float expected[] = {first, second};
         CHECK(view_equal(value.description(), description));
         check_scalar_sequence(value.values(), expected);
         CHECK(value.mode() == mode);
     }
 
-    void populate_nested2(Nested2 &value, protocyte::ByteView description, float first, float second, InnerMode mode) {
+    void populate_nested2(Nested2 &value, protocyte::Span<const protocyte::u8> description, float first, float second,
+                          InnerMode mode) {
         require_success(value.set_description(description));
         require_success(value.mutable_values().push_back(first));
         require_success(value.mutable_values().push_back(second));
@@ -609,19 +618,19 @@ namespace {
         check_nested2(value, description, first, second, mode);
     }
 
-    bool nested1_matches(const Nested1 &value, protocyte::ByteView name, int32_t id) noexcept {
+    bool nested1_matches(const Nested1 &value, protocyte::Span<const protocyte::u8> name, int32_t id) noexcept {
         return view_equal(value.name(), name) && value.id() == id && value.has_inner() &&
                nested2_matches(*value.inner(), view_of(nested_description), 1.5f, 2.5f, InnerMode::B);
     }
 
-    void check_nested1(const Nested1 &value, protocyte::ByteView name, int32_t id) {
+    void check_nested1(const Nested1 &value, protocyte::Span<const protocyte::u8> name, int32_t id) {
         CHECK(view_equal(value.name(), name));
         CHECK(value.id() == id);
         REQUIRE(value.has_inner());
         check_nested2(*value.inner(), view_of(nested_description), 1.5f, 2.5f, InnerMode::B);
     }
 
-    void populate_nested1(Nested1 &value, protocyte::ByteView name, int32_t id) {
+    void populate_nested1(Nested1 &value, protocyte::Span<const protocyte::u8> name, int32_t id) {
         require_success(value.set_name(name));
         require_success(value.set_id(id));
         auto inner = value.ensure_inner();
@@ -977,7 +986,7 @@ namespace {
             require_success(parsed.merge_from(reader));
             REQUIRE(parsed.has_oneof_bytes());
             CHECK(view_equal(parsed.oneof_bytes(), view_of(oneof_bytes)));
-            CHECK(parsed.oneof_bytes().size == test::ultimate::BYTE_ARRAY_CAP);
+            CHECK(parsed.oneof_bytes().size() == test::ultimate::BYTE_ARRAY_CAP);
         }
 
         SECTION("deep oneof alternative round trips") {
@@ -1041,7 +1050,7 @@ namespace {
             REQUIRE(moved.has_oneof_bytes());
             CHECK(view_equal(moved.oneof_bytes(), view_of(oneof_bytes)));
             CHECK(source.special_oneof_case() == Message::Special_oneofCase::none);
-            CHECK(source.oneof_bytes().size == 0u);
+            CHECK(source.oneof_bytes().size() == 0u);
         }
 
         SECTION("move assignment transfers active message case") {
@@ -1245,7 +1254,7 @@ namespace {
         SECTION("unset fixed bytes stay absent through round trip") {
             Message message(ctx);
             CHECK_FALSE(message.has_sha256());
-            CHECK(message.sha256().size == 0u);
+            CHECK(message.sha256().size() == 0u);
             populate_required_fixed_array(message, ctx);
 
             auto encoded_size = message.encoded_size();
@@ -1260,14 +1269,14 @@ namespace {
             protocyte::SliceReader reader(encoded, writer.position());
             require_success(parsed.merge_from(reader));
             CHECK_FALSE(parsed.has_sha256());
-            CHECK(parsed.sha256().size == 0u);
+            CHECK(parsed.sha256().size() == 0u);
         }
 
         SECTION("mutable fixed bytes mark presence and zero initialize") {
             Message message(ctx);
             auto sha256 = message.mutable_sha256();
             REQUIRE(message.has_sha256());
-            REQUIRE(sha256.size == 32u);
+            REQUIRE(sha256.size() == 32u);
             uint8_t expected_byte = 1u;
             for (auto &byte : sha256) {
                 CHECK(byte == 0u);
@@ -1287,7 +1296,7 @@ namespace {
 
             message.clear_sha256();
             CHECK_FALSE(message.has_sha256());
-            CHECK(message.sha256().size == 0u);
+            CHECK(message.sha256().size() == 0u);
         }
 
         SECTION("explicit zero bytes stay present through round trip") {
@@ -1334,7 +1343,7 @@ namespace {
             CHECK(message.byte_array_size() == 0u);
             require_success(message.resize_byte_array_for_overwrite(sizeof(byte_array)));
             auto view = message.mutable_byte_array();
-            for (size_t i {}; i < view.size; ++i) { view.data[i] = byte_array[i]; }
+            for (size_t i {}; i < view.size(); ++i) { view.data()[i] = byte_array[i]; }
             CHECK(view_equal(message.byte_array(), view_of(byte_array)));
 
             require_failure(message.resize_byte_array(test::ultimate::BYTE_ARRAY_CAP + 1u),
@@ -2001,7 +2010,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         append_bytes(parsed.mutable_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
         protocyte::SliceReader reader(encoded, writer.position());
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
-        const protocyte::ByteView expected[] = {view_of(repeated_bytes_0)};
+        const protocyte::Span<const protocyte::u8> expected[] = {view_of(repeated_bytes_0)};
         check_byte_entry_sequence(parsed.repeated_byte_array(), expected);
     }
 
@@ -2154,9 +2163,99 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         Config::String overwritten_text(&ctx);
         require_success(overwritten_text.resize_for_overwrite(sizeof(string_bytes)));
         auto text_view = overwritten_text.mutable_view_for_overwrite();
-        for (size_t i {}; i < text_view.size; ++i) { text_view.data[i] = string_bytes[i]; }
+        for (size_t i {}; i < text_view.size(); ++i) { text_view.data()[i] = string_bytes[i]; }
         CHECK(view_equal(overwritten_text.view(), view_of(string_bytes)));
     }
+}
+
+TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
+    using DynamicSpan = protocyte::Span<int>;
+    using FixedSpan = protocyte::Span<int, 5u>;
+    static_assert(protocyte::dynamic_extent == static_cast<protocyte::usize>(~static_cast<protocyte::usize>(0u)));
+    static_assert(DynamicSpan::extent == protocyte::dynamic_extent);
+    static_assert(FixedSpan::extent == 5u);
+    static_assert(std::is_same_v<typename DynamicSpan::element_type, int>);
+    static_assert(std::is_same_v<typename DynamicSpan::value_type, int>);
+    static_assert(std::is_same_v<typename DynamicSpan::size_type, protocyte::usize>);
+    static_assert(std::is_same_v<typename DynamicSpan::difference_type, protocyte::isize>);
+    static_assert(std::is_same_v<typename DynamicSpan::pointer, int *>);
+    static_assert(std::is_same_v<typename DynamicSpan::const_pointer, const int *>);
+    static_assert(std::is_same_v<typename DynamicSpan::reference, int &>);
+    static_assert(std::is_same_v<typename DynamicSpan::const_reference, const int &>);
+    static_assert(std::is_same_v<typename DynamicSpan::iterator, int *>);
+    static_assert(std::is_same_v<typename DynamicSpan::const_iterator, const int *>);
+    static_assert(std::is_default_constructible_v<DynamicSpan>);
+    static_assert(std::is_default_constructible_v<protocyte::Span<int, 0u>>);
+    static_assert(!std::is_default_constructible_v<FixedSpan>);
+    static_assert(std::is_same_v<decltype(protocyte::declval<FixedSpan>().first<2u>()), protocyte::Span<int, 2u>>);
+    static_assert(std::is_same_v<decltype(protocyte::declval<FixedSpan>().last<2u>()), protocyte::Span<int, 2u>>);
+    static_assert(
+        std::is_same_v<decltype(protocyte::declval<FixedSpan>().subspan<1u, 3u>()), protocyte::Span<int, 3u>>);
+    static_assert(std::is_same_v<decltype(protocyte::declval<FixedSpan>().subspan<2u>()), protocyte::Span<int, 3u>>);
+    static_assert(std::is_same_v<decltype(protocyte::as_bytes(protocyte::declval<FixedSpan>())),
+                                 protocyte::Span<const protocyte::u8, 5u * sizeof(int)>>);
+    static_assert(std::is_same_v<decltype(protocyte::as_writable_bytes(protocyte::declval<FixedSpan>())),
+                                 protocyte::Span<protocyte::u8, 5u * sizeof(int)>>);
+
+    int values[] = {1, 2, 3, 4, 5};
+    FixedSpan fixed {values};
+    DynamicSpan dynamic {values, 5u};
+    DynamicSpan from_pair {values, values + 5u};
+    std::array<int, 5u> array_values {10, 20, 30, 40, 50};
+    DynamicSpan from_array {array_values};
+    protocyte::Span<const int, 5u> const_fixed {fixed};
+    protocyte::Span<const int> const_dynamic {fixed};
+
+    CHECK(fixed.data() == values);
+    CHECK(fixed.size() == 5u);
+    CHECK(fixed.size_bytes() == 5u * sizeof(int));
+    CHECK(!fixed.empty());
+    CHECK(fixed.front() == 1);
+    CHECK(fixed.back() == 5);
+    CHECK(fixed[2u] == 3);
+    CHECK(dynamic.size() == fixed.size());
+    CHECK(from_pair.size() == fixed.size());
+    CHECK(from_array.data() == array_values.data());
+    CHECK(from_array.back() == 50);
+    CHECK(const_fixed.data() == fixed.data());
+    CHECK(const_dynamic.size() == fixed.size());
+
+    int expected[] = {1, 2, 3, 4, 5};
+    check_scalar_sequence(fixed, expected);
+    check_scalar_reverse_sequence(fixed, expected);
+    CHECK(*fixed.cbegin() == 1);
+    CHECK(*(fixed.cend() - 1u) == 5);
+    CHECK(*fixed.crbegin() == 5);
+    CHECK(*(fixed.crend().base()) == 1);
+
+    auto first_static = fixed.first<2u>();
+    int expected_first[] = {1, 2};
+    check_scalar_sequence(first_static, expected_first);
+    auto first_dynamic = fixed.first(3u);
+    int expected_first_dynamic[] = {1, 2, 3};
+    check_scalar_sequence(first_dynamic, expected_first_dynamic);
+    auto last_static = fixed.last<2u>();
+    int expected_last[] = {4, 5};
+    check_scalar_sequence(last_static, expected_last);
+    auto last_dynamic = fixed.last(3u);
+    int expected_last_dynamic[] = {3, 4, 5};
+    check_scalar_sequence(last_dynamic, expected_last_dynamic);
+    auto middle_static = fixed.subspan<1u, 3u>();
+    int expected_middle[] = {2, 3, 4};
+    check_scalar_sequence(middle_static, expected_middle);
+    auto tail_static = fixed.subspan<2u>();
+    int expected_tail[] = {3, 4, 5};
+    check_scalar_sequence(tail_static, expected_tail);
+    auto middle_dynamic = fixed.subspan(1u, 2u);
+    int expected_middle_dynamic[] = {2, 3};
+    check_scalar_sequence(middle_dynamic, expected_middle_dynamic);
+
+    const auto readonly_bytes = protocyte::as_bytes(fixed);
+    CHECK(readonly_bytes.data() == reinterpret_cast<const protocyte::u8 *>(values));
+    CHECK(readonly_bytes.size() == fixed.size_bytes());
+    auto writable_bytes = protocyte::as_writable_bytes(fixed);
+    REQUIRE(writable_bytes.size() == fixed.size_bytes());
+    writable_bytes[0u] = readonly_bytes[0u];
 }
 
 TEST_CASE("HashMap iterators expose key/value proxies", "[smoke][iterators][map]") {
@@ -2401,8 +2500,8 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         auto parsed = parse_compat_bytes(ctx, compat_cases::map_default_entries);
 
         CHECK(parsed.map_int32_str().size() == 2u);
-        CHECK(compat_map_int32_str_contains(parsed, 0, protocyte::ByteView {}));
-        CHECK(compat_map_int32_str_contains(parsed, 7, protocyte::ByteView {}));
+        CHECK(compat_map_int32_str_contains(parsed, 0, protocyte::Span<const protocyte::u8> {}));
+        CHECK(compat_map_int32_str_contains(parsed, 7, protocyte::Span<const protocyte::u8> {}));
     }
 
     SECTION("unknown fields inside map entries are skipped") {
@@ -2532,19 +2631,19 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
 
     constexpr std::array<unsigned char, 5> bytes_payload {0x00u, 0x01u, 0x02u, 0x03u, 0x04u};
     require_success(message.set_f_bytes(bytes_payload));
-    const auto bytes_view = protocyte::byte_view_of(bytes_payload);
+    const auto bytes_view = protocyte::byte_span_of(bytes_payload);
     REQUIRE(bytes_view);
     CHECK(view_equal(message.f_bytes(), *bytes_view));
 
     constexpr std::array<char, 5> string_payload {'h', 'e', 'l', 'l', 'o'};
     require_success(message.set_f_string(string_payload));
-    const auto string_view = protocyte::byte_view_of(string_payload);
+    const auto string_view = protocyte::byte_span_of(string_payload);
     REQUIRE(string_view);
     CHECK(view_equal(message.f_string(), *string_view));
 
     constexpr std::array<unsigned char, 4> bounded_payload {0x10u, 0x11u, 0x12u, 0x13u};
     require_success(message.set_byte_array(bounded_payload));
-    const auto bounded_view = protocyte::byte_view_of(bounded_payload);
+    const auto bounded_view = protocyte::byte_span_of(bounded_payload);
     REQUIRE(bounded_view);
     CHECK(view_equal(message.byte_array(), *bounded_view));
 
@@ -2557,21 +2656,21 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     const PointerByteRange bounded_pointer_range {bounded_payload.data(),
                                                   bounded_payload.data() + bounded_payload.size()};
     require_success(message.set_f_bytes(bounded_pointer_range));
-    const auto bounded_pointer_view = protocyte::byte_view_of(bounded_pointer_range);
+    const auto bounded_pointer_view = protocyte::byte_span_of(bounded_pointer_range);
     REQUIRE(bounded_pointer_view);
     CHECK(view_equal(message.f_bytes(), *bounded_pointer_view));
 
     const std::vector<std::uint16_t> word_payload {0x1514u, 0x1716u};
     require_success(message.set_byte_array(word_payload));
     const auto word_bytes = reinterpret_cast<const protocyte::u8 *>(word_payload.data());
-    CHECK(message.byte_array().size == word_payload.size() * sizeof(word_payload[0]));
-    REQUIRE(message.byte_array().size >= 4u);
-    CHECK(message.byte_array().data[0] == word_bytes[0]);
-    CHECK(message.byte_array().data[1] == word_bytes[1]);
-    CHECK(message.byte_array().data[2] == word_bytes[2]);
-    CHECK(message.byte_array().data[3] == word_bytes[3]);
+    CHECK(message.byte_array().size() == word_payload.size() * sizeof(word_payload[0]));
+    REQUIRE(message.byte_array().size() >= 4u);
+    CHECK(message.byte_array().data()[0] == word_bytes[0]);
+    CHECK(message.byte_array().data()[1] == word_bytes[1]);
+    CHECK(message.byte_array().data()[2] == word_bytes[2]);
+    CHECK(message.byte_array().data()[3] == word_bytes[3]);
     require_success(message.set_byte_array(message.byte_array()));
-    CHECK(message.byte_array().size == word_payload.size() * sizeof(word_payload[0]));
+    CHECK(message.byte_array().size() == word_payload.size() * sizeof(word_payload[0]));
 
     const PointerByteRange reversed_pointer_range {bounded_payload.data() + bounded_payload.size(),
                                                    bounded_payload.data()};
@@ -3259,8 +3358,8 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
 
         Message message(ctx);
         const auto view = message.mutable_sha256();
-        CHECK(view.data == nullptr);
-        CHECK(view.size == 0u);
+        CHECK(view.data() == nullptr);
+        CHECK(view.size() == 0u);
     }
 
     SECTION("nested message fields respect max_message_bytes") {
