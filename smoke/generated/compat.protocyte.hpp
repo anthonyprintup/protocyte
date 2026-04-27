@@ -65,12 +65,12 @@ namespace protocyte_smoke::test::compat {
         }
         constexpr void clear_value() noexcept { value_ = {}; }
 
-        ::protocyte::ByteView label() const noexcept { return label_.view(); }
+        ::protocyte::Span<const ::protocyte::u8> label() const noexcept { return label_.view(); }
         typename Config::String &mutable_label() noexcept { return label_; }
         template<class Value>::protocyte::Status set_label(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -638,12 +638,12 @@ namespace protocyte_smoke::test::compat {
         }
         constexpr void clear_f_double() noexcept { f_double_ = {}; }
 
-        ::protocyte::ByteView f_string() const noexcept { return f_string_.view(); }
+        ::protocyte::Span<const ::protocyte::u8> f_string() const noexcept { return f_string_.view(); }
         typename Config::String &mutable_f_string() noexcept { return f_string_; }
         template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -656,12 +656,12 @@ namespace protocyte_smoke::test::compat {
         }
         void clear_f_string() noexcept { f_string_.clear(); }
 
-        ::protocyte::ByteView f_bytes() const noexcept { return f_bytes_.view(); }
+        ::protocyte::Span<const ::protocyte::u8> f_bytes() const noexcept { return f_bytes_.view(); }
         typename Config::Bytes &mutable_f_bytes() noexcept { return f_bytes_; }
         template<class Value>::protocyte::Status set_f_bytes(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -713,13 +713,13 @@ namespace protocyte_smoke::test::compat {
         constexpr bool has_oneof_string() const noexcept {
             return special_oneof_case_ == Special_oneofCase::oneof_string;
         }
-        ::protocyte::ByteView oneof_string() const noexcept {
-            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::ByteView {};
+        ::protocyte::Span<const ::protocyte::u8> oneof_string() const noexcept {
+            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
         template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -776,13 +776,13 @@ namespace protocyte_smoke::test::compat {
         constexpr bool has_oneof_bytes() const noexcept {
             return special_oneof_case_ == Special_oneofCase::oneof_bytes;
         }
-        ::protocyte::ByteView oneof_bytes() const noexcept {
-            return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::ByteView {};
+        ::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept {
+            return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
         template<class Value>::protocyte::Status set_oneof_bytes(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -808,16 +808,16 @@ namespace protocyte_smoke::test::compat {
             has_opt_int32_ = false;
         }
 
-        ::protocyte::ByteView opt_string() const noexcept { return opt_string_.view(); }
+        ::protocyte::Span<const ::protocyte::u8> opt_string() const noexcept { return opt_string_.view(); }
         bool has_opt_string() const noexcept { return has_opt_string_; }
         typename Config::String &mutable_opt_string() noexcept {
             has_opt_string_ = true;
             return opt_string_;
         }
         template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }

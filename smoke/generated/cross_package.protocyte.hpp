@@ -55,7 +55,7 @@ namespace test::crosspkg {
             return out;
         }
 
-        ::protocyte::ByteView nested_bytes() const noexcept { return nested_bytes_.view(); }
+        ::protocyte::Span<const ::protocyte::u8> nested_bytes() const noexcept { return nested_bytes_.view(); }
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
         static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return 15u; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
@@ -76,15 +76,15 @@ namespace test::crosspkg {
             }
             return {};
         }
-        ::protocyte::MutableByteView mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
+        ::protocyte::Span<::protocyte::u8> mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
         template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
-            if (view->size > ctx_->limits.max_string_bytes) {
+            if (view->size() > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = nested_bytes_.assign(*view); !st) {
@@ -139,7 +139,7 @@ namespace test::crosspkg {
                             return st;
                         }
                         const auto view = nested_bytes_value.mutable_view();
-                        if (const auto st = reader.read(view.data, view.size); !st) {
+                        if (const auto st = reader.read(view.data(), view.size()); !st) {
                             return st;
                         }
                         nested_bytes_ = ::protocyte::move(nested_bytes_value);
@@ -249,7 +249,7 @@ namespace test::crosspkg {
             return out;
         }
 
-        ::protocyte::ByteView remote_bytes() const noexcept { return remote_bytes_.view(); }
+        ::protocyte::Span<const ::protocyte::u8> remote_bytes() const noexcept { return remote_bytes_.view(); }
         ::protocyte::usize remote_bytes_size() const noexcept { return remote_bytes_.size(); }
         static constexpr ::protocyte::usize remote_bytes_max_size() noexcept { return 9u; }
         ::protocyte::Status resize_remote_bytes(const ::protocyte::usize size) noexcept {
@@ -270,15 +270,15 @@ namespace test::crosspkg {
             }
             return {};
         }
-        ::protocyte::MutableByteView mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
+        ::protocyte::Span<::protocyte::u8> mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
         template<class Value>::protocyte::Status set_remote_bytes(const Value &value) noexcept
-            requires(::protocyte::ByteViewRange<Value>)
+            requires(::protocyte::ByteSpanSource<Value>)
         {
-            const auto view = ::protocyte::byte_view_of(value);
+            const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
             }
-            if (view->size > ctx_->limits.max_string_bytes) {
+            if (view->size() > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = remote_bytes_.assign(*view); !st) {
@@ -353,7 +353,7 @@ namespace test::crosspkg {
                             return st;
                         }
                         const auto view = remote_bytes_value.mutable_view();
-                        if (const auto st = reader.read(view.data, view.size); !st) {
+                        if (const auto st = reader.read(view.data(), view.size()); !st) {
                             return st;
                         }
                         remote_bytes_ = ::protocyte::move(remote_bytes_value);
