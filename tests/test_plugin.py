@@ -95,13 +95,18 @@ def test_runtime_sequence_containers_accept_spans() -> None:
     assert "template<class T, usize Extent = dynamic_extent> struct Span" in runtime_header
     assert "inline constexpr usize dynamic_extent" in runtime_header
     assert "static constexpr usize extent {Extent};" in runtime_header
+    assert "constexpr explicit(Extent != dynamic_extent) Span(pointer data, const usize size) noexcept" in runtime_header
+    assert "Pointer range constructors follow std::span" in runtime_header
+    assert "explicit(Extent != dynamic_extent && OtherExtent == dynamic_extent)" in runtime_header
     assert "constexpr reference front() const noexcept" in runtime_header
     assert "constexpr reference back() const noexcept" in runtime_header
     assert "template<usize Count> constexpr Span<T, Count> first() const noexcept" in runtime_header
+    assert "requires(Extent == dynamic_extent || Count <= Extent)" in runtime_header
     assert "constexpr Span<T> first(const usize count) const noexcept" in runtime_header
     assert "template<usize Count> constexpr Span<T, Count> last() const noexcept" in runtime_header
     assert "constexpr Span<T> last(const usize count) const noexcept" in runtime_header
     assert "constexpr auto subspan() const noexcept" in runtime_header
+    assert "Offset <= Extent && (Count == dynamic_extent || Count <= Extent - Offset)" in runtime_header
     assert "constexpr Span<T> subspan(const usize offset, const usize count = dynamic_extent) const noexcept" in runtime_header
     assert "constexpr auto as_bytes(const Span<T, Extent> view) noexcept" in runtime_header
     assert "constexpr auto as_writable_bytes(const Span<T, Extent> view) noexcept" in runtime_header
@@ -115,6 +120,8 @@ def test_runtime_sequence_containers_accept_spans() -> None:
     assert "contiguous_range_size" not in runtime_header
     assert "const auto first_addr = reinterpret_cast<uptr>(first);" in runtime_header
     assert "const auto last_addr = reinterpret_cast<uptr>(last);" in runtime_header
+    assert "if (view.size() != 0u && view.data() == nullptr)" in runtime_header
+    assert "if (*size != 0u && value.data() == nullptr)" in runtime_header
     assert "if (last < first)" not in runtime_header
     assert "template<class Range> Status assign(const Range &values) noexcept" in vector_body
     assert "template<class Range> Status append(const Range &values) noexcept" in vector_body

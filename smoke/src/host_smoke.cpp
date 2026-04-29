@@ -67,6 +67,15 @@ namespace {
         }
     };
 
+    template<class T, protocyte::usize Count>
+    concept HasStaticFirst = requires(T span) { span.template first<Count>(); };
+
+    template<class T, protocyte::usize Count>
+    concept HasStaticLast = requires(T span) { span.template last<Count>(); };
+
+    template<class T, protocyte::usize Offset, protocyte::usize Count = protocyte::dynamic_extent>
+    concept HasStaticSubspan = requires(T span) { span.template subspan<Offset, Count>(); };
+
     using Config = protocyte::DefaultConfig;
     using Message = test::ultimate::UltimateComplexMessage<>;
     using Nested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<>;
@@ -2238,11 +2247,17 @@ TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
     static_assert(std::is_default_constructible_v<DynamicSpan>);
     static_assert(std::is_default_constructible_v<protocyte::Span<int, 0u>>);
     static_assert(!std::is_default_constructible_v<FixedSpan>);
+    static_assert(!std::is_convertible_v<DynamicSpan, FixedSpan>);
+    static_assert(std::is_constructible_v<FixedSpan, DynamicSpan>);
     static_assert(std::is_same_v<decltype(protocyte::declval<FixedSpan>().first<2u>()), protocyte::Span<int, 2u>>);
+    static_assert(!HasStaticFirst<FixedSpan, 6u>);
     static_assert(std::is_same_v<decltype(protocyte::declval<FixedSpan>().last<2u>()), protocyte::Span<int, 2u>>);
+    static_assert(!HasStaticLast<FixedSpan, 6u>);
     static_assert(
         std::is_same_v<decltype(protocyte::declval<FixedSpan>().subspan<1u, 3u>()), protocyte::Span<int, 3u>>);
     static_assert(std::is_same_v<decltype(protocyte::declval<FixedSpan>().subspan<2u>()), protocyte::Span<int, 3u>>);
+    static_assert(!HasStaticSubspan<FixedSpan, 6u>);
+    static_assert(!HasStaticSubspan<FixedSpan, 3u, 3u>);
     static_assert(std::is_same_v<decltype(protocyte::as_bytes(protocyte::declval<FixedSpan>())),
                                  protocyte::Span<const protocyte::u8, 5u * sizeof(int)>>);
     static_assert(std::is_same_v<decltype(protocyte::as_writable_bytes(protocyte::declval<FixedSpan>())),
@@ -2256,6 +2271,7 @@ TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
     DynamicSpan from_array {array_values};
     protocyte::Span<const int, 5u> const_fixed {fixed};
     protocyte::Span<const int> const_dynamic {fixed};
+    FixedSpan fixed_from_dynamic {dynamic};
 
     CHECK(fixed.data() == values);
     CHECK(fixed.size() == 5u);
@@ -2270,6 +2286,7 @@ TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
     CHECK(from_array.back() == 50);
     CHECK(const_fixed.data() == fixed.data());
     CHECK(const_dynamic.size() == fixed.size());
+    CHECK(fixed_from_dynamic.data() == dynamic.data());
 
     int expected[] = {1, 2, 3, 4, 5};
     check_scalar_sequence(fixed, expected);
@@ -2773,6 +2790,22 @@ TEST_CASE("generated repeated fields accept contiguous range operations", "[smok
     require_success(message.mutable_r_int32_unpacked().assign(
         PointerIntRange {pointer_values, pointer_values + sizeof(pointer_values) / sizeof(pointer_values[0])}));
     check_scalar_sequence(message.r_int32_unpacked(), pointer_values);
+
+    struct DataSizeIntRange {
+        const int *values;
+        protocyte::usize count;
+        const int *data() const noexcept { return values; }
+        protocyte::usize size() const noexcept { return count; }
+    };
+    const DataSizeIntRange null_data_range {nullptr, 1u};
+    require_failure(protocyte::checked_span_of(null_data_range), protocyte::ErrorCode::invalid_argument);
+    require_failure(message.mutable_r_int32_unpacked().assign(null_data_range), protocyte::ErrorCode::invalid_argument);
+    require_failure(message.mutable_r_int32_unpacked().append(null_data_range), protocyte::ErrorCode::invalid_argument);
+    require_failure(message.mutable_r_int32_unpacked().prepend(null_data_range),
+                    protocyte::ErrorCode::invalid_argument);
+    const protocyte::Span<const int> null_span {nullptr, 1u};
+    require_failure(protocyte::checked_span_of(null_span), protocyte::ErrorCode::invalid_argument);
+    require_failure(message.mutable_r_int32_unpacked().assign(null_span), protocyte::ErrorCode::invalid_argument);
 
     const std::array<int, 3u> array_values {1, 2, 3};
     require_success(message.mutable_integer_array().assign(array_values));

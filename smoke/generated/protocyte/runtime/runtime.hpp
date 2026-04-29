@@ -1205,22 +1205,27 @@ namespace protocyte {
         constexpr Span() noexcept
             requires(Extent == dynamic_extent || Extent == 0u)
         = default;
-        constexpr Span(pointer data, const usize size) noexcept:
+        // Fixed-extent constructors follow std::span: runtime sizes must match Extent.
+        constexpr explicit(Extent != dynamic_extent) Span(pointer data, const usize size) noexcept:
             data_ {data}, size_ {span_storage_size<Extent>(size)} {}
-        constexpr Span(pointer first, pointer last) noexcept:
+        // Pointer range constructors follow std::span: [first, last) must be a valid range.
+        constexpr explicit(Extent != dynamic_extent) Span(pointer first, pointer last) noexcept:
             data_ {first}, size_ {span_storage_size<Extent>(first == last ? 0u : static_cast<usize>(last - first))} {}
         template<class U, usize N> constexpr Span(U (&items)[N]) noexcept
             requires((Extent == dynamic_extent || Extent == N) && ::std::convertible_to<U *, pointer>)
             : data_ {items}, size_ {span_storage_size<Extent>(N)} {}
-        template<class U, usize OtherExtent> constexpr Span(const Span<U, OtherExtent> other) noexcept
+        template<class U, usize OtherExtent>
+        constexpr explicit(Extent != dynamic_extent && OtherExtent == dynamic_extent)
+            Span(const Span<U, OtherExtent> other) noexcept
             requires(::std::convertible_to<U *, T *> &&
                      (Extent == dynamic_extent || OtherExtent == dynamic_extent || Extent == OtherExtent))
             : data_ {other.data()}, size_ {span_storage_size<Extent>(other.size())} {}
-        template<class Range> constexpr Span(Range &value) noexcept
+        template<class Range> constexpr explicit(Extent != dynamic_extent) Span(Range &value) noexcept
             requires(!is_span<::std::remove_cvref_t<Range>> && DataSizeSpanSource<Range &> &&
                      ::std::convertible_to<SpanDataPointer<Range &>, pointer>)
             : data_ {value.data()}, size_ {span_storage_size<Extent>(static_cast<usize>(value.size()))} {}
-        template<class Range> constexpr Span(Range &value) noexcept
+        // Pointer-only range sources follow std::span: [begin(), end()) must be a valid range.
+        template<class Range> constexpr explicit(Extent != dynamic_extent) Span(Range &value) noexcept
             requires(!is_span<::std::remove_cvref_t<Range>> && !DataSizeSpanSource<Range &> &&
                      PointerSpanSource<Range &> && ::std::convertible_to<SpanBeginPointer<Range &>, pointer> &&
                      ::std::convertible_to<SpanEndPointer<Range &>, pointer>)
@@ -1244,13 +1249,22 @@ namespace protocyte {
         constexpr usize size() const noexcept { return size_; }
         constexpr usize size_bytes() const noexcept { return size_ * sizeof(T); }
         constexpr bool empty() const noexcept { return size_ == 0u; }
-        template<usize Count> constexpr Span<T, Count> first() const noexcept { return {data_, Count}; }
+        template<usize Count> constexpr Span<T, Count> first() const noexcept
+            requires(Extent == dynamic_extent || Count <= Extent)
+        {
+            return Span<T, Count> {data_, Count};
+        }
         constexpr Span<T> first(const usize count) const noexcept { return {data_, count}; }
-        template<usize Count> constexpr Span<T, Count> last() const noexcept {
-            return {data_ + (size_ - Count), Count};
+        template<usize Count> constexpr Span<T, Count> last() const noexcept
+            requires(Extent == dynamic_extent || Count <= Extent)
+        {
+            return Span<T, Count> {data_ + (size_ - Count), Count};
         }
         constexpr Span<T> last(const usize count) const noexcept { return {data_ + (size_ - count), count}; }
-        template<usize Offset, usize Count = dynamic_extent> constexpr auto subspan() const noexcept {
+        template<usize Offset, usize Count = dynamic_extent> constexpr auto subspan() const noexcept
+            requires(Extent == dynamic_extent ||
+                     (Offset <= Extent && (Count == dynamic_extent || Count <= Extent - Offset)))
+        {
             constexpr usize subspan_extent {
                 Count != dynamic_extent ? Count : (Extent != dynamic_extent ? Extent - Offset : dynamic_extent)};
             const usize count {Count != dynamic_extent ? Count : size_ - Offset};
@@ -1336,6 +1350,9 @@ namespace protocyte {
 
     template<class T, usize Extent>
     constexpr Result<Span<T, Extent>> checked_span_of(const Span<T, Extent> view) noexcept {
+        if (view.size() != 0u && view.data() == nullptr) {
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
         return view;
     }
 
@@ -1350,6 +1367,9 @@ namespace protocyte {
         const auto size = checked_span_count(value.size());
         if (!size) {
             return protocyte::unexpected(size.error());
+        }
+        if (*size != 0u && value.data() == nullptr) {
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
         return Span<::std::remove_pointer_t<SpanDataPointer<Range &>>> {value.data(), *size};
     }
