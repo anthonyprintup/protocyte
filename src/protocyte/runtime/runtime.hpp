@@ -1508,8 +1508,6 @@ namespace protocyte {
 
     template<class T, usize Max> struct Array;
 
-    template<usize Max> struct ByteArray;
-
     template<usize Max> struct FixedByteArray;
 
     template<class Config> struct Bytes;
@@ -2116,11 +2114,17 @@ namespace protocyte {
 
         explicit Array(Context *ctx = nullptr) noexcept: ctx_ {ctx} {}
         Array(Array &&other) noexcept: ctx_ {other.context()} {
-            for (auto &value : other) {
-                new (ptr(size_)) T {protocyte::move(value)};
-                ++size_;
+            if constexpr (::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>) {
+                ::std::memcpy(ptr(0u), other.ptr(0u), other.size_ * sizeof(T));
+                size_ = other.size_;
+                other.size_ = {};
+            } else {
+                for (auto &value : other) {
+                    new (ptr(size_)) T {protocyte::move(value)};
+                    ++size_;
+                }
+                other.clear();
             }
-            other.clear();
         }
         Array &operator=(Array &&other) noexcept {
             if (this == &other) {
@@ -2128,11 +2132,17 @@ namespace protocyte {
             }
             clear();
             ctx_.bind(other.context());
-            for (auto &value : other) {
-                new (ptr(size_)) T {protocyte::move(value)};
-                ++size_;
+            if constexpr (::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>) {
+                ::std::memcpy(ptr(0u), other.ptr(0u), other.size_ * sizeof(T));
+                size_ = other.size_;
+                other.size_ = {};
+            } else {
+                for (auto &value : other) {
+                    new (ptr(size_)) T {protocyte::move(value)};
+                    ++size_;
+                }
+                other.clear();
             }
-            other.clear();
             return *this;
         }
         Array(const Array &) = delete;
@@ -2145,8 +2155,8 @@ namespace protocyte {
         void bind(Context *ctx) noexcept { ctx_.bind(ctx); }
         usize size() const noexcept { return size_; }
         bool empty() const noexcept { return !size_; }
-        T *data() noexcept { return size_ ? ptr(0u) : nullptr; }
-        const T *data() const noexcept { return size_ ? ptr(0u) : nullptr; }
+        T *data() noexcept { return ptr(0u); }
+        const T *data() const noexcept { return ptr(0u); }
         T &operator[](const usize index) noexcept { return *ptr(index); }
         const T &operator[](const usize index) const noexcept { return *ptr(index); }
         iterator begin() noexcept { return data(); }
@@ -2163,9 +2173,13 @@ namespace protocyte {
         const_reverse_iterator crend() const noexcept { return rend(); }
 
         void clear() noexcept {
-            while (size_) {
-                --size_;
-                ptr(size_)->~T();
+            if constexpr (::std::is_trivially_destructible_v<T>) {
+                size_ = {};
+            } else {
+                while (size_) {
+                    --size_;
+                    ptr(size_)->~T();
+                }
             }
         }
 
@@ -2185,6 +2199,17 @@ namespace protocyte {
 
         Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
+
+        Status assign(const ByteView view) noexcept
+            requires(::std::same_as<T, u8>)
+        {
+            if (view.size > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            copy_bytes(data(), view.data, view.size);
+            size_ = view.size;
+            return {};
+        }
 
         template<class Range> Status assign(const Range &values) noexcept
             requires(ContiguousRange<Range>)
@@ -2275,6 +2300,44 @@ namespace protocyte {
             }
         }
 
+        ByteView view() const noexcept
+            requires(::std::same_as<T, u8>)
+        {
+            return {.data = data(), .size = size_};
+        }
+
+        MutableByteView mutable_view() noexcept
+            requires(::std::same_as<T, u8>)
+        {
+            return {.data = data(), .size = size_};
+        }
+
+        Status resize(const usize count) noexcept
+            requires(::std::same_as<T, u8>)
+        {
+            if (count > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            const usize old_size {size_};
+            if (const auto st = resize_for_overwrite(count); !st) {
+                return st;
+            }
+            if (count > old_size) {
+                ::std::memset(data() + old_size, 0, count - old_size);
+            }
+            return {};
+        }
+
+        Status resize_for_overwrite(const usize count) noexcept
+            requires(::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>)
+        {
+            if (count > Max) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            size_ = count;
+            return {};
+        }
+
     protected:
         template<class Source> static constexpr bool can_memcpy_range_v =
             ::std::is_trivially_copyable_v<T> && ::std::same_as<::std::remove_cv_t<Source>, T>;
@@ -2339,86 +2402,7 @@ namespace protocyte {
         usize size_ {};
     };
 
-    template<usize Max> struct ByteArray {
-        using value_type = u8;
-        using iterator = u8 *;
-        using const_iterator = const u8 *;
-        using reverse_iterator = ReverseIterator<u8>;
-        using const_reverse_iterator = ReverseIterator<const u8>;
-
-        ByteArray() noexcept = default;
-        ByteArray(ByteArray &&other) noexcept: size_ {other.size_} {
-            copy_bytes(bytes_, other.bytes_, other.size_);
-            other.size_ = {};
-        }
-        ByteArray &operator=(ByteArray &&other) noexcept {
-            if (this == &other) {
-                return *this;
-            }
-            size_ = other.size_;
-            copy_bytes(bytes_, other.bytes_, other.size_);
-            other.size_ = {};
-            return *this;
-        }
-        ByteArray(const ByteArray &) = delete;
-        ByteArray &operator=(const ByteArray &) = delete;
-
-        static constexpr usize max_size() noexcept { return Max; }
-        ByteView view() const noexcept { return {.data = bytes_, .size = size_}; }
-        MutableByteView mutable_view() noexcept { return {.data = bytes_, .size = size_}; }
-        u8 *data() noexcept { return bytes_; }
-        const u8 *data() const noexcept { return bytes_; }
-        usize size() const noexcept { return size_; }
-        bool empty() const noexcept { return !size_; }
-        iterator begin() noexcept { return bytes_; }
-        const_iterator begin() const noexcept { return bytes_; }
-        iterator end() noexcept { return bytes_ + size_; }
-        const_iterator end() const noexcept { return bytes_ + size_; }
-        const_iterator cbegin() const noexcept { return begin(); }
-        const_iterator cend() const noexcept { return end(); }
-        reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
-        const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
-        reverse_iterator rend() noexcept { return reverse_iterator {begin()}; }
-        const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
-        const_reverse_iterator crbegin() const noexcept { return rbegin(); }
-        const_reverse_iterator crend() const noexcept { return rend(); }
-        void clear() noexcept { size_ = {}; }
-
-        Status resize(const usize count) noexcept {
-            if (count > Max) {
-                return protocyte::unexpected(ErrorCode::count_limit, {});
-            }
-            const usize old_size {size_};
-            if (const auto st = resize_for_overwrite(count); !st) {
-                return st;
-            }
-            if (count > old_size) {
-                ::std::memset(bytes_ + old_size, 0, count - old_size);
-            }
-            return {};
-        }
-
-        Status resize_for_overwrite(const usize count) noexcept {
-            if (count > Max) {
-                return protocyte::unexpected(ErrorCode::count_limit, {});
-            }
-            size_ = count;
-            return {};
-        }
-
-        Status assign(const ByteView view) noexcept {
-            if (view.size > Max) {
-                return protocyte::unexpected(ErrorCode::count_limit, {});
-            }
-            copy_bytes(bytes_, view.data, view.size);
-            size_ = view.size;
-            return {};
-        }
-
-    protected:
-        u8 bytes_[Max];
-        usize size_ {};
-    };
+    template<usize Max> using ByteArray = Array<u8, Max>;
 
     template<usize Max> struct FixedByteArray {
         using value_type = u8;
