@@ -400,7 +400,7 @@ namespace protocyte {
             return *this;
         }
 
-        ~Result() noexcept { destroy(); }
+        constexpr ~Result() noexcept { destroy(); }
 
         constexpr bool is_ok() const noexcept { return ok_; }
         constexpr explicit operator bool() const noexcept { return ok_; }
@@ -720,7 +720,7 @@ namespace protocyte {
         }
 
     protected:
-        void destroy() noexcept {
+        constexpr void destroy() noexcept {
             if (ok_) {
                 value_.~T();
             } else {
@@ -833,7 +833,7 @@ namespace protocyte {
             return *this;
         }
 
-        ~Result() noexcept { destroy(); }
+        constexpr ~Result() noexcept { destroy(); }
 
         constexpr bool is_ok() const noexcept { return ok_; }
         constexpr explicit operator bool() const noexcept { return ok_; }
@@ -1131,7 +1131,7 @@ namespace protocyte {
         constexpr Result() noexcept = default;
 
     protected:
-        void destroy() noexcept {
+        constexpr void destroy() noexcept {
             if (!ok_) {
                 storage_.error_.~E();
             }
@@ -1139,7 +1139,7 @@ namespace protocyte {
 
         union Storage {
             constexpr Storage() noexcept {}
-            ~Storage() noexcept {}
+            constexpr ~Storage() noexcept {}
 
             E error_;
         };
@@ -1305,6 +1305,23 @@ namespace protocyte {
         return lhs * rhs;
     }
 
+    template<class Count> constexpr Result<usize> checked_span_count(const Count count) noexcept {
+        using CountValue = ::std::remove_cvref_t<Count>;
+        if constexpr (::std::is_integral_v<CountValue>) {
+            if constexpr (::std::is_signed_v<CountValue>) {
+                if (count < 0) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+            }
+            if constexpr (sizeof(CountValue) > sizeof(usize)) {
+                if (count > static_cast<CountValue>(static_cast<usize>(~static_cast<usize>(0u)))) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+            }
+        }
+        return static_cast<usize>(count);
+    }
+
     template<class Range> constexpr auto span_of(Range &value) noexcept
         requires(requires { Span {value}; })
     {
@@ -1317,14 +1334,67 @@ namespace protocyte {
         return Span {value};
     }
 
+    template<class T, usize Extent>
+    constexpr Result<Span<T, Extent>> checked_span_of(const Span<T, Extent> view) noexcept {
+        return view;
+    }
+
+    template<class T, usize N> constexpr Result<Span<T, N>> checked_span_of(T (&items)[N]) noexcept {
+        return Span<T, N> {items};
+    }
+
+    template<class Range> constexpr auto checked_span_of(Range &value) noexcept
+        -> Result<Span<::std::remove_pointer_t<SpanDataPointer<Range &>>>>
+        requires(!is_span<::std::remove_cvref_t<Range>> && DataSizeSpanSource<Range &>)
+    {
+        const auto size = checked_span_count(value.size());
+        if (!size) {
+            return protocyte::unexpected(size.error());
+        }
+        return Span<::std::remove_pointer_t<SpanDataPointer<Range &>>> {value.data(), *size};
+    }
+
+    template<class Range> constexpr auto checked_span_of(Range &value) noexcept
+        -> Result<Span<::std::remove_pointer_t<SpanBeginPointer<Range &>>>>
+        requires(!is_span<::std::remove_cvref_t<Range>> && !DataSizeSpanSource<Range &> && PointerSpanSource<Range &>)
+    {
+        auto *first = value.begin();
+        auto *last = value.end();
+        if (first == last) {
+            return Span<::std::remove_pointer_t<SpanBeginPointer<Range &>>> {first, first};
+        }
+        if (first == nullptr || last == nullptr) {
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
+        const auto first_addr = reinterpret_cast<uptr>(first);
+        const auto last_addr = reinterpret_cast<uptr>(last);
+        if (last_addr < first_addr) {
+            return protocyte::unexpected(ErrorCode::count_limit, {});
+        }
+        using Element = ::std::remove_pointer_t<SpanBeginPointer<Range &>>;
+        const auto byte_count = last_addr - first_addr;
+        if (byte_count % sizeof(Element) != 0u) {
+            return protocyte::unexpected(ErrorCode::count_limit, {});
+        }
+        return Span<Element> {first, static_cast<usize>(byte_count / sizeof(Element))};
+    }
+
+    template<class T>
+    concept CheckedSpanSource =
+        requires(T &value) { checked_span_of(value); } || requires(const T &value) { checked_span_of(value); };
+
     template<class T, usize Extent> Result<usize> byte_span_size(const Span<T, Extent> view) noexcept {
         return checked_mul(view.size(), sizeof(T));
     }
 
     template<class T> Result<usize> byte_span_size(const T &value) noexcept
-        requires(requires { span_of(value); })
+        requires(requires { checked_span_of(value); })
     {
-        return byte_span_size(span_of(value));
+        const auto view = checked_span_of(value);
+        if (!view) {
+            return protocyte::unexpected(view.error());
+        }
+        return byte_span_size(*view);
     }
 
     template<class T, usize Extent> Result<Span<const u8>> byte_span_of(const Span<T, Extent> view) noexcept {
@@ -1332,32 +1402,29 @@ namespace protocyte {
         if (!size) {
             return protocyte::unexpected(size.error());
         }
+        if (*size != 0u && view.data() == nullptr) {
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
         return Span<const u8> {reinterpret_cast<const u8 *>(view.data()), *size};
     }
 
     template<class T> Result<Span<const u8>> byte_span_of(const T &value) noexcept
         requires(!is_span<::std::remove_cvref_t<T>> && DataSizeSpanSource<const T &>)
     {
-        const auto count = value.size();
-        using Count = ::std::remove_cvref_t<decltype(count)>;
-        if constexpr (::std::is_integral_v<Count>) {
-            if constexpr (::std::is_signed_v<Count>) {
-                if (count < 0) {
-                    return protocyte::unexpected(ErrorCode::count_limit, {});
-                }
-            }
-            if constexpr (sizeof(Count) > sizeof(usize)) {
-                if (count > static_cast<Count>(static_cast<usize>(~static_cast<usize>(0u)))) {
-                    return protocyte::unexpected(ErrorCode::count_limit, {});
-                }
-            }
+        const auto count = checked_span_count(value.size());
+        if (!count) {
+            return protocyte::unexpected(count.error());
         }
         using Element = ::std::remove_pointer_t<SpanDataPointer<const T &>>;
-        const auto size = checked_mul(static_cast<usize>(count), sizeof(Element));
+        const auto size = checked_mul(*count, sizeof(Element));
         if (!size) {
             return protocyte::unexpected(size.error());
         }
-        return Span<const u8> {reinterpret_cast<const u8 *>(value.data()), *size};
+        const auto *data = value.data();
+        if (*size != 0u && data == nullptr) {
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
+        return Span<const u8> {reinterpret_cast<const u8 *>(data), *size};
     }
 
     template<class T> Result<Span<const u8>> byte_span_of(const T &value) noexcept
@@ -1522,6 +1589,45 @@ namespace protocyte {
             return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
     }
+
+    template<class T, class Context>
+    concept PointerContextConstructible = requires(Context *ctx) { T {ctx}; };
+
+    template<class T, class Context>
+    concept ReferenceContextConstructible = !::std::is_void_v<Context> && requires(Context &ctx) { T {ctx}; };
+
+    template<class T, class Context>
+    concept DefaultConstructible = requires { T {}; };
+
+    template<class T, class Context>
+    concept ByteAssignableCopyConstructible =
+        requires(const T &src) { src.view(); } && requires(T &out, const Span<const u8> view) { out.assign(view); } &&
+        (PointerContextConstructible<T, Context> || DefaultConstructible<T, Context>);
+
+    template<class T, class Context>
+    concept CopyFromConstructible = requires(T &out, const T &src) { out.copy_from(src); } &&
+                                    (ReferenceContextConstructible<T, Context> ||
+                                     PointerContextConstructible<T, Context> || DefaultConstructible<T, Context>);
+
+    template<class T, class Context>
+    concept CopyValueCompatible = requires(const T &value) { T {value}; } ||
+                                  ByteAssignableCopyConstructible<T, Context> || CopyFromConstructible<T, Context>;
+
+    template<class T, class Source, class Context>
+    concept RangeElementCompatible =
+        (::std::same_as<::std::remove_cvref_t<Source>, T> && CopyValueCompatible<T, Context>) ||
+        (SpanSource<const Source> && requires(T &out, const Span<const u8> view) { out.assign(view); } &&
+         (PointerContextConstructible<T, Context> || DefaultConstructible<T, Context>) ) ||
+        requires(const Source &value) { T(value); };
+
+    template<class Range> using CheckedSpanSourceView =
+        typename decltype(checked_span_of(protocyte::declval<Range &>()))::value_type;
+
+    template<class Range> using CheckedSpanSourceElement = typename CheckedSpanSourceView<Range>::element_type;
+
+    template<class T, class Range, class Context>
+    concept ContainerCompatibleSpanSource =
+        CheckedSpanSource<Range> && RangeElementCompatible<T, CheckedSpanSourceElement<Range>, Context>;
 
     template<class T> struct ValueContext {
         using type = void;
@@ -1905,9 +2011,13 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::no_memory, {});
             }
             auto *next = static_cast<T *>(raw);
-            for (usize i {}; i < size_; ++i) {
-                new (&next[i]) T {protocyte::move(data_[i])};
-                data_[i].~T();
+            if constexpr (::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>) {
+                ::std::memcpy(next, data_, size_ * sizeof(T));
+            } else {
+                for (usize i {}; i < size_; ++i) {
+                    new (&next[i]) T {protocyte::move(data_[i])};
+                    data_[i].~T();
+                }
             }
             if (data_ != nullptr) {
                 Config::deallocate(*ctx_, data_, capacity_ * sizeof(T), alignof(T));
@@ -1945,17 +2055,20 @@ namespace protocyte {
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
         template<class Range> Status assign(const Range &values) noexcept
-            requires(SpanSource<const Range>)
+            requires(ContainerCompatibleSpanSource<T, const Range, Context>)
         {
             Vector temp {ctx_};
-            const auto view = span_of(values);
-            if (view.size() > max_size()) {
+            const auto view = checked_span_of(values);
+            if (!view) {
+                return view.status();
+            }
+            if (view->size() > max_size()) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            if (const auto st = temp.reserve(view.size()); !st) {
+            if (const auto st = temp.reserve(view->size()); !st) {
                 return st;
             }
-            if (const auto st = temp.append_range_data(view.data(), view.size()); !st) {
+            if (const auto st = temp.append_range_data(view->data(), view->size()); !st) {
                 return st;
             }
             *this = protocyte::move(temp);
@@ -1963,10 +2076,13 @@ namespace protocyte {
         }
 
         template<class Range> Status append(const Range &values) noexcept
-            requires(SpanSource<const Range>)
+            requires(ContainerCompatibleSpanSource<T, const Range, Context>)
         {
-            const auto view = span_of(values);
-            const auto total = checked_add(size_, view.size());
+            const auto view = checked_span_of(values);
+            if (!view) {
+                return view.status();
+            }
+            const auto total = checked_add(size_, view->size());
             if (!total) {
                 return total.status();
             }
@@ -1974,13 +2090,14 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             Vector temp {ctx_};
-            if (const auto st = temp.reserve(*total); !st) {
+            const usize target_capacity {capacity_ > *total ? capacity_ : *total};
+            if (const auto st = temp.reserve(target_capacity); !st) {
                 return st;
             }
             if (const auto st = temp.append_range_data(data_, size_); !st) {
                 return st;
             }
-            if (const auto st = temp.append_range_data(view.data(), view.size()); !st) {
+            if (const auto st = temp.append_range_data(view->data(), view->size()); !st) {
                 return st;
             }
             *this = protocyte::move(temp);
@@ -1988,10 +2105,13 @@ namespace protocyte {
         }
 
         template<class Range> Status prepend(const Range &values) noexcept
-            requires(SpanSource<const Range>)
+            requires(ContainerCompatibleSpanSource<T, const Range, Context>)
         {
-            const auto view = span_of(values);
-            const auto total = checked_add(size_, view.size());
+            const auto view = checked_span_of(values);
+            if (!view) {
+                return view.status();
+            }
+            const auto total = checked_add(size_, view->size());
             if (!total) {
                 return total.status();
             }
@@ -1999,10 +2119,11 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             Vector temp {ctx_};
-            if (const auto st = temp.reserve(*total); !st) {
+            const usize target_capacity {capacity_ > *total ? capacity_ : *total};
+            if (const auto st = temp.reserve(target_capacity); !st) {
                 return st;
             }
-            if (const auto st = temp.append_range_data(view.data(), view.size()); !st) {
+            if (const auto st = temp.append_range_data(view->data(), view->size()); !st) {
                 return st;
             }
             if (const auto st = temp.append_range_data(data_, size_); !st) {
@@ -2266,14 +2387,17 @@ namespace protocyte {
         }
 
         template<class Range> Status assign(const Range &values) noexcept
-            requires(SpanSource<const Range>)
+            requires(ContainerCompatibleSpanSource<T, const Range, Context>)
         {
             Array temp {context()};
-            const auto view = span_of(values);
-            if (view.size() > Max) {
+            const auto view = checked_span_of(values);
+            if (!view) {
+                return view.status();
+            }
+            if (view->size() > Max) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            if (const auto st = temp.append_range_data(view.data(), view.size()); !st) {
+            if (const auto st = temp.append_range_data(view->data(), view->size()); !st) {
                 return st;
             }
             *this = protocyte::move(temp);
@@ -2281,10 +2405,13 @@ namespace protocyte {
         }
 
         template<class Range> Status append(const Range &values) noexcept
-            requires(SpanSource<const Range>)
+            requires(ContainerCompatibleSpanSource<T, const Range, Context>)
         {
-            const auto view = span_of(values);
-            const auto total = checked_add(size_, view.size());
+            const auto view = checked_span_of(values);
+            if (!view) {
+                return view.status();
+            }
+            const auto total = checked_add(size_, view->size());
             if (!total) {
                 return total.status();
             }
@@ -2295,7 +2422,7 @@ namespace protocyte {
             if (const auto st = temp.append_range_data(data(), size_); !st) {
                 return st;
             }
-            if (const auto st = temp.append_range_data(view.data(), view.size()); !st) {
+            if (const auto st = temp.append_range_data(view->data(), view->size()); !st) {
                 return st;
             }
             *this = protocyte::move(temp);
@@ -2303,10 +2430,13 @@ namespace protocyte {
         }
 
         template<class Range> Status prepend(const Range &values) noexcept
-            requires(SpanSource<const Range>)
+            requires(ContainerCompatibleSpanSource<T, const Range, Context>)
         {
-            const auto view = span_of(values);
-            const auto total = checked_add(size_, view.size());
+            const auto view = checked_span_of(values);
+            if (!view) {
+                return view.status();
+            }
+            const auto total = checked_add(size_, view->size());
             if (!total) {
                 return total.status();
             }
@@ -2314,7 +2444,7 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             Array temp {context()};
-            if (const auto st = temp.append_range_data(view.data(), view.size()); !st) {
+            if (const auto st = temp.append_range_data(view->data(), view->size()); !st) {
                 return st;
             }
             if (const auto st = temp.append_range_data(data(), size_); !st) {

@@ -207,6 +207,14 @@ namespace {
         return protocyte::Span<const protocyte::u8> {data, N};
     }
 
+    struct PointerOnlyIntRange {
+        const protocyte::i32 *first;
+        const protocyte::i32 *last;
+
+        const protocyte::i32 *begin() const noexcept { return first; }
+        const protocyte::i32 *end() const noexcept { return last; }
+    };
+
     struct FailingBulkReader {
         FailingBulkReader(const uint8_t *data, size_t size) noexcept: data {data}, size {size} {}
 
@@ -2046,6 +2054,11 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         require_success(values.push_back(1));
         require_success(values.push_back(2));
         require_success(values.push_back(3));
+        struct NonConvertible {};
+        using NonConvertibleRange = std::array<NonConvertible, 1u>;
+        static_assert(
+            !protocyte::ContainerCompatibleSpanSource<protocyte::i32, const NonConvertibleRange, Config::Context>);
+        static_assert(!protocyte::ContainerCompatibleSpanSource<protocyte::i32, const NonConvertibleRange, void>);
 
         protocyte::i32 expected_values[] = {10, 20, 30};
         size_t index {};
@@ -2067,6 +2080,15 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         const protocyte::i32 expected_range_values[] = {0, 10, 20, 30, 40};
         check_scalar_sequence(values, expected_range_values);
 
+        Config::Vector<protocyte::i32> reserved_values(&ctx);
+        require_success(reserved_values.reserve(8u));
+        require_success(reserved_values.append(appended_values));
+        CHECK(reserved_values.capacity() == 8u);
+        require_success(reserved_values.prepend(prepended_values));
+        CHECK(reserved_values.capacity() == 8u);
+        const protocyte::i32 expected_reserved_values[] = {0, 10, 40};
+        check_scalar_sequence(reserved_values, expected_reserved_values);
+
         protocyte::Array<protocyte::i32, 6u> bounded;
         require_success(bounded.assign(assigned_values));
         require_success(bounded.append(appended_values));
@@ -2075,6 +2097,35 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         const std::array<int, 2u> overflowing_values {50, 60};
         require_failure(bounded.append(overflowing_values), protocyte::ErrorCode::count_limit);
         check_scalar_sequence(bounded, expected_range_values);
+
+        const short converted_assigned_values[] = {200};
+        const unsigned short converted_appended_values[] = {300};
+        const signed char converted_prepended_values[] = {100};
+        const protocyte::Span<const short> converted_assigned {converted_assigned_values};
+        const protocyte::Span<const unsigned short> converted_appended {converted_appended_values};
+        const protocyte::Span<const signed char> converted_prepended {converted_prepended_values};
+        require_success(values.assign(converted_assigned));
+        require_success(values.append(converted_appended));
+        require_success(values.prepend(converted_prepended));
+        const protocyte::i32 expected_converted_values[] = {100, 200, 300};
+        check_scalar_sequence(values, expected_converted_values);
+
+        protocyte::Array<protocyte::i32, 3u> converted_bounded;
+        require_success(converted_bounded.assign(converted_assigned));
+        require_success(converted_bounded.append(converted_appended));
+        require_success(converted_bounded.prepend(converted_prepended));
+        check_scalar_sequence(converted_bounded, expected_converted_values);
+
+        const PointerOnlyIntRange invalid_range {nullptr, expected_values};
+        Config::Vector<protocyte::i32> invalid_values(&ctx);
+        require_failure(invalid_values.assign(invalid_range), protocyte::ErrorCode::invalid_argument);
+        require_failure(invalid_values.append(invalid_range), protocyte::ErrorCode::invalid_argument);
+        require_failure(invalid_values.prepend(invalid_range), protocyte::ErrorCode::invalid_argument);
+
+        protocyte::Array<protocyte::i32, 3u> invalid_bounded;
+        require_failure(invalid_bounded.assign(invalid_range), protocyte::ErrorCode::invalid_argument);
+        require_failure(invalid_bounded.append(invalid_range), protocyte::ErrorCode::invalid_argument);
+        require_failure(invalid_bounded.prepend(invalid_range), protocyte::ErrorCode::invalid_argument);
 
         protocyte::Array<protocyte::i32, 3u> bounded_traversal;
         for (const auto value : expected_values) { require_success(bounded_traversal.push_back(value)); }
@@ -2653,6 +2704,12 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
         const unsigned char *begin() const noexcept { return first; }
         const unsigned char *end() const noexcept { return last; }
     };
+    struct DataSizeByteRange {
+        const unsigned char *bytes;
+        protocyte::usize count;
+        const unsigned char *data() const noexcept { return bytes; }
+        protocyte::usize size() const noexcept { return count; }
+    };
     const PointerByteRange bounded_pointer_range {bounded_payload.data(),
                                                   bounded_payload.data() + bounded_payload.size()};
     require_success(message.set_f_bytes(bounded_pointer_range));
@@ -2676,6 +2733,12 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
                                                    bounded_payload.data()};
     require_failure(message.set_f_bytes(reversed_pointer_range), protocyte::ErrorCode::count_limit);
     CHECK(view_equal(message.f_bytes(), *bounded_pointer_view));
+    const DataSizeByteRange null_data_range {nullptr, 1u};
+    require_failure(protocyte::byte_span_of(null_data_range), protocyte::ErrorCode::invalid_argument);
+    require_failure(message.set_f_bytes(null_data_range), protocyte::ErrorCode::invalid_argument);
+    const protocyte::Span<const protocyte::u8> null_span {nullptr, 1u};
+    require_failure(protocyte::byte_span_of(null_span), protocyte::ErrorCode::invalid_argument);
+    require_failure(message.set_f_bytes(null_span), protocyte::ErrorCode::invalid_argument);
 
     require_success(message.set_oneof_bytes(bounded_payload));
     CHECK(message.has_oneof_bytes());

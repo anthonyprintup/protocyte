@@ -106,6 +106,8 @@ def test_runtime_sequence_containers_accept_spans() -> None:
     assert "constexpr auto as_bytes(const Span<T, Extent> view) noexcept" in runtime_header
     assert "constexpr auto as_writable_bytes(const Span<T, Extent> view) noexcept" in runtime_header
     assert "concept SpanSource" in runtime_header
+    assert "concept CheckedSpanSource" in runtime_header
+    assert "concept ContainerCompatibleSpanSource" in runtime_header
     assert "concept DataSizeSpanSource" in runtime_header
     assert "concept PointerSpanSource" in runtime_header
     assert "concept ContiguousRange" not in runtime_header
@@ -117,19 +119,23 @@ def test_runtime_sequence_containers_accept_spans() -> None:
     assert "template<class Range> Status assign(const Range &values) noexcept" in vector_body
     assert "template<class Range> Status append(const Range &values) noexcept" in vector_body
     assert "template<class Range> Status prepend(const Range &values) noexcept" in vector_body
-    assert "const auto view = span_of(values);" in vector_body
-    assert "temp.append_range_data(view.data(), view.size())" in vector_body
+    assert "requires(ContainerCompatibleSpanSource<T, const Range, Context>)" in vector_body
+    assert "const auto view = checked_span_of(values);" in vector_body
+    assert "temp.append_range_data(view->data(), view->size())" in vector_body
+    assert "const usize target_capacity {capacity_ > *total ? capacity_ : *total};" in vector_body
+    assert "::std::memcpy(next, data_, size_ * sizeof(T));" in vector_body
     assert "::std::memcpy(&data_[size_], values, count * sizeof(T));" in vector_body
     assert "if constexpr (::std::is_trivially_copyable_v<T>) {\n                return assign(other);\n            } else {" in vector_body
     assert "if (*total > max_size())" in vector_body
     assert "template<class Range> Status assign(const Range &values) noexcept" in array_body
     assert "template<class Range> Status append(const Range &values) noexcept" in array_body
     assert "template<class Range> Status prepend(const Range &values) noexcept" in array_body
+    assert "requires(ContainerCompatibleSpanSource<T, const Range, Context>)" in array_body
     assert "T *data() noexcept { return ptr(0u); }" in array_body
     assert "const T *data() const noexcept { return ptr(0u); }" in array_body
     assert "size_ ? ptr(0u) : nullptr" not in array_body
-    assert "const auto view = span_of(values);" in array_body
-    assert "temp.append_range_data(view.data(), view.size())" in array_body
+    assert "const auto view = checked_span_of(values);" in array_body
+    assert "temp.append_range_data(view->data(), view->size())" in array_body
     assert "::std::memcpy(ptr(size_), values, count * sizeof(T));" in array_body
     assert "if constexpr (::std::is_trivially_copyable_v<T>) {\n                return assign(other);\n            } else {" in array_body
     assert "if (*total > Max)" in array_body
