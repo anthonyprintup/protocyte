@@ -16,8 +16,9 @@ namespace {
     using Header = ::fetchcontent::common::Header<>;
     using Envelope = ::fetchcontent::demo::Envelope<>;
 
-    template<std::size_t N>::protocyte::ByteView view_of(const std::array<unsigned char, N> &bytes) noexcept {
-        return ::protocyte::ByteView {bytes.data(), bytes.size()};
+    template<std::size_t N>
+    ::protocyte::Span<const ::protocyte::u8> view_of(const std::array<unsigned char, N> &bytes) noexcept {
+        return ::protocyte::Span<const ::protocyte::u8> {bytes.data(), bytes.size()};
     }
 
     template<class Message> std::string encode_hex(const Message &message) {
