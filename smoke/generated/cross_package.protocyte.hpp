@@ -92,21 +92,6 @@ namespace test::crosspkg {
             }
             return {};
         }
-        template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
-            requires(::protocyte::TextPointer<Value>)
-        {
-            const auto view = ::protocyte::cstring_byte_span_of(value);
-            if (!view) {
-                return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
-            if (const auto st = nested_bytes_.assign(*view); !st) {
-                return st;
-            }
-            return {};
-        }
         void clear_nested_bytes() noexcept { nested_bytes_.clear(); }
 
         template<typename Reader>
@@ -290,21 +275,6 @@ namespace test::crosspkg {
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
-            if (!view) {
-                return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
-            if (const auto st = remote_bytes_.assign(*view); !st) {
-                return st;
-            }
-            return {};
-        }
-        template<class Value>::protocyte::Status set_remote_bytes(const Value &value) noexcept
-            requires(::protocyte::TextPointer<Value>)
-        {
-            const auto view = ::protocyte::cstring_byte_span_of(value);
             if (!view) {
                 return view.status();
             }

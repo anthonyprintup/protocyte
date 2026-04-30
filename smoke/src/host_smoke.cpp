@@ -2697,6 +2697,9 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     REQUIRE(created);
     auto &message = *created;
 
+    static_assert(::protocyte::TextSource<const char *>);
+    static_assert(!::protocyte::ByteSpanSource<const char *>);
+
     constexpr std::array<unsigned char, 5> bytes_payload {0x00u, 0x01u, 0x02u, 0x03u, 0x04u};
     require_success(message.set_f_bytes(bytes_payload));
     const auto bytes_view = protocyte::byte_span_of(bytes_payload);
@@ -2733,10 +2736,6 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     require_success(message.set_f_string(u8_string_view_payload));
     CHECK(view_equal(message.f_string(), *protocyte::byte_span_of(u8_string_view_payload)));
 
-    require_success(message.set_f_bytes("hello from bytes c string"));
-    CHECK(message.f_bytes().size() == std::string_view {"hello from bytes c string"}.size());
-    CHECK(view_equal(message.f_bytes(), *protocyte::byte_span_of(std::string_view {"hello from bytes c string"})));
-
     constexpr char embedded_nul_bytes_payload[] {'x', '\0', 'y'};
     require_success(message.set_f_bytes(embedded_nul_bytes_payload));
     const auto embedded_nul_bytes_view = protocyte::byte_span_of(embedded_nul_bytes_payload);
@@ -2744,14 +2743,18 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     CHECK(message.f_bytes().size() == 3u);
     CHECK(view_equal(message.f_bytes(), *embedded_nul_bytes_view));
 
+    constexpr char trailing_nul_bytes_payload[] {'x', 'y', '\0'};
+    require_success(message.set_f_bytes(trailing_nul_bytes_payload));
+    const auto trailing_nul_bytes_view = protocyte::byte_span_of(trailing_nul_bytes_payload);
+    REQUIRE(trailing_nul_bytes_view);
+    CHECK(message.f_bytes().size() == 3u);
+    CHECK(view_equal(message.f_bytes(), *trailing_nul_bytes_view));
+
     constexpr std::array<unsigned char, 4> bounded_payload {0x10u, 0x11u, 0x12u, 0x13u};
     require_success(message.set_byte_array(bounded_payload));
     const auto bounded_view = protocyte::byte_span_of(bounded_payload);
     REQUIRE(bounded_view);
     CHECK(view_equal(message.byte_array(), *bounded_view));
-    require_success(message.set_byte_array("hey"));
-    CHECK(message.byte_array().size() == std::string_view {"hey"}.size());
-    CHECK(view_equal(message.byte_array(), *protocyte::byte_span_of(std::string_view {"hey"})));
 
     struct PointerByteRange {
         const unsigned char *first;
@@ -2801,9 +2804,6 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     require_success(message.set_oneof_bytes(bounded_payload));
     CHECK(message.has_oneof_bytes());
     CHECK(view_equal(message.oneof_bytes(), *bounded_view));
-    require_success(message.set_oneof_bytes("hey"));
-    CHECK(message.has_oneof_bytes());
-    CHECK(message.oneof_bytes().size() == std::string_view {"hey"}.size());
 }
 
 TEST_CASE("generated repeated fields accept contiguous range operations", "[smoke][runtime][repeated]") {

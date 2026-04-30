@@ -648,12 +648,18 @@ def _emit_copy_oneof_from_other(w: CppWriter, oneof: OneofModel, options: Genera
 
 
 def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) -> None:
-    def emit_setter_start(signature: str, view_expr: str, *, template_prefix: bool = False) -> None:
+    def emit_setter_start(
+        signature: str,
+        view_expr: str,
+        *,
+        requires_expr: str | None = None,
+        template_prefix: bool = False,
+    ) -> None:
         if template_prefix:
             w.line("template<class Value>")
         w.line(signature)
-        if template_prefix:
-            w.line("    requires(::protocyte::ByteSpanSource<Value>)")
+        if requires_expr is not None:
+            w.line(f"    requires({requires_expr})")
         w.line("{")
         w.push()
         w.line(f"const auto view = {view_expr};")
@@ -662,21 +668,22 @@ def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) ->
         w.pop()
         w.line("}")
 
+    byte_source_requires = "::protocyte::ByteSpanSource<Value>"
+    if item.kind == "string":
+        byte_source_requires += " && !::protocyte::TextSource<Value>"
     emit_setter_start(
         f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept",
         "::protocyte::byte_span_of(value)",
+        requires_expr=byte_source_requires,
         template_prefix=True,
     )
-    w.line("template<class Value>")
-    w.line(f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept")
-    w.line("    requires(::protocyte::TextPointer<Value>)")
-    w.line("{")
-    w.push()
-    w.line("const auto view = ::protocyte::cstring_byte_span_of(value);")
-    w.line("if (!view) { return view.status(); }")
-    emit_body()
-    w.pop()
-    w.line("}")
+    if item.kind == "string":
+        emit_setter_start(
+            f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept",
+            "::protocyte::text_byte_span_of(value)",
+            requires_expr="::protocyte::TextSource<Value>",
+            template_prefix=True,
+        )
 
 
 def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
