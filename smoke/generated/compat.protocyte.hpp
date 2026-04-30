@@ -68,9 +68,23 @@ namespace protocyte_smoke::test::compat {
         ::protocyte::Span<const ::protocyte::u8> label() const noexcept { return label_.view(); }
         typename Config::String &mutable_label() noexcept { return label_; }
         template<class Value>::protocyte::Status set_label(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            label_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_label(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -641,9 +655,23 @@ namespace protocyte_smoke::test::compat {
         ::protocyte::Span<const ::protocyte::u8> f_string() const noexcept { return f_string_.view(); }
         typename Config::String &mutable_f_string() noexcept { return f_string_; }
         template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            f_string_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -717,9 +745,25 @@ namespace protocyte_smoke::test::compat {
             return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
         template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            clear_special_oneof();
+            new (&special_oneof.oneof_string) typename Config::String {::protocyte::move(temp)};
+            special_oneof_case_ = Special_oneofCase::oneof_string;
+            return {};
+        }
+        template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -815,9 +859,24 @@ namespace protocyte_smoke::test::compat {
             return opt_string_;
         }
         template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            opt_string_ = ::protocyte::move(temp);
+            has_opt_string_ = true;
+            return {};
+        }
+        template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }

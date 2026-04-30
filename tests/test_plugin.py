@@ -321,7 +321,26 @@ def test_generates_proto3_files_and_runtime() -> None:
         "protocyte/runtime/runtime.hpp"
     ]
     assert "concept ByteSpanSource" in files["protocyte/runtime/runtime.hpp"]
+    assert "concept TextChar" in files["protocyte/runtime/runtime.hpp"]
+    assert "concept TextArray" in files["protocyte/runtime/runtime.hpp"]
+    assert "concept TextPointer" in files["protocyte/runtime/runtime.hpp"]
+    assert "concept TextSource" in files["protocyte/runtime/runtime.hpp"]
     assert "Result<Span<const u8>> byte_span_of(const Span<T, Extent> view) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<Span<const u8>> cstring_byte_span_of(const Char *value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<Span<const u8>> cstring_byte_span_of(const Char (&value)[N]) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<Span<const u8>> text_byte_span_of(const T &value) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<Span<const u8>> text_byte_span_of(const Char (&value)[N]) noexcept" in files[
+        "protocyte/runtime/runtime.hpp"
+    ]
+    assert "Result<Span<const u8>> byte_span_of(const Char (&value)[N]) noexcept" in files[
         "protocyte/runtime/runtime.hpp"
     ]
     assert "Result<Span<const u8>> byte_span_of(const T &value) noexcept" in files["protocyte/runtime/runtime.hpp"]
@@ -1029,12 +1048,16 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "::protocyte::Span<const ::protocyte::u8> digest() const noexcept { return digest_.view(); }" in header
     assert "template<class Value>\n  ::protocyte::Status set_digest(const Value &value) noexcept" in header
     assert "template<class Value>\n  ::protocyte::Status set_blob(const Value &value) noexcept" in header
+    assert header.count("template<class Value>\n  ::protocyte::Status set_blob(const Value &value) noexcept") == 1
+    assert "requires(::protocyte::TextSource<Value>)" not in header
     assert "requires(::protocyte::ByteSpanSource<Value>)" in header
     assert "::protocyte::ByteViewConvertible" not in header
     assert "::protocyte::ByteView" not in header
     assert "::protocyte::MutableByteView" not in header
     assert "::protocyte::Status set_blob(const ::protocyte::ByteView value) noexcept" not in header
     assert "const auto view = ::protocyte::byte_span_of(value);" in header
+    assert "const auto view = ::protocyte::cstring_byte_span_of(value);" not in header
+    assert "const auto view = ::protocyte::text_byte_span_of(value);" not in header
     assert "if (!view)" in header
     assert "return view.status();" in header
     assert "if (const auto st = blob_.assign(*view); !st)" in header

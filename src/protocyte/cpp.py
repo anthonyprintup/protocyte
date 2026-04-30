@@ -647,14 +647,43 @@ def _emit_copy_oneof_from_other(w: CppWriter, oneof: OneofModel, options: Genera
     w.line("}")
 
 
-def _emit_byte_range_setter_start(w: CppWriter, item: FieldModel) -> None:
-    w.line("template<class Value>")
-    w.line(f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept")
-    w.line("    requires(::protocyte::ByteSpanSource<Value>)")
-    w.line("{")
-    w.push()
-    w.line("const auto view = ::protocyte::byte_span_of(value);")
-    w.line("if (!view) { return view.status(); }")
+def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) -> None:
+    def emit_setter_start(
+        signature: str,
+        view_expr: str,
+        *,
+        requires_expr: str | None = None,
+        template_prefix: bool = False,
+    ) -> None:
+        if template_prefix:
+            w.line("template<class Value>")
+        w.line(signature)
+        if requires_expr is not None:
+            w.line(f"    requires({requires_expr})")
+        w.line("{")
+        w.push()
+        w.line(f"const auto view = {view_expr};")
+        w.line("if (!view) { return view.status(); }")
+        emit_body()
+        w.pop()
+        w.line("}")
+
+    byte_source_requires = "::protocyte::ByteSpanSource<Value>"
+    if item.kind == "string":
+        byte_source_requires += " && !::protocyte::TextSource<Value>"
+    emit_setter_start(
+        f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept",
+        "::protocyte::byte_span_of(value)",
+        requires_expr=byte_source_requires,
+        template_prefix=True,
+    )
+    if item.kind == "string":
+        emit_setter_start(
+            f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept",
+            "::protocyte::text_byte_span_of(value)",
+            requires_expr="::protocyte::TextSource<Value>",
+            template_prefix=True,
+        )
 
 
 def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
@@ -711,11 +740,13 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"return {_member(item)}.resize_for_overwrite(size);")
         w.pop()
         w.line("}")
-        _emit_byte_range_setter_start(w, item)
-        w.line("if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
-        w.line(f"return {_member(item)}.assign(*view);")
-        w.pop()
-        w.line("}")
+        def emit_setter_body() -> None:
+            w.line(
+                "if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
+            )
+            w.line(f"return {_member(item)}.assign(*view);")
+
+        _emit_byte_range_setter_family(w, item, emit_setter_body)
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear(); }}")
         return
     if item.kind == "bytes" and item.array_enabled:
@@ -761,16 +792,20 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"return {_member(item)}.mutable_view();")
         w.pop()
         w.line("}")
-        _emit_byte_range_setter_start(w, item)
-        w.line("if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
-        if item.array_fixed:
-            w.line(f"if (view->size() != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}")
-        w.line(f"if (const auto st = {_member(item)}.assign(*view); !st) {{ return st; }}")
-        if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return {};")
-        w.pop()
-        w.line("}")
+        def emit_setter_body() -> None:
+            w.line(
+                "if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
+            )
+            if item.array_fixed:
+                w.line(
+                    f"if (view->size() != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}"
+                )
+            w.line(f"if (const auto st = {_member(item)}.assign(*view); !st) {{ return st; }}")
+            if item.proto3_optional:
+                w.line(f"has_{item.cpp_name}_ = true;")
+            w.line("return {};")
+
+        _emit_byte_range_setter_family(w, item, emit_setter_body)
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear();")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = false;")
@@ -788,15 +823,15 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"return {_member(item)};")
         w.pop()
         w.line("}")
-        _emit_byte_range_setter_start(w, item)
-        w.line(f"{typ} temp{{ctx_}};")
-        w.line("if (const auto st = temp.assign(*view); !st) { return st; }")
-        w.line(f"{_member(item)} = ::protocyte::move(temp);")
-        if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return {};")
-        w.pop()
-        w.line("}")
+        def emit_setter_body() -> None:
+            w.line(f"{typ} temp{{ctx_}};")
+            w.line("if (const auto st = temp.assign(*view); !st) { return st; }")
+            w.line(f"{_member(item)} = ::protocyte::move(temp);")
+            if item.proto3_optional:
+                w.line(f"has_{item.cpp_name}_ = true;")
+            w.line("return {};")
+
+        _emit_byte_range_setter_family(w, item, emit_setter_body)
         w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear();")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = false;")
@@ -846,19 +881,21 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         w.line(
             f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : ::protocyte::Span<const ::protocyte::u8>{{}}; }}"
         )
-        _emit_byte_range_setter_start(w, item)
-        if item.kind == "bytes" and item.array_enabled:
-            w.line("if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }")
-            w.line(f"{_storage_type(item, options)} temp{{}};")
-        else:
-            w.line(f"{typ} temp{{ctx_}};")
-        w.line("if (const auto st = temp.assign(*view); !st) { return st; }")
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
-        w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move(temp)}};")
-        w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-        w.line("return {};")
-        w.pop()
-        w.line("}")
+        def emit_setter_body() -> None:
+            if item.kind == "bytes" and item.array_enabled:
+                w.line(
+                    "if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
+                )
+                w.line(f"{_storage_type(item, options)} temp{{}};")
+            else:
+                w.line(f"{typ} temp{{ctx_}};")
+            w.line("if (const auto st = temp.assign(*view); !st) { return st; }")
+            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move(temp)}};")
+            w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+            w.line("return {};")
+
+        _emit_byte_range_setter_family(w, item, emit_setter_body)
         return
     if item.kind == "message":
         w.line(

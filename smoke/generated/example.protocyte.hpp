@@ -99,9 +99,23 @@ namespace test::ultimate {
         ::protocyte::Span<const ::protocyte::u8> description() const noexcept { return description_.view(); }
         typename Config::String &mutable_description() noexcept { return description_; }
         template<class Value>::protocyte::Status set_description(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            description_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_description(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -383,9 +397,23 @@ namespace test::ultimate {
         ::protocyte::Span<const ::protocyte::u8> name() const noexcept { return name_.view(); }
         typename Config::String &mutable_name() noexcept { return name_; }
         template<class Value>::protocyte::Status set_name(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            name_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_name(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -1093,9 +1121,23 @@ namespace test::ultimate {
         ::protocyte::Span<const ::protocyte::u8> extreme() const noexcept { return extreme_.view(); }
         typename Config::String &mutable_extreme() noexcept { return extreme_; }
         template<class Value>::protocyte::Status set_extreme(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            extreme_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_extreme(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -1130,9 +1172,25 @@ namespace test::ultimate {
             return has_text() ? deep_oneof.text.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
         template<class Value>::protocyte::Status set_text(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            clear_deep_oneof();
+            new (&deep_oneof.text) typename Config::String {::protocyte::move(temp)};
+            deep_oneof_case_ = Deep_oneofCase::text;
+            return {};
+        }
+        template<class Value>::protocyte::Status set_text(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -2242,9 +2300,23 @@ namespace test::ultimate {
         ::protocyte::Span<const ::protocyte::u8> f_string() const noexcept { return f_string_.view(); }
         typename Config::String &mutable_f_string() noexcept { return f_string_; }
         template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            f_string_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -2331,9 +2403,25 @@ namespace test::ultimate {
             return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
         template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            clear_special_oneof();
+            new (&special_oneof.oneof_string) typename Config::String {::protocyte::move(temp)};
+            special_oneof_case_ = Special_oneofCase::oneof_string;
+            return {};
+        }
+        template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -2668,9 +2756,24 @@ namespace test::ultimate {
             return opt_string_;
         }
         template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            opt_string_ = ::protocyte::move(temp);
+            has_opt_string_ = true;
+            return {};
+        }
+        template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
@@ -5963,9 +6066,23 @@ namespace test::ultimate {
         ::protocyte::Span<const ::protocyte::u8> tag() const noexcept { return tag_.view(); }
         typename Config::String &mutable_tag() noexcept { return tag_; }
         template<class Value>::protocyte::Status set_tag(const Value &value) noexcept
-            requires(::protocyte::ByteSpanSource<Value>)
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return st;
+            }
+            tag_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_tag(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
             if (!view) {
                 return view.status();
             }
