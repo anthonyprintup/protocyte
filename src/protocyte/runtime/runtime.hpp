@@ -1157,6 +1157,16 @@ namespace protocyte {
     template<class T> inline constexpr bool is_span = false;
     template<class T, usize Extent> inline constexpr bool is_span<Span<T, Extent>> = true;
 
+    template<class T>
+    concept TextChar = ::std::same_as<::std::remove_cv_t<T>, char> || ::std::same_as<::std::remove_cv_t<T>, char8_t>;
+
+    template<class T> inline constexpr bool is_text_char_array = false;
+    template<class Char, usize N> inline constexpr bool is_text_char_array<Char[N]> = TextChar<Char>;
+
+    template<class T>
+    concept TextPointer =
+        ::std::is_pointer_v<::std::remove_cvref_t<T>> && TextChar<::std::remove_pointer_t<::std::remove_cvref_t<T>>>;
+
     template<class T> using SpanDataPointer = decltype(protocyte::declval<T>().data());
     template<class T> using SpanBeginPointer = decltype(protocyte::declval<T>().begin());
     template<class T> using SpanEndPointer = decltype(protocyte::declval<T>().end());
@@ -1428,6 +1438,33 @@ namespace protocyte {
         return Span<const u8> {reinterpret_cast<const u8 *>(view.data()), *size};
     }
 
+    template<class Char> constexpr usize cstring_size(const Char *value) noexcept
+        requires(TextChar<Char>)
+    {
+        usize size {};
+        while (value[size] != Char {}) { ++size; }
+        return size;
+    }
+
+    template<class Char> Result<Span<const u8>> cstring_byte_span_of(const Char *value) noexcept
+        requires(TextChar<Char>)
+    {
+        if (value == nullptr) {
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
+        return Span<const u8> {reinterpret_cast<const u8 *>(value), cstring_size(value) * sizeof(Char)};
+    }
+
+    template<class Char, usize N> Result<Span<const u8>> byte_span_of(const Char (&value)[N]) noexcept
+        requires(TextChar<Char>)
+    {
+        usize size {N};
+        if (size != 0u && value[size - 1u] == Char {}) {
+            --size;
+        }
+        return Span<const u8> {reinterpret_cast<const u8 *>(value), size * sizeof(Char)};
+    }
+
     template<class T> Result<Span<const u8>> byte_span_of(const T &value) noexcept
         requires(!is_span<::std::remove_cvref_t<T>> && DataSizeSpanSource<const T &>)
     {
@@ -1472,7 +1509,8 @@ namespace protocyte {
     }
 
     template<class T> Result<Span<const u8>> byte_span_of(const T &value) noexcept
-        requires(requires { span_of(value); } && !DataSizeSpanSource<const T &> && !PointerSpanSource<const T &>)
+        requires(requires { span_of(value); } && !DataSizeSpanSource<const T &> && !PointerSpanSource<const T &> &&
+                 !is_text_char_array<::std::remove_cvref_t<T>>)
     {
         return byte_span_of(span_of(value));
     }
