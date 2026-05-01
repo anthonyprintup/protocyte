@@ -11,7 +11,14 @@
 #include <new>
 #include <type_traits>
 
-#if PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_FORMAT
+#include <version>
+#if defined(__cpp_lib_format) && __cpp_lib_format >= 201907L
+#include <format>
+#endif
+#endif
+
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW || PROTOCYTE_ENABLE_STD_FORMAT || PROTOCYTE_ENABLE_FMT_FORMAT
 #include <string_view>
 #endif
 
@@ -2974,6 +2981,12 @@ namespace protocyte {
         typename Config::Bytes bytes_;
     };
 
+#if PROTOCYTE_ENABLE_FMT_FORMAT
+    template<class Config> std::string_view format_as(const String<Config> &value) noexcept {
+        return ::std::string_view {value.data(), value.size()};
+    }
+#endif
+
     template<class T, class Config> struct Box {
         using Context = typename Config::Context;
 
@@ -4298,5 +4311,19 @@ namespace protocyte {
 #endif
 
 } // namespace protocyte
+
+#if PROTOCYTE_ENABLE_STD_FORMAT && defined(__cpp_lib_format) && __cpp_lib_format >= 201907L
+namespace std {
+
+    template<class Config> struct formatter<::protocyte::String<Config>, char>
+        : public ::std::formatter<::std::string_view, char> {
+        template<class FormatContext> auto format(const ::protocyte::String<Config> &value, FormatContext &ctx) const {
+            return ::std::formatter<::std::string_view, char>::format(::std::string_view {value.data(), value.size()},
+                                                                      ctx);
+        }
+    };
+
+} // namespace std
+#endif
 
 #endif // PROTOCYTE_RUNTIME_RUNTIME_HPP

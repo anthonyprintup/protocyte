@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
+include(CheckCXXSourceCompiles)
 
 set(PROTOCYTE_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
@@ -41,6 +42,29 @@ set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
 )
+
+check_cxx_source_compiles([=[
+#include <version>
+#if !defined(__cpp_lib_format) || __cpp_lib_format < 201907L
+#error "std::format is unavailable"
+#endif
+#include <format>
+#include <string_view>
+#include <type_traits>
+
+int main() {
+    using Formatter = ::std::formatter<::std::string_view, char>;
+    static_assert(::std::is_default_constructible_v<Formatter>);
+    const auto formatted = ::std::format("{}", ::std::string_view {"ok"});
+    return formatted == "ok" ? 0 : 1;
+}
+]=] PROTOCYTE_SMOKE_HAS_STD_FORMAT)
+
+function(protocyte_smoke_enable_std_format_if_available target_name)
+    if(PROTOCYTE_SMOKE_HAS_STD_FORMAT)
+        target_compile_definitions("${target_name}" PRIVATE PROTOCYTE_ENABLE_STD_FORMAT=1)
+    endif()
+endfunction()
 
 if(PROTOCYTE_SMOKE_REGENERATE OR PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     set(PROTOCYTE_FETCH_PROTOBUF "${PROTOCYTE_SMOKE_FETCH_PROTOBUF}")
@@ -212,6 +236,7 @@ target_compile_definitions(
         PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1
         PROTOCYTE_ENABLE_STD_STRING_VIEW=1
 )
+protocyte_smoke_enable_std_format_if_available(protocyte_host_smoke)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
 target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain)
 
@@ -239,6 +264,7 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
             PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1
             PROTOCYTE_ENABLE_STD_STRING_VIEW=1
     )
+    protocyte_smoke_enable_std_format_if_available(protocyte_host_benchmark)
     target_compile_features(protocyte_host_benchmark PRIVATE cxx_std_20)
     target_link_libraries(protocyte_host_benchmark PRIVATE benchmark::benchmark_main)
 
@@ -268,6 +294,7 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
             PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1
             PROTOCYTE_ENABLE_STD_STRING_VIEW=1
     )
+    protocyte_smoke_enable_std_format_if_available(protocyte_host_protobuf_benchmark)
     target_compile_features(protocyte_host_protobuf_benchmark PRIVATE cxx_std_20)
     target_link_libraries(
         protocyte_host_protobuf_benchmark

@@ -2621,6 +2621,10 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     CHECK(converted_span == std::string_view {"hello"});
 #if defined(__cpp_lib_format)
     CHECK(std::format("{}", message.f_string()) == "hello");
+#if PROTOCYTE_ENABLE_STD_FORMAT
+    CHECK(std::format("{}", message.mutable_f_string()) == "hello");
+    CHECK(std::format("{:>8}", message.mutable_f_string()) == "   hello");
+#endif
 #endif
     const std::string_view converted_string = message.mutable_f_string();
     CHECK(converted_string == converted_span);
@@ -2635,6 +2639,10 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     REQUIRE(embedded_nul_string_view);
     CHECK(message.f_string().size() == 3u);
     CHECK(view_equal(message.f_string(), *embedded_nul_string_view));
+#if defined(__cpp_lib_format) && PROTOCYTE_ENABLE_STD_FORMAT
+    const auto formatted_embedded_nul = std::format("{}", message.mutable_f_string());
+    CHECK(formatted_embedded_nul == std::string {"a\0b", 3u});
+#endif
 
     const char *c_string_payload = "hello from pointer";
     require_success(message.set_f_string(c_string_payload));
