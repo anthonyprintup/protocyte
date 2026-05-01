@@ -131,6 +131,25 @@ def test_cmake_requires_python_314_for_codegen_wrapper() -> None:
     assert "find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)" in functions
 
 
+def test_smoke_cmake_gates_std_format_opt_in_on_compile_probe() -> None:
+    smoke_cmake = (Path(__file__).resolve().parents[1] / "smoke" / "CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "include(CheckCXXSourceCompiles)" in smoke_cmake
+    assert "check_cxx_source_compiles(" in smoke_cmake
+    assert "#include <version>" in smoke_cmake
+    assert "#if !defined(__cpp_lib_format) || __cpp_lib_format < 201907L" in smoke_cmake
+    assert '#error "std::format is unavailable"' in smoke_cmake
+    assert "#include <format>" in smoke_cmake
+    assert "#include <string_view>" in smoke_cmake
+    assert "::std::formatter<::std::string_view, char>" in smoke_cmake
+    assert "::std::format(\"{}\", ::std::string_view {\"ok\"})" in smoke_cmake
+    assert "PROTOCYTE_SMOKE_HAS_STD_FORMAT" in smoke_cmake
+    assert "if(PROTOCYTE_SMOKE_HAS_STD_FORMAT)" in smoke_cmake
+    assert "target_compile_definitions(\"${target_name}\" PRIVATE PROTOCYTE_ENABLE_STD_FORMAT=1)" in smoke_cmake
+    assert "\n        PROTOCYTE_ENABLE_STD_FORMAT=1" not in smoke_cmake
+    assert "\n            PROTOCYTE_ENABLE_STD_FORMAT=1" not in smoke_cmake
+
+
 def test_prerelease_cmake_version_file_marks_versioned_requests_unsuitable() -> None:
     template = (
         Path(__file__).resolve().parents[1] / "cmake" / "protocyteConfigVersionPrerelease.cmake.in"

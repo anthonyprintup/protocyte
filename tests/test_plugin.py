@@ -183,8 +183,11 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     )[0]
 
     assert "#include <cstring>" in runtime_header
-    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in runtime_header
+    assert "#if PROTOCYTE_ENABLE_STD_FORMAT\n#include <version>\n#if defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\n#include <format>\n#endif\n#endif" in runtime_header
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW || PROTOCYTE_ENABLE_STD_FORMAT || PROTOCYTE_ENABLE_FMT_FORMAT\n#include <string_view>\n#endif" in runtime_header
     assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW" not in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_STD_FORMAT" not in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_FMT_FORMAT" not in runtime_header
     assert "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept" in runtime_header
     assert "if (!count || dst == src)" in runtime_header
     assert "::std::memmove(dst, src, count);" in runtime_header
@@ -218,6 +221,12 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "const char *data() const noexcept" in string_body
     assert "usize length() const noexcept { return size(); }" in string_body
     assert "operator ::std::string_view() const noexcept { return view(); }" in string_body
+    assert "#if PROTOCYTE_ENABLE_FMT_FORMAT\n    template<class Config> std::string_view format_as(const String<Config> &value) noexcept" in runtime_header
+    assert "return ::std::string_view {value.data(), value.size()};" in runtime_header
+    assert "#if PROTOCYTE_ENABLE_STD_FORMAT && defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\nnamespace std {" in runtime_header
+    assert "template<class Config> struct formatter<::protocyte::String<Config>, char>" in runtime_header
+    assert "public ::std::formatter<::std::string_view, char>" in runtime_header
+    assert "auto format(const ::protocyte::String<Config> &value, FormatContext &ctx) const" in runtime_header
     assert "Status assign(const Span<const char> view) noexcept" in string_body
     assert "Status assign(const Span<const u8> view) noexcept" in string_body
     assert "copy_bytes(out, data_ + pos_, count);" in slice_reader_body
