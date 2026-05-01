@@ -210,9 +210,7 @@ def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
     w.line(f"#include <{options.runtime_prefix}/runtime.hpp>")
     extra_includes: list[str] = []
     if _file_uses_string_view(file_model):
-        extra_includes.append("#include <string_view>")
-    elif _file_uses_std_string_view_accessors(file_model):
-        extra_includes.extend(["#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW", "#include <string_view>", "#endif"])
+        extra_includes.extend(["#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW", "#include <string_view>", "#endif"])
     for dependency in sorted(file_model.dependencies):
         extra_includes.append(f'#include "{_include_path(dependency, options)}"')
     if extra_includes:
@@ -1993,15 +1991,6 @@ def _file_uses_string_view(file_model: FileModel) -> bool:
         return True
     for message in _walk_messages(file_model.messages):
         if any(constant.kind == CONSTANT_KIND_STRING for constant in message.constants):
-            return True
-    return False
-
-
-def _file_uses_std_string_view_accessors(file_model: FileModel) -> bool:
-    for message in _walk_messages(file_model.messages):
-        if message.is_map_entry:
-            continue
-        if any(item.kind == "string" and not item.repeated for item in message.fields):
             return True
     return False
 

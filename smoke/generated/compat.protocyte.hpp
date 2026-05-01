@@ -5,10 +5,6 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
-#include <string_view>
-#endif
-
 namespace protocyte_smoke::test::compat {
 
     enum struct EncodingMatrix_Mode : ::protocyte::i32 {

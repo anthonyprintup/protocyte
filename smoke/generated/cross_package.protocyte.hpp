@@ -5,7 +5,9 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW
 #include <string_view>
+#endif
 
 namespace test::crosspkg {
 

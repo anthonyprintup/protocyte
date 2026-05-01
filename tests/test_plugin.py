@@ -688,7 +688,7 @@ def test_generated_header_contains_expected_field_api() -> None:
 
     assert "namespace demo {" in header
     assert "bool has_opt_name() const noexcept" in header
-    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in header
+    assert "#include <string_view>" not in header
     assert (
         "  #ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
         "  ::std::string_view opt_name() const noexcept { return opt_name_.view(); }\n"
@@ -1056,8 +1056,12 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     header = files["arrays.protocyte.hpp"]
     runtime_header = files["protocyte/runtime/runtime.hpp"]
 
-    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
-    assert "#include <string_view>" in header
+    assert (
+        "#include <protocyte/runtime/runtime.hpp>\n\n"
+        "#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "#include <string_view>\n"
+        "#endif"
+    ) in header
     assert "inline constexpr ::protocyte::u32 FILE_CAP {16u};" in header
     assert 'inline constexpr ::std::string_view FILE_LABEL {"ell", 3u};' in header
     assert "inline constexpr bool FILE_READY {true};" in header
@@ -1391,8 +1395,12 @@ def test_generated_header_emits_utf8_string_constants() -> None:
 
     assert not response.error
     header = next(file.content for file in response.file if file.name == "unicode.protocyte.hpp")
-    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
-    assert '#include <string_view>' in header
+    assert (
+        "#include <protocyte/runtime/runtime.hpp>\n\n"
+        "#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "#include <string_view>\n"
+        "#endif"
+    ) in header
     assert 'static constexpr ::std::string_view NAME {"\\xc4"' in header
     assert '"\\x80"' in header
     assert '"\\xc3"' in header
@@ -1436,7 +1444,7 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "void clear_choice() noexcept {" in header
     assert "destroy_at_(&choice.text);" in header
     assert "destroy_at_(&choice.inner);" in header
-    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in header
+    assert "#include <string_view>" not in header
     assert (
         "  #ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
         "  ::std::string_view text() const noexcept { return has_text() ? choice.text.view() : ::std::string_view{}; }\n"
