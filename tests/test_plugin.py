@@ -53,6 +53,16 @@ def test_runtime_rejects_unmatched_end_group_in_skip_field() -> None:
     assert "case WireType::EGROUP: return {};" not in runtime_header
 
 
+def test_kernel_smoke_provides_debug_string_view_crt_shims() -> None:
+    source = (Path(__file__).resolve().parents[1] / "smoke" / "src" / "kernel_driver_smoke.cpp").read_text()
+
+    assert "#if defined(PROTOCYTE_ENABLE_STD_STRING_VIEW) && defined(_DEBUG)" in source
+    assert "__imp__invoke_watson" in source
+    assert "__imp__CrtDbgReport" in source
+    assert "DbgPrintEx" in source
+    assert "KeBugCheckEx" in source
+
+
 def test_runtime_container_growth_checks_capacity_limits() -> None:
     runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
 

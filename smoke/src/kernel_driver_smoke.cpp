@@ -24,6 +24,34 @@ void __cdecl operator delete[](void *ptr) noexcept { ::operator delete(ptr); }
 void __cdecl operator delete[](void *ptr, size_t) noexcept { ::operator delete(ptr); }
 #endif
 
+#if defined(PROTOCYTE_ENABLE_STD_STRING_VIEW) && defined(_DEBUG)
+// MSVC's debug STL imports these CRT assertion hooks through __imp_* data symbols.
+__declspec(noreturn) void protocyte_debug_crt_shim_bugcheck(const char *symbol_name) {
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
+               "Protocyte kernel smoke: MSVC STL debug CRT fallback called for %s.\n", symbol_name);
+    KeBugCheckEx(MANUALLY_INITIATED_CRASH, 0x50535643u, 0u, 0u, 0u);
+    for (;;) {}
+}
+
+extern "C" __declspec(noreturn) void __cdecl protocyte_invoke_watson_shim(const wchar_t *, const wchar_t *,
+                                                                          const wchar_t *, unsigned int, uintptr_t) {
+    protocyte_debug_crt_shim_bugcheck("_invoke_watson");
+}
+
+extern "C" int __cdecl protocyte_crt_dbg_report_shim(int, const char *, int, const char *, const char *, ...) {
+    protocyte_debug_crt_shim_bugcheck("_CrtDbgReport");
+}
+
+using protocyte_invoke_watson_fn = void(__cdecl *)(const wchar_t *, const wchar_t *, const wchar_t *, unsigned int,
+                                                   uintptr_t);
+using protocyte_crt_dbg_report_fn = int(__cdecl *)(int, const char *, int, const char *, const char *, ...);
+
+extern "C" {
+    protocyte_invoke_watson_fn __imp__invoke_watson = &protocyte_invoke_watson_shim;
+    protocyte_crt_dbg_report_fn __imp__CrtDbgReport = &protocyte_crt_dbg_report_shim;
+}
+#endif
+
 namespace {
 
     constexpr ULONG protocyte_pool_tag = 'TyCP';
