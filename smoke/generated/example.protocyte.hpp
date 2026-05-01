@@ -96,7 +96,7 @@ namespace test::ultimate {
             return out;
         }
 
-        ::protocyte::Span<const ::protocyte::u8> description() const noexcept { return description_.view(); }
+        ::protocyte::Span<const char> description() const noexcept { return description_.view(); }
         typename Config::String &mutable_description() noexcept { return description_; }
         template<class Value>::protocyte::Status set_description(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -394,7 +394,7 @@ namespace test::ultimate {
             return out;
         }
 
-        ::protocyte::Span<const ::protocyte::u8> name() const noexcept { return name_.view(); }
+        ::protocyte::Span<const char> name() const noexcept { return name_.view(); }
         typename Config::String &mutable_name() noexcept { return name_; }
         template<class Value>::protocyte::Status set_name(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -1118,7 +1118,7 @@ namespace test::ultimate {
             deep_oneof_case_ = Deep_oneofCase::none;
         }
 
-        ::protocyte::Span<const ::protocyte::u8> extreme() const noexcept { return extreme_.view(); }
+        ::protocyte::Span<const char> extreme() const noexcept { return extreme_.view(); }
         typename Config::String &mutable_extreme() noexcept { return extreme_; }
         template<class Value>::protocyte::Status set_extreme(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -1168,8 +1168,8 @@ namespace test::ultimate {
         }
 
         constexpr bool has_text() const noexcept { return deep_oneof_case_ == Deep_oneofCase::text; }
-        ::protocyte::Span<const ::protocyte::u8> text() const noexcept {
-            return has_text() ? deep_oneof.text.view() : ::protocyte::Span<const ::protocyte::u8> {};
+        ::protocyte::Span<const char> text() const noexcept {
+            return has_text() ? deep_oneof.text.view() : ::protocyte::Span<const char> {};
         }
         template<class Value>::protocyte::Status set_text(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -2297,7 +2297,7 @@ namespace test::ultimate {
         }
         constexpr void clear_f_bool() noexcept { f_bool_ = {}; }
 
-        ::protocyte::Span<const ::protocyte::u8> f_string() const noexcept { return f_string_.view(); }
+        ::protocyte::Span<const char> f_string() const noexcept { return f_string_.view(); }
         typename Config::String &mutable_f_string() noexcept { return f_string_; }
         template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -2399,8 +2399,8 @@ namespace test::ultimate {
         constexpr bool has_oneof_string() const noexcept {
             return special_oneof_case_ == Special_oneofCase::oneof_string;
         }
-        ::protocyte::Span<const ::protocyte::u8> oneof_string() const noexcept {
-            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::Span<const ::protocyte::u8> {};
+        ::protocyte::Span<const char> oneof_string() const noexcept {
+            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::Span<const char> {};
         }
         template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -2749,7 +2749,7 @@ namespace test::ultimate {
             has_opt_int32_ = false;
         }
 
-        ::protocyte::Span<const ::protocyte::u8> opt_string() const noexcept { return opt_string_.view(); }
+        ::protocyte::Span<const char> opt_string() const noexcept { return opt_string_.view(); }
         bool has_opt_string() const noexcept { return has_opt_string_; }
         typename Config::String &mutable_opt_string() noexcept {
             has_opt_string_ = true;
@@ -6063,7 +6063,7 @@ namespace test::ultimate {
             return out;
         }
 
-        ::protocyte::Span<const ::protocyte::u8> tag() const noexcept { return tag_.view(); }
+        ::protocyte::Span<const char> tag() const noexcept { return tag_.view(); }
         typename Config::String &mutable_tag() noexcept { return tag_; }
         template<class Value>::protocyte::Status set_tag(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)

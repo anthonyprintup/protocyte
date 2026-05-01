@@ -159,6 +159,12 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     bytes_body = runtime_header.split("template<class Config> struct Bytes {", maxsplit=1)[1].split(
         "template<class Config> struct String {", maxsplit=1
     )[0]
+    span_body = runtime_header.split("template<class T, usize Extent> struct Span {", maxsplit=1)[1].split(
+        "template<class T> Span(T *, usize) -> Span<T>;", maxsplit=1
+    )[0]
+    string_body = runtime_header.split("template<class Config> struct String {", maxsplit=1)[1].split(
+        "template<class T, class Config> struct Box {", maxsplit=1
+    )[0]
     slice_reader_body = runtime_header.split("struct SliceReader {", maxsplit=1)[1].split(
         "struct ReaderRef {", maxsplit=1
     )[0]
@@ -167,6 +173,7 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     )[0]
 
     assert "#include <cstring>" in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in runtime_header
     assert "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept" in runtime_header
     assert "if (!count || dst == src)" in runtime_header
     assert "::std::memmove(dst, src, count);" in runtime_header
@@ -189,6 +196,16 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "Status resize_for_overwrite(const usize count) noexcept" in fixed_byte_array_body
     assert "return bytes_.resize_for_overwrite(count);" in bytes_body
     assert "copy_bytes(temp.data(), view.data(), view.size());" in bytes_body
+    assert "constexpr operator ::std::string_view() const noexcept" in span_body
+    assert "requires(::std::same_as<::std::remove_cv_t<T>, char>)" in span_body
+    assert "using value_type = const char;" in string_body
+    assert "Span<const char> view() const noexcept" in string_body
+    assert "Span<const u8> byte_view() const noexcept" in string_body
+    assert "const char *data() const noexcept" in string_body
+    assert "usize length() const noexcept { return size(); }" in string_body
+    assert "operator ::std::string_view() const noexcept { return view(); }" in string_body
+    assert "Status assign(const Span<const char> view) noexcept" in string_body
+    assert "Status assign(const Span<const u8> view) noexcept" in string_body
     assert "copy_bytes(out, data_ + pos_, count);" in slice_reader_body
     assert "copy_bytes(data_ + pos_, data, count);" in slice_writer_body
     assert "for (usize i {}; i < count; ++i)" not in slice_reader_body
@@ -354,10 +371,8 @@ def test_generates_proto3_files_and_runtime() -> None:
     ]
     assert "using reverse_iterator = ReverseIterator<T>;" in files["protocyte/runtime/runtime.hpp"]
     assert "offset_ptr(" not in files["protocyte/runtime/runtime.hpp"]
-    assert "using iterator = typename Config::Bytes::const_iterator;" in files["protocyte/runtime/runtime.hpp"]
-    assert "using reverse_iterator = typename Config::Bytes::const_reverse_iterator;" in files[
-        "protocyte/runtime/runtime.hpp"
-    ]
+    assert "using iterator = const char *;" in files["protocyte/runtime/runtime.hpp"]
+    assert "using reverse_iterator = ReverseIterator<const char>;" in files["protocyte/runtime/runtime.hpp"]
     assert "using Bucket = Optional<Entry>;" in files["protocyte/runtime/runtime.hpp"]
     assert "struct EntryProxy {" in files["protocyte/runtime/runtime.hpp"]
     assert "struct ConstEntryProxy {" in files["protocyte/runtime/runtime.hpp"]
@@ -661,6 +676,7 @@ def test_generated_header_contains_expected_field_api() -> None:
 
     assert "namespace demo {" in header
     assert "bool has_opt_name() const noexcept" in header
+    assert "::protocyte::Span<const char> opt_name() const noexcept" in header
     assert "struct Sample {" in header
     assert "typename Config::template Map<typename Config::String, ::protocyte::i32> items_;" in header
     assert "typename Config::template Box<::demo::Sample<Config>> self_;" in header
@@ -1401,6 +1417,7 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "void clear_choice() noexcept {" in header
     assert "destroy_at_(&choice.text);" in header
     assert "destroy_at_(&choice.inner);" in header
+    assert "::protocyte::Span<const char> text() const noexcept" in header
     assert "union ChoiceStorage {" in header
     assert "ChoiceStorage() noexcept {}" in header
     assert "~ChoiceStorage() noexcept {}" in header

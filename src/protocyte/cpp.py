@@ -813,7 +813,8 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         return
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
-        w.line(f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {_member(item)}.view(); }}")
+        view_type = "::protocyte::Span<const char>" if item.kind == "string" else "::protocyte::Span<const ::protocyte::u8>"
+        w.line(f"{view_type} {item.cpp_name}() const noexcept {{ return {_member(item)}.view(); }}")
         if item.proto3_optional:
             w.line(f"bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}")
         w.line(f"{typ}& mutable_{item.cpp_name}() noexcept {{")
@@ -878,8 +879,9 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         f"constexpr bool has_{item.cpp_name}() const noexcept {{ return {case_member} == {case_type}::{item.cpp_name}; }}"
     )
     if item.kind in {"string", "bytes"}:
+        view_type = "::protocyte::Span<const char>" if item.kind == "string" else "::protocyte::Span<const ::protocyte::u8>"
         w.line(
-            f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : ::protocyte::Span<const ::protocyte::u8>{{}}; }}"
+            f"{view_type} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : {view_type}{{}}; }}"
         )
         def emit_setter_body() -> None:
             if item.kind == "bytes" and item.array_enabled:

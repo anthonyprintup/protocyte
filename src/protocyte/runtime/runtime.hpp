@@ -11,6 +11,10 @@
 #include <new>
 #include <type_traits>
 
+#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#include <string_view>
+#endif
+
 namespace protocyte {
 
     using i8 = ::std::int8_t;
@@ -1265,6 +1269,13 @@ namespace protocyte {
         constexpr usize size() const noexcept { return size_; }
         constexpr usize size_bytes() const noexcept { return size_ * sizeof(T); }
         constexpr bool empty() const noexcept { return size_ == 0u; }
+#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+        constexpr operator ::std::string_view() const noexcept
+            requires(::std::same_as<::std::remove_cv_t<T>, char>)
+        {
+            return data_ == nullptr ? ::std::string_view {} : ::std::string_view {data_, size_};
+        }
+#endif
         template<usize Count> constexpr Span<T, Count> first() const noexcept
             requires(Extent == dynamic_extent || Count <= Extent)
         {
@@ -1560,6 +1571,13 @@ namespace protocyte {
         return ::std::memcmp(lhs.data(), rhs.data(), lhs.size()) == 0;
     }
 
+    template<class L, usize LExtent, class R, usize RExtent>
+    constexpr bool bytes_equal(const Span<L, LExtent> lhs, const Span<R, RExtent> rhs) noexcept
+        requires(!(::std::same_as<::std::remove_cv_t<L>, u8> && ::std::same_as<::std::remove_cv_t<R>, u8>) )
+    {
+        return bytes_equal(as_bytes(lhs), as_bytes(rhs));
+    }
+
     constexpr bool bytes_zero(const Span<const u8> view) noexcept {
         for (usize i {}; i < view.size(); ++i) {
             if (view.data()[i] != 0u) {
@@ -1576,6 +1594,12 @@ namespace protocyte {
             hash *= 1099511628211ull;
         }
         return hash;
+    }
+
+    template<class T, usize Extent> constexpr u64 fnv1a(const Span<T, Extent> view) noexcept
+        requires(!::std::same_as<::std::remove_cv_t<T>, u8>)
+    {
+        return fnv1a(as_bytes(view));
     }
 
     template<class T> struct AlwaysFalse {
@@ -2815,11 +2839,11 @@ namespace protocyte {
 
     template<class Config> struct String {
         using Context = typename Config::Context;
-        using value_type = const u8;
-        using iterator = typename Config::Bytes::const_iterator;
-        using const_iterator = typename Config::Bytes::const_iterator;
-        using reverse_iterator = typename Config::Bytes::const_reverse_iterator;
-        using const_reverse_iterator = typename Config::Bytes::const_reverse_iterator;
+        using value_type = const char;
+        using iterator = const char *;
+        using const_iterator = const char *;
+        using reverse_iterator = ReverseIterator<const char>;
+        using const_reverse_iterator = ReverseIterator<const char>;
 
         explicit String(Context *ctx = nullptr) noexcept: bytes_ {ctx} {}
         String(String &&other) noexcept: bytes_ {protocyte::move(other.bytes_)} {}
@@ -2830,19 +2854,24 @@ namespace protocyte {
         String(const String &) = delete;
         String &operator=(const String &) = delete;
 
-        Span<const u8> view() const noexcept { return bytes_.view(); }
-        const_iterator begin() const noexcept { return bytes_.begin(); }
-        const_iterator end() const noexcept { return bytes_.end(); }
-        const_iterator cbegin() const noexcept { return bytes_.cbegin(); }
-        const_iterator cend() const noexcept { return bytes_.cend(); }
-        const_reverse_iterator rbegin() const noexcept { return bytes_.rbegin(); }
-        const_reverse_iterator rend() const noexcept { return bytes_.rend(); }
-        const_reverse_iterator crbegin() const noexcept { return bytes_.crbegin(); }
-        const_reverse_iterator crend() const noexcept { return bytes_.crend(); }
-        const u8 *data() const noexcept { return bytes_.data(); }
+        Span<const char> view() const noexcept { return {data(), size()}; }
+        Span<const u8> byte_view() const noexcept { return bytes_.view(); }
+        const_iterator begin() const noexcept { return data(); }
+        const_iterator end() const noexcept { return data() + size(); }
+        const_iterator cbegin() const noexcept { return begin(); }
+        const_iterator cend() const noexcept { return end(); }
+        const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
+        const_reverse_iterator rend() const noexcept { return const_reverse_iterator {begin()}; }
+        const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+        const_reverse_iterator crend() const noexcept { return rend(); }
+        const char *data() const noexcept { return reinterpret_cast<const char *>(bytes_.data()); }
         Context *context() const noexcept { return bytes_.context(); }
         usize size() const noexcept { return bytes_.size(); }
+        usize length() const noexcept { return size(); }
         bool empty() const noexcept { return bytes_.empty(); }
+#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+        operator ::std::string_view() const noexcept { return view(); }
+#endif
         void clear() noexcept { bytes_.clear(); }
         Span<u8> mutable_view_for_overwrite() noexcept { return bytes_.mutable_view(); }
 
@@ -2851,6 +2880,14 @@ namespace protocyte {
                 return st;
             }
             return bytes_.resize_for_overwrite(count);
+        }
+
+        Status assign(const Span<const char> view) noexcept {
+            const auto bytes = byte_span_of(view);
+            if (!bytes) {
+                return bytes.status();
+            }
+            return assign(*bytes);
         }
 
         Status assign(const Span<const u8> view) noexcept {
@@ -4227,6 +4264,17 @@ namespace protocyte {
     template<class Writer>
     Status write_string_field(Writer &writer, const u32 field_number, const Span<const u8> view) noexcept {
         return write_bytes_field(writer, field_number, view);
+    }
+
+    template<class Writer, class T, usize Extent>
+    Status write_string_field(Writer &writer, const u32 field_number, const Span<T, Extent> view) noexcept
+        requires(TextChar<T>)
+    {
+        const auto bytes = byte_span_of(view);
+        if (!bytes) {
+            return bytes.status();
+        }
+        return write_string_field(writer, field_number, *bytes);
     }
 
     inline Result<usize> add_size(const usize total, const usize value) noexcept { return checked_add(total, value); }
