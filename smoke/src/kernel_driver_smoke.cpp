@@ -24,7 +24,7 @@ void __cdecl operator delete[](void *ptr) noexcept { ::operator delete(ptr); }
 void __cdecl operator delete[](void *ptr, size_t) noexcept { ::operator delete(ptr); }
 #endif
 
-#if defined(PROTOCYTE_ENABLE_STD_STRING_VIEW) && defined(_DEBUG)
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW && defined(_DEBUG)
 // MSVC's debug STL imports these CRT assertion hooks through __imp_* data symbols.
 __declspec(noreturn) void protocyte_debug_crt_shim_bugcheck(const char *symbol_name) {
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,

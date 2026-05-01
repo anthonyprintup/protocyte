@@ -56,7 +56,7 @@ def test_runtime_rejects_unmatched_end_group_in_skip_field() -> None:
 def test_kernel_smoke_provides_debug_string_view_crt_shims() -> None:
     source = (Path(__file__).resolve().parents[1] / "smoke" / "src" / "kernel_driver_smoke.cpp").read_text()
 
-    assert "#if defined(PROTOCYTE_ENABLE_STD_STRING_VIEW) && defined(_DEBUG)" in source
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW && defined(_DEBUG)" in source
     assert "__imp__invoke_watson" in source
     assert "__imp__CrtDbgReport" in source
     assert "DbgPrintEx" in source
@@ -183,7 +183,8 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     )[0]
 
     assert "#include <cstring>" in runtime_header
-    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in runtime_header
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW" not in runtime_header
     assert "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept" in runtime_header
     assert "if (!count || dst == src)" in runtime_header
     assert "::std::memmove(dst, src, count);" in runtime_header
@@ -690,7 +691,7 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "bool has_opt_name() const noexcept" in header
     assert "#include <string_view>" not in header
     assert (
-        "  #ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "  #if PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
         "  ::std::string_view opt_name() const noexcept { return opt_name_.view(); }\n"
         "  #else\n"
         "  ::protocyte::Span<const char> opt_name() const noexcept { return opt_name_.view(); }\n"
@@ -1058,7 +1059,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
 
     assert (
         "#include <protocyte/runtime/runtime.hpp>\n\n"
-        "#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "#if !PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
         "#include <string_view>\n"
         "#endif"
     ) in header
@@ -1397,7 +1398,7 @@ def test_generated_header_emits_utf8_string_constants() -> None:
     header = next(file.content for file in response.file if file.name == "unicode.protocyte.hpp")
     assert (
         "#include <protocyte/runtime/runtime.hpp>\n\n"
-        "#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "#if !PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
         "#include <string_view>\n"
         "#endif"
     ) in header
@@ -1446,7 +1447,7 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "destroy_at_(&choice.inner);" in header
     assert "#include <string_view>" not in header
     assert (
-        "  #ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "  #if PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
         "  ::std::string_view text() const noexcept { return has_text() ? choice.text.view() : ::std::string_view{}; }\n"
         "  #else\n"
         "  ::protocyte::Span<const char> text() const noexcept { return has_text() ? choice.text.view() : ::protocyte::Span<const char>{}; }\n"

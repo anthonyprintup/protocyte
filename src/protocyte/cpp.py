@@ -210,7 +210,7 @@ def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
     w.line(f"#include <{options.runtime_prefix}/runtime.hpp>")
     extra_includes: list[str] = []
     if _file_uses_string_view(file_model):
-        extra_includes.extend(["#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW", "#include <string_view>", "#endif"])
+        extra_includes.extend(["#if !PROTOCYTE_ENABLE_STD_STRING_VIEW", "#include <string_view>", "#endif"])
     for dependency in sorted(file_model.dependencies):
         extra_includes.append(f'#include "{_include_path(dependency, options)}"')
     if extra_includes:
@@ -1979,7 +1979,7 @@ def _emit_string_view_accessor(
 ) -> None:
     if span_expr is None:
         span_expr = string_view_expr
-    w.line("#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW")
+    w.line("#if PROTOCYTE_ENABLE_STD_STRING_VIEW")
     w.line(f"::std::string_view {name}() const noexcept {{ return {string_view_expr}; }}")
     w.line("#else")
     w.line(f"::protocyte::Span<const char> {name}() const noexcept {{ return {span_expr}; }}")

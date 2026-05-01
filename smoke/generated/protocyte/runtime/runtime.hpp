@@ -11,7 +11,7 @@
 #include <new>
 #include <type_traits>
 
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
 #include <string_view>
 #endif
 
@@ -1269,7 +1269,7 @@ namespace protocyte {
         constexpr usize size() const noexcept { return size_; }
         constexpr usize size_bytes() const noexcept { return size_ * sizeof(T); }
         constexpr bool empty() const noexcept { return size_ == 0u; }
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         constexpr operator ::std::string_view() const noexcept
             requires(::std::same_as<::std::remove_cv_t<T>, char>)
         {
@@ -2869,7 +2869,7 @@ namespace protocyte {
         usize size() const noexcept { return bytes_.size(); }
         usize length() const noexcept { return size(); }
         bool empty() const noexcept { return bytes_.empty(); }
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         operator ::std::string_view() const noexcept { return view(); }
 #endif
         void clear() noexcept { bytes_.clear(); }

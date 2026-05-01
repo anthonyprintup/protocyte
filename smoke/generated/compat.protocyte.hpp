@@ -65,7 +65,7 @@ namespace protocyte_smoke::test::compat {
         }
         constexpr void clear_value() noexcept { value_ = {}; }
 
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         ::std::string_view label() const noexcept { return label_.view(); }
 #else
         ::protocyte::Span<const char> label() const noexcept { return label_.view(); }
@@ -656,7 +656,7 @@ namespace protocyte_smoke::test::compat {
         }
         constexpr void clear_f_double() noexcept { f_double_ = {}; }
 
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         ::std::string_view f_string() const noexcept { return f_string_.view(); }
 #else
         ::protocyte::Span<const char> f_string() const noexcept { return f_string_.view(); }
@@ -749,7 +749,7 @@ namespace protocyte_smoke::test::compat {
         constexpr bool has_oneof_string() const noexcept {
             return special_oneof_case_ == Special_oneofCase::oneof_string;
         }
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         ::std::string_view oneof_string() const noexcept {
             return has_oneof_string() ? special_oneof.oneof_string.view() : ::std::string_view {};
         }
@@ -866,7 +866,7 @@ namespace protocyte_smoke::test::compat {
             has_opt_int32_ = false;
         }
 
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         ::std::string_view opt_string() const noexcept { return opt_string_.view(); }
 #else
         ::protocyte::Span<const char> opt_string() const noexcept { return opt_string_.view(); }
