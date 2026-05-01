@@ -208,7 +208,8 @@ namespace {
         };
     }
 
-    bool view_equal(protocyte::Span<const protocyte::u8> lhs, protocyte::Span<const protocyte::u8> rhs) noexcept {
+    template<class L, protocyte::usize LExtent, class R, protocyte::usize RExtent>
+    bool view_equal(protocyte::Span<L, LExtent> lhs, protocyte::Span<R, RExtent> rhs) noexcept {
         return protocyte::bytes_equal(lhs, rhs);
     }
 
@@ -2711,6 +2712,10 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     const auto string_view = protocyte::byte_span_of(string_payload);
     REQUIRE(string_view);
     CHECK(view_equal(message.f_string(), *string_view));
+    const std::string_view converted_span = message.f_string();
+    CHECK(converted_span == std::string_view {"hello"});
+    const std::string_view converted_string = message.mutable_f_string();
+    CHECK(converted_string == converted_span);
 
     require_success(message.set_f_string("hello from literal"));
     CHECK(message.f_string().size() == std::string_view {"hello from literal"}.size());
