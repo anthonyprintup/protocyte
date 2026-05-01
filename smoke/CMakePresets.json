@@ -9,6 +9,7 @@
         "PATH": "$env{VCINSTALLDIR}Tools/Llvm/x64/bin;$env{VSINSTALLDIR}Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja;$env{WindowsSdkVerBinPath}x64;$penv{PATH}"
       },
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
         "CMAKE_CXX_COMPILER": "clang-cl",
         "CMAKE_RC_COMPILER": "rc",
         "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
@@ -22,6 +23,7 @@
         "PATH": "$env{VSINSTALLDIR}Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja;$env{WindowsSdkVerBinPath}x64;$penv{PATH}"
       },
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
         "CMAKE_CXX_COMPILER": "cl",
         "CMAKE_RC_COMPILER": "rc",
         "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY"
@@ -38,6 +40,24 @@
       "inherits": "windows-msvc-base",
       "displayName": "Windows MSVC + Ninja",
       "binaryDir": "${sourceDir}/build/msvc"
+    },
+    {
+      "name": "windows-clangcl-ninja-benchmarks",
+      "inherits": "windows-clangcl-ninja",
+      "displayName": "Windows clang-cl + Ninja + benchmarks",
+      "binaryDir": "${sourceDir}/build/clangcl-benchmarks",
+      "cacheVariables": {
+        "PROTOCYTE_SMOKE_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-ninja-benchmarks",
+      "inherits": "windows-msvc-ninja",
+      "displayName": "Windows MSVC + Ninja + benchmarks",
+      "binaryDir": "${sourceDir}/build/msvc-benchmarks",
+      "cacheVariables": {
+        "PROTOCYTE_SMOKE_BUILD_BENCHMARKS": "ON"
+      }
     },
     {
       "name": "windows-clangcl-ninja-driver",
@@ -66,6 +86,14 @@
     {
       "name": "windows-msvc-ninja",
       "configurePreset": "windows-msvc-ninja"
+    },
+    {
+      "name": "windows-clangcl-ninja-benchmarks",
+      "configurePreset": "windows-clangcl-ninja-benchmarks"
+    },
+    {
+      "name": "windows-msvc-ninja-benchmarks",
+      "configurePreset": "windows-msvc-ninja-benchmarks"
     },
     {
       "name": "windows-clangcl-ninja-driver",

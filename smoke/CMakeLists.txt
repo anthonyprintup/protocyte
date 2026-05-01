@@ -5,6 +5,7 @@ project(protocyte_smoke LANGUAGES CXX)
 option(PROTOCYTE_SMOKE_REGENERATE "Regenerate checked protocyte output with protoc." OFF)
 option(PROTOCYTE_SMOKE_FETCH_PROTOBUF "Fetch and build protobuf when protoc is not installed." ON)
 option(PROTOCYTE_SMOKE_BUILD_DRIVER "Build the WDK kernel driver smoke test." OFF)
+option(PROTOCYTE_SMOKE_BUILD_BENCHMARKS "Build Protocyte marshalling benchmarks." OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +18,7 @@ set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
 set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
 set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
 set(PROTOCYTE_CROSS_PACKAGE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/cross_package.proto")
+set(PROTOCYTE_BENCHMARK_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/benchmark.proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
 set(
     PROTOCYTE_SMOKE_CLANG_FORMAT
@@ -40,7 +42,7 @@ set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
 )
 
-if(PROTOCYTE_SMOKE_REGENERATE)
+if(PROTOCYTE_SMOKE_REGENERATE OR PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     set(PROTOCYTE_FETCH_PROTOBUF "${PROTOCYTE_SMOKE_FETCH_PROTOBUF}")
 else()
     set(PROTOCYTE_FETCH_PROTOBUF OFF)
@@ -115,6 +117,87 @@ FetchContent_Declare(
     GIT_TAG v3.7.1
 )
 FetchContent_MakeAvailable(Catch2)
+FetchContent_GetProperties(Catch2 SOURCE_DIR protocyte_smoke_catch2_source_dir)
+list(APPEND CMAKE_MODULE_PATH "${protocyte_smoke_catch2_source_dir}/extras")
+
+if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_INSTALL_TOOLS OFF CACHE BOOL "" FORCE)
+    if(WIN32)
+        set(CMAKE_USE_WIN32_THREADS_INIT ON CACHE BOOL "" FORCE)
+        set(CMAKE_USE_PTHREADS_INIT OFF CACHE BOOL "" FORCE)
+        set(CMAKE_THREAD_LIBS_INIT "" CACHE STRING "" FORCE)
+        set(HAVE_LIB_RT OFF CACHE BOOL "" FORCE)
+    endif()
+    FetchContent_Declare(
+        benchmark
+        GIT_REPOSITORY https://github.com/google/benchmark.git
+        GIT_TAG v1.9.5
+    )
+    FetchContent_MakeAvailable(benchmark)
+
+    set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+    protocyte_setup_codegen()
+    if(NOT TARGET protobuf::libprotobuf AND NOT TARGET libprotobuf)
+        find_package(Protobuf CONFIG QUIET)
+    endif()
+    if(NOT TARGET protobuf::libprotobuf AND NOT TARGET libprotobuf)
+        find_package(Protobuf MODULE QUIET)
+    endif()
+    if(NOT TARGET protobuf::libprotobuf AND NOT TARGET libprotobuf AND PROTOCYTE_SMOKE_FETCH_PROTOBUF)
+        set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_PROTOBUF_BINARIES ON CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            protobuf
+            GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+            GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
+        )
+        FetchContent_MakeAvailable(protobuf)
+        set(PROTOCYTE_PROTOC_EXECUTABLE "$<TARGET_FILE:protobuf::protoc>" CACHE INTERNAL "protoc executable for protocyte")
+    endif()
+    set(PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/protobuf")
+    set(PROTOCYTE_PROTOBUF_BENCHMARK_HEADER "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}/benchmark.pb.h")
+    set(PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}/benchmark.pb.cc")
+    add_custom_command(
+        OUTPUT
+            "${PROTOCYTE_PROTOBUF_BENCHMARK_HEADER}"
+            "${PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE}"
+        COMMAND
+            "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}"
+        COMMAND
+            ${PROTOCYTE_PROTOC_EXECUTABLE}
+            "--proto_path=${PROTOCYTE_SMOKE_PROTO_DIR}"
+            "--cpp_out=${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}"
+            "${PROTOCYTE_BENCHMARK_PROTO}"
+        DEPENDS "${PROTOCYTE_BENCHMARK_PROTO}"
+        COMMENT "Generating protobuf benchmark C++ sources"
+        VERBATIM
+    )
+    add_custom_target(
+        protocyte_smoke_protobuf_benchmark_codegen
+        DEPENDS
+            "${PROTOCYTE_PROTOBUF_BENCHMARK_HEADER}"
+            "${PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE}"
+    )
+    set_source_files_properties(
+        "${PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE}"
+        PROPERTIES
+            COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:Clang>:-Wno-invalid-offsetof>"
+    )
+
+    if(TARGET protobuf::libprotobuf)
+        set(protocyte_smoke_libprotobuf_target protobuf::libprotobuf)
+    elseif(TARGET libprotobuf)
+        set(protocyte_smoke_libprotobuf_target libprotobuf)
+    else()
+        message(FATAL_ERROR "protobuf benchmark requires a libprotobuf CMake target")
+    endif()
+endif()
 
 add_executable(protocyte_host_smoke
     src/host_smoke.cpp
@@ -140,6 +223,69 @@ if(MSVC)
     target_compile_options(protocyte_host_smoke PRIVATE /W4 /permissive-)
 else()
     target_compile_options(protocyte_host_smoke PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
+    add_executable(protocyte_host_benchmark
+        src/host_benchmark.cpp
+        "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+        "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
+        "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
+    )
+    target_include_directories(protocyte_host_benchmark PRIVATE "${PROTOCYTE_GENERATED_DIR}")
+    target_compile_definitions(
+        protocyte_host_benchmark
+        PRIVATE
+            PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1
+            PROTOCYTE_ENABLE_STD_STRING_VIEW=1
+    )
+    target_compile_features(protocyte_host_benchmark PRIVATE cxx_std_20)
+    target_link_libraries(protocyte_host_benchmark PRIVATE benchmark::benchmark_main)
+
+    if(PROTOCYTE_SMOKE_REGENERATE)
+        add_dependencies(protocyte_host_benchmark protocyte_smoke_regenerate)
+    endif()
+
+    if(MSVC)
+        target_compile_options(protocyte_host_benchmark PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(protocyte_host_benchmark PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+
+    add_executable(protocyte_host_protobuf_benchmark
+        src/protobuf_benchmark.cpp
+        "${PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE}"
+    )
+    target_include_directories(
+        protocyte_host_protobuf_benchmark
+        PRIVATE
+            "${PROTOCYTE_GENERATED_DIR}"
+            "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}"
+    )
+    target_compile_definitions(
+        protocyte_host_protobuf_benchmark
+        PRIVATE
+            PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1
+            PROTOCYTE_ENABLE_STD_STRING_VIEW=1
+    )
+    target_compile_features(protocyte_host_protobuf_benchmark PRIVATE cxx_std_20)
+    target_link_libraries(
+        protocyte_host_protobuf_benchmark
+        PRIVATE
+            benchmark::benchmark_main
+            "${protocyte_smoke_libprotobuf_target}"
+    )
+    add_dependencies(protocyte_host_protobuf_benchmark protocyte_smoke_protobuf_benchmark_codegen)
+
+    if(PROTOCYTE_SMOKE_REGENERATE)
+        add_dependencies(protocyte_host_protobuf_benchmark protocyte_smoke_regenerate)
+    endif()
+
+    if(MSVC)
+        target_compile_options(protocyte_host_protobuf_benchmark PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(protocyte_host_protobuf_benchmark PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 enable_testing()
