@@ -14,6 +14,7 @@
 #include "compat_cases.hpp"
 #include "cross_package.protocyte.hpp"
 #include "example.protocyte.hpp"
+#include "host_fixture.hpp"
 #include "protocyte/runtime/runtime.hpp"
 
 namespace {
@@ -446,18 +447,16 @@ namespace {
     }
 
     void assign_string(Config::String &out, protocyte::Span<const protocyte::u8> view) {
-        require_success(out.assign(view));
+        require_success(protocyte_smoke::fixture::assign_string(out, view));
     }
 
     void assign_bytes(Config::Bytes &out, protocyte::Span<const protocyte::u8> view) {
-        require_success(out.assign(view));
+        require_success(protocyte_smoke::fixture::assign_bytes(out, view));
     }
 
     template<class Container>
     void append_bytes(Container &out, Config::Context &ctx, protocyte::Span<const protocyte::u8> view) {
-        Config::Bytes value(&ctx);
-        assign_bytes(value, view);
-        require_success(out.push_back(protocyte::move(value)));
+        require_success(protocyte_smoke::fixture::append_bytes(out, ctx, view));
     }
 
     template<class Container, class T, size_t N>
@@ -554,12 +553,7 @@ namespace {
     }
 
     void populate_required_fixed_array(Message &message, Config::Context &ctx) {
-        for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
-            require_success(message.mutable_fixed_integer_array().push_back(fixed_integer_array_values[i]));
-        }
-        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
-        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_2));
-        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_3));
+        require_success(protocyte_smoke::fixture::populate_required_fixed_array(message, ctx));
     }
 
     template<class Container> void check_three_byte_entries(const Container &values,
@@ -571,9 +565,7 @@ namespace {
     }
 
     void populate_repeated_bytes_holder(RepeatedBytesHolder &value, Config::Context &ctx) {
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_0));
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_1));
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_2));
+        require_success(protocyte_smoke::fixture::populate_repeated_bytes_holder(value, ctx));
     }
 
     void check_repeated_bytes_holder(const RepeatedBytesHolder &value) {
@@ -582,9 +574,7 @@ namespace {
     }
 
     void populate_bounded_repeated_bytes_holder(BoundedRepeatedBytesHolder &value, Config::Context &ctx) {
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_1));
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_2));
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_3));
+        require_success(protocyte_smoke::fixture::populate_bounded_repeated_bytes_holder(value, ctx));
     }
 
     void check_bounded_repeated_bytes_holder(const BoundedRepeatedBytesHolder &value) {
@@ -593,9 +583,7 @@ namespace {
     }
 
     void populate_fixed_repeated_bytes_holder(FixedRepeatedBytesHolder &value, Config::Context &ctx) {
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_0));
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_2));
-        append_bytes(value.mutable_values(), ctx, view_of(repeated_bytes_3));
+        require_success(protocyte_smoke::fixture::populate_fixed_repeated_bytes_holder(value, ctx));
     }
 
     void check_fixed_repeated_bytes_holder(const FixedRepeatedBytesHolder &value) {
@@ -627,12 +615,9 @@ namespace {
         CHECK(value.mode() == mode);
     }
 
-    void populate_nested2(Nested2 &value, protocyte::Span<const protocyte::u8> description, float first, float second,
-                          InnerMode mode) {
-        require_success(value.set_description(description));
-        require_success(value.mutable_values().push_back(first));
-        require_success(value.mutable_values().push_back(second));
-        require_success(value.set_mode(mode));
+    [[maybe_unused]] void populate_nested2(Nested2 &value, protocyte::Span<const protocyte::u8> description,
+                                           float first, float second, InnerMode mode) {
+        require_success(protocyte_smoke::fixture::populate_nested2(value, description, first, second, mode));
         check_nested2(value, description, first, second, mode);
     }
 
@@ -649,130 +634,36 @@ namespace {
     }
 
     void populate_nested1(Nested1 &value, protocyte::Span<const protocyte::u8> name, int32_t id) {
-        require_success(value.set_name(name));
-        require_success(value.set_id(id));
-        auto inner = value.ensure_inner();
-        require_success(inner);
-        populate_nested2(**inner, view_of(nested_description), 1.5f, 2.5f, InnerMode::B);
+        require_success(protocyte_smoke::fixture::populate_nested1(value, name, id));
         check_nested1(value, name, id);
     }
 
     void insert_map_str_int32(Message &message, Config::Context &ctx) {
-        Config::String key(&ctx);
-        assign_string(key, view_of(map_key));
-        require_success(message.mutable_map_str_int32().insert_or_assign(protocyte::move(key), 301));
+        require_success(protocyte_smoke::fixture::insert_map_str_int32(message, ctx));
     }
 
-    void insert_map_int32_str(Message &message, Config::Context &ctx) {
-        Config::String value(&ctx);
-        assign_string(value, view_of(map_value));
-        require_success(message.mutable_map_int32_str().insert_or_assign(302, protocyte::move(value)));
+    [[maybe_unused]] void insert_map_int32_str(Message &message, Config::Context &ctx) {
+        require_success(protocyte_smoke::fixture::insert_map_int32_str(message, ctx));
     }
 
-    void insert_map_bool_bytes(Message &message, Config::Context &ctx) {
-        Config::Bytes value(&ctx);
-        assign_bytes(value, view_of(bool_bytes));
-        require_success(message.mutable_map_bool_bytes().insert_or_assign(true, protocyte::move(value)));
+    [[maybe_unused]] void insert_map_bool_bytes(Message &message, Config::Context &ctx) {
+        require_success(protocyte_smoke::fixture::insert_map_bool_bytes(message, ctx));
     }
 
-    void insert_map_uint64_msg(Message &message, Config::Context &ctx) {
-        Nested1 value(ctx);
-        populate_nested1(value, view_of(nested_name), 330);
-        require_success(message.mutable_map_uint64_msg().insert_or_assign(3300u, protocyte::move(value)));
+    [[maybe_unused]] void insert_map_uint64_msg(Message &message, Config::Context &ctx) {
+        require_success(protocyte_smoke::fixture::insert_map_uint64_msg(message, ctx));
     }
 
-    void insert_very_nested_map(Message &message, Config::Context &ctx) {
-        Config::String key(&ctx);
-        assign_string(key, view_of(very_nested_key));
-        Nested2 value(ctx);
-        populate_nested2(value, view_of(nested_description), 3.5f, 4.5f, InnerMode::C);
-        require_success(
-            message.mutable_very_nested_map().insert_or_assign(protocyte::move(key), protocyte::move(value)));
+    [[maybe_unused]] void insert_very_nested_map(Message &message, Config::Context &ctx) {
+        require_success(protocyte_smoke::fixture::insert_very_nested_map(message, ctx));
     }
 
-    void populate_deep(Deep &value, Config::Context &ctx) {
-        require_success(value.set_extreme(view_of(extreme_value)));
-        Config::String weird(&ctx);
-        assign_string(weird, view_of(weird_value));
-        require_success(value.mutable_weird_map().insert_or_assign(7, protocyte::move(weird)));
-        require_success(value.set_text(view_of(deep_text)));
+    [[maybe_unused]] void populate_deep(Deep &value, Config::Context &ctx) {
+        require_success(protocyte_smoke::fixture::populate_deep(value, ctx));
     }
 
     void populate_message(Message &message, Config::Context &ctx) {
-        require_success(message.set_f_double(123.5));
-        require_success(message.set_f_float(12.25f));
-        require_success(message.set_f_int32(42));
-        require_success(message.set_f_int64(42000000000ll));
-        require_success(message.set_f_uint32(99u));
-        require_success(message.set_f_uint64(99000000000ull));
-        require_success(message.set_f_sint32(-17));
-        require_success(message.set_f_sint64(-17000000000ll));
-        require_success(message.set_f_fixed32(0x11223344u));
-        require_success(message.set_f_fixed64(0x1122334455667788ull));
-        require_success(message.set_f_sfixed32(-1234567));
-        require_success(message.set_f_sfixed64(-1234567890123ll));
-        require_success(message.set_f_bool(true));
-        require_success(message.set_f_string(view_of(string_bytes)));
-        require_success(message.set_f_bytes(view_of(bytes_data)));
-        require_success(message.mutable_r_int32_unpacked().push_back(21));
-        require_success(message.mutable_r_int32_unpacked().push_back(22));
-        require_success(message.mutable_r_int32_packed().push_back(23));
-        require_success(message.mutable_r_int32_packed().push_back(24));
-        require_success(message.mutable_r_double().push_back(23.5));
-        require_success(message.mutable_r_double().push_back(24.5));
-        require_success(message.set_color(Color::GREEN));
-
-        auto nested = message.ensure_nested1();
-        require_success(nested);
-        populate_nested1(**nested, view_of(nested_name), 25);
-
-        require_success(message.set_oneof_bytes(view_of(oneof_bytes)));
-        insert_map_str_int32(message, ctx);
-        insert_map_int32_str(message, ctx);
-        insert_map_bool_bytes(message, ctx);
-        insert_map_uint64_msg(message, ctx);
-        insert_very_nested_map(message, ctx);
-
-        auto recursive = message.ensure_recursive_self();
-        require_success(recursive);
-        require_success((*recursive)->set_f_string(view_of(recursive_string)));
-        require_success((*recursive)->set_f_int32(350));
-        populate_required_fixed_array(**recursive, ctx);
-
-        auto nested_item = message.mutable_lots_of_nested().emplace_back(ctx);
-        require_success(nested_item);
-        populate_nested2(**nested_item, view_of(nested_description), 36.5f, 37.5f, InnerMode::A);
-
-        require_success(message.mutable_colors().push_back(static_cast<int32_t>(Color::RED)));
-        require_success(message.mutable_colors().push_back(static_cast<int32_t>(Color::BLUE)));
-        require_success(message.set_opt_int32(38));
-        require_success(message.set_opt_string(view_of(optional_string)));
-        require_success(message.set_sha256(view_of(sha256_bytes)));
-        require_success(message.set_byte_array(view_of(byte_array)));
-        require_success(message.set_float_expr_array(view_of(float_expr_array)));
-        append_bytes(message.mutable_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
-        append_bytes(message.mutable_repeated_byte_array(), ctx, view_of(repeated_bytes_1));
-        append_bytes(message.mutable_repeated_byte_array(), ctx, view_of(repeated_bytes_2));
-        append_bytes(message.mutable_bounded_repeated_byte_array(), ctx, view_of(repeated_bytes_1));
-        append_bytes(message.mutable_bounded_repeated_byte_array(), ctx, view_of(repeated_bytes_2));
-        append_bytes(message.mutable_bounded_repeated_byte_array(), ctx, view_of(repeated_bytes_3));
-        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
-        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_2));
-        append_bytes(message.mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_3));
-        auto crazy_fixed_repeated = message.ensure_crazy_fixed_repeated_bytes();
-        require_success(crazy_fixed_repeated);
-        populate_fixed_repeated_bytes_holder(**crazy_fixed_repeated, ctx);
-
-        for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
-            require_success(message.mutable_integer_array().push_back(integer_array_values[i]));
-        }
-        for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
-            require_success(message.mutable_fixed_integer_array().push_back(fixed_integer_array_values[i]));
-        }
-
-        auto deep = message.ensure_extreme_nesting();
-        require_success(deep);
-        populate_deep(**deep, ctx);
+        require_success(protocyte_smoke::fixture::populate_message(message, ctx));
     }
 
     void check_maps(const Message &message) {
