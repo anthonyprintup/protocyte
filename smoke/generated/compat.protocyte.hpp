@@ -65,7 +65,7 @@ namespace protocyte_smoke::test::compat {
         }
         constexpr void clear_value() noexcept { value_ = {}; }
 
-        ::protocyte::Span<const char> label() const noexcept { return label_.view(); }
+        ::protocyte::StringView label() const noexcept { return label_.view(); }
         typename Config::String &mutable_label() noexcept { return label_; }
         template<class Value>::protocyte::Status set_label(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -652,7 +652,7 @@ namespace protocyte_smoke::test::compat {
         }
         constexpr void clear_f_double() noexcept { f_double_ = {}; }
 
-        ::protocyte::Span<const char> f_string() const noexcept { return f_string_.view(); }
+        ::protocyte::StringView f_string() const noexcept { return f_string_.view(); }
         typename Config::String &mutable_f_string() noexcept { return f_string_; }
         template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -741,8 +741,8 @@ namespace protocyte_smoke::test::compat {
         constexpr bool has_oneof_string() const noexcept {
             return special_oneof_case_ == Special_oneofCase::oneof_string;
         }
-        ::protocyte::Span<const char> oneof_string() const noexcept {
-            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::Span<const char> {};
+        ::protocyte::StringView oneof_string() const noexcept {
+            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::StringView {};
         }
         template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -852,7 +852,7 @@ namespace protocyte_smoke::test::compat {
             has_opt_int32_ = false;
         }
 
-        ::protocyte::Span<const char> opt_string() const noexcept { return opt_string_.view(); }
+        ::protocyte::StringView opt_string() const noexcept { return opt_string_.view(); }
         bool has_opt_string() const noexcept { return has_opt_string_; }
         typename Config::String &mutable_opt_string() noexcept {
             has_opt_string_ = true;

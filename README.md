@@ -448,11 +448,13 @@ Hosted users who want standard-library interoperability can opt in:
 target_compile_definitions(my_target PRIVATE PROTOCYTE_ENABLE_STD_STRING_VIEW=1)
 ```
 
-When `PROTOCYTE_ENABLE_STD_STRING_VIEW` is defined, the runtime includes
-`<string_view>` and both `::protocyte::Span<char>` / `Span<const char>` and
-`::protocyte::String` are implicitly convertible to `std::string_view`. The
-default accessor return type remains `Span<const char>`, so code that does not
-enable the option keeps the smaller no-exception surface.
+When `PROTOCYTE_ENABLE_STD_STRING_VIEW` is set to a nonzero value, the runtime
+includes `<string_view>` and both `::protocyte::Span<char>` / `Span<const char>`
+and `::protocyte::String` are implicitly convertible to `std::string_view`.
+Generated immutable `string` field accessors also return `std::string_view` under
+this opt-in, so hosted code can pass string fields directly to
+standard-library APIs such as `std::format`. Code that does not enable the
+option keeps the smaller no-exception `Span<const char>` accessor surface.
 
 In a Windows kernel driver, one technically possible MSVC/STL-specific escape
 hatch is to provide the STL's internal out-of-range throw helper yourself so

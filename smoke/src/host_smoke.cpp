@@ -2,6 +2,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#if __has_include(<format>)
+#include <format>
+#endif
 #include <limits>
 #include <string>
 #include <string_view>
@@ -212,6 +215,16 @@ namespace {
     template<class L, protocyte::usize LExtent, class R, protocyte::usize RExtent>
     bool view_equal(protocyte::Span<L, LExtent> lhs, protocyte::Span<R, RExtent> rhs) noexcept {
         return protocyte::bytes_equal(lhs, rhs);
+    }
+
+    template<class R, protocyte::usize RExtent>
+    bool view_equal(std::string_view lhs, protocyte::Span<R, RExtent> rhs) noexcept {
+        return view_equal(protocyte::Span<const char> {lhs.data(), lhs.size()}, rhs);
+    }
+
+    template<class L, protocyte::usize LExtent>
+    bool view_equal(protocyte::Span<L, LExtent> lhs, std::string_view rhs) noexcept {
+        return view_equal(lhs, protocyte::Span<const char> {rhs.data(), rhs.size()});
     }
 
     template<size_t N> protocyte::Span<const protocyte::u8> view_of(const uint8_t (&data)[N]) noexcept {
@@ -2603,8 +2616,12 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     const auto string_view = protocyte::byte_span_of(string_payload);
     REQUIRE(string_view);
     CHECK(view_equal(message.f_string(), *string_view));
+    static_assert(std::is_same_v<decltype(message.f_string()), std::string_view>);
     const std::string_view converted_span = message.f_string();
     CHECK(converted_span == std::string_view {"hello"});
+#if defined(__cpp_lib_format)
+    CHECK(std::format("{}", message.f_string()) == "hello");
+#endif
     const std::string_view converted_string = message.mutable_f_string();
     CHECK(converted_string == converted_span);
 

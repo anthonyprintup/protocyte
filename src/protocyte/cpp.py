@@ -210,7 +210,7 @@ def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
     w.line(f"#include <{options.runtime_prefix}/runtime.hpp>")
     extra_includes: list[str] = []
     if _file_uses_string_view(file_model):
-        extra_includes.append("#include <string_view>")
+        extra_includes.extend(["#if !PROTOCYTE_ENABLE_STD_STRING_VIEW", "#include <string_view>", "#endif"])
     for dependency in sorted(file_model.dependencies):
         extra_includes.append(f'#include "{_include_path(dependency, options)}"')
     if extra_includes:
@@ -813,8 +813,10 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         return
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
-        view_type = "::protocyte::Span<const char>" if item.kind == "string" else "::protocyte::Span<const ::protocyte::u8>"
-        w.line(f"{view_type} {item.cpp_name}() const noexcept {{ return {_member(item)}.view(); }}")
+        if item.kind == "string":
+            _emit_string_view_accessor(w, item.cpp_name, f"{_member(item)}.view()")
+        else:
+            w.line(f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {_member(item)}.view(); }}")
         if item.proto3_optional:
             w.line(f"bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}")
         w.line(f"{typ}& mutable_{item.cpp_name}() noexcept {{")
@@ -879,10 +881,17 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
         f"constexpr bool has_{item.cpp_name}() const noexcept {{ return {case_member} == {case_type}::{item.cpp_name}; }}"
     )
     if item.kind in {"string", "bytes"}:
-        view_type = "::protocyte::Span<const char>" if item.kind == "string" else "::protocyte::Span<const ::protocyte::u8>"
-        w.line(
-            f"{view_type} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : {view_type}{{}}; }}"
-        )
+        if item.kind == "string":
+            _emit_string_view_accessor(
+                w,
+                item.cpp_name,
+                f"has_{item.cpp_name}() ? {_member(item)}.view() : ::protocyte::StringView{{}}",
+            )
+        else:
+            view_type = "::protocyte::Span<const ::protocyte::u8>"
+            w.line(
+                f"{view_type} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : {view_type}{{}}; }}"
+            )
         def emit_setter_body() -> None:
             if item.kind == "bytes" and item.array_enabled:
                 w.line(
@@ -1959,6 +1968,14 @@ def _scalar_write_helper(item: FieldModel, *, field: bool) -> str:
 
 def _runtime_scalar_type(cpp_type: str) -> str:
     return _RUNTIME_SCALAR_TYPES.get(cpp_type, cpp_type)
+
+
+def _emit_string_view_accessor(
+    w: CppWriter,
+    name: str,
+    expr: str,
+) -> None:
+    w.line(f"::protocyte::StringView {name}() const noexcept {{ return {expr}; }}")
 
 
 def _file_uses_string_view(file_model: FileModel) -> bool:

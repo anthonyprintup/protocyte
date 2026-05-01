@@ -11,7 +11,7 @@
 #include <new>
 #include <type_traits>
 
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
 #include <string_view>
 #endif
 
@@ -1269,11 +1269,11 @@ namespace protocyte {
         constexpr usize size() const noexcept { return size_; }
         constexpr usize size_bytes() const noexcept { return size_ * sizeof(T); }
         constexpr bool empty() const noexcept { return size_ == 0u; }
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         constexpr operator ::std::string_view() const noexcept
             requires(::std::same_as<::std::remove_cv_t<T>, char>)
         {
-            return data_ == nullptr ? ::std::string_view {} : ::std::string_view {data_, size_};
+            return ::std::string_view {data_, size_};
         }
 #endif
         template<usize Count> constexpr Span<T, Count> first() const noexcept
@@ -1315,6 +1315,12 @@ namespace protocyte {
     template<class Range>
         requires(!DataSizeSpanSource<Range &> && PointerSpanSource<Range &>)
     Span(Range &) -> Span<::std::remove_pointer_t<SpanBeginPointer<Range &>>>;
+
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
+    using StringView = ::std::string_view;
+#else
+    using StringView = Span<const char>;
+#endif
 
     template<class T>
     concept SpanSource = requires(T &value) { Span {value}; } || requires(const T &value) { Span {value}; };
@@ -2869,7 +2875,7 @@ namespace protocyte {
         usize size() const noexcept { return bytes_.size(); }
         usize length() const noexcept { return size(); }
         bool empty() const noexcept { return bytes_.empty(); }
-#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
         operator ::std::string_view() const noexcept { return view(); }
 #endif
         void clear() noexcept { bytes_.clear(); }

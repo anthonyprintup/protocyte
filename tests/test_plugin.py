@@ -53,6 +53,16 @@ def test_runtime_rejects_unmatched_end_group_in_skip_field() -> None:
     assert "case WireType::EGROUP: return {};" not in runtime_header
 
 
+def test_kernel_smoke_provides_debug_string_view_crt_shims() -> None:
+    source = (Path(__file__).resolve().parents[1] / "smoke" / "src" / "kernel_driver_smoke.cpp").read_text()
+
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW && defined(_DEBUG)" in source
+    assert "__imp__invoke_watson" in source
+    assert "__imp__CrtDbgReport" in source
+    assert "DbgPrintEx" in source
+    assert "KeBugCheckEx" in source
+
+
 def test_runtime_container_growth_checks_capacity_limits() -> None:
     runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
 
@@ -173,7 +183,8 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     )[0]
 
     assert "#include <cstring>" in runtime_header
-    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in runtime_header
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n#include <string_view>\n#endif" in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW" not in runtime_header
     assert "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept" in runtime_header
     assert "if (!count || dst == src)" in runtime_header
     assert "::std::memmove(dst, src, count);" in runtime_header
@@ -198,6 +209,9 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "copy_bytes(temp.data(), view.data(), view.size());" in bytes_body
     assert "constexpr operator ::std::string_view() const noexcept" in span_body
     assert "requires(::std::same_as<::std::remove_cv_t<T>, char>)" in span_body
+    assert "return ::std::string_view {data_, size_};" in span_body
+    assert "data_ == nullptr ? ::std::string_view {}" not in span_body
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n    using StringView = ::std::string_view;\n#else\n    using StringView = Span<const char>;\n#endif" in runtime_header
     assert "using value_type = const char;" in string_body
     assert "Span<const char> view() const noexcept" in string_body
     assert "Span<const u8> byte_view() const noexcept" in string_body
@@ -676,7 +690,10 @@ def test_generated_header_contains_expected_field_api() -> None:
 
     assert "namespace demo {" in header
     assert "bool has_opt_name() const noexcept" in header
-    assert "::protocyte::Span<const char> opt_name() const noexcept" in header
+    assert "#include <string_view>" not in header
+    assert "  ::protocyte::StringView opt_name() const noexcept { return opt_name_.view(); }" in header
+    assert "::std::string_view opt_name()" not in header
+    assert "::protocyte::Span<const char> opt_name()" not in header
     assert "struct Sample {" in header
     assert "typename Config::template Map<typename Config::String, ::protocyte::i32> items_;" in header
     assert "typename Config::template Box<::demo::Sample<Config>> self_;" in header
@@ -1037,8 +1054,12 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     header = files["arrays.protocyte.hpp"]
     runtime_header = files["protocyte/runtime/runtime.hpp"]
 
-    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
-    assert "#include <string_view>" in header
+    assert (
+        "#include <protocyte/runtime/runtime.hpp>\n\n"
+        "#if !PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "#include <string_view>\n"
+        "#endif"
+    ) in header
     assert "inline constexpr ::protocyte::u32 FILE_CAP {16u};" in header
     assert 'inline constexpr ::std::string_view FILE_LABEL {"ell", 3u};' in header
     assert "inline constexpr bool FILE_READY {true};" in header
@@ -1372,8 +1393,12 @@ def test_generated_header_emits_utf8_string_constants() -> None:
 
     assert not response.error
     header = next(file.content for file in response.file if file.name == "unicode.protocyte.hpp")
-    assert '#include <protocyte/runtime/runtime.hpp>\n\n#include <string_view>' in header
-    assert '#include <string_view>' in header
+    assert (
+        "#include <protocyte/runtime/runtime.hpp>\n\n"
+        "#if !PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
+        "#include <string_view>\n"
+        "#endif"
+    ) in header
     assert 'static constexpr ::std::string_view NAME {"\\xc4"' in header
     assert '"\\x80"' in header
     assert '"\\xc3"' in header
@@ -1417,7 +1442,13 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "void clear_choice() noexcept {" in header
     assert "destroy_at_(&choice.text);" in header
     assert "destroy_at_(&choice.inner);" in header
-    assert "::protocyte::Span<const char> text() const noexcept" in header
+    assert "#include <string_view>" not in header
+    assert (
+        "  ::protocyte::StringView text() const noexcept { "
+        "return has_text() ? choice.text.view() : ::protocyte::StringView{}; }"
+    ) in header
+    assert "::std::string_view text()" not in header
+    assert "::protocyte::Span<const char> text()" not in header
     assert "union ChoiceStorage {" in header
     assert "ChoiceStorage() noexcept {}" in header
     assert "~ChoiceStorage() noexcept {}" in header
