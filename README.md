@@ -432,6 +432,50 @@ Common generated operations include:
 - `clone()`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
 
+### String Views
+
+Generated `string` field accessors return `::protocyte::Span<const char>` by
+default. Protocyte does not return `std::string_view` by default because the
+runtime is designed for freestanding and kernel-style builds that avoid
+standard-library exception surfaces. `std::string_view` includes checked APIs
+such as `at()` and some `substr()` overloads whose standard contract can throw
+`std::out_of_range`; `::protocyte::Span<const char>` keeps the default string
+view API in Protocyte's no-exceptions runtime surface.
+
+Hosted users who want standard-library interoperability can opt in:
+
+```cmake
+target_compile_definitions(my_target PRIVATE PROTOCYTE_ENABLE_STD_STRING_VIEW=1)
+```
+
+When `PROTOCYTE_ENABLE_STD_STRING_VIEW` is defined, the runtime includes
+`<string_view>` and both `::protocyte::Span<char>` / `Span<const char>` and
+`::protocyte::String` are implicitly convertible to `std::string_view`. The
+default accessor return type remains `Span<const char>`, so code that does not
+enable the option keeps the smaller no-exception surface.
+
+In a Windows kernel driver, one technically possible MSVC/STL-specific escape
+hatch is to provide the STL's internal out-of-range throw helper yourself so
+`std::string_view::at()` can link even though exceptions are unavailable. This
+should be treated as a last-resort compatibility shim, not as a recommended
+Protocyte configuration: any accidental checked access would bugcheck the
+system.
+
+```cpp
+#include <ntddk.h>
+
+namespace std {
+[[noreturn]] void __cdecl _Xout_of_range(char const*) {
+    KeBugCheckEx(MANUALLY_INITIATED_CRASH, 'svat', 0, 0, 0);
+    __assume(0);
+}
+}  // namespace std
+```
+
+Prefer the default `::protocyte::Span<const char>` API in kernel and
+freestanding builds. It avoids depending on implementation-private STL symbols
+and keeps checked string access out of the generated-code runtime surface.
+
 ### Parse Atomicity
 
 `merge_from(reader)` commits parsed data per wire field occurrence. If a field
