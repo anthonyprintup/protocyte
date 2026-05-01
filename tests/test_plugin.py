@@ -211,6 +211,7 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "requires(::std::same_as<::std::remove_cv_t<T>, char>)" in span_body
     assert "return ::std::string_view {data_, size_};" in span_body
     assert "data_ == nullptr ? ::std::string_view {}" not in span_body
+    assert "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n    using StringView = ::std::string_view;\n#else\n    using StringView = Span<const char>;\n#endif" in runtime_header
     assert "using value_type = const char;" in string_body
     assert "Span<const char> view() const noexcept" in string_body
     assert "Span<const u8> byte_view() const noexcept" in string_body
@@ -690,13 +691,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "namespace demo {" in header
     assert "bool has_opt_name() const noexcept" in header
     assert "#include <string_view>" not in header
-    assert (
-        "  #if PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
-        "  ::std::string_view opt_name() const noexcept { return opt_name_.view(); }\n"
-        "  #else\n"
-        "  ::protocyte::Span<const char> opt_name() const noexcept { return opt_name_.view(); }\n"
-        "  #endif"
-    ) in header
+    assert "  ::protocyte::StringView opt_name() const noexcept { return opt_name_.view(); }" in header
+    assert "::std::string_view opt_name()" not in header
+    assert "::protocyte::Span<const char> opt_name()" not in header
     assert "struct Sample {" in header
     assert "typename Config::template Map<typename Config::String, ::protocyte::i32> items_;" in header
     assert "typename Config::template Box<::demo::Sample<Config>> self_;" in header
@@ -1447,12 +1444,11 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "destroy_at_(&choice.inner);" in header
     assert "#include <string_view>" not in header
     assert (
-        "  #if PROTOCYTE_ENABLE_STD_STRING_VIEW\n"
-        "  ::std::string_view text() const noexcept { return has_text() ? choice.text.view() : ::std::string_view{}; }\n"
-        "  #else\n"
-        "  ::protocyte::Span<const char> text() const noexcept { return has_text() ? choice.text.view() : ::protocyte::Span<const char>{}; }\n"
-        "  #endif"
+        "  ::protocyte::StringView text() const noexcept { "
+        "return has_text() ? choice.text.view() : ::protocyte::StringView{}; }"
     ) in header
+    assert "::std::string_view text()" not in header
+    assert "::protocyte::Span<const char> text()" not in header
     assert "union ChoiceStorage {" in header
     assert "ChoiceStorage() noexcept {}" in header
     assert "~ChoiceStorage() noexcept {}" in header

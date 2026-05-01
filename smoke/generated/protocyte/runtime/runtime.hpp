@@ -1316,6 +1316,12 @@ namespace protocyte {
         requires(!DataSizeSpanSource<Range &> && PointerSpanSource<Range &>)
     Span(Range &) -> Span<::std::remove_pointer_t<SpanBeginPointer<Range &>>>;
 
+#if PROTOCYTE_ENABLE_STD_STRING_VIEW
+    using StringView = ::std::string_view;
+#else
+    using StringView = Span<const char>;
+#endif
+
     template<class T>
     concept SpanSource = requires(T &value) { Span {value}; } || requires(const T &value) { Span {value}; };
 

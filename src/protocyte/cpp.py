@@ -885,8 +885,7 @@ def _emit_oneof_accessors(w: CppWriter, item: FieldModel, options: GeneratorOpti
             _emit_string_view_accessor(
                 w,
                 item.cpp_name,
-                f"has_{item.cpp_name}() ? {_member(item)}.view() : ::std::string_view{{}}",
-                f"has_{item.cpp_name}() ? {_member(item)}.view() : ::protocyte::Span<const char>{{}}",
+                f"has_{item.cpp_name}() ? {_member(item)}.view() : ::protocyte::StringView{{}}",
             )
         else:
             view_type = "::protocyte::Span<const ::protocyte::u8>"
@@ -1974,16 +1973,9 @@ def _runtime_scalar_type(cpp_type: str) -> str:
 def _emit_string_view_accessor(
     w: CppWriter,
     name: str,
-    string_view_expr: str,
-    span_expr: str | None = None,
+    expr: str,
 ) -> None:
-    if span_expr is None:
-        span_expr = string_view_expr
-    w.line("#if PROTOCYTE_ENABLE_STD_STRING_VIEW")
-    w.line(f"::std::string_view {name}() const noexcept {{ return {string_view_expr}; }}")
-    w.line("#else")
-    w.line(f"::protocyte::Span<const char> {name}() const noexcept {{ return {span_expr}; }}")
-    w.line("#endif")
+    w.line(f"::protocyte::StringView {name}() const noexcept {{ return {expr}; }}")
 
 
 def _file_uses_string_view(file_model: FileModel) -> bool:
