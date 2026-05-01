@@ -141,6 +141,25 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
 
     set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
     protocyte_setup_codegen()
+    if(NOT TARGET protobuf::libprotobuf AND NOT TARGET libprotobuf)
+        find_package(Protobuf CONFIG QUIET)
+    endif()
+    if(NOT TARGET protobuf::libprotobuf AND NOT TARGET libprotobuf)
+        find_package(Protobuf MODULE QUIET)
+    endif()
+    if(NOT TARGET protobuf::libprotobuf AND NOT TARGET libprotobuf AND PROTOCYTE_SMOKE_FETCH_PROTOBUF)
+        set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(protobuf_BUILD_PROTOBUF_BINARIES ON CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            protobuf
+            GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+            GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
+        )
+        FetchContent_MakeAvailable(protobuf)
+        set(PROTOCYTE_PROTOC_EXECUTABLE "$<TARGET_FILE:protobuf::protoc>" CACHE INTERNAL "protoc executable for protocyte")
+    endif()
     set(PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/protobuf")
     set(PROTOCYTE_PROTOBUF_BENCHMARK_HEADER "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}/benchmark.pb.h")
     set(PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}/benchmark.pb.cc")
