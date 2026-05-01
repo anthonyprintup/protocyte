@@ -1273,7 +1273,7 @@ namespace protocyte {
         constexpr operator ::std::string_view() const noexcept
             requires(::std::same_as<::std::remove_cv_t<T>, char>)
         {
-            return data_ == nullptr ? ::std::string_view {} : ::std::string_view {data_, size_};
+            return ::std::string_view {data_, size_};
         }
 #endif
         template<usize Count> constexpr Span<T, Count> first() const noexcept
