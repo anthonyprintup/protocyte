@@ -4630,7 +4630,7 @@ namespace test::ultimate {
                 {
                     const auto st_size = ::protocyte::add_size(
                         entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                                           ::protocyte::varint_size(entry.key));
                     if (!st_size) {
                         return st_size.status();
                     }
@@ -4988,7 +4988,7 @@ namespace test::ultimate {
             if (f_uint64_ != 0u) {
                 const auto st_size = ::protocyte::add_size(
                     total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::f_uint64)) +
-                               ::protocyte::varint_size(static_cast<::protocyte::u64>(f_uint64_)));
+                               ::protocyte::varint_size(f_uint64_));
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -5319,7 +5319,7 @@ namespace test::ultimate {
                 {
                     const auto st_size = ::protocyte::add_size(
                         entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                                           ::protocyte::varint_size(entry.key));
                     if (!st_size) {
                         return ::protocyte::unexpected(st_size.error());
                     }
