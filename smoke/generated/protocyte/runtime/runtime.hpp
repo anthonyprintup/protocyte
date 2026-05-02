@@ -3765,7 +3765,7 @@ namespace protocyte {
     }
 
     template<class Writer> Status write_uint64(Writer &writer, const u64 value) noexcept {
-        return write_varint_scalar(writer, value);
+        return write_varint(writer, value);
     }
 
     template<class Writer> Status write_bool(Writer &writer, const bool value) noexcept {

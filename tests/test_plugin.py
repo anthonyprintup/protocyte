@@ -1581,6 +1581,33 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
     assert "return ::protocyte::usize {};" in header
 
 
+def test_generated_encoded_size_omits_redundant_uint64_varint_casts() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("uint64_casts.proto")
+    request.proto_file.append(_uint64_casts_file())
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name == "uint64_casts.protocyte.hpp")
+    encoded_size_body = header.split(
+        "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {", maxsplit=1
+    )[1].split("\n};", maxsplit=1)[0]
+
+    assert "::protocyte::varint_size(version_)" in encoded_size_body
+    assert "::protocyte::varint_size(values_value)" in encoded_size_body
+    assert "::protocyte::varint_size(loose_values_value)" in encoded_size_body
+    assert "::protocyte::varint_size(choice.choice_value)" in encoded_size_body
+    assert "::protocyte::varint_size(entry.key)" in encoded_size_body
+    assert "::protocyte::varint_size(entry.value)" in encoded_size_body
+    assert "::protocyte::varint_size(static_cast<::protocyte::u64>(version_))" not in encoded_size_body
+    assert "::protocyte::varint_size(static_cast<::protocyte::u64>(values_value))" not in encoded_size_body
+    assert "::protocyte::varint_size(static_cast<::protocyte::u64>(loose_values_value))" not in encoded_size_body
+    assert "::protocyte::varint_size(static_cast<::protocyte::u64>(choice.choice_value))" not in encoded_size_body
+    assert "::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key))" not in encoded_size_body
+    assert "::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value))" not in encoded_size_body
+
+
 def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("namespaced.proto")
@@ -1684,6 +1711,67 @@ def _simple_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_MESSAGE
     field.type_name = ".demo.Sample"
+
+    return file
+
+
+def _uint64_casts_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "uint64_casts.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Uint64CastCases"
+
+    field = message.field.add()
+    field.name = "version"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_UINT64
+
+    field = message.field.add()
+    field.name = "values"
+    field.number = 2
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_UINT64
+    field.options.packed = True
+
+    field = message.field.add()
+    field.name = "loose_values"
+    field.number = 5
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_UINT64
+    field.options.packed = False
+
+    message.oneof_decl.add().name = "choice"
+    field = message.field.add()
+    field.name = "choice_value"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_UINT64
+    field.oneof_index = 0
+
+    entry = message.nested_type.add()
+    entry.name = "CountersEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_UINT64
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_UINT64
+
+    field = message.field.add()
+    field.name = "counters"
+    field.number = 4
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.Uint64CastCases.CountersEntry"
 
     return file
 

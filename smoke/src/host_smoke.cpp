@@ -2554,6 +2554,18 @@ TEST_CASE("tag_size matches protobuf group sizing", "[smoke][runtime]") {
     CHECK(protocyte::tag_size(large_field_number, protocyte::WireType::SGROUP) == single_tag_size * 2u);
 }
 
+TEST_CASE("write_uint64 emits canonical varint bytes", "[smoke][runtime]") {
+    std::array<protocyte::u8, 10u> encoded {};
+    protocyte::SliceWriter writer(encoded.data(), encoded.size());
+
+    require_success(protocyte::write_uint64(writer, 0x8000000000000000ull));
+
+    const std::array<protocyte::u8, 10u> expected {0x80u, 0x80u, 0x80u, 0x80u, 0x80u,
+                                                   0x80u, 0x80u, 0x80u, 0x80u, 0x01u};
+    REQUIRE(writer.position() == expected.size());
+    for (protocyte::usize index {}; index < expected.size(); ++index) { CHECK(encoded[index] == expected[index]); }
+}
+
 TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke][runtime]") {
     if constexpr (sizeof(protocyte::usize) == sizeof(protocyte::u64)) {
         SUCCEED("usize can represent every u64 length on this target");

@@ -1916,10 +1916,16 @@ def _scalar_size(item: FieldModel, value: str) -> str:
     width = _fixed_scalar_width(item)
     if width is not None:
         return width
+    return _varint_size_expr(item, value)
+
+
+def _varint_size_expr(item: FieldModel, value: str) -> str:
     if item.proto_type == FieldDescriptorProto.TYPE_SINT32:
         return f"::protocyte::varint_size(::protocyte::encode_zigzag32({value}))"
     if item.proto_type == FieldDescriptorProto.TYPE_SINT64:
         return f"::protocyte::varint_size(::protocyte::encode_zigzag64({value}))"
+    if item.proto_type == FieldDescriptorProto.TYPE_UINT64:
+        return f"::protocyte::varint_size({value})"
     return f"::protocyte::varint_size(static_cast<::protocyte::u64>({value}))"
 
 
