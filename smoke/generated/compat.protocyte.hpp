@@ -1680,7 +1680,7 @@ namespace protocyte_smoke::test::compat {
                     return st;
                 }
             }
-            for (const auto entry : map_str_int32_) {
+            for (const auto &entry : map_str_int32_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -1727,7 +1727,7 @@ namespace protocyte_smoke::test::compat {
                     return st;
                 }
             }
-            for (const auto entry : map_int32_str_) {
+            for (const auto &entry : map_int32_str_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -2054,7 +2054,7 @@ namespace protocyte_smoke::test::compat {
                 }
                 total = *st_size;
             }
-            for (const auto entry : map_str_int32_) {
+            for (const auto &entry : map_str_int32_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -2092,7 +2092,7 @@ namespace protocyte_smoke::test::compat {
                 }
                 total = *st_size;
             }
-            for (const auto entry : map_int32_str_) {
+            for (const auto &entry : map_int32_str_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,

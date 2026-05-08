@@ -1438,7 +1438,7 @@ def _emit_write_field(
 
 def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     assert item.map_key is not None and item.map_value is not None
-    w.line(f"for (const auto entry : {_member(item)}) {{")
+    w.line(f"for (const auto &entry : {_member(item)}) {{")
     with w.indent(), w.cpp_scope():
         w.line("enum struct EntryFieldNumber : ::protocyte::u32 {")
         with w.indent():
@@ -1560,7 +1560,7 @@ def _emit_size_statement(w: CppWriter, item: FieldModel, options: GeneratorOptio
 
 def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     assert item.map_key is not None and item.map_value is not None
-    w.line(f"for (const auto entry : {_member(item)}) {{")
+    w.line(f"for (const auto &entry : {_member(item)}) {{")
     with w.indent(), w.cpp_scope():
         w.line("enum struct EntryFieldNumber : ::protocyte::u32 {")
         with w.indent():

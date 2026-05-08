@@ -184,6 +184,17 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
         FetchContent_MakeAvailable(protobuf)
         set(PROTOCYTE_PROTOC_EXECUTABLE "$<TARGET_FILE:protobuf::protoc>" CACHE INTERNAL "protoc executable for protocyte")
     endif()
+    set(PROTOCYTE_PROTOCYTE_BENCHMARK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/protocyte")
+    set(PROTOCYTE_PROTOCYTE_BENCHMARK_HEADER "${PROTOCYTE_PROTOCYTE_BENCHMARK_GENERATED_DIR}/benchmark.protocyte.hpp")
+    set(PROTOCYTE_PROTOCYTE_BENCHMARK_SOURCE "${PROTOCYTE_PROTOCYTE_BENCHMARK_GENERATED_DIR}/benchmark.protocyte.cpp")
+    protocyte_generate(
+        TARGET protocyte_smoke_benchmark_codegen
+        PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
+        OUT_DIR "${PROTOCYTE_PROTOCYTE_BENCHMARK_GENERATED_DIR}"
+        PROTOS "${PROTOCYTE_BENCHMARK_PROTO}"
+        OPTIONS "namespace_prefix=protocyte_smoke"
+    )
+
     set(PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/protobuf")
     set(PROTOCYTE_PROTOBUF_BENCHMARK_HEADER "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}/benchmark.pb.h")
     set(PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}/benchmark.pb.cc")
@@ -253,11 +264,14 @@ endif()
 if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     add_executable(protocyte_host_benchmark
         src/host_benchmark.cpp
-        "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
-        "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
-        "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
+        "${PROTOCYTE_PROTOCYTE_BENCHMARK_SOURCE}"
     )
-    target_include_directories(protocyte_host_benchmark PRIVATE "${PROTOCYTE_GENERATED_DIR}")
+    target_include_directories(
+        protocyte_host_benchmark
+        PRIVATE
+            "${PROTOCYTE_GENERATED_DIR}"
+            "${PROTOCYTE_PROTOCYTE_BENCHMARK_GENERATED_DIR}"
+    )
     target_compile_definitions(
         protocyte_host_benchmark
         PRIVATE
@@ -271,6 +285,7 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     if(PROTOCYTE_SMOKE_REGENERATE)
         add_dependencies(protocyte_host_benchmark protocyte_smoke_regenerate)
     endif()
+    add_dependencies(protocyte_host_benchmark protocyte_smoke_benchmark_codegen)
 
     if(MSVC)
         target_compile_options(protocyte_host_benchmark PRIVATE /W4 /permissive-)
@@ -313,11 +328,56 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     else()
         target_compile_options(protocyte_host_protobuf_benchmark PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
+    add_executable(protocyte_host_benchmark_smoke
+        src/benchmark_compat_smoke.cpp
+        "${PROTOCYTE_PROTOCYTE_BENCHMARK_SOURCE}"
+        "${PROTOCYTE_PROTOBUF_BENCHMARK_SOURCE}"
+    )
+    target_include_directories(
+        protocyte_host_benchmark_smoke
+        PRIVATE
+            "${PROTOCYTE_GENERATED_DIR}"
+            "${PROTOCYTE_PROTOCYTE_BENCHMARK_GENERATED_DIR}"
+            "${PROTOCYTE_PROTOBUF_BENCHMARK_GENERATED_DIR}"
+    )
+    target_compile_definitions(
+        protocyte_host_benchmark_smoke
+        PRIVATE
+            PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1
+            PROTOCYTE_ENABLE_STD_STRING_VIEW=1
+    )
+    protocyte_smoke_enable_std_format_if_available(protocyte_host_benchmark_smoke)
+    target_compile_features(protocyte_host_benchmark_smoke PRIVATE cxx_std_20)
+    target_link_libraries(
+        protocyte_host_benchmark_smoke
+        PRIVATE
+            Catch2::Catch2WithMain
+            "${protocyte_smoke_libprotobuf_target}"
+    )
+    add_dependencies(
+        protocyte_host_benchmark_smoke
+        protocyte_smoke_benchmark_codegen
+        protocyte_smoke_protobuf_benchmark_codegen
+    )
+
+    if(PROTOCYTE_SMOKE_REGENERATE)
+        add_dependencies(protocyte_host_benchmark_smoke protocyte_smoke_regenerate)
+    endif()
+
+    if(MSVC)
+        target_compile_options(protocyte_host_benchmark_smoke PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(protocyte_host_benchmark_smoke PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 enable_testing()
 include(Catch)
 catch_discover_tests(protocyte_host_smoke)
+if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
+    catch_discover_tests(protocyte_host_benchmark_smoke)
+endif()
 
 if(PROTOCYTE_SMOKE_BUILD_DRIVER)
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
