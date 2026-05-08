@@ -1347,7 +1347,7 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (const auto entry : weird_map_) {
+            for (const auto &entry : weird_map_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -1425,7 +1425,7 @@ namespace test::ultimate {
                 }
                 total = *st_size;
             }
-            for (const auto entry : weird_map_) {
+            for (const auto &entry : weird_map_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -4480,7 +4480,7 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (const auto entry : map_str_int32_) {
+            for (const auto &entry : map_str_int32_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -4527,7 +4527,7 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (const auto entry : map_int32_str_) {
+            for (const auto &entry : map_int32_str_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -4574,7 +4574,7 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (const auto entry : map_bool_bytes_) {
+            for (const auto &entry : map_bool_bytes_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -4621,7 +4621,7 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (const auto entry : map_uint64_msg_) {
+            for (const auto &entry : map_uint64_msg_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -4668,7 +4668,7 @@ namespace test::ultimate {
                     return st;
                 }
             }
-            for (const auto entry : very_nested_map_) {
+            for (const auto &entry : very_nested_map_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -5196,7 +5196,7 @@ namespace test::ultimate {
                 }
                 total = *st_size;
             }
-            for (const auto entry : map_str_int32_) {
+            for (const auto &entry : map_str_int32_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -5234,7 +5234,7 @@ namespace test::ultimate {
                 }
                 total = *st_size;
             }
-            for (const auto entry : map_int32_str_) {
+            for (const auto &entry : map_int32_str_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -5272,7 +5272,7 @@ namespace test::ultimate {
                 }
                 total = *st_size;
             }
-            for (const auto entry : map_bool_bytes_) {
+            for (const auto &entry : map_bool_bytes_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -5310,7 +5310,7 @@ namespace test::ultimate {
                 }
                 total = *st_size;
             }
-            for (const auto entry : map_uint64_msg_) {
+            for (const auto &entry : map_uint64_msg_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,
@@ -5348,7 +5348,7 @@ namespace test::ultimate {
                 }
                 total = *st_size;
             }
-            for (const auto entry : very_nested_map_) {
+            for (const auto &entry : very_nested_map_) {
                 enum struct EntryFieldNumber : ::protocyte::u32 {
                     key = 1u,
                     value = 2u,

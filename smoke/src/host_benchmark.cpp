@@ -3,23 +3,22 @@
 #include <cstdint>
 #include <vector>
 
-#include "host_fixture.hpp"
+#include "protocyte_benchmark_fixture.hpp"
 
 namespace {
 
-    using Fixture = protocyte_smoke::fixture::Message;
+    using Fixture = protocyte_smoke::benchmark_fixture::ProtocyteMessage;
 
-    bool make_populated_message(Fixture &message, protocyte_smoke::fixture::Config::Context &ctx,
-                                benchmark::State &state) {
-        if (const auto st = protocyte_smoke::fixture::populate_message(message, ctx); !st) {
-            state.SkipWithError("populate_message failed");
+    bool make_populated_message(Fixture &message, protocyte::DefaultConfig::Context &ctx, benchmark::State &state) {
+        if (const auto st = protocyte_smoke::benchmark_fixture::populate_protocyte_message(message, ctx); !st) {
+            state.SkipWithError("populate_protocyte_message failed");
             return false;
         }
         return true;
     }
 
     bool make_encoded_message(std::vector<protocyte::u8> &encoded, benchmark::State &state) {
-        auto ctx = protocyte_smoke::fixture::make_context();
+        auto ctx = protocyte_smoke::benchmark_fixture::make_context();
         Fixture message(ctx);
         if (!make_populated_message(message, ctx, state)) {
             return false;
@@ -44,8 +43,8 @@ namespace {
         return true;
     }
 
-    void BM_UltimateComplexMessage_EncodedSize(benchmark::State &state) {
-        auto ctx = protocyte_smoke::fixture::make_context();
+    void BM_ProtocyteBenchmarkMessage_EncodedSize(benchmark::State &state) {
+        auto ctx = protocyte_smoke::benchmark_fixture::make_context();
         Fixture message(ctx);
         if (!make_populated_message(message, ctx, state)) {
             return;
@@ -62,8 +61,8 @@ namespace {
         }
     }
 
-    void BM_UltimateComplexMessage_Serialize(benchmark::State &state) {
-        auto ctx = protocyte_smoke::fixture::make_context();
+    void BM_ProtocyteBenchmarkMessage_Serialize(benchmark::State &state) {
+        auto ctx = protocyte_smoke::benchmark_fixture::make_context();
         Fixture message(ctx);
         if (!make_populated_message(message, ctx, state)) {
             return;
@@ -88,14 +87,14 @@ namespace {
         state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(buffer.size()));
     }
 
-    void BM_UltimateComplexMessage_MergeFrom(benchmark::State &state) {
+    void BM_ProtocyteBenchmarkMessage_MergeFrom(benchmark::State &state) {
         std::vector<protocyte::u8> encoded;
         if (!make_encoded_message(encoded, state)) {
             return;
         }
 
         for (auto _ : state) {
-            auto ctx = protocyte_smoke::fixture::make_context();
+            auto ctx = protocyte_smoke::benchmark_fixture::make_context();
             Fixture parsed(ctx);
             protocyte::SliceReader reader(encoded.data(), encoded.size());
             if (const auto st = parsed.merge_from(reader); !st) {
@@ -108,8 +107,8 @@ namespace {
         state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) * static_cast<int64_t>(encoded.size()));
     }
 
-    BENCHMARK(BM_UltimateComplexMessage_EncodedSize);
-    BENCHMARK(BM_UltimateComplexMessage_Serialize);
-    BENCHMARK(BM_UltimateComplexMessage_MergeFrom);
+    BENCHMARK(BM_ProtocyteBenchmarkMessage_EncodedSize);
+    BENCHMARK(BM_ProtocyteBenchmarkMessage_Serialize);
+    BENCHMARK(BM_ProtocyteBenchmarkMessage_MergeFrom);
 
 } // namespace

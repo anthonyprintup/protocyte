@@ -1718,6 +1718,36 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
     }
 
+    SECTION("plain bytes preserve previous contents if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::f_bytes),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(bytes_data)));
+        require_success(writer.write(bytes_data, sizeof(bytes_data)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_f_bytes(view_of(repeated_bytes_2)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(view_equal(parsed.f_bytes(), view_of(repeated_bytes_2)));
+    }
+
+    SECTION("plain string preserves previous contents if read fails after can_read") {
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, sizeof(string_bytes)));
+        require_success(writer.write(string_bytes, sizeof(string_bytes)));
+
+        Message parsed(ctx);
+        require_success(parsed.set_f_string(view_of(optional_string)));
+        FailingBulkReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(view_equal(parsed.f_string(), view_of(optional_string)));
+    }
+
     SECTION("bounded bytes preserve previous contents if read fails after can_read") {
         uint8_t encoded[128] = {};
         protocyte::SliceWriter writer(encoded, sizeof(encoded));

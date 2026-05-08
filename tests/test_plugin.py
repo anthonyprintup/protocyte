@@ -794,7 +794,7 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
         "                {"
         not in cross_header
     )
-    weird_map_serialize = header.split("for (const auto entry : weird_map_) {", maxsplit=1)[1].split(
+    weird_map_serialize = header.split("for (const auto &entry : weird_map_) {", maxsplit=1)[1].split(
         "if (deep_oneof_case_", maxsplit=1
     )[0]
     assert weird_map_serialize.count("                {\n                    const auto st_size =") == 2

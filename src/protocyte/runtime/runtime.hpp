@@ -2924,6 +2924,13 @@ namespace protocyte {
             return {};
         }
 
+        Status validate() const noexcept {
+            if (!validate_utf8(byte_view())) {
+                return protocyte::unexpected(ErrorCode::invalid_utf8, {});
+            }
+            return {};
+        }
+
     protected:
         Status check_size_limit(const usize size) const noexcept {
             if (const auto ctx = bytes_.context(); ctx != nullptr && size > ctx->limits.max_string_bytes) {
@@ -4202,12 +4209,8 @@ namespace protocyte {
             return st;
         }
         auto buffer = temp.mutable_view();
-        for (usize i {}; i < size; ++i) {
-            auto byte = reader.read_byte();
-            if (!byte) {
-                return byte.status();
-            }
-            buffer.data()[i] = *byte;
+        if (const auto st = reader.read(buffer.data(), buffer.size()); !st) {
+            return st;
         }
         out = protocyte::move(temp);
         return {};
@@ -4233,20 +4236,15 @@ namespace protocyte {
         if (size > ctx.limits.max_string_bytes) {
             return protocyte::unexpected(ErrorCode::size_limit, reader.position());
         }
-        typename Config::Bytes buffer {&ctx};
-        if (const auto st = buffer.resize_for_overwrite(size); !st) {
+        typename Config::String temp {&ctx};
+        if (const auto st = temp.resize_for_overwrite(size); !st) {
             return st;
         }
-        auto bytes = buffer.mutable_view();
-        for (usize i {}; i < size; ++i) {
-            auto byte = reader.read_byte();
-            if (!byte) {
-                return byte.status();
-            }
-            bytes.data()[i] = *byte;
+        auto bytes = temp.mutable_view_for_overwrite();
+        if (const auto st = reader.read(bytes.data(), bytes.size()); !st) {
+            return st;
         }
-        typename Config::String temp {&ctx};
-        if (const auto st = temp.assign_owned(protocyte::move(buffer)); !st) {
+        if (const auto st = temp.validate(); !st) {
             return st;
         }
         out = protocyte::move(temp);
