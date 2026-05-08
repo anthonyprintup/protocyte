@@ -929,7 +929,7 @@ namespace test::ultimate {
                     }
                 }
             }
-            if (values_.size() != 0u && values_.size() != 3u) {
+            if (!values_.empty() && values_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::values));
             }
@@ -937,7 +937,7 @@ namespace test::ultimate {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
-            if (values_.size() != 0u && values_.size() != 3u) {
+            if (!values_.empty() && values_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::values));
             }
@@ -952,7 +952,7 @@ namespace test::ultimate {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
-            if (values_.size() != 0u && values_.size() != 3u) {
+            if (!values_.empty() && values_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::values));
             }
@@ -4254,11 +4254,11 @@ namespace test::ultimate {
                     }
                 }
             }
-            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u) {
+            if (!fixed_integer_array_.empty() && fixed_integer_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
-            if (fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u) {
+            if (!fixed_repeated_byte_array_.empty() && fixed_repeated_byte_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
             }
@@ -4266,11 +4266,11 @@ namespace test::ultimate {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
-            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u) {
+            if (!fixed_integer_array_.empty() && fixed_integer_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
-            if (fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u) {
+            if (!fixed_repeated_byte_array_.empty() && fixed_repeated_byte_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
             }
@@ -4933,11 +4933,11 @@ namespace test::ultimate {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
-            if (fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u) {
+            if (!fixed_integer_array_.empty() && fixed_integer_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_integer_array));
             }
-            if (fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u) {
+            if (!fixed_repeated_byte_array_.empty() && fixed_repeated_byte_array_.size() != 3u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
             }

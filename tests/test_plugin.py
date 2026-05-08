@@ -84,7 +84,7 @@ def test_runtime_container_growth_checks_capacity_limits() -> None:
         in runtime_header
     )
     assert "const usize target {count * 2u};" in runtime_header
-    assert "next_size >= rehash_threshold_for(buckets_.size())" in runtime_header
+    assert "buckets_.empty() || *next_size >= rehash_threshold_for(buckets_.size())" in runtime_header
     assert "static constexpr usize rehash_threshold_for(const usize bucket_count) noexcept" in runtime_header
     assert "capacity_ * 2u" not in runtime_header
     assert "checked_mul(count, 2u, &target)" not in runtime_header
@@ -130,7 +130,8 @@ def test_runtime_sequence_containers_accept_spans() -> None:
     assert "contiguous_range_size" not in runtime_header
     assert "const auto first_addr = reinterpret_cast<uptr>(first);" in runtime_header
     assert "const auto last_addr = reinterpret_cast<uptr>(last);" in runtime_header
-    assert "if (view.size() != 0u && view.data() == nullptr)" in runtime_header
+    assert "if (!view.empty() && view.data() == nullptr)" in runtime_header
+    assert "if (view.size() != 0u && view.data() == nullptr)" not in runtime_header
     assert "if (*size != 0u && value.data() == nullptr)" in runtime_header
     assert "if (last < first)" not in runtime_header
     assert "template<class Range> Status assign(const Range &values) noexcept" in vector_body
@@ -193,7 +194,7 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "::std::memmove(dst, src, count);" in runtime_header
     assert "::std::memcpy(dst, src, count);" in runtime_header
     assert "constexpr bool bytes_equal(const Span<const u8> lhs, const Span<const u8> rhs) noexcept" in runtime_header
-    assert "if (!lhs.size())" in runtime_header
+    assert "if (lhs.empty())" in runtime_header
     assert "if (::std::is_constant_evaluated())" in runtime_header
     assert "return ::std::memcmp(lhs.data(), rhs.data(), lhs.size()) == 0;" in runtime_header
     assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
@@ -771,8 +772,8 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert "if (const auto st = out->copy_from(*this); !st) {" in header
     assert "return has_recursive_self() ? recursive_self_.operator->() : nullptr;" in header
     assert "static_cast<::protocyte::u32>(FieldNumber::recursive_self), *recursive_self_" in header
-    assert "fixed_integer_array_.size() != 0u && fixed_integer_array_.size() != 3u" in header
-    assert "fixed_repeated_byte_array_.size() != 0u && fixed_repeated_byte_array_.size() != 3u" in header
+    assert "!fixed_integer_array_.empty() && fixed_integer_array_.size() != 3u" in header
+    assert "!fixed_repeated_byte_array_.empty() && fixed_repeated_byte_array_.size() != 3u" in header
     assert (
         "for (const auto &packed_value_remote_values : remote_values_) {\n"
         "                    {\n"
@@ -1108,7 +1109,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "return view.status();" in header
     assert "if (const auto st = blob_.assign(*view); !st)" in header
     assert "if (*len != 32u)" in header
-    assert "if (values_.size() != 0u && values_.size() != 4u) {" in header
+    assert "if (!values_.empty() && values_.size() != 4u) {" in header
     assert "template<class T, usize Max> struct Array" in runtime_header
     assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
     assert "template<usize Max> struct FixedByteArray" in runtime_header

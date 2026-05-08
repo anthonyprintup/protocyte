@@ -1050,7 +1050,7 @@ def _emit_fixed_array_validation(w: CppWriter, message: MessageModel, *, for_siz
             continue
         if item.repeated:
             condition = (
-                f"{_member(item)}.size() != 0u && "
+                f"!{_member(item)}.empty() && "
                 f"{_member(item)}.size() != {_array_max_literal(item)}"
             )
         else:

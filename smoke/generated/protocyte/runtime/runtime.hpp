@@ -1390,7 +1390,7 @@ namespace protocyte {
 
     template<class T, usize Extent>
     constexpr Result<Span<T, Extent>> checked_span_of(const Span<T, Extent> view) noexcept {
-        if (view.size() != 0u && view.data() == nullptr) {
+        if (!view.empty() && view.data() == nullptr) {
             return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
         return view;
@@ -1462,7 +1462,7 @@ namespace protocyte {
         if (!size) {
             return protocyte::unexpected(size.error());
         }
-        if (*size != 0u && view.data() == nullptr) {
+        if (!view.empty() && view.data() == nullptr) {
             return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
         return Span<const u8> {reinterpret_cast<const u8 *>(view.data()), *size};
@@ -1570,7 +1570,7 @@ namespace protocyte {
         if (lhs.size() != rhs.size()) {
             return false;
         }
-        if (!lhs.size()) {
+        if (lhs.empty()) {
             return true;
         }
         if (::std::is_constant_evaluated()) {
@@ -3303,7 +3303,7 @@ namespace protocyte {
             if (*next_size > max_size()) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            if (!buckets_.size() || *next_size >= rehash_threshold_for(buckets_.size())) {
+            if (buckets_.empty() || *next_size >= rehash_threshold_for(buckets_.size())) {
                 return reserve(*next_size);
             }
             return {};

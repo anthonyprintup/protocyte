@@ -972,7 +972,7 @@ namespace {
             REQUIRE(moved.has_oneof_bytes());
             CHECK(view_equal(moved.oneof_bytes(), view_of(oneof_bytes)));
             CHECK(source.special_oneof_case() == Message::Special_oneofCase::none);
-            CHECK(source.oneof_bytes().size() == 0u);
+            CHECK(source.oneof_bytes().empty());
         }
 
         SECTION("move assignment transfers active message case") {
@@ -1176,7 +1176,7 @@ namespace {
         SECTION("unset fixed bytes stay absent through round trip") {
             Message message(ctx);
             CHECK_FALSE(message.has_sha256());
-            CHECK(message.sha256().size() == 0u);
+            CHECK(message.sha256().empty());
             populate_required_fixed_array(message, ctx);
 
             auto encoded_size = message.encoded_size();
@@ -1191,7 +1191,7 @@ namespace {
             protocyte::SliceReader reader(encoded, writer.position());
             require_success(parsed.merge_from(reader));
             CHECK_FALSE(parsed.has_sha256());
-            CHECK(parsed.sha256().size() == 0u);
+            CHECK(parsed.sha256().empty());
         }
 
         SECTION("mutable fixed bytes mark presence and zero initialize") {
@@ -1218,7 +1218,7 @@ namespace {
 
             message.clear_sha256();
             CHECK_FALSE(message.has_sha256());
-            CHECK(message.sha256().size() == 0u);
+            CHECK(message.sha256().empty());
         }
 
         SECTION("explicit zero bytes stay present through round trip") {
@@ -1376,8 +1376,8 @@ namespace {
                 CHECK(target_fixed_integer_array[i] == fixed_integer_array_values[i]);
             }
             CHECK(source.byte_array_size() == 0u);
-            CHECK(source.integer_array().size() == 0u);
-            CHECK(source.fixed_integer_array().size() == 0u);
+            CHECK(source.integer_array().empty());
+            CHECK(source.fixed_integer_array().empty());
         }
 
         SECTION("partially populated fixed arrays are rejected before encoding") {
@@ -2528,8 +2528,8 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         auto parsed = parse_compat_bytes(ctx, compat_cases::unknown_fields);
 
         CHECK(parsed.f_int32() == 321);
-        CHECK(parsed.map_str_int32().size() == 0u);
-        CHECK(parsed.map_int32_str().size() == 0u);
+        CHECK(parsed.map_str_int32().empty());
+        CHECK(parsed.map_int32_str().empty());
     }
 }
 
@@ -3462,7 +3462,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         Message message(ctx);
         const auto view = message.mutable_sha256();
         CHECK(view.data() == nullptr);
-        CHECK(view.size() == 0u);
+        CHECK(view.empty());
     }
 
     SECTION("nested message fields respect max_message_bytes") {
