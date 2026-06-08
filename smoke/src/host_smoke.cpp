@@ -5,6 +5,7 @@
 #if __has_include(<format>)
 #include <format>
 #endif
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -188,11 +189,10 @@ namespace {
     static_assert(sizeof(nested_bytes) == CrossNested::EXTERNAL_CAP);
     static_assert(sizeof(cross_package_bytes) == Message::INTEGER_ARRAY_CAP + 1u);
     static_assert(sizeof(cross_package_nested_bytes) == CrossPackageNested::MIRRORED_COUNT);
-    static_assert(sizeof(integer_array_values) / sizeof(integer_array_values[0]) == Message::INTEGER_ARRAY_CAP);
-    static_assert(sizeof(mirrored_values) / sizeof(mirrored_values[0]) == Cross::ROOT_MIRROR);
-    static_assert(sizeof(cross_package_values) / sizeof(cross_package_values[0]) == CrossPackage::NESTED_COUNT);
-    static_assert(sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]) ==
-                  Message::FIXED_INTEGER_ARRAY_CAP);
+    static_assert(std::size(integer_array_values) == Message::INTEGER_ARRAY_CAP);
+    static_assert(std::size(mirrored_values) == Cross::ROOT_MIRROR);
+    static_assert(std::size(cross_package_values) == CrossPackage::NESTED_COUNT);
+    static_assert(std::size(fixed_integer_array_values) == Message::FIXED_INTEGER_ARRAY_CAP);
 
     void *smoke_allocate(void *, size_t size, size_t) noexcept { return malloc(size); }
 
@@ -428,6 +428,22 @@ namespace {
 
     template<class T>
     concept CanCallUnexpected = requires(T &&value) { protocyte::unexpected(protocyte::forward<T>(value)); };
+
+    template<class T>
+    concept CanConstructOptionalFrom =
+        requires(T &&value) { protocyte::Optional<const int &> {protocyte::forward<T>(value)}; };
+
+    template<class T>
+    concept CanConstructResultFrom =
+        requires(T &&value) { protocyte::Result<const int &> {protocyte::forward<T>(value)}; };
+
+    template<class T>
+    concept CanAssignOptionalFrom =
+        requires(protocyte::Optional<const int &> optional, T &&value) { optional = protocyte::forward<T>(value); };
+
+    template<class T>
+    concept CanAssignResultFrom =
+        requires(protocyte::Result<const int &> result, T &&value) { result = protocyte::forward<T>(value); };
 
     template<class T>
     concept CanTransformMoveOnlyMember =
@@ -880,7 +896,7 @@ namespace {
             Message message(ctx);
             auto oneof_msg = message.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(**oneof_msg, view_of(nested_name), 2800);
+            populate_nested1(*oneof_msg, view_of(nested_name), 2800);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -948,7 +964,7 @@ namespace {
             Message first(ctx);
             auto first_oneof = first.ensure_oneof_msg();
             require_success(first_oneof);
-            require_success((*first_oneof)->set_name(view_of(nested_name)));
+            require_success(first_oneof->set_name(view_of(nested_name)));
             populate_required_fixed_array(first, ctx);
             require_success(first.set_oneof_bytes(view_of(oneof_bytes)));
 
@@ -979,7 +995,7 @@ namespace {
             Message source(ctx);
             auto oneof_msg = source.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(**oneof_msg, view_of(nested_name), 2802);
+            populate_nested1(*oneof_msg, view_of(nested_name), 2802);
 
             Message target(ctx);
             require_success(target.set_oneof_string(view_of(oneof_string)));
@@ -995,7 +1011,7 @@ namespace {
             Message source(ctx);
             auto oneof_msg = source.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(**oneof_msg, view_of(nested_name), 2802);
+            populate_nested1(*oneof_msg, view_of(nested_name), 2802);
 
             Message target(ctx);
             require_success(target.set_oneof_string(view_of(oneof_string)));
@@ -1011,7 +1027,7 @@ namespace {
             Message source(ctx);
             auto oneof_msg = source.ensure_oneof_msg();
             require_success(oneof_msg);
-            populate_nested1(**oneof_msg, view_of(nested_name), 2802);
+            populate_nested1(*oneof_msg, view_of(nested_name), 2802);
 
             auto cloned = source.clone();
             require_success(cloned);
@@ -1078,7 +1094,7 @@ namespace {
             Message message(ctx);
             auto crazy_repeated = message.ensure_crazy_repeated_bytes();
             require_success(crazy_repeated);
-            populate_repeated_bytes_holder(**crazy_repeated, ctx);
+            populate_repeated_bytes_holder(*crazy_repeated, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -1097,7 +1113,7 @@ namespace {
             Message message(ctx);
             auto crazy_bounded = message.ensure_crazy_bounded_repeated_bytes();
             require_success(crazy_bounded);
-            populate_bounded_repeated_bytes_holder(**crazy_bounded, ctx);
+            populate_bounded_repeated_bytes_holder(*crazy_bounded, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -1116,7 +1132,7 @@ namespace {
             Message message(ctx);
             auto crazy_fixed = message.ensure_crazy_fixed_repeated_bytes();
             require_success(crazy_fixed);
-            populate_fixed_repeated_bytes_holder(**crazy_fixed, ctx);
+            populate_fixed_repeated_bytes_holder(*crazy_fixed, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -1135,7 +1151,7 @@ namespace {
             Message message(ctx);
             auto crazy_repeated = message.ensure_crazy_repeated_bytes();
             require_success(crazy_repeated);
-            populate_repeated_bytes_holder(**crazy_repeated, ctx);
+            populate_repeated_bytes_holder(*crazy_repeated, ctx);
             require_success(message.set_crazy_fixed_bytes(view_of(crazy_fixed_bytes)));
             populate_required_fixed_array(message, ctx);
 
@@ -1156,7 +1172,7 @@ namespace {
             require_success(message.set_crazy_bounded_bytes(view_of(crazy_bounded_bytes)));
             auto crazy_fixed = message.ensure_crazy_fixed_repeated_bytes();
             require_success(crazy_fixed);
-            populate_fixed_repeated_bytes_holder(**crazy_fixed, ctx);
+            populate_fixed_repeated_bytes_holder(*crazy_fixed, ctx);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[256] = {};
@@ -1280,7 +1296,7 @@ namespace {
         SECTION("bounded repeated arrays reject extra elements") {
             Message message(ctx);
             auto &integer_array = message.mutable_integer_array();
-            for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(integer_array_values); ++i) {
                 require_success(integer_array.push_back(integer_array_values[i]));
             }
             require_failure(integer_array.push_back(999), protocyte::ErrorCode::count_limit);
@@ -1328,10 +1344,10 @@ namespace {
         SECTION("copy_from self-assignment keeps bounded repeated arrays intact") {
             Message message(ctx);
             require_success(message.set_byte_array(view_of(byte_array)));
-            for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(integer_array_values); ++i) {
                 require_success(message.mutable_integer_array().push_back(integer_array_values[i]));
             }
-            for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(fixed_integer_array_values); ++i) {
                 require_success(message.mutable_fixed_integer_array().push_back(fixed_integer_array_values[i]));
             }
 
@@ -1339,10 +1355,10 @@ namespace {
 
             CHECK(view_equal(message.byte_array(), view_of(byte_array)));
             CHECK(message.byte_array_size() == sizeof(byte_array));
-            for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(integer_array_values); ++i) {
                 CHECK(message.integer_array()[i] == integer_array_values[i]);
             }
-            for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(fixed_integer_array_values); ++i) {
                 CHECK(message.fixed_integer_array()[i] == fixed_integer_array_values[i]);
             }
         }
@@ -1350,10 +1366,10 @@ namespace {
         SECTION("move assignment transfers bounded arrays") {
             Message source(ctx);
             require_success(source.set_byte_array(view_of(byte_array)));
-            for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(integer_array_values); ++i) {
                 require_success(source.mutable_integer_array().push_back(integer_array_values[i]));
             }
-            for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(fixed_integer_array_values); ++i) {
                 require_success(source.mutable_fixed_integer_array().push_back(fixed_integer_array_values[i]));
             }
 
@@ -1367,12 +1383,12 @@ namespace {
             CHECK(target.byte_array_size() == sizeof(byte_array));
             const auto &target_integer_array = target.integer_array();
             REQUIRE(target_integer_array.size() == Message::INTEGER_ARRAY_CAP);
-            for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(integer_array_values); ++i) {
                 CHECK(target_integer_array[i] == integer_array_values[i]);
             }
             const auto &target_fixed_integer_array = target.fixed_integer_array();
             REQUIRE(target_fixed_integer_array.size() == Message::FIXED_INTEGER_ARRAY_CAP);
-            for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
+            for (size_t i = 0; i < std::size(fixed_integer_array_values); ++i) {
                 CHECK(target_fixed_integer_array[i] == fixed_integer_array_values[i]);
             }
             CHECK(source.byte_array_size() == 0u);
@@ -1571,12 +1587,12 @@ namespace {
 
     void populate_cross_message(Cross &message) {
         require_success(message.set_external_bytes(view_of(external_bytes)));
-        for (size_t i = 0; i < sizeof(mirrored_values) / sizeof(mirrored_values[0]); ++i) {
+        for (size_t i = 0; i < std::size(mirrored_values); ++i) {
             require_success(message.mutable_mirrored_values().push_back(mirrored_values[i]));
         }
         auto nested = message.ensure_nested();
         require_success(nested);
-        require_success((*nested)->set_nested_bytes(view_of(nested_bytes)));
+        require_success(nested->set_nested_bytes(view_of(nested_bytes)));
     }
 
     void check_cross_message(const Cross &message) {
@@ -1612,12 +1628,12 @@ namespace {
 
     void populate_cross_package(CrossPackage &message) {
         require_success(message.set_remote_bytes(view_of(cross_package_bytes)));
-        for (size_t i = 0; i < sizeof(cross_package_values) / sizeof(cross_package_values[0]); ++i) {
+        for (size_t i = 0; i < std::size(cross_package_values); ++i) {
             require_success(message.mutable_remote_values().push_back(cross_package_values[i]));
         }
         auto nested = message.ensure_nested();
         require_success(nested);
-        require_success((*nested)->set_nested_bytes(view_of(cross_package_nested_bytes)));
+        require_success(nested->set_nested_bytes(view_of(cross_package_nested_bytes)));
     }
 
     void check_cross_package(const CrossPackage &message) {
@@ -1880,7 +1896,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         Message parsed(ctx);
         auto old = parsed.ensure_oneof_msg();
         require_success(old);
-        populate_nested1(**old, view_of(nested_name), 2800);
+        populate_nested1(*old, view_of(nested_name), 2800);
 
         protocyte::SliceReader reader(encoded, writer.position());
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
@@ -1906,7 +1922,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         Message parsed(ctx);
         auto old = parsed.ensure_nested1();
         require_success(old);
-        populate_nested1(**old, view_of(nested_name), 25);
+        populate_nested1(*old, view_of(nested_name), 25);
 
         protocyte::SliceReader reader(encoded, writer.position());
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
@@ -2381,7 +2397,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         require_success(protocyte_message.set_f_string(view_of(string_bytes)));
         require_success(protocyte_message.set_f_bytes(view_of(bytes_data)));
         if (auto nested = protocyte_message.ensure_nested(); nested) {
-            populate_compat_nested(**nested, 417, view_of(nested_name));
+            populate_compat_nested(*nested, 417, view_of(nested_name));
         } else {
             require_success(nested);
         }
@@ -2444,7 +2460,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         CompatMessage protocyte_message(ctx);
 
         if (auto nested = protocyte_message.ensure_oneof_nested(); nested) {
-            populate_compat_nested(**nested, 90210, view_of(nested_description));
+            populate_compat_nested(*nested, 90210, view_of(nested_description));
         } else {
             require_success(nested);
         }
@@ -2795,7 +2811,7 @@ TEST_CASE("generated repeated fields accept contiguous range operations", "[smok
     };
     const int pointer_values[] = {7, 8, 9};
     require_success(message.mutable_r_int32_unpacked().assign(
-        PointerIntRange {pointer_values, pointer_values + sizeof(pointer_values) / sizeof(pointer_values[0])}));
+        PointerIntRange {pointer_values, pointer_values + std::size(pointer_values)}));
     check_scalar_sequence(message.r_int32_unpacked(), pointer_values);
 
     struct DataSizeIntRange {
@@ -2992,10 +3008,33 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                      protocyte::Result<int>>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {1}.and_then(ResultAndThenQualifier {})),
                                      protocyte::Result<int>>);
-        static_assert(!CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &>);
-        static_assert(!CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &>);
+        static_assert(CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &>);
+        static_assert(CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &>);
         static_assert(CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &&>);
-        static_assert(!CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &&>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MoveOnlyMemberProbe> &>().transform(
+                                       &MoveOnlyMemberProbe::child)),
+                                   protocyte::Result<MoveOnlyMember &>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Result<MoveOnlyMemberProbe> &>().transform(
+                             &MoveOnlyMemberProbe::child)),
+                         protocyte::Result<const MoveOnlyMember &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MoveOnlyMemberProbe> &&>().transform(
+                                       &MoveOnlyMemberProbe::child)),
+                                   protocyte::Result<MoveOnlyMember>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MemberInvokeProbe> &>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Result<int &>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Result<MemberInvokeProbe> &>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Result<const int &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MemberInvokeProbe> &&>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Result<int>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Result<MemberInvokeProbe> &&>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Result<int>>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {
                                          protocyte::unexpected(protocyte::ErrorCode::invalid_argument)}
                                                   .or_else(ResultErrorQualifier {})),
@@ -3112,10 +3151,33 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                                      protocyte::Optional<int>>);
         static_assert(std::is_same_v<decltype(protocyte::Optional<int> {}.and_then(OptionalAndThenQualifier {})),
                                      protocyte::Optional<int>>);
-        static_assert(!CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &>);
-        static_assert(!CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &>);
+        static_assert(CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &>);
+        static_assert(CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &>);
         static_assert(CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &&>);
-        static_assert(!CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &&>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MoveOnlyMemberProbe> &>().transform(
+                                       &MoveOnlyMemberProbe::child)),
+                                   protocyte::Optional<MoveOnlyMember &>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Optional<MoveOnlyMemberProbe> &>().transform(
+                             &MoveOnlyMemberProbe::child)),
+                         protocyte::Optional<const MoveOnlyMember &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MoveOnlyMemberProbe> &&>().transform(
+                                       &MoveOnlyMemberProbe::child)),
+                                   protocyte::Optional<MoveOnlyMember>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MemberInvokeProbe> &>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Optional<int &>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Optional<MemberInvokeProbe> &>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Optional<const int &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MemberInvokeProbe> &&>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Optional<int>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Optional<MemberInvokeProbe> &&>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Optional<int>>);
 
         protocyte::Optional<int> lvalue {};
         require_success(lvalue.emplace(10));
@@ -3214,6 +3276,96 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
                 .transform(&MoveOnlyMemberProbe::child);
         REQUIRE(move_only_member);
         CHECK(move_only_member->value == 43);
+    }
+}
+
+TEST_CASE("Result and Optional support non-owning reference values", "[smoke][runtime][references]") {
+    static_assert(std::same_as<protocyte::Result<int &>::value_type, int &>);
+    static_assert(std::same_as<protocyte::Result<const int &>::value_type, const int &>);
+    static_assert(std::same_as<protocyte::Optional<int &>::value_type, int &>);
+    static_assert(std::same_as<protocyte::Optional<const int &>::value_type, const int &>);
+    static_assert(!std::is_constructible_v<protocyte::Result<int &&>, int &&>);
+    static_assert(!std::is_constructible_v<protocyte::Result<const int &&>, const int &&>);
+    static_assert(!std::is_constructible_v<protocyte::Optional<int &&>, int &&>);
+    static_assert(!std::is_constructible_v<protocyte::Optional<const int &&>, const int &&>);
+
+    int first = 7;
+    int second = 11;
+    const int const_value = 13;
+    static_assert(CanConstructOptionalFrom<const int &>);
+    static_assert(!CanConstructOptionalFrom<int>);
+    static_assert(CanConstructResultFrom<const int &>);
+    static_assert(!CanConstructResultFrom<int>);
+    static_assert(CanAssignOptionalFrom<const int &>);
+    static_assert(!CanAssignOptionalFrom<int>);
+    static_assert(CanAssignResultFrom<const int &>);
+    static_assert(!CanAssignResultFrom<int>);
+
+    SECTION("reference Result stores aliases and assignment rebinds") {
+        protocyte::Result<int &> result {first};
+        REQUIRE(result);
+        CHECK(&result.value() == &first);
+        CHECK(*result == 7);
+
+        auto transformed = result.transform([](int &value) noexcept -> int & {
+            value += 1;
+            return value;
+        });
+        static_assert(std::same_as<decltype(transformed), protocyte::Result<int &>>);
+        REQUIRE(transformed);
+        CHECK(&transformed.value() == &first);
+        CHECK(first == 8);
+
+        protocyte::Result<int &> rebound {second};
+        result = rebound;
+        *result = 21;
+        CHECK(first == 8);
+        CHECK(second == 21);
+        CHECK(&result.value() == &second);
+
+        result = first;
+        *result = 34;
+        CHECK(first == 34);
+        CHECK(second == 21);
+        CHECK(&result.value() == &first);
+
+        const protocyte::Result<const int &> const_result {const_value};
+        REQUIRE(const_result);
+        CHECK(&const_result.value() == &const_value);
+    }
+
+    SECTION("reference Optional stores aliases and assignment rebinds") {
+        protocyte::Optional<int &> optional {first};
+        REQUIRE(optional);
+        CHECK(&optional.value() == &first);
+
+        auto transformed = optional.transform([](int &value) noexcept -> int & {
+            value += 2;
+            return value;
+        });
+        static_assert(std::same_as<decltype(transformed), protocyte::Optional<int &>>);
+        REQUIRE(transformed);
+        CHECK(&transformed.value() == &first);
+        CHECK(first == 9);
+
+        protocyte::Optional<int &> rebound {second};
+        optional = rebound;
+        *optional = 31;
+        CHECK(first == 9);
+        CHECK(second == 31);
+        CHECK(&optional.value() == &second);
+
+        optional = first;
+        *optional = 43;
+        CHECK(first == 43);
+        CHECK(second == 31);
+        CHECK(&optional.value() == &first);
+
+        protocyte::Optional<const int &> const_optional {const_value};
+        REQUIRE(const_optional);
+        CHECK(&const_optional.value() == &const_value);
+        const_optional.reset();
+        REQUIRE_FALSE(const_optional);
     }
 }
 
@@ -3558,15 +3710,15 @@ TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[s
 
     auto nested = message.ensure_nested1();
     require_success(nested);
-    require_success((*nested)->set_name(view_of(nested_name)));
-    require_success((*nested)->set_id(77));
+    require_success(nested->set_name(view_of(nested_name)));
+    require_success(nested->set_id(77));
 
-    auto inner = (*nested)->ensure_inner();
+    auto inner = nested->ensure_inner();
     require_success(inner);
-    require_success((*inner)->set_description(view_of(nested_description)));
-    require_success((*inner)->mutable_values().push_back(4.5f));
-    require_success((*inner)->mutable_values().push_back(5.5f));
-    require_success((*inner)->set_mode(InnerMode::C));
+    require_success(inner->set_description(view_of(nested_description)));
+    require_success(inner->mutable_values().push_back(4.5f));
+    require_success(inner->mutable_values().push_back(5.5f));
+    require_success(inner->set_mode(InnerMode::C));
 
     auto encoded_size = message.encoded_size();
     require_success(encoded_size);

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iterator>
 #include <string_view>
 
 #include "example.protocyte.hpp"
@@ -50,9 +51,8 @@ namespace protocyte_smoke::fixture {
 
     static_assert(sizeof(byte_array) == ::test::ultimate::BYTE_ARRAY_CAP);
     static_assert(sizeof(float_expr_array) == Message::FLOATISH_BOUND);
-    static_assert(sizeof(integer_array_values) / sizeof(integer_array_values[0]) == Message::INTEGER_ARRAY_CAP);
-    static_assert(sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]) ==
-                  Message::FIXED_INTEGER_ARRAY_CAP);
+    static_assert(std::size(integer_array_values) == Message::INTEGER_ARRAY_CAP);
+    static_assert(std::size(fixed_integer_array_values) == Message::FIXED_INTEGER_ARRAY_CAP);
 
     inline void *smoke_allocate(void *, size_t size, size_t) noexcept { return malloc(size); }
 
@@ -87,7 +87,7 @@ namespace protocyte_smoke::fixture {
     }
 
     inline protocyte::Status populate_required_fixed_array(Message &message, Config::Context &ctx) noexcept {
-        for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
+        for (size_t i = 0; i < std::size(fixed_integer_array_values); ++i) {
             if (const auto st = message.mutable_fixed_integer_array().push_back(fixed_integer_array_values[i]); !st) {
                 return st;
             }
@@ -161,7 +161,7 @@ namespace protocyte_smoke::fixture {
         if (!inner) {
             return protocyte::unexpected(inner.error());
         }
-        return populate_nested2(**inner, view_of(nested_description), 1.5f, 2.5f, InnerMode::B);
+        return populate_nested2(*inner, view_of(nested_description), 1.5f, 2.5f, InnerMode::B);
     }
 
     inline protocyte::Status insert_map_str_int32(Message &message, Config::Context &ctx) noexcept {
@@ -294,7 +294,7 @@ namespace protocyte_smoke::fixture {
         if (!nested) {
             return protocyte::unexpected(nested.error());
         }
-        if (const auto st = populate_nested1(**nested, view_of(nested_name), 25); !st) {
+        if (const auto st = populate_nested1(*nested, view_of(nested_name), 25); !st) {
             return st;
         }
 
@@ -321,13 +321,13 @@ namespace protocyte_smoke::fixture {
         if (!recursive) {
             return protocyte::unexpected(recursive.error());
         }
-        if (const auto st = (*recursive)->set_f_string(view_of(recursive_string)); !st) {
+        if (const auto st = recursive->set_f_string(view_of(recursive_string)); !st) {
             return st;
         }
-        if (const auto st = (*recursive)->set_f_int32(350); !st) {
+        if (const auto st = recursive->set_f_int32(350); !st) {
             return st;
         }
-        if (const auto st = populate_required_fixed_array(**recursive, ctx); !st) {
+        if (const auto st = populate_required_fixed_array(*recursive, ctx); !st) {
             return st;
         }
 
@@ -335,7 +335,7 @@ namespace protocyte_smoke::fixture {
         if (!nested_item) {
             return protocyte::unexpected(nested_item.error());
         }
-        if (const auto st = populate_nested2(**nested_item, view_of(nested_description), 36.5f, 37.5f, InnerMode::A);
+        if (const auto st = populate_nested2(*nested_item, view_of(nested_description), 36.5f, 37.5f, InnerMode::A);
             !st) {
             return st;
         }
@@ -398,16 +398,16 @@ namespace protocyte_smoke::fixture {
         if (!crazy_fixed_repeated) {
             return protocyte::unexpected(crazy_fixed_repeated.error());
         }
-        if (const auto st = populate_fixed_repeated_bytes_holder(**crazy_fixed_repeated, ctx); !st) {
+        if (const auto st = populate_fixed_repeated_bytes_holder(*crazy_fixed_repeated, ctx); !st) {
             return st;
         }
 
-        for (size_t i = 0; i < sizeof(integer_array_values) / sizeof(integer_array_values[0]); ++i) {
+        for (size_t i = 0; i < std::size(integer_array_values); ++i) {
             if (const auto st = message.mutable_integer_array().push_back(integer_array_values[i]); !st) {
                 return st;
             }
         }
-        for (size_t i = 0; i < sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0]); ++i) {
+        for (size_t i = 0; i < std::size(fixed_integer_array_values); ++i) {
             if (const auto st = message.mutable_fixed_integer_array().push_back(fixed_integer_array_values[i]); !st) {
                 return st;
             }
@@ -417,7 +417,7 @@ namespace protocyte_smoke::fixture {
         if (!deep) {
             return protocyte::unexpected(deep.error());
         }
-        return populate_deep(**deep, ctx);
+        return populate_deep(*deep, ctx);
     }
 
 } // namespace protocyte_smoke::fixture

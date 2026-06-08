@@ -50,7 +50,7 @@ namespace protocyte_smoke::benchmark_fixture {
         if (!inner) {
             return protocyte::unexpected(inner.error());
         }
-        return populate_nested2(**inner, view_of(nested_description), 1.5f, 2.5f, ProtocyteInnerMode::B);
+        return populate_nested2(*inner, view_of(nested_description), 1.5f, 2.5f, ProtocyteInnerMode::B);
     }
 
     inline protocyte::Status populate_fixed_repeated_bytes_holder(ProtocyteFixedRepeatedBytesHolder &value,
@@ -201,7 +201,7 @@ namespace protocyte_smoke::benchmark_fixture {
         if (!nested) {
             return protocyte::unexpected(nested.error());
         }
-        if (const auto st = populate_nested1(**nested, view_of(nested_name), 25); !st) {
+        if (const auto st = populate_nested1(*nested, view_of(nested_name), 25); !st) {
             return st;
         }
         if (const auto st = message.set_oneof_bytes(view_of(oneof_bytes)); !st) {
@@ -227,29 +227,29 @@ namespace protocyte_smoke::benchmark_fixture {
         if (!recursive) {
             return protocyte::unexpected(recursive.error());
         }
-        if (const auto st = (*recursive)->set_f_string(view_of(recursive_string)); !st) {
+        if (const auto st = recursive->set_f_string(view_of(recursive_string)); !st) {
             return st;
         }
-        if (const auto st = (*recursive)->set_f_int32(350); !st) {
+        if (const auto st = recursive->set_f_int32(350); !st) {
             return st;
         }
         for (const auto value : fixed_integer_array_values) {
-            if (const auto st = (*recursive)->mutable_fixed_integer_array().push_back(value); !st) {
+            if (const auto st = recursive->mutable_fixed_integer_array().push_back(value); !st) {
                 return st;
             }
         }
         if (const auto st =
-                append_bytes((*recursive)->mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
+                append_bytes(recursive->mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_0));
             !st) {
             return st;
         }
         if (const auto st =
-                append_bytes((*recursive)->mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_2));
+                append_bytes(recursive->mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_2));
             !st) {
             return st;
         }
         if (const auto st =
-                append_bytes((*recursive)->mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_3));
+                append_bytes(recursive->mutable_fixed_repeated_byte_array(), ctx, view_of(repeated_bytes_3));
             !st) {
             return st;
         }
@@ -259,7 +259,7 @@ namespace protocyte_smoke::benchmark_fixture {
             return protocyte::unexpected(nested_item.error());
         }
         if (const auto st =
-                populate_nested2(**nested_item, view_of(nested_description), 36.5f, 37.5f, ProtocyteInnerMode::A);
+                populate_nested2(*nested_item, view_of(nested_description), 36.5f, 37.5f, ProtocyteInnerMode::A);
             !st) {
             return st;
         }
@@ -321,7 +321,7 @@ namespace protocyte_smoke::benchmark_fixture {
         if (!crazy_fixed_repeated) {
             return protocyte::unexpected(crazy_fixed_repeated.error());
         }
-        if (const auto st = populate_fixed_repeated_bytes_holder(**crazy_fixed_repeated, ctx); !st) {
+        if (const auto st = populate_fixed_repeated_bytes_holder(*crazy_fixed_repeated, ctx); !st) {
             return st;
         }
         for (const auto value : integer_array_values) {
@@ -339,7 +339,7 @@ namespace protocyte_smoke::benchmark_fixture {
         if (!deep) {
             return protocyte::unexpected(deep.error());
         }
-        return populate_deep(**deep, ctx);
+        return populate_deep(*deep, ctx);
     }
 
 } // namespace protocyte_smoke::benchmark_fixture

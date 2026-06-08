@@ -228,9 +228,8 @@ namespace test::crosspkg {
                 return st;
             }
             if (other.has_nested()) {
-                if (const auto st = ensure_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                        return ensured->copy_from(*other.nested());
-                    });
+                if (const auto st = ensure_nested().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.nested()); });
                     !st) {
                     return st;
                 }
@@ -298,15 +297,12 @@ namespace test::crosspkg {
         const ::test::crosspkg::CrossPackageConstants_Nested<Config> *nested() const noexcept {
             return has_nested() ? nested_.operator->() : nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>>>
-        ensure_nested() noexcept {
+        ::protocyte::Result<::test::crosspkg::CrossPackageConstants_Nested<Config> &> ensure_nested() noexcept {
             if (nested_.has_value()) {
-                return ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {*nested_};
+                return *nested_;
             }
             return nested_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {
-                    return ::protocyte::Ref<::test::crosspkg::CrossPackageConstants_Nested<Config>> {*nested_};
-                });
+                [this]() noexcept -> ::test::crosspkg::CrossPackageConstants_Nested<Config> & { return *nested_; });
         }
         void clear_nested() noexcept { nested_.reset(); }
 

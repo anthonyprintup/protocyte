@@ -373,9 +373,8 @@ namespace test::ultimate {
                 return st;
             }
             if (other.has_inner()) {
-                if (const auto st = ensure_inner().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                        return ensured->copy_from(*other.inner());
-                    });
+                if (const auto st = ensure_inner().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.inner()); });
                     !st) {
                     return st;
                 }
@@ -439,18 +438,14 @@ namespace test::ultimate {
         const ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> *inner() const noexcept {
             return has_inner() ? inner_.operator->() : nullptr;
         }
-        ::protocyte::Result<
-            ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>>>
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> &>
         ensure_inner() noexcept {
             if (inner_.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> {
-                    *inner_};
+                return *inner_;
             }
             return inner_.emplace(*ctx_).transform(
-                [this]() noexcept
-                    -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> {
-                    return ::protocyte::Ref<
-                        ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> {*inner_};
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> & {
+                    return *inner_;
                 });
         }
         void clear_inner() noexcept { inner_.reset(); }
@@ -661,9 +656,7 @@ namespace test::ultimate {
                         typename Config::Bytes value {ctx_};
                         if (const auto st =
                                 ::protocyte::read_bytes_field<Config>(*ctx_, reader, wire_type, field_number, value)
-                                    .and_then([&]() noexcept -> ::protocyte::Status {
-                                        return values_.push_back(::protocyte::move(value));
-                                    });
+                                    .and_then([&]() noexcept { return values_.push_back(::protocyte::move(value)); });
                             !st) {
                             return st;
                         }
@@ -786,10 +779,10 @@ namespace test::ultimate {
                                                            field_number);
                         }
                         typename Config::Bytes value {ctx_};
-                        if (const auto st = ::protocyte::read_bytes<Config>(*ctx_, reader, value)
-                                                .and_then([&]() noexcept -> ::protocyte::Status {
-                                                    return values_.push_back(::protocyte::move(value));
-                                                });
+                        if (const auto st =
+                                ::protocyte::read_bytes<Config>(*ctx_, reader, value).and_then([&]() noexcept {
+                                    return values_.push_back(::protocyte::move(value));
+                                });
                             !st) {
                             return st;
                         }
@@ -911,10 +904,10 @@ namespace test::ultimate {
                                                            field_number);
                         }
                         typename Config::Bytes value {ctx_};
-                        if (const auto st = ::protocyte::read_bytes<Config>(*ctx_, reader, value)
-                                                .and_then([&]() noexcept -> ::protocyte::Status {
-                                                    return values_.push_back(::protocyte::move(value));
-                                                });
+                        if (const auto st =
+                                ::protocyte::read_bytes<Config>(*ctx_, reader, value).and_then([&]() noexcept {
+                                    return values_.push_back(::protocyte::move(value));
+                                });
                             !st) {
                             return st;
                         }
@@ -1950,9 +1943,8 @@ namespace test::ultimate {
                 return st;
             }
             if (other.has_nested1()) {
-                if (const auto st = ensure_nested1().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                        return ensured->copy_from(*other.nested1());
-                    });
+                if (const auto st = ensure_nested1().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.nested1()); });
                     !st) {
                     return st;
                 }
@@ -1975,9 +1967,8 @@ namespace test::ultimate {
                 return st;
             }
             if (other.has_recursive_self()) {
-                if (const auto st = ensure_recursive_self().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                        return ensured->copy_from(*other.recursive_self());
-                    });
+                if (const auto st = ensure_recursive_self().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.recursive_self()); });
                     !st) {
                     return st;
                 }
@@ -2005,10 +1996,8 @@ namespace test::ultimate {
                 clear_opt_string();
             }
             if (other.has_extreme_nesting()) {
-                if (const auto st =
-                        ensure_extreme_nesting().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                            return ensured->copy_from(*other.extreme_nesting());
-                        });
+                if (const auto st = ensure_extreme_nesting().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.extreme_nesting()); });
                     !st) {
                     return st;
                 }
@@ -2058,9 +2047,8 @@ namespace test::ultimate {
                     break;
                 }
                 case Special_oneofCase::oneof_msg: {
-                    if (const auto st = ensure_oneof_msg().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                            return ensured->copy_from(*other.oneof_msg());
-                        });
+                    if (const auto st = ensure_oneof_msg().and_then(
+                            [&](auto &ensured) noexcept { return ensured.copy_from(*other.oneof_msg()); });
                         !st) {
                         return st;
                     }
@@ -2098,30 +2086,26 @@ namespace test::ultimate {
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_repeated_bytes: {
-                    if (const auto st =
-                            ensure_crazy_repeated_bytes().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ensured->copy_from(*other.crazy_repeated_bytes());
-                            });
+                    if (const auto st = ensure_crazy_repeated_bytes().and_then(
+                            [&](auto &ensured) noexcept { return ensured.copy_from(*other.crazy_repeated_bytes()); });
                         !st) {
                         return st;
                     }
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes: {
-                    if (const auto st = ensure_crazy_bounded_repeated_bytes().and_then(
-                            [&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ensured->copy_from(*other.crazy_bounded_repeated_bytes());
-                            });
+                    if (const auto st = ensure_crazy_bounded_repeated_bytes().and_then([&](auto &ensured) noexcept {
+                            return ensured.copy_from(*other.crazy_bounded_repeated_bytes());
+                        });
                         !st) {
                         return st;
                     }
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes: {
-                    if (const auto st = ensure_crazy_fixed_repeated_bytes().and_then(
-                            [&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ensured->copy_from(*other.crazy_fixed_repeated_bytes());
-                            });
+                    if (const auto st = ensure_crazy_fixed_repeated_bytes().and_then([&](auto &ensured) noexcept {
+                            return ensured.copy_from(*other.crazy_fixed_repeated_bytes());
+                        });
                         !st) {
                         return st;
                     }
@@ -2386,14 +2370,13 @@ namespace test::ultimate {
         const ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> *nested1() const noexcept {
             return has_nested1() ? nested1_.operator->() : nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>>
-        ensure_nested1() noexcept {
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> &> ensure_nested1() noexcept {
             if (nested1_.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {*nested1_};
+                return *nested1_;
             }
             return nested1_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
-                    return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {*nested1_};
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> & {
+                    return *nested1_;
                 });
         }
         void clear_nested1() noexcept { nested1_.reset(); }
@@ -2455,7 +2438,7 @@ namespace test::ultimate {
             return has_oneof_msg() && special_oneof.oneof_msg.has_value() ? special_oneof.oneof_msg.operator->() :
                                                                             nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>>
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> &>
         ensure_oneof_msg() noexcept {
             if (!has_oneof_msg()) {
                 clear_special_oneof();
@@ -2464,13 +2447,11 @@ namespace test::ultimate {
             }
             special_oneof_case_ = Special_oneofCase::oneof_msg;
             if (special_oneof.oneof_msg.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
-                    *special_oneof.oneof_msg};
+                return *special_oneof.oneof_msg;
             }
             return special_oneof.oneof_msg.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
-                    return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> {
-                        *special_oneof.oneof_msg};
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config> & {
+                    return *special_oneof.oneof_msg;
                 });
         }
 
@@ -2587,7 +2568,7 @@ namespace test::ultimate {
                        crazy_bytes_oneof.crazy_repeated_bytes.operator->() :
                        nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>>>
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config> &>
         ensure_crazy_repeated_bytes() noexcept {
             if (!has_crazy_repeated_bytes()) {
                 clear_crazy_bytes_oneof();
@@ -2596,14 +2577,11 @@ namespace test::ultimate {
             }
             crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_repeated_bytes;
             if (crazy_bytes_oneof.crazy_repeated_bytes.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
-                    *crazy_bytes_oneof.crazy_repeated_bytes};
+                return *crazy_bytes_oneof.crazy_repeated_bytes;
             }
             return crazy_bytes_oneof.crazy_repeated_bytes.emplace(*ctx_).transform(
-                [this]() noexcept
-                    -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
-                    return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config>> {
-                        *crazy_bytes_oneof.crazy_repeated_bytes};
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage_RepeatedBytesHolder<Config> & {
+                    return *crazy_bytes_oneof.crazy_repeated_bytes;
                 });
         }
 
@@ -2616,8 +2594,7 @@ namespace test::ultimate {
                        crazy_bytes_oneof.crazy_bounded_repeated_bytes.operator->() :
                        nullptr;
         }
-        ::protocyte::Result<
-            ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>>>
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config> &>
         ensure_crazy_bounded_repeated_bytes() noexcept {
             if (!has_crazy_bounded_repeated_bytes()) {
                 clear_crazy_bytes_oneof();
@@ -2626,15 +2603,11 @@ namespace test::ultimate {
             }
             crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes;
             if (crazy_bytes_oneof.crazy_bounded_repeated_bytes.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
-                    *crazy_bytes_oneof.crazy_bounded_repeated_bytes};
+                return *crazy_bytes_oneof.crazy_bounded_repeated_bytes;
             }
             return crazy_bytes_oneof.crazy_bounded_repeated_bytes.emplace(*ctx_).transform(
-                [this]() noexcept
-                    -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
-                    return ::protocyte::Ref<
-                        ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config>> {
-                        *crazy_bytes_oneof.crazy_bounded_repeated_bytes};
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage_BoundedRepeatedBytesHolder<Config> & {
+                    return *crazy_bytes_oneof.crazy_bounded_repeated_bytes;
                 });
         }
 
@@ -2647,7 +2620,7 @@ namespace test::ultimate {
                        crazy_bytes_oneof.crazy_fixed_repeated_bytes.operator->() :
                        nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>>
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config> &>
         ensure_crazy_fixed_repeated_bytes() noexcept {
             if (!has_crazy_fixed_repeated_bytes()) {
                 clear_crazy_bytes_oneof();
@@ -2656,14 +2629,11 @@ namespace test::ultimate {
             }
             crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes;
             if (crazy_bytes_oneof.crazy_fixed_repeated_bytes.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
-                    *crazy_bytes_oneof.crazy_fixed_repeated_bytes};
+                return *crazy_bytes_oneof.crazy_fixed_repeated_bytes;
             }
             return crazy_bytes_oneof.crazy_fixed_repeated_bytes.emplace(*ctx_).transform(
-                [this]() noexcept
-                    -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
-                    return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>> {
-                        *crazy_bytes_oneof.crazy_fixed_repeated_bytes};
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config> & {
+                    return *crazy_bytes_oneof.crazy_fixed_repeated_bytes;
                 });
         }
 
@@ -2718,8 +2688,7 @@ namespace test::ultimate {
         const ::test::ultimate::UltimateComplexMessage<Config> *recursive_self() const noexcept {
             return has_recursive_self() ? recursive_self_.operator->() : nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage<Config>>>
-        ensure_recursive_self() noexcept {
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage<Config> &> ensure_recursive_self() noexcept {
             return recursive_self_.ensure();
         }
         void clear_recursive_self() noexcept { recursive_self_.reset(); }
@@ -2797,21 +2766,15 @@ namespace test::ultimate {
         extreme_nesting() const noexcept {
             return has_extreme_nesting() ? extreme_nesting_.operator->() : nullptr;
         }
-        ::protocyte::Result<
-            ::protocyte::Ref<::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>>>
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config> &>
         ensure_extreme_nesting() noexcept {
             if (extreme_nesting_.has_value()) {
-                return ::protocyte::Ref<
-                    ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>> {
-                    *extreme_nesting_};
+                return *extreme_nesting_;
             }
             return extreme_nesting_.emplace(*ctx_).transform(
                 [this]() noexcept
-                    -> ::protocyte::Ref<
-                        ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>> {
-                    return ::protocyte::Ref<
-                        ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>> {
-                        *extreme_nesting_};
+                    -> ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config> & {
+                    return *extreme_nesting_;
                 });
         }
         void clear_extreme_nesting() noexcept { extreme_nesting_.reset(); }
@@ -3738,7 +3701,7 @@ namespace test::ultimate {
                         }
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> value {*ctx_};
                         if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, value)
-                                                .and_then([&]() noexcept -> ::protocyte::Status {
+                                                .and_then([&]() noexcept {
                                                     return lots_of_nested_.push_back(::protocyte::move(value));
                                                 });
                             !st) {
@@ -4020,7 +3983,7 @@ namespace test::ultimate {
                         typename Config::Bytes value {ctx_};
                         if (const auto st =
                                 ::protocyte::read_bytes_field<Config>(*ctx_, reader, wire_type, field_number, value)
-                                    .and_then([&]() noexcept -> ::protocyte::Status {
+                                    .and_then([&]() noexcept {
                                         return repeated_byte_array_.push_back(::protocyte::move(value));
                                     });
                             !st) {
@@ -4035,10 +3998,9 @@ namespace test::ultimate {
                         }
                         typename Config::Bytes value {ctx_};
                         if (const auto st =
-                                ::protocyte::read_bytes<Config>(*ctx_, reader, value)
-                                    .and_then([&]() noexcept -> ::protocyte::Status {
-                                        return bounded_repeated_byte_array_.push_back(::protocyte::move(value));
-                                    });
+                                ::protocyte::read_bytes<Config>(*ctx_, reader, value).and_then([&]() noexcept {
+                                    return bounded_repeated_byte_array_.push_back(::protocyte::move(value));
+                                });
                             !st) {
                             return st;
                         }
@@ -4051,10 +4013,9 @@ namespace test::ultimate {
                         }
                         typename Config::Bytes value {ctx_};
                         if (const auto st =
-                                ::protocyte::read_bytes<Config>(*ctx_, reader, value)
-                                    .and_then([&]() noexcept -> ::protocyte::Status {
-                                        return fixed_repeated_byte_array_.push_back(::protocyte::move(value));
-                                    });
+                                ::protocyte::read_bytes<Config>(*ctx_, reader, value).and_then([&]() noexcept {
+                                    return fixed_repeated_byte_array_.push_back(::protocyte::move(value));
+                                });
                             !st) {
                             return st;
                         }
@@ -6043,8 +6004,8 @@ namespace test::ultimate {
                 return st;
             }
             if (other.has_ref()) {
-                if (const auto st = ensure_ref().and_then(
-                        [&](auto ensured) noexcept -> ::protocyte::Status { return ensured->copy_from(*other.ref()); });
+                if (const auto st =
+                        ensure_ref().and_then([&](auto &ensured) noexcept { return ensured.copy_from(*other.ref()); });
                     !st) {
                     return st;
                 }
@@ -6101,14 +6062,12 @@ namespace test::ultimate {
         const ::test::ultimate::UltimateComplexMessage<Config> *ref() const noexcept {
             return has_ref() ? ref_.operator->() : nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::UltimateComplexMessage<Config>>> ensure_ref() noexcept {
+        ::protocyte::Result<::test::ultimate::UltimateComplexMessage<Config> &> ensure_ref() noexcept {
             if (ref_.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage<Config>> {*ref_};
+                return *ref_;
             }
             return ref_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::test::ultimate::UltimateComplexMessage<Config>> {
-                    return ::protocyte::Ref<::test::ultimate::UltimateComplexMessage<Config>> {*ref_};
-                });
+                [this]() noexcept -> ::test::ultimate::UltimateComplexMessage<Config> & { return *ref_; });
         }
         void clear_ref() noexcept { ref_.reset(); }
 
@@ -6434,9 +6393,8 @@ namespace test::ultimate {
                 return st;
             }
             if (other.has_nested()) {
-                if (const auto st = ensure_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                        return ensured->copy_from(*other.nested());
-                    });
+                if (const auto st = ensure_nested().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.nested()); });
                     !st) {
                     return st;
                 }
@@ -6504,15 +6462,12 @@ namespace test::ultimate {
         const ::test::ultimate::CrossMessageConstants_Nested<Config> *nested() const noexcept {
             return has_nested() ? nested_.operator->() : nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>>>
-        ensure_nested() noexcept {
+        ::protocyte::Result<::test::ultimate::CrossMessageConstants_Nested<Config> &> ensure_nested() noexcept {
             if (nested_.has_value()) {
-                return ::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>> {*nested_};
+                return *nested_;
             }
             return nested_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>> {
-                    return ::protocyte::Ref<::test::ultimate::CrossMessageConstants_Nested<Config>> {*nested_};
-                });
+                [this]() noexcept -> ::test::ultimate::CrossMessageConstants_Nested<Config> & { return *nested_; });
         }
         void clear_nested() noexcept { nested_.reset(); }
 
