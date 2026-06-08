@@ -564,18 +564,19 @@ namespace protocyte {
             }
         }
 
-        template<class F> constexpr auto transform(F &&f) && noexcept(
-            noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(value_))) &&
-            noexcept(Result<WrapperValueT<InvokeResult<F, T &&>>, E> {protocyte::unexpected(protocyte::move(error_))}))
-            -> Result<WrapperValueT<InvokeResult<F, T &&>>, E>
-            requires(TransformValueType<WrapperValueT<InvokeResult<F, T &&>>, F, T &&> &&
+        template<class F> constexpr auto
+        transform(F &&f) && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(value_))) &&
+                                     noexcept(Result<::std::remove_cvref_t<InvokeResult<F, T &&>>, E> {
+                                         protocyte::unexpected(protocyte::move(error_))}))
+            -> Result<::std::remove_cvref_t<InvokeResult<F, T &&>>, E>
+            requires(TransformValueType<::std::remove_cvref_t<InvokeResult<F, T &&>>, F, T &&> &&
                      requires(F &&fn, T &&value_ref, E &&error_ref) {
                          protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<T>(value_ref));
-                         Result<WrapperValueT<InvokeResult<F, T &&>>, E> {
+                         Result<::std::remove_cvref_t<InvokeResult<F, T &&>>, E> {
                              protocyte::unexpected(protocyte::forward<E>(error_ref))};
                      })
         {
-            using U = WrapperValueT<InvokeResult<F, T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, T &&>>;
             if (!ok_) {
                 return Result<U, E> {protocyte::unexpected(protocyte::move(error_))};
             }
@@ -589,17 +590,17 @@ namespace protocyte {
 
         template<class F> constexpr auto transform(F &&f) const && noexcept(
             noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(value_))) &&
-            noexcept(Result<WrapperValueT<InvokeResult<F, const T &&>>, E> {
+            noexcept(Result<::std::remove_cvref_t<InvokeResult<F, const T &&>>, E> {
                 protocyte::unexpected(protocyte::move(error_))}))
-            -> Result<WrapperValueT<InvokeResult<F, const T &&>>, E>
-            requires(TransformValueType<WrapperValueT<InvokeResult<F, const T &&>>, F, const T &&> &&
+            -> Result<::std::remove_cvref_t<InvokeResult<F, const T &&>>, E>
+            requires(TransformValueType<::std::remove_cvref_t<InvokeResult<F, const T &&>>, F, const T &&> &&
                      requires(F &&fn, const T &&value_ref, const E &&error_ref) {
                          protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<const T>(value_ref));
-                         Result<WrapperValueT<InvokeResult<F, const T &&>>, E> {
+                         Result<::std::remove_cvref_t<InvokeResult<F, const T &&>>, E> {
                              protocyte::unexpected(protocyte::forward<const E>(error_ref))};
                      })
         {
-            using U = WrapperValueT<InvokeResult<F, const T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, const T &&>>;
             if (!ok_) {
                 return Result<U, E> {protocyte::unexpected(protocyte::move(error_))};
             }
@@ -2236,14 +2237,14 @@ namespace protocyte {
 
         template<class F> constexpr auto
         transform(F &&f) && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr()))))
-            -> Optional<WrapperValueT<InvokeResult<F, T &&>>>
-            requires(!::std::is_void_v<WrapperValueT<InvokeResult<F, T &&>>> &&
-                     TransformValueType<WrapperValueT<InvokeResult<F, T &&>>, F, T &&> &&
+            -> Optional<::std::remove_cvref_t<InvokeResult<F, T &&>>>
+            requires(!::std::is_void_v<::std::remove_cvref_t<InvokeResult<F, T &&>>> &&
+                     TransformValueType<::std::remove_cvref_t<InvokeResult<F, T &&>>, F, T &&> &&
                      requires(F &&fn, T &&value_ref) {
                          protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<T>(value_ref));
                      })
         {
-            using U = WrapperValueT<InvokeResult<F, T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, T &&>>;
             Optional<U> out {};
             if (has_) {
                 static_cast<void>(out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr()))));
@@ -2254,14 +2255,14 @@ namespace protocyte {
         template<class F>
         constexpr auto transform(F &&f) const && noexcept(noexcept(protocyte::invoke(protocyte::forward<F>(f),
                                                                                      protocyte::move(*ptr()))))
-            -> Optional<WrapperValueT<InvokeResult<F, const T &&>>>
-            requires(!::std::is_void_v<WrapperValueT<InvokeResult<F, const T &&>>> &&
-                     TransformValueType<WrapperValueT<InvokeResult<F, const T &&>>, F, const T &&> &&
+            -> Optional<::std::remove_cvref_t<InvokeResult<F, const T &&>>>
+            requires(!::std::is_void_v<::std::remove_cvref_t<InvokeResult<F, const T &&>>> &&
+                     TransformValueType<::std::remove_cvref_t<InvokeResult<F, const T &&>>, F, const T &&> &&
                      requires(F &&fn, const T &&value_ref) {
                          protocyte::invoke(protocyte::forward<F>(fn), protocyte::forward<const T>(value_ref));
                      })
         {
-            using U = WrapperValueT<InvokeResult<F, const T &&>>;
+            using U = ::std::remove_cvref_t<InvokeResult<F, const T &&>>;
             Optional<U> out {};
             if (has_) {
                 static_cast<void>(out.emplace(protocyte::invoke(protocyte::forward<F>(f), protocyte::move(*ptr()))));

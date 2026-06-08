@@ -3011,7 +3011,6 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         static_assert(CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &>);
         static_assert(CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &>);
         static_assert(CanTransformMoveOnlyMember<protocyte::Result<MoveOnlyMemberProbe> &&>);
-        static_assert(CanTransformMoveOnlyMember<const protocyte::Result<MoveOnlyMemberProbe> &&>);
         static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MoveOnlyMemberProbe> &>().transform(
                                        &MoveOnlyMemberProbe::child)),
                                    protocyte::Result<MoveOnlyMember &>>);
@@ -3019,6 +3018,23 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
             std::same_as<decltype(protocyte::declval<const protocyte::Result<MoveOnlyMemberProbe> &>().transform(
                              &MoveOnlyMemberProbe::child)),
                          protocyte::Result<const MoveOnlyMember &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MoveOnlyMemberProbe> &&>().transform(
+                                       &MoveOnlyMemberProbe::child)),
+                                   protocyte::Result<MoveOnlyMember>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MemberInvokeProbe> &>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Result<int &>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Result<MemberInvokeProbe> &>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Result<const int &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Result<MemberInvokeProbe> &&>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Result<int>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Result<MemberInvokeProbe> &&>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Result<int>>);
         static_assert(std::is_same_v<decltype(protocyte::Result<int> {
                                          protocyte::unexpected(protocyte::ErrorCode::invalid_argument)}
                                                   .or_else(ResultErrorQualifier {})),
@@ -3138,7 +3154,6 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
         static_assert(CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &>);
         static_assert(CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &>);
         static_assert(CanTransformMoveOnlyMember<protocyte::Optional<MoveOnlyMemberProbe> &&>);
-        static_assert(CanTransformMoveOnlyMember<const protocyte::Optional<MoveOnlyMemberProbe> &&>);
         static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MoveOnlyMemberProbe> &>().transform(
                                        &MoveOnlyMemberProbe::child)),
                                    protocyte::Optional<MoveOnlyMember &>>);
@@ -3146,6 +3161,23 @@ TEST_CASE("monadic runtime operations stay lazy and preserve overload flexibilit
             std::same_as<decltype(protocyte::declval<const protocyte::Optional<MoveOnlyMemberProbe> &>().transform(
                              &MoveOnlyMemberProbe::child)),
                          protocyte::Optional<const MoveOnlyMember &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MoveOnlyMemberProbe> &&>().transform(
+                                       &MoveOnlyMemberProbe::child)),
+                                   protocyte::Optional<MoveOnlyMember>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MemberInvokeProbe> &>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Optional<int &>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Optional<MemberInvokeProbe> &>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Optional<const int &>>);
+        static_assert(std::same_as<decltype(protocyte::declval<protocyte::Optional<MemberInvokeProbe> &&>().transform(
+                                       &MemberInvokeProbe::value)),
+                                   protocyte::Optional<int>>);
+        static_assert(
+            std::same_as<decltype(protocyte::declval<const protocyte::Optional<MemberInvokeProbe> &&>().transform(
+                             &MemberInvokeProbe::value)),
+                         protocyte::Optional<int>>);
 
         protocyte::Optional<int> lvalue {};
         require_success(lvalue.emplace(10));
