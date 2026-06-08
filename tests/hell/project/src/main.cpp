@@ -70,7 +70,7 @@ int main() {
     if (auto ensured = envelope->ensure_header(); !ensured) {
         std::cerr << "failed to create envelope header\n";
         return EXIT_FAILURE;
-    } else if (const auto st = ensured->get().copy_from(*header); !st) {
+    } else if (const auto st = ensured.value().copy_from(*header); !st) {
         std::cerr << "failed to copy header into envelope\n";
         return EXIT_FAILURE;
     }
