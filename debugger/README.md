@@ -7,7 +7,7 @@ This directory contains LLDB visualizers for the generated Protocyte runtime:
 - `protocyte::Vector<T, Config>`: shows size/capacity and expandable indexed elements.
 - `HashMap<K, V, Config>`: shows `key => value` entries when expanded.
 - Generated message oneofs: optional tagged-union view for generated message types.
-- `Status`, `Error`, `Result<T>`, `Optional<T>`, `Ref<T>`, `Box<T, Config>`, and the slice reader/writer types get compact summaries.
+- `Status`, `Error`, `Result<T>`, `Result<T&>`, `Optional<T>`, `Optional<T&>`, `Box<T, Config>`, and the slice reader/writer types get compact summaries.
 
 ## Plain LLDB
 

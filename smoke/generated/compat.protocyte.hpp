@@ -435,9 +435,8 @@ namespace protocyte_smoke::test::compat {
                 return st;
             }
             if (other.has_nested()) {
-                if (const auto st = ensure_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                        return ensured->copy_from(*other.nested());
-                    });
+                if (const auto st = ensure_nested().and_then(
+                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.nested()); });
                     !st) {
                     return st;
                 }
@@ -487,10 +486,8 @@ namespace protocyte_smoke::test::compat {
                     break;
                 }
                 case Special_oneofCase::oneof_nested: {
-                    if (const auto st =
-                            ensure_oneof_nested().and_then([&](auto ensured) noexcept -> ::protocyte::Status {
-                                return ensured->copy_from(*other.oneof_nested());
-                            });
+                    if (const auto st = ensure_oneof_nested().and_then(
+                            [&](auto &ensured) noexcept { return ensured.copy_from(*other.oneof_nested()); });
                         !st) {
                         return st;
                     }
@@ -706,14 +703,13 @@ namespace protocyte_smoke::test::compat {
         const ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> *nested() const noexcept {
             return has_nested() ? nested_.operator->() : nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>
-        ensure_nested() noexcept {
+        ::protocyte::Result<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> &> ensure_nested() noexcept {
             if (nested_.has_value()) {
-                return ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {*nested_};
+                return *nested_;
             }
             return nested_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                    return ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {*nested_};
+                [this]() noexcept -> ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> & {
+                    return *nested_;
                 });
         }
         void clear_nested() noexcept { nested_.reset(); }
@@ -798,7 +794,7 @@ namespace protocyte_smoke::test::compat {
                        special_oneof.oneof_nested.operator->() :
                        nullptr;
         }
-        ::protocyte::Result<::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>>
+        ::protocyte::Result<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> &>
         ensure_oneof_nested() noexcept {
             if (!has_oneof_nested()) {
                 clear_special_oneof();
@@ -807,13 +803,11 @@ namespace protocyte_smoke::test::compat {
             }
             special_oneof_case_ = Special_oneofCase::oneof_nested;
             if (special_oneof.oneof_nested.has_value()) {
-                return ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                    *special_oneof.oneof_nested};
+                return *special_oneof.oneof_nested;
             }
             return special_oneof.oneof_nested.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                    return ::protocyte::Ref<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                        *special_oneof.oneof_nested};
+                [this]() noexcept -> ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> & {
+                    return *special_oneof.oneof_nested;
                 });
         }
 

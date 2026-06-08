@@ -91,6 +91,63 @@ def _pointee_type(pointer):
     return pointer.GetType().GetPointeeType()
 
 
+def _type_name(value_type):
+    for method_name in ("GetDisplayTypeName", "GetName"):
+        method = getattr(value_type, method_name, None)
+        if callable(method):
+            try:
+                name = method()
+            except Exception:
+                continue
+            if name:
+                return name
+    return ""
+
+
+def _first_template_argument(type_name):
+    start = type_name.find("<")
+    if start < 0:
+        return ""
+    depth = 0
+    for index in range(start + 1, len(type_name)):
+        char = type_name[index]
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            if depth == 0:
+                return type_name[start + 1 : index].strip()
+            depth -= 1
+        elif char == "," and depth == 0:
+            return type_name[start + 1 : index].strip()
+    return ""
+
+
+def _type_name_is_lvalue_reference(type_name):
+    normalized = type_name.replace(" ", "")
+    return normalized.endswith("&") and not normalized.endswith("&&")
+
+
+def _first_template_argument_is_lvalue_reference(value):
+    try:
+        value_type = value.GetType().GetTemplateArgumentType(0)
+    except Exception:
+        value_type = lldb.SBType()
+    if value_type.IsValid():
+        is_reference_type = getattr(value_type, "IsReferenceType", None)
+        if callable(is_reference_type):
+            try:
+                if is_reference_type():
+                    return True
+            except Exception:
+                pass
+        if _type_name_is_lvalue_reference(_type_name(value_type)):
+            return True
+
+    return _type_name_is_lvalue_reference(
+        _first_template_argument(value.GetTypeName() or "")
+    )
+
+
 def _read_process_memory(value, address, size):
     if address == 0 or size == 0:
         return b""
@@ -114,7 +171,9 @@ def _ascii_preview(data):
     out = []
     for byte in data:
         char = chr(byte)
-        out.append(char if char in _string.printable and char not in "\r\n\t\x0b\x0c" else ".")
+        out.append(
+            char if char in _string.printable and char not in "\r\n\t\x0b\x0c" else "."
+        )
     return "".join(out)
 
 
@@ -127,7 +186,7 @@ def _bytes_summary_from_span(value, data_value, size_value):
     suffix = " ..." if size > len(data) else ""
     if address == 0 and size != 0:
         return f"size={size}, data=null"
-    return f"size={size}, hex=[{_hex_preview(data)}{suffix}], ascii=\"{_ascii_preview(data)}{suffix}\""
+    return f'size={size}, hex=[{_hex_preview(data)}{suffix}], ascii="{_ascii_preview(data)}{suffix}"'
 
 
 def _vector_storage(value):
@@ -164,8 +223,15 @@ def _value_label(value):
     typename = value.GetTypeName() or ""
     if typename.startswith("protocyte::String<"):
         return string_summary(value, None)
-    if typename.startswith("protocyte::Bytes<") or typename in ("protocyte::ByteView", "protocyte::MutableByteView"):
-        return bytes_summary(value, None) if typename.startswith("protocyte::Bytes<") else byte_view_summary(value, None)
+    if typename.startswith("protocyte::Bytes<") or typename in (
+        "protocyte::ByteView",
+        "protocyte::MutableByteView",
+    ):
+        return (
+            bytes_summary(value, None)
+            if typename.startswith("protocyte::Bytes<")
+            else byte_view_summary(value, None)
+        )
     summary = value.GetSummary()
     if summary:
         return summary
@@ -277,13 +343,10 @@ def result_summary(value, _internal_dict):
 
 
 def optional_summary(value, _internal_dict):
+    ptr = _child(value.GetNonSyntheticValue(), "ptr_")
+    if ptr.IsValid():
+        return "some" if _pointer_value(ptr) else "none"
     return "some" if _bool(_child(value, "has_")) else "none"
-
-
-def ref_summary(value, _internal_dict):
-    ptr = _child(value, "ptr_")
-    address = _pointer_value(ptr)
-    return f"value=0x{address:x}" if address else "value=null"
 
 
 def box_summary(value, _internal_dict):
@@ -309,7 +372,7 @@ def string_summary(value, _internal_dict):
     if address == 0 and size != 0:
         return f"size={size}, data=null"
     text = data.decode("utf-8", errors="replace")
-    return f"size={size}, value=\"{text}{suffix}\", hex=[{_hex_preview(data)}{suffix}]"
+    return f'size={size}, value="{text}{suffix}", hex=[{_hex_preview(data)}{suffix}]'
 
 
 def byte_view_summary(value, _internal_dict):
@@ -354,7 +417,9 @@ class VectorSyntheticProvider:
         self.data, self.size_value, _capacity = _vector_storage(self.value)
         self.size = _unsigned(self.size_value, 0)
         self.element_type = _pointee_type(self.data)
-        self.element_size = self.element_type.GetByteSize() if self.element_type.IsValid() else 0
+        self.element_size = (
+            self.element_type.GetByteSize() if self.element_type.IsValid() else 0
+        )
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
@@ -377,7 +442,9 @@ class VectorSyntheticProvider:
         if index < 0 or index >= self.size or self.element_size == 0:
             return lldb.SBValue()
         address = _pointer_value(self.data) + index * self.element_size
-        return self.value.CreateValueFromAddress(f"[{index}]", address, self.element_type)
+        return self.value.CreateValueFromAddress(
+            f"[{index}]", address, self.element_type
+        )
 
     def has_children(self):
         return True
@@ -399,7 +466,9 @@ class ByteSpanSyntheticProvider:
             self.size_value = _child(self.value, "size")
         self.size = _unsigned(self.size_value, 0)
         self.element_type = _pointee_type(self.data)
-        self.element_size = self.element_type.GetByteSize() if self.element_type.IsValid() else 1
+        self.element_size = (
+            self.element_type.GetByteSize() if self.element_type.IsValid() else 1
+        )
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
@@ -422,7 +491,9 @@ class ByteSpanSyntheticProvider:
         if index < 0 or index >= self.size:
             return lldb.SBValue()
         address = _pointer_value(self.data) + index * self.element_size
-        return self.value.CreateValueFromAddress(f"[{index}]", address, self.element_type)
+        return self.value.CreateValueFromAddress(
+            f"[{index}]", address, self.element_type
+        )
 
     def has_children(self):
         return True
@@ -442,22 +513,30 @@ class PointerValueSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
-        return (1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0) + len(self.raw_children)
+        return (
+            1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
+        ) + len(self.raw_children)
 
     def get_child_index(self, name):
-        value_count = 1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
+        value_count = (
+            1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
+        )
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
             return value_count + raw_index
         return 0 if name == "value" else -1
 
     def get_child_at_index(self, index):
-        value_count = 1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
+        value_count = (
+            1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
+        )
         if value_count <= index < value_count + len(self.raw_children):
             return self.raw_children[index - value_count]
         if index != 0 or value_count == 0:
             return lldb.SBValue()
-        return self.value.CreateValueFromAddress("value", _pointer_value(self.ptr), self.pointee_type)
+        return self.value.CreateValueFromAddress(
+            "value", _pointer_value(self.ptr), self.pointee_type
+        )
 
     def has_children(self):
         return True
@@ -470,6 +549,11 @@ class ResultSyntheticProvider:
 
     def update(self):
         self.ok = _bool(_child(self.value, "ok_"))
+        self.value_ptr = _child(self.value, "value_")
+        self.value_is_reference = _first_template_argument_is_lvalue_reference(
+            self.value
+        )
+        self.value_pointee_type = _pointee_type(self.value_ptr)
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
@@ -491,6 +575,15 @@ class ResultSyntheticProvider:
         if index != 0:
             return lldb.SBValue()
         if self.ok:
+            address = _pointer_value(self.value_ptr)
+            if (
+                self.value_is_reference
+                and address != 0
+                and self.value_pointee_type.IsValid()
+            ):
+                return self.value.CreateValueFromAddress(
+                    "value", address, self.value_pointee_type
+                )
             return _child(self.value, "value_")
         return _child(self.value, "error_")
 
@@ -504,7 +597,12 @@ class OptionalSyntheticProvider:
         self.update()
 
     def update(self):
-        self.has_value = _bool(_child(self.value, "has_"))
+        self.ptr = _child(self.value, "ptr_")
+        self.has_value = (
+            _pointer_value(self.ptr) != 0
+            if self.ptr.IsValid()
+            else _bool(_child(self.value, "has_"))
+        )
         self.storage = _child(self.value, "storage_")
         try:
             self.value_type = self.value.GetType().GetTemplateArgumentType(0)
@@ -513,7 +611,9 @@ class OptionalSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
-        return (1 if self.has_value and self.value_type.IsValid() else 0) + len(self.raw_children)
+        return (1 if self.has_value and self.value_type.IsValid() else 0) + len(
+            self.raw_children
+        )
 
     def get_child_index(self, name):
         value_count = 1 if self.has_value and self.value_type.IsValid() else 0
@@ -528,7 +628,15 @@ class OptionalSyntheticProvider:
             return self.raw_children[index - value_count]
         if index != 0 or value_count == 0:
             return lldb.SBValue()
-        return self.value.CreateValueFromAddress("value", self.storage.GetAddress(), self.value_type)
+        if self.ptr.IsValid():
+            pointee_type = _pointee_type(self.ptr)
+            if pointee_type.IsValid():
+                return self.value.CreateValueFromAddress(
+                    "value", _pointer_value(self.ptr), pointee_type
+                )
+        return self.value.CreateValueFromAddress(
+            "value", self.storage.GetAddress(), self.value_type
+        )
 
     def has_children(self):
         return True
@@ -551,12 +659,18 @@ class HashMapSyntheticProvider:
         if base == 0 or bucket_size == 0:
             return
         for bucket_index in range(bucket_count):
-            bucket = self.value.CreateValueFromAddress(f"bucket[{bucket_index}]", base + bucket_index * bucket_size, bucket_type)
+            bucket = self.value.CreateValueFromAddress(
+                f"bucket[{bucket_index}]",
+                base + bucket_index * bucket_size,
+                bucket_type,
+            )
             entry = _optional_payload(bucket, f"entry[{bucket_index}]")
             if not entry.IsValid():
                 continue
             key = _child(entry, "key")
-            value = _renamed_value(self.value, _child(entry, "value"), f"{_value_label(key)} =>")
+            value = _renamed_value(
+                self.value, _child(entry, "value"), f"{_value_label(key)} =>"
+            )
             if value.IsValid():
                 self.entries.append(value)
 
@@ -604,15 +718,25 @@ class GeneratedMessageOneofSyntheticProvider:
             prefix = _oneof_prefix(case_field_name)
             if case_name == "none":
                 payload = _oneof_payload(self.value, prefix, case_name)
-                self.children.append(_renamed_value(self.value, payload if payload.IsValid() else case_field, prefix or case_field_name))
+                self.children.append(
+                    _renamed_value(
+                        self.value,
+                        payload if payload.IsValid() else case_field,
+                        prefix or case_field_name,
+                    )
+                )
                 continue
             payload = _oneof_payload(self.value, prefix, case_name)
             if not payload.IsValid():
                 payload = _child(self.value, f"{prefix}_{case_name}_")
             if not payload.IsValid():
-                self.children.append(_renamed_value(self.value, case_field, f"{prefix}: {case_name}"))
+                self.children.append(
+                    _renamed_value(self.value, case_field, f"{prefix}: {case_name}")
+                )
                 continue
-            self.children.append(_renamed_value(self.value, payload, f"{prefix}: {case_name}"))
+            self.children.append(
+                _renamed_value(self.value, payload, f"{prefix}: {case_name}")
+            )
         self.children.extend(_raw_children(self.value))
 
     def num_children(self):
@@ -651,7 +775,9 @@ def register_oneof_formatters(debugger, regex):
         f"type synthetic add -w {category} -x -l protocyte_lldb.GeneratedMessageOneofSyntheticProvider '{regex}'",
         f"type category enable {category}",
     ]
-    return _run_lldb_commands(debugger, commands, context="Protocyte oneof formatter registration")
+    return _run_lldb_commands(
+        debugger, commands, context="Protocyte oneof formatter registration"
+    )
 
 
 def protocyte_oneof(debugger, command, _exe_ctx, result, _internal_dict):
@@ -678,8 +804,6 @@ def __lldb_init_module(debugger, _internal_dict):
         f"type synthetic add -w {category} -x -l protocyte_lldb.ResultSyntheticProvider '^protocyte::Result<.+>$'",
         f"type summary add -w {category} -p -x -F protocyte_lldb.optional_summary '^protocyte::Optional<.+>$'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.OptionalSyntheticProvider '^protocyte::Optional<.+>$'",
-        f"type summary add -w {category} -p -x -F protocyte_lldb.ref_summary '^protocyte::Ref<.+>$'",
-        f"type synthetic add -w {category} -x -l protocyte_lldb.PointerValueSyntheticProvider '^protocyte::Ref<.+>$'",
         f"type summary add -w {category} -p -x -F protocyte_lldb.box_summary '^protocyte::Box<.+,.+>$'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.PointerValueSyntheticProvider '^protocyte::Box<.+,.+>$'",
         f"type summary add -w {category} -p -x -F protocyte_lldb.vector_summary '^protocyte::Vector<.+,.+>$'",

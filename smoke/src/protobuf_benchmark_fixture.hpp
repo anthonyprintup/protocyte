@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iterator>
 #include <string>
 
 #include "benchmark.pb.h"
@@ -79,8 +80,7 @@ namespace protocyte_smoke::benchmark_fixture {
         recursive->set_f_string(bytes_of(view_of(recursive_string)));
         recursive->set_f_int32(350);
         recursive->mutable_fixed_integer_array()->Add(
-            fixed_integer_array_values,
-            fixed_integer_array_values + (sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0])));
+            fixed_integer_array_values, fixed_integer_array_values + std::size(fixed_integer_array_values));
         append_bytes(recursive->mutable_fixed_repeated_byte_array(), view_of(repeated_bytes_0));
         append_bytes(recursive->mutable_fixed_repeated_byte_array(), view_of(repeated_bytes_2));
         append_bytes(recursive->mutable_fixed_repeated_byte_array(), view_of(repeated_bytes_3));
@@ -105,11 +105,9 @@ namespace protocyte_smoke::benchmark_fixture {
         append_bytes(message->mutable_fixed_repeated_byte_array(), view_of(repeated_bytes_3));
         populate_fixed_repeated_bytes_holder(message->mutable_crazy_fixed_repeated_bytes());
         message->mutable_integer_array()->Add(integer_array_values,
-                                              integer_array_values +
-                                                  (sizeof(integer_array_values) / sizeof(integer_array_values[0])));
-        message->mutable_fixed_integer_array()->Add(
-            fixed_integer_array_values,
-            fixed_integer_array_values + (sizeof(fixed_integer_array_values) / sizeof(fixed_integer_array_values[0])));
+                                              integer_array_values + std::size(integer_array_values));
+        message->mutable_fixed_integer_array()->Add(fixed_integer_array_values,
+                                                    fixed_integer_array_values + std::size(fixed_integer_array_values));
 
         auto *deep = message->mutable_extreme_nesting();
         deep->set_extreme(bytes_of(view_of(extreme_value)));
