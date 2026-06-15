@@ -7,8 +7,82 @@ import string as _string
 import sys
 
 
-def _quote_path(path):
-    return '"' + path.replace("\\", "\\\\").replace('"', '\\"') + '"'
+_BYTES_TYPE_REGEX = r"^.*protocyte::Bytes<.*>$"
+_STRING_TYPE_REGEX = r"^.*protocyte::String<.*>$"
+_SPAN_TYPE_REGEX = r"^.*protocyte::Span<.*>$"
+_VECTOR_TYPE_REGEX = r"^.*protocyte::Vector<.+,.+>$"
+_HASH_MAP_TYPE_REGEX = r"^.*protocyte::HashMap<.+,.+,.+>$"
+_DEFAULT_BYTES_TYPE = "protocyte::Bytes<protocyte::DefaultConfig>"
+_DEFAULT_STRING_TYPE = "protocyte::String<protocyte::DefaultConfig>"
+_registered_exact_types = set()
+
+
+def _recognizer_type_name(type_):
+    for method_name in ("GetDisplayTypeName", "GetName"):
+        method = getattr(type_, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            name = method()
+        except Exception:
+            continue
+        if name:
+            return _canonical_type_name(name)
+    return ""
+
+
+def _canonical_type_name(name):
+    name = name.strip()
+    for prefix in ("class ", "struct "):
+        if name.startswith(prefix):
+            return name[len(prefix) :]
+    return name
+
+
+def _is_template_type(type_, template_name):
+    name = _recognizer_type_name(type_)
+    return name.startswith(template_name + "<") or name.startswith("::" + template_name + "<")
+
+
+def _is_named_type(type_, type_name):
+    name = _recognizer_type_name(type_)
+    return name == type_name or name == "::" + type_name
+
+
+def is_result_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::Result")
+
+
+def is_optional_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::Optional")
+
+
+def is_box_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::Box")
+
+
+def is_vector_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::Vector")
+
+
+def is_bytes_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::Bytes")
+
+
+def is_string_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::String")
+
+
+def is_span_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::Span")
+
+
+def is_hash_map_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::HashMap")
+
+
+def is_limited_reader_type(type_, _internal_dict):
+    return _is_template_type(type_, "protocyte::LimitedReader")
 
 
 def _run_lldb_commands(debugger, commands, *, context, ignored_errors=None):
@@ -31,17 +105,19 @@ def _run_lldb_commands(debugger, commands, *, context, ignored_errors=None):
     return None
 
 
+def _is_unsupported_option_error(error):
+    lowered_error = error.lower()
+    return "unknown or ambiguous option" in lowered_error or "unknown option" in lowered_error
+
+
 def write_smoke_lldbinit():
     repo_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "..")
     )
-    formatter_path = os.path.join(
-        repo_root, "src", "protocyte", "debugger", "protocyte_lldb.py"
-    )
     smoke_lldbinit = os.path.join(repo_root, "tests", "smoke", ".lldbinit")
     content = "\n".join(
         [
-            f"command script import {_quote_path(formatter_path)}",
+            "command script import ../../src/protocyte/debugger/protocyte_lldb.py",
             "protocyte-oneof '^.*test::ultimate::.*<.*>$'",
             "",
         ]
@@ -189,12 +265,23 @@ def _bytes_summary_from_span(value, data_value, size_value):
     data, size, address = _read_byte_span(value, data_value, size_value)
     suffix = " ..." if size > len(data) else ""
     if address == 0 and size != 0:
-        return f"size={size}, data=null"
-    return f'size={size}, hex=[{_hex_preview(data)}{suffix}], ascii="{_ascii_preview(data)}{suffix}"'
+        return f"{_count_summary('size', size)}, data=null"
+    return (
+        f"{_count_summary('size', size)}, hex=[{_hex_preview(data)}{suffix}], "
+        f'ascii="{_ascii_preview(data)}{suffix}"'
+    )
+
+
+def _count_summary(name, value):
+    return f"{name}={value} [0x{value:x}]"
 
 
 def _vector_storage(value):
     return _child(value, "data_"), _child(value, "size_"), _child(value, "capacity_")
+
+
+def _vector_context(value):
+    return _child(value, "ctx_")
 
 
 def _bytes_storage(value):
@@ -202,9 +289,26 @@ def _bytes_storage(value):
     return _vector_storage(vector)
 
 
+def _bytes_context(value):
+    return _child(value, "ctx_")
+
+
 def _string_storage(value):
     bytes_value = _child(value, "bytes_")
     return _bytes_storage(bytes_value)
+
+
+def _string_context(value):
+    bytes_value = _child(value, "bytes_")
+    return _bytes_context(bytes_value)
+
+
+def _span_storage(value):
+    data = _child(value, "data_")
+    size = _child(value, "size_")
+    if data.IsValid() or size.IsValid():
+        return data, size
+    return _child(value, "data"), _child(value, "size")
 
 
 def _optional_payload(value, name="value"):
@@ -302,13 +406,36 @@ def _renamed_value(parent, source, name):
 
 
 def _raw_children(value):
+    raw = _raw_view(value)
+    return [raw] if raw.IsValid() else []
+
+
+def _raw_view(value):
     raw = value.GetNonSyntheticValue()
-    children = []
-    for index in range(raw.GetNumChildren()):
-        child = raw.GetChildAtIndex(index)
-        name = child.GetName() or f"[{index}]"
-        children.append(_renamed_value(value, child, f"raw.{name}"))
-    return children
+    if not raw.IsValid():
+        return lldb.SBValue()
+    try:
+        renamed = raw.Clone("Raw View")
+    except Exception:
+        renamed = lldb.SBValue()
+    if not renamed.IsValid():
+        renamed = value.CreateValueFromData("Raw View", raw.GetData(), raw.GetType())
+    if not renamed.IsValid():
+        renamed = _renamed_value(value, raw, "Raw View")
+    if not renamed.IsValid():
+        return lldb.SBValue()
+    for method_name, method_value in (
+        ("SetPreferSyntheticValue", False),
+        ("SetSyntheticChildrenGenerated", False),
+    ):
+        method = getattr(renamed, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            method(method_value)
+        except Exception:
+            pass
+    return renamed if renamed.GetNumChildren() else lldb.SBValue()
 
 
 def _raw_child_index(children, name):
@@ -316,6 +443,39 @@ def _raw_child_index(children, name):
         if child.GetName() == name:
             return index
     return -1
+
+
+def _is_raw_view_value(value):
+    return (value.GetName() or "") == "Raw View"
+
+
+def _raw_member_children(value):
+    raw = value.GetNonSyntheticValue()
+    if not raw.IsValid():
+        return []
+    return [
+        raw.GetChildAtIndex(index)
+        for index in range(raw.GetNumChildren())
+        if raw.GetChildAtIndex(index).IsValid()
+    ]
+
+
+def _set_raw_mode(provider):
+    provider.raw_mode_children = []
+    if not _is_raw_view_value(provider.value):
+        return False
+    provider.raw_mode_children = _raw_member_children(provider.value)
+    return True
+
+
+def _raw_mode_child_index(provider, name):
+    return _raw_child_index(provider.raw_mode_children, name)
+
+
+def _raw_mode_child_at_index(provider, index):
+    if index < 0 or index >= len(provider.raw_mode_children):
+        return lldb.SBValue()
+    return provider.raw_mode_children[index]
 
 
 def status_summary(value, _internal_dict):
@@ -360,23 +520,32 @@ def box_summary(value, _internal_dict):
 
 
 def vector_summary(value, _internal_dict):
-    _data, size, capacity = _vector_storage(value)
-    return f"size={_unsigned(size, 0)}, capacity={_unsigned(capacity, 0)}"
+    if _is_raw_view_value(value):
+        return None
+    _data, size, _capacity = _vector_storage(value)
+    return _count_summary("size", _unsigned(size, 0))
 
 
 def bytes_summary(value, _internal_dict):
+    if _is_raw_view_value(value):
+        return None
     data, size, _capacity = _bytes_storage(value)
     return _bytes_summary_from_span(value, data, size)
 
 
 def string_summary(value, _internal_dict):
+    if _is_raw_view_value(value):
+        return None
     data_value, size_value, _capacity = _string_storage(value)
     data, size, address = _read_byte_span(value, data_value, size_value)
     suffix = " ..." if size > len(data) else ""
     if address == 0 and size != 0:
-        return f"size={size}, data=null"
+        return f"{_count_summary('size', size)}, data=null"
     text = data.decode("utf-8", errors="replace")
-    return f'size={size}, value="{text}{suffix}", hex=[{_hex_preview(data)}{suffix}]'
+    return (
+        f'{_count_summary("size", size)}, value="{text}{suffix}", '
+        f"hex=[{_hex_preview(data)}{suffix}]"
+    )
 
 
 def byte_view_summary(value, _internal_dict):
@@ -387,11 +556,23 @@ def mutable_byte_view_summary(value, _internal_dict):
     return byte_view_summary(value, _internal_dict)
 
 
+def span_summary(value, _internal_dict):
+    if _is_raw_view_value(value):
+        return None
+    _data, size = _span_storage(value)
+    return _count_summary("size", _unsigned(size, 0))
+
+
 def hash_map_summary(value, _internal_dict):
+    if _is_raw_view_value(value):
+        return None
     size = _child(value, "size_")
     buckets = _child(value, "buckets_")
     _data, bucket_count, _capacity = _vector_storage(buckets)
-    return f"size={_unsigned(size, 0)}, buckets={_unsigned(bucket_count, 0)}"
+    return (
+        f"{_count_summary('size', _unsigned(size, 0))}, "
+        f"{_count_summary('buckets', _unsigned(bucket_count, 0))}"
+    )
 
 
 def slice_reader_summary(value, _internal_dict):
@@ -418,36 +599,53 @@ class VectorSyntheticProvider:
         self.update()
 
     def update(self):
-        self.data, self.size_value, _capacity = _vector_storage(self.value)
+        self.data, self.size_value, self.capacity_value = _vector_storage(self.value)
         self.size = _unsigned(self.size_value, 0)
         self.element_type = _pointee_type(self.data)
         self.element_size = (
             self.element_type.GetByteSize() if self.element_type.IsValid() else 0
         )
+        self.metadata_children = [
+            child
+            for child in (
+                _renamed_value(self.value, _vector_context(self.value), "context"),
+                _renamed_value(self.value, self.capacity_value, "capacity"),
+            )
+            if child.IsValid()
+        ]
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
-        return self.size + len(self.raw_children)
+        return len(self.metadata_children) + self.size + len(self.raw_children)
 
     def get_child_index(self, name):
+        for index, child in enumerate(self.metadata_children):
+            if child.GetName() == name:
+                return index
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
-            return self.size + raw_index
+            return len(self.metadata_children) + self.size + raw_index
         if name.startswith("[") and name.endswith("]"):
             try:
-                return int(name[1:-1])
+                index = int(name[1:-1])
             except ValueError:
                 return -1
+            if 0 <= index < self.size:
+                return len(self.metadata_children) + index
         return -1
 
     def get_child_at_index(self, index):
-        if self.size <= index < self.size + len(self.raw_children):
-            return self.raw_children[index - self.size]
-        if index < 0 or index >= self.size or self.element_size == 0:
+        metadata_count = len(self.metadata_children)
+        if 0 <= index < metadata_count:
+            return self.metadata_children[index]
+        element_index = index - metadata_count
+        if self.size <= element_index < self.size + len(self.raw_children):
+            return self.raw_children[element_index - self.size]
+        if element_index < 0 or element_index >= self.size or self.element_size == 0:
             return lldb.SBValue()
-        address = _pointer_value(self.data) + index * self.element_size
+        address = _pointer_value(self.data) + element_index * self.element_size
         return self.value.CreateValueFromAddress(
-            f"[{index}]", address, self.element_type
+            f"[{element_index}]", address, self.element_type
         )
 
     def has_children(self):
@@ -460,43 +658,78 @@ class ByteSpanSyntheticProvider:
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            return
         typename = self.value.GetTypeName() or ""
         if typename.startswith("protocyte::Bytes<"):
             self.data, self.size_value, _capacity = _bytes_storage(self.value)
+            context = _bytes_context(self.value)
+            metadata_sources = (
+                ("context", context),
+                ("capacity", _capacity),
+            )
         elif typename.startswith("protocyte::String<"):
             self.data, self.size_value, _capacity = _string_storage(self.value)
+            context = _string_context(self.value)
+            metadata_sources = (
+                ("context", context),
+                ("capacity", _capacity),
+            )
+        elif typename.startswith("protocyte::Span<"):
+            self.data, self.size_value = _span_storage(self.value)
+            metadata_sources = ()
         else:
-            self.data = _child(self.value, "data")
-            self.size_value = _child(self.value, "size")
+            self.data, self.size_value = _span_storage(self.value)
+            metadata_sources = ()
         self.size = _unsigned(self.size_value, 0)
         self.element_type = _pointee_type(self.data)
         self.element_size = (
             self.element_type.GetByteSize() if self.element_type.IsValid() else 1
         )
+        self.metadata_children = [
+            _renamed_value(self.value, source, name)
+            for name, source in metadata_sources
+            if source.IsValid()
+        ]
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
-        return self.size + len(self.raw_children)
+        if _is_raw_view_value(self.value):
+            return len(self.raw_mode_children)
+        return len(self.metadata_children) + self.size + len(self.raw_children)
 
     def get_child_index(self, name):
+        if _is_raw_view_value(self.value):
+            return _raw_mode_child_index(self, name)
+        for index, child in enumerate(self.metadata_children):
+            if child.GetName() == name:
+                return index
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
-            return self.size + raw_index
+            return len(self.metadata_children) + self.size + raw_index
         if name.startswith("[") and name.endswith("]"):
             try:
-                return int(name[1:-1])
+                index = int(name[1:-1])
             except ValueError:
                 return -1
+            if 0 <= index < self.size:
+                return len(self.metadata_children) + index
         return -1
 
     def get_child_at_index(self, index):
-        if self.size <= index < self.size + len(self.raw_children):
-            return self.raw_children[index - self.size]
-        if index < 0 or index >= self.size:
+        if _is_raw_view_value(self.value):
+            return _raw_mode_child_at_index(self, index)
+        metadata_count = len(self.metadata_children)
+        if 0 <= index < metadata_count:
+            return self.metadata_children[index]
+        element_index = index - metadata_count
+        if self.size <= element_index < self.size + len(self.raw_children):
+            return self.raw_children[element_index - self.size]
+        if element_index < 0 or element_index >= self.size:
             return lldb.SBValue()
-        address = _pointer_value(self.data) + index * self.element_size
+        address = _pointer_value(self.data) + element_index * self.element_size
         return self.value.CreateValueFromAddress(
-            f"[{index}]", address, self.element_type
+            f"[{element_index}]", address, self.element_type
         )
 
     def has_children(self):
@@ -653,8 +886,13 @@ class HashMapSyntheticProvider:
 
     def update(self):
         self.entries = []
-        self.raw_children = _raw_children(self.value)
         buckets = _child(self.value, "buckets_")
+        self.metadata_children = [
+            child
+            for child in (_renamed_value(self.value, buckets, "buckets"),)
+            if child.IsValid()
+        ]
+        self.raw_children = _raw_children(self.value)
         data, bucket_count_value, _capacity = _vector_storage(buckets)
         bucket_count = _unsigned(bucket_count_value, 0)
         bucket_type = _pointee_type(data)
@@ -679,12 +917,16 @@ class HashMapSyntheticProvider:
                 self.entries.append(value)
 
     def num_children(self):
-        return len(self.entries) + len(self.raw_children)
+        return len(self.entries) + len(self.metadata_children) + len(self.raw_children)
 
     def get_child_index(self, name):
+        entry_count = len(self.entries)
+        for index, child in enumerate(self.metadata_children):
+            if child.GetName() == name:
+                return entry_count + index
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
-            return len(self.entries) + raw_index
+            return entry_count + len(self.metadata_children) + raw_index
         for index, entry in enumerate(self.entries):
             if entry.GetName() == name:
                 return index
@@ -696,9 +938,15 @@ class HashMapSyntheticProvider:
         return -1
 
     def get_child_at_index(self, index):
-        if len(self.entries) <= index < len(self.entries) + len(self.raw_children):
-            return self.raw_children[index - len(self.entries)]
-        if index < 0 or index >= len(self.entries):
+        entry_count = len(self.entries)
+        metadata_count = len(self.metadata_children)
+        if entry_count <= index < entry_count + metadata_count:
+            return self.metadata_children[index - entry_count]
+        if entry_count + metadata_count <= index < entry_count + metadata_count + len(
+            self.raw_children
+        ):
+            return self.raw_children[index - entry_count - metadata_count]
+        if index < 0 or index >= entry_count:
             return lldb.SBValue()
         return self.entries[index]
 
@@ -773,14 +1021,38 @@ def oneof_summary(value, _internal_dict):
 
 def register_oneof_formatters(debugger, regex):
     category = "protocyte-oneof"
+    disable_command = f"type category disable {category}"
+    delete_command = f"type category delete {category}"
+    define_command = f"type category define {category}"
     commands = [
-        f"type category define {category}",
+        disable_command,
+        delete_command,
+        define_command,
         f"type summary add -w {category} -p -x -F protocyte_lldb.oneof_summary '{regex}'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.GeneratedMessageOneofSyntheticProvider '{regex}'",
         f"type category enable {category}",
     ]
     return _run_lldb_commands(
-        debugger, commands, context="Protocyte oneof formatter registration"
+        debugger,
+        commands,
+        context="Protocyte oneof formatter registration",
+        ignored_errors={
+            disable_command: (
+                "does not exist",
+                "not found",
+                "invalid type category",
+            ),
+            delete_command: (
+                "does not exist",
+                "not found",
+                "invalid type category",
+                "cannot delete one or more categories",
+            ),
+            define_command: (
+                "already exists",
+                "exists already",
+            ),
+        },
     )
 
 
@@ -796,49 +1068,303 @@ def protocyte_oneof(debugger, command, _exe_ctx, result, _internal_dict):
     result.PutCString(f"registered Protocyte oneof formatter for {regex}")
 
 
+def protocyte_formatters(_debugger, _command, _exe_ctx, result, _internal_dict):
+    result.PutCString(
+        "Protocyte formatter module is loaded. Runtime formatters use exact type "
+        "registration, regexes, and LLDB recognizers when supported.\n"
+        f"  Bytes exact: {_DEFAULT_BYTES_TYPE}\n"
+        f"  String exact: {_DEFAULT_STRING_TYPE}\n"
+        f"  Bytes: {_BYTES_TYPE_REGEX}\n"
+        f"  String: {_STRING_TYPE_REGEX}\n"
+        f"  Span: {_SPAN_TYPE_REGEX}\n"
+        f"  Vector: {_VECTOR_TYPE_REGEX}\n"
+        f"  HashMap: {_HASH_MAP_TYPE_REGEX}"
+    )
+
+
+def protocyte_bytes(_debugger, command, exe_ctx, result, _internal_dict):
+    expression = command.strip()
+    if not expression:
+        result.SetError("usage: protocyte-bytes <expression>")
+        return
+    target = exe_ctx.GetTarget()
+    value = target.EvaluateExpression(expression)
+    if not value.IsValid():
+        result.SetError(f"invalid expression: {expression}")
+        return
+    result.PutCString(bytes_summary(value, {}))
+
+
+def _formatter_commands_for_type(type_name):
+    category = "protocyte"
+    type_name = _canonical_type_name(type_name)
+    if type_name.startswith("protocyte::Result<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.result_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.ResultSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::Optional<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.optional_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.OptionalSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::Box<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.box_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.PointerValueSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::Vector<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.vector_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.VectorSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::Bytes<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.bytes_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::String<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.string_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::Span<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.span_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::HashMap<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.hash_map_summary '{type_name}'",
+            f"type synthetic add -w {category} -l protocyte_lldb.HashMapSyntheticProvider '{type_name}'",
+        ]
+    if type_name.startswith("protocyte::LimitedReader<"):
+        return [
+            f"type summary add -w {category} -p -F protocyte_lldb.limited_reader_summary '{type_name}'",
+        ]
+    return []
+
+
+def _register_exact_type(debugger, type_name, *, force=False):
+    type_name = _canonical_type_name(type_name)
+    if not force and type_name in _registered_exact_types:
+        return None
+    commands = _formatter_commands_for_type(type_name)
+    if not commands:
+        return f"no Protocyte formatter registration rule for {type_name}"
+    commands.append("type category enable protocyte")
+    ignored_errors = {
+        command: ("already exists", "exists already") for command in commands
+    }
+    error = _run_lldb_commands(
+        debugger,
+        commands,
+        context=f"Protocyte formatter registration for {type_name}",
+        ignored_errors=ignored_errors,
+    )
+    if error:
+        return error
+    _registered_exact_types.add(type_name)
+    return None
+
+
+def protocyte_register_type(debugger, command, exe_ctx, result, _internal_dict):
+    expression = command.strip()
+    if not expression:
+        result.SetError("usage: protocyte-register-type <expression>")
+        return
+    target = exe_ctx.GetTarget()
+    value = target.EvaluateExpression(expression)
+    if not value.IsValid():
+        result.SetError(f"invalid expression: {expression}")
+        return
+    type_name = value.GetTypeName()
+    if not type_name:
+        result.SetError(f"could not resolve type for expression: {expression}")
+        return
+    error = _register_exact_type(debugger, type_name, force=True)
+    if error:
+        result.SetError(error)
+        return
+    result.PutCString(
+        f"registered Protocyte formatter for {_canonical_type_name(type_name)}"
+    )
+
+
+def _frame_variables(frame):
+    if not frame or not frame.IsValid():
+        return []
+    try:
+        variables = frame.GetVariables(True, True, True, True)
+    except Exception:
+        return []
+    try:
+        size = variables.GetSize()
+    except Exception:
+        return []
+    return [variables.GetValueAtIndex(index) for index in range(size)]
+
+
+def protocyte_register_frame_types(debugger, _command, exe_ctx, result, _internal_dict):
+    frame = exe_ctx.GetFrame()
+    registered = []
+    failures = []
+    for value in _frame_variables(frame):
+        type_name = value.GetTypeName()
+        if not type_name:
+            continue
+        if not _formatter_commands_for_type(type_name):
+            continue
+        error = _register_exact_type(debugger, type_name)
+        if error:
+            failures.append(error)
+        else:
+            registered.append(_canonical_type_name(type_name))
+
+    if failures:
+        result.SetError("; ".join(failures))
+    elif registered and _command.strip() == "verbose":
+        result.PutCString(
+            "registered Protocyte formatter types: " + ", ".join(registered)
+        )
+
+
 def __lldb_init_module(debugger, _internal_dict):
     category = "protocyte"
+    disable_command = f"type category disable {category}"
     delete_command = f"type category delete {category}"
+    define_command = f"type category define {category}"
+    delete_oneof_command = "command script delete protocyte-oneof"
+    delete_diagnostics_command = "command script delete protocyte-formatters"
+    delete_bytes_command = "command script delete protocyte-bytes"
+    delete_register_type_command = "command script delete protocyte-register-type"
+    delete_register_frame_types_command = (
+        "command script delete protocyte-register-frame-types"
+    )
+    stop_hook_command = 'target stop-hook add -o "protocyte-register-frame-types"'
     commands = [
+        disable_command,
         delete_command,
-        f"type category define {category}",
+        define_command,
         f"type summary add -w {category} -p -F protocyte_lldb.status_summary protocyte::Status",
         f"type summary add -w {category} -p -F protocyte_lldb.error_summary protocyte::Error",
+        f"type summary add -w {category} -p -F protocyte_lldb.bytes_summary '{_DEFAULT_BYTES_TYPE}'",
+        f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider '{_DEFAULT_BYTES_TYPE}'",
+        f"type summary add -w {category} -p -F protocyte_lldb.string_summary '{_DEFAULT_STRING_TYPE}'",
+        f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider '{_DEFAULT_STRING_TYPE}'",
         f"type summary add -w {category} -p -x -F protocyte_lldb.result_summary '^protocyte::Result<.+>$'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.ResultSyntheticProvider '^protocyte::Result<.+>$'",
         f"type summary add -w {category} -p -x -F protocyte_lldb.optional_summary '^protocyte::Optional<.+>$'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.OptionalSyntheticProvider '^protocyte::Optional<.+>$'",
-        f"type summary add -w {category} -p -x -F protocyte_lldb.box_summary '^protocyte::Box<.+,.+>$'",
-        f"type synthetic add -w {category} -x -l protocyte_lldb.PointerValueSyntheticProvider '^protocyte::Box<.+,.+>$'",
-        f"type summary add -w {category} -p -x -F protocyte_lldb.vector_summary '^protocyte::Vector<.+,.+>$'",
-        f"type synthetic add -w {category} -x -l protocyte_lldb.VectorSyntheticProvider '^protocyte::Vector<.+,.+>$'",
-        f"type summary add -w {category} -p -x -F protocyte_lldb.bytes_summary '^protocyte::Bytes<.+>$'",
-        f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '^protocyte::Bytes<.+>$'",
-        f"type summary add -w {category} -p -x -F protocyte_lldb.string_summary '^protocyte::String<.+>$'",
-        f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '^protocyte::String<.+>$'",
+        f"type summary add -w {category} -p -x -F protocyte_lldb.box_summary '^protocyte::Box<.+>$'",
+        f"type synthetic add -w {category} -x -l protocyte_lldb.PointerValueSyntheticProvider '^protocyte::Box<.+>$'",
+        f"type summary add -w {category} -p -x -F protocyte_lldb.vector_summary '{_VECTOR_TYPE_REGEX}'",
+        f"type synthetic add -w {category} -x -l protocyte_lldb.VectorSyntheticProvider '{_VECTOR_TYPE_REGEX}'",
+        f"type summary add -w {category} -p -x -F protocyte_lldb.bytes_summary '{_BYTES_TYPE_REGEX}'",
+        f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '{_BYTES_TYPE_REGEX}'",
+        f"type summary add -w {category} -p -x -F protocyte_lldb.string_summary '{_STRING_TYPE_REGEX}'",
+        f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '{_STRING_TYPE_REGEX}'",
+        f"type summary add -w {category} -p -x -F protocyte_lldb.span_summary '{_SPAN_TYPE_REGEX}'",
+        f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '{_SPAN_TYPE_REGEX}'",
         f"type summary add -w {category} -p -F protocyte_lldb.byte_view_summary protocyte::ByteView",
         f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider protocyte::ByteView",
         f"type summary add -w {category} -p -F protocyte_lldb.mutable_byte_view_summary protocyte::MutableByteView",
         f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider protocyte::MutableByteView",
-        f"type summary add -w {category} -p -x -F protocyte_lldb.hash_map_summary '^protocyte::HashMap<.+,.+,.+>$'",
-        f"type synthetic add -w {category} -x -l protocyte_lldb.HashMapSyntheticProvider '^protocyte::HashMap<.+,.+,.+>$'",
+        f"type summary add -w {category} -p -x -F protocyte_lldb.hash_map_summary '{_HASH_MAP_TYPE_REGEX}'",
+        f"type synthetic add -w {category} -x -l protocyte_lldb.HashMapSyntheticProvider '{_HASH_MAP_TYPE_REGEX}'",
         f"type summary add -w {category} -p -F protocyte_lldb.slice_reader_summary protocyte::SliceReader",
         f"type summary add -w {category} -p -x -F protocyte_lldb.limited_reader_summary '^protocyte::LimitedReader<.+>$'",
         f"type summary add -w {category} -p -F protocyte_lldb.slice_writer_summary protocyte::SliceWriter",
         f"type category enable {category}",
+        delete_oneof_command,
         "command script add -f protocyte_lldb.protocyte_oneof protocyte-oneof",
+        delete_diagnostics_command,
+        "command script add -f protocyte_lldb.protocyte_formatters protocyte-formatters",
+        delete_bytes_command,
+        "command script add -f protocyte_lldb.protocyte_bytes protocyte-bytes",
+        delete_register_type_command,
+        "command script add -f protocyte_lldb.protocyte_register_type protocyte-register-type",
+        delete_register_frame_types_command,
+        "command script add -f protocyte_lldb.protocyte_register_frame_types protocyte-register-frame-types",
+        stop_hook_command,
+    ]
+    recognizer_commands = [
+        "type summary add -w protocyte -p --python-function protocyte_lldb.result_summary --recognizer-function protocyte_lldb.is_result_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.ResultSyntheticProvider --recognizer-function protocyte_lldb.is_result_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.optional_summary --recognizer-function protocyte_lldb.is_optional_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.OptionalSyntheticProvider --recognizer-function protocyte_lldb.is_optional_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.box_summary --recognizer-function protocyte_lldb.is_box_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.PointerValueSyntheticProvider --recognizer-function protocyte_lldb.is_box_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.vector_summary --recognizer-function protocyte_lldb.is_vector_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.VectorSyntheticProvider --recognizer-function protocyte_lldb.is_vector_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.bytes_summary --recognizer-function protocyte_lldb.is_bytes_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.ByteSpanSyntheticProvider --recognizer-function protocyte_lldb.is_bytes_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.string_summary --recognizer-function protocyte_lldb.is_string_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.ByteSpanSyntheticProvider --recognizer-function protocyte_lldb.is_string_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.span_summary --recognizer-function protocyte_lldb.is_span_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.ByteSpanSyntheticProvider --recognizer-function protocyte_lldb.is_span_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.hash_map_summary --recognizer-function protocyte_lldb.is_hash_map_type",
+        "type synthetic add -w protocyte --python-class protocyte_lldb.HashMapSyntheticProvider --recognizer-function protocyte_lldb.is_hash_map_type",
+        "type summary add -w protocyte -p --python-function protocyte_lldb.limited_reader_summary --recognizer-function protocyte_lldb.is_limited_reader_type",
     ]
     error = _run_lldb_commands(
         debugger,
         commands,
         context="Protocyte formatter registration",
         ignored_errors={
+            disable_command: (
+                "does not exist",
+                "not found",
+                "invalid type category",
+            ),
             delete_command: (
                 "does not exist",
                 "not found",
                 "invalid type category",
+                "cannot delete one or more categories",
+            ),
+            define_command: (
+                "already exists",
+                "exists already",
+            ),
+            delete_oneof_command: (
+                "does not exist",
+                "not found",
+                "unknown command",
+            ),
+            delete_diagnostics_command: (
+                "does not exist",
+                "not found",
+                "unknown command",
+            ),
+            delete_bytes_command: (
+                "does not exist",
+                "not found",
+                "unknown command",
+            ),
+            delete_register_type_command: (
+                "does not exist",
+                "not found",
+                "unknown command",
+            ),
+            delete_register_frame_types_command: (
+                "does not exist",
+                "not found",
+                "unknown command",
+            ),
+            stop_hook_command: (
+                "invalid target",
+                "no target",
+                "requires a target",
             ),
         },
     )
     if error:
         raise RuntimeError(error)
+    recognizer_error = _run_lldb_commands(
+        debugger,
+        recognizer_commands,
+        context="Protocyte recognizer formatter registration",
+    )
+    if recognizer_error and not _is_unsupported_option_error(recognizer_error):
+        raise RuntimeError(recognizer_error)

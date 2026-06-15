@@ -1,0 +1,3 @@
+command script import ../../src/protocyte/debugger/protocyte_lldb.py
+protocyte-oneof '^.*test::ultimate::.*<.*>$'
+

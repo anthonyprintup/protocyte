@@ -44,7 +44,7 @@ After that, generated messages in the matching namespace get a summary such as `
 
 ## CLion
 
-CLion can use project-local `.lldbinit` files, but execution is disabled by default for security. Enable it once in your user-level LLDB init file, then CLion will load this repository's [`.lldbinit`](../.lldbinit) when debugging from the project root.
+CLion can use project-local `.lldbinit` files, but execution is disabled by default for security. Enable it once in your user-level LLDB init file, then CLion will load the applicable project-local `.lldbinit`.
 
 Add this to your user-level `.lldbinit`:
 
@@ -53,6 +53,8 @@ settings set target.load-cwd-lldbinit true
 ```
 
 On Windows with the MSVC toolchain, CLion uses JetBrains' LLDB-based debugger for MSVC. Use a CMake profile that debugs with LLDB, start a debug session, and the variables view should pick up these formatters through the project `.lldbinit`.
+
+The smoke CMake project lives under `tests/smoke`, so this repository also tracks [tests/smoke/.lldbinit](../tests/smoke/.lldbinit). That file imports the same formatter module with a path relative to the smoke project root and registers the generated-message oneof formatter used by `protocyte_host_smoke`.
 
 If CLion starts the debugger from a different working directory, add the same import command under **Settings | Build, Execution, Deployment | Debugger | LLDB Startup Commands** with the absolute path to `src/protocyte/debugger/protocyte_lldb.py`.
 
