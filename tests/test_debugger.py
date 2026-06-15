@@ -390,6 +390,24 @@ def test_lldb_init_module_keeps_loading_when_recognizers_are_unsupported(
     assert any(command.startswith("target stop-hook add") for command in commands)
 
 
+def test_lldb_init_module_ignores_fresh_session_script_delete_errors(
+    protocyte_lldb_module,
+) -> None:
+    debugger = _FakeDebugger(
+        fail_command_contains="command script delete",
+        error="error: can only delete user defined commands, but no user defined commands found",
+    )
+
+    protocyte_lldb_module.__lldb_init_module(debugger, {})
+
+    commands = debugger.interpreter.commands
+    assert "command script add -f protocyte_lldb.protocyte_oneof protocyte-oneof" in commands
+    assert (
+        "command script add -f protocyte_lldb.protocyte_register_frame_types "
+        "protocyte-register-frame-types"
+    ) in commands
+
+
 @pytest.mark.parametrize(
     ("type_name", "recognizer_name"),
     [

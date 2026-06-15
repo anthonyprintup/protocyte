@@ -15,6 +15,12 @@ _HASH_MAP_TYPE_REGEX = r"^.*protocyte::HashMap<.+,.+,.+>$"
 _DEFAULT_BYTES_TYPE = "protocyte::Bytes<protocyte::DefaultConfig>"
 _DEFAULT_STRING_TYPE = "protocyte::String<protocyte::DefaultConfig>"
 _registered_exact_types = set()
+_SCRIPT_DELETE_IGNORED_ERRORS = (
+    "does not exist",
+    "not found",
+    "unknown command",
+    "can only delete user defined commands",
+)
 
 
 def _recognizer_type_name(type_):
@@ -1417,31 +1423,11 @@ def __lldb_init_module(debugger, _internal_dict):
                 "already exists",
                 "exists already",
             ),
-            delete_oneof_command: (
-                "does not exist",
-                "not found",
-                "unknown command",
-            ),
-            delete_diagnostics_command: (
-                "does not exist",
-                "not found",
-                "unknown command",
-            ),
-            delete_bytes_command: (
-                "does not exist",
-                "not found",
-                "unknown command",
-            ),
-            delete_register_type_command: (
-                "does not exist",
-                "not found",
-                "unknown command",
-            ),
-            delete_register_frame_types_command: (
-                "does not exist",
-                "not found",
-                "unknown command",
-            ),
+            delete_oneof_command: _SCRIPT_DELETE_IGNORED_ERRORS,
+            delete_diagnostics_command: _SCRIPT_DELETE_IGNORED_ERRORS,
+            delete_bytes_command: _SCRIPT_DELETE_IGNORED_ERRORS,
+            delete_register_type_command: _SCRIPT_DELETE_IGNORED_ERRORS,
+            delete_register_frame_types_command: _SCRIPT_DELETE_IGNORED_ERRORS,
             stop_hook_command: (
                 "invalid target",
                 "no target",
