@@ -37,6 +37,6 @@ norecursedirs = [
     ".uv-cache",
     "build",
     "dist",
-    "smoke/build",
-    "smoke/cmake-build-debug",
+    "tests/smoke/build",
+    "tests/smoke/cmake-build-debug",
 ]

@@ -1,1 +1,1 @@
-command script import ./debugger/protocyte_lldb.py
+command script import ./src/protocyte/debugger/protocyte_lldb.py

@@ -1,2 +1,17 @@
 .idea/
 **/.idea/
+
+.pytest_cache/
+.ruff_cache/
+.uv-cache/
+.venv/
+__pycache__/
+*.pyc
+
+build/
+dist/
+staging/
+tests/fetchcontent/build/
+tests/find_package/build/
+tests/smoke/build/
+tests/smoke/cmake-build-debug/
