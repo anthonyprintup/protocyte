@@ -159,7 +159,13 @@ class _InvalidLLDBValue(_FakeLLDBValue):
 
 @pytest.fixture
 def protocyte_lldb_module(monkeypatch: pytest.MonkeyPatch):
-    module_path = Path(__file__).resolve().parents[1] / "debugger" / "protocyte_lldb.py"
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "protocyte"
+        / "debugger"
+        / "protocyte_lldb.py"
+    )
     fake_lldb = types.SimpleNamespace(
         SBCommandReturnObject=_FakeSBCommandReturnObject,
         SBType=_InvalidLLDBType,

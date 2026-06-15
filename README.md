@@ -67,12 +67,16 @@ On other shells, either activate `.venv` first or prepend the matching
 For a ground-zero walkthrough that covers getting `protoc`, building and
 installing the protocyte package, running `protoc` with the plugin, wiring the
 generated files into a CMake target, and setting up automatic regeneration, see
-[smoke/README.md](smoke/README.md).
+[tests/smoke/README.md](tests/smoke/README.md).
 
 Generate code:
 
 ```powershell
-protoc --proto_path=. --protocyte_out=runtime=emit:generated tests/example.proto
+protoc `
+  --proto_path=. `
+  --proto_path=src/protocyte/proto `
+  --protocyte_out=runtime=emit:generated `
+  tests/example.proto
 ```
 
 The plugin emits:
@@ -238,9 +242,14 @@ the runtime header emitted into the generated output tree instead of reusing
 the installed/runtime target.
 
 The full end-to-end examples, including building a static library from
-generated translation units, are in [smoke/README.md](smoke/README.md),
+generated translation units, are in [tests/smoke/README.md](tests/smoke/README.md),
 [tests/fetchcontent/CMakeLists.txt](tests/fetchcontent/CMakeLists.txt), and
 [tests/find_package/CMakeLists.txt](tests/find_package/CMakeLists.txt).
+
+## Debugging
+
+LLDB formatters for Protocyte runtime and generated message types are documented
+in [docs/debugger.md](docs/debugger.md).
 
 ## Plugin Parameters
 
@@ -277,6 +286,7 @@ Example:
 ```powershell
 protoc `
   --proto_path=. `
+  --proto_path=src/protocyte/proto `
   --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out `
   tests/example.proto
 ```
@@ -284,7 +294,7 @@ protoc `
 ## Protocyte Extensions
 
 Protocyte ships custom protobuf options in
-[protocyte/options.proto](protocyte/options.proto).
+[src/protocyte/proto/protocyte/options.proto](src/protocyte/proto/protocyte/options.proto).
 
 Available extensions:
 

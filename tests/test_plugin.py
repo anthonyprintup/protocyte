@@ -56,6 +56,7 @@ def test_runtime_rejects_unmatched_end_group_in_skip_field() -> None:
 def test_kernel_smoke_provides_debug_string_view_crt_shims() -> None:
     source = (
         Path(__file__).resolve().parents[1]
+        / "tests"
         / "smoke"
         / "src"
         / "kernel_driver_smoke.cpp"
@@ -1162,12 +1163,14 @@ def test_generated_header_contains_expected_field_api() -> None:
 def test_checked_smoke_output_reflects_copy_propagation() -> None:
     header = (
         Path(__file__).resolve().parents[1]
+        / "tests"
         / "smoke"
         / "generated"
         / "example.protocyte.hpp"
     ).read_text(encoding="utf-8")
     cross_header = (
         Path(__file__).resolve().parents[1]
+        / "tests"
         / "smoke"
         / "generated"
         / "cross_package.protocyte.hpp"
@@ -2270,16 +2273,15 @@ def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
     assert "::protocyte::Status serialize(Writer& writer) const noexcept {" in header
 
 
-def test_repo_root_options_proto_matches_generator_copy() -> None:
+def test_packaged_options_proto_is_the_only_repo_copy() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     root_copy = repo_root / "protocyte" / "options.proto"
     source_copy = (
         repo_root / "src" / "protocyte" / "proto" / "protocyte" / "options.proto"
     )
 
-    assert root_copy.read_text(encoding="utf-8") == source_copy.read_text(
-        encoding="utf-8"
-    )
+    assert not root_copy.exists()
+    assert source_copy.is_file()
 
 
 def _simple_file() -> descriptor_pb2.FileDescriptorProto:

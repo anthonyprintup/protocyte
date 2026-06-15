@@ -1,6 +1,6 @@
 # Protocyte LLDB Formatters
 
-This directory contains LLDB visualizers for the generated Protocyte runtime:
+This document describes LLDB visualizers for the generated Protocyte runtime:
 
 - `protocyte::String<Config>`: shows `size=<N>, value="<text>", hex=[<bytes>]`.
 - `protocyte::Bytes<Config>`, `ByteView`, and `MutableByteView`: show `size=<N>, hex=[<bytes>], ascii="<preview>"` and expandable byte children.
@@ -17,10 +17,10 @@ This repository includes a project-local [`.lldbinit`](../.lldbinit) at the repo
 (lldb) command source .lldbinit
 ```
 
-That init file imports [debugger/protocyte_lldb.py](protocyte_lldb.py). If you prefer, import the formatter module directly:
+That init file imports [src/protocyte/debugger/protocyte_lldb.py](../src/protocyte/debugger/protocyte_lldb.py). If you prefer, import the formatter module directly:
 
 ```text
-(lldb) command script import debugger/protocyte_lldb.py
+(lldb) command script import src/protocyte/debugger/protocyte_lldb.py
 ```
 
 Then inspect values normally:
@@ -54,7 +54,7 @@ settings set target.load-cwd-lldbinit true
 
 On Windows with the MSVC toolchain, CLion uses JetBrains' LLDB-based debugger for MSVC. Use a CMake profile that debugs with LLDB, start a debug session, and the variables view should pick up these formatters through the project `.lldbinit`.
 
-If CLion starts the debugger from a different working directory, add the same import command under **Settings | Build, Execution, Deployment | Debugger | LLDB Startup Commands** with the absolute path to `debugger/protocyte_lldb.py`.
+If CLion starts the debugger from a different working directory, add the same import command under **Settings | Build, Execution, Deployment | Debugger | LLDB Startup Commands** with the absolute path to `src/protocyte/debugger/protocyte_lldb.py`.
 
 To enable the oneof tagged-union view in CLion, add a second startup command with the generated namespace or message regex you want, for example:
 

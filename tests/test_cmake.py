@@ -132,7 +132,9 @@ def test_cmake_requires_python_314_for_codegen_wrapper() -> None:
 
 
 def test_smoke_cmake_gates_std_format_opt_in_on_compile_probe() -> None:
-    smoke_cmake = (Path(__file__).resolve().parents[1] / "smoke" / "CMakeLists.txt").read_text(encoding="utf-8")
+    smoke_cmake = (
+        Path(__file__).resolve().parents[1] / "tests" / "smoke" / "CMakeLists.txt"
+    ).read_text(encoding="utf-8")
 
     assert "include(CheckCXXSourceCompiles)" in smoke_cmake
     assert "check_cxx_source_compiles(" in smoke_cmake

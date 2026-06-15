@@ -432,8 +432,9 @@ changes to protocyte itself also refresh the checked outputs.
 
 ## 9. Run The Smoke Project In This Repository
 
-The smoke presets live in `smoke/CMakePresets.json`, so run the preset-based
-configure, build, and test commands from the `smoke/` directory.
+The smoke presets live in `tests/smoke/CMakePresets.json`, so run the
+preset-based configure, build, and test commands from the `tests/smoke/`
+directory.
 
 On Windows, open a Visual Studio Developer PowerShell or otherwise initialize
 the MSVC developer environment first. The presets use the standard
@@ -444,7 +445,7 @@ edition or Windows SDK version.
 Build and run the hosted smoke test:
 
 ```powershell
-Push-Location smoke
+Push-Location tests/smoke
 cmake --preset windows-clangcl-ninja
 cmake --build --preset windows-clangcl-ninja
 ctest --preset windows-clangcl-ninja
@@ -454,7 +455,7 @@ Pop-Location
 Regenerate the checked-in smoke fixtures:
 
 ```powershell
-Push-Location smoke
+Push-Location tests/smoke
 cmake --preset windows-clangcl-ninja -DPROTOCYTE_SMOKE_REGENERATE=ON
 cmake --build build/clangcl --target protocyte_smoke_regenerate
 Pop-Location
@@ -463,7 +464,7 @@ Pop-Location
 Build the optional WDK driver smoke target:
 
 ```powershell
-Push-Location smoke
+Push-Location tests/smoke
 cmake --preset windows-clangcl-ninja-driver
 cmake --build --preset windows-clangcl-ninja-driver
 Pop-Location
@@ -472,6 +473,6 @@ Pop-Location
 If you want a concrete reference, the smoke project is the best place to copy
 from first:
 
-- [`smoke/CMakeLists.txt`](./CMakeLists.txt) shows regeneration wiring.
-- [`smoke/proto/example.proto`](./proto/example.proto) shows protocyte options.
-- [`smoke/src/host_smoke.cpp`](./src/host_smoke.cpp) shows generated-code usage.
+- [`tests/smoke/CMakeLists.txt`](./CMakeLists.txt) shows regeneration wiring.
+- [`tests/smoke/proto/example.proto`](./proto/example.proto) shows protocyte options.
+- [`tests/smoke/src/host_smoke.cpp`](./src/host_smoke.cpp) shows generated-code usage.

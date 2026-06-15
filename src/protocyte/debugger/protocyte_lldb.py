@@ -32,9 +32,13 @@ def _run_lldb_commands(debugger, commands, *, context, ignored_errors=None):
 
 
 def write_smoke_lldbinit():
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    formatter_path = os.path.join(repo_root, "debugger", "protocyte_lldb.py")
-    smoke_lldbinit = os.path.join(repo_root, "smoke", ".lldbinit")
+    repo_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
+    formatter_path = os.path.join(
+        repo_root, "src", "protocyte", "debugger", "protocyte_lldb.py"
+    )
+    smoke_lldbinit = os.path.join(repo_root, "tests", "smoke", ".lldbinit")
     content = "\n".join(
         [
             f"command script import {_quote_path(formatter_path)}",

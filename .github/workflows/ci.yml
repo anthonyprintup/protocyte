@@ -38,7 +38,7 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Lint Python sources
-        run: uv run ruff check src tests smoke/tools debugger
+        run: uv run ruff check src tests
 
       - name: Build plugin package
         run: uv build
@@ -69,22 +69,22 @@ jobs:
 
       - name: Verify checked smoke outputs
         run: |
-          uv run python smoke/tools/generate_checked_outputs.py
-          git diff --exit-code -- smoke/generated
+          uv run python tests/smoke/tools/generate_checked_outputs.py
+          git diff --exit-code -- tests/smoke/generated
 
       - name: Set up MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Configure non-kernel smoke tests
-        working-directory: smoke
+        working-directory: tests/smoke
         run: cmake --preset windows-clangcl-ninja
 
       - name: Build non-kernel smoke tests
-        working-directory: smoke
+        working-directory: tests/smoke
         run: cmake --build --preset windows-clangcl-ninja
 
       - name: Run non-kernel smoke tests
-        working-directory: smoke
+        working-directory: tests/smoke
         run: ctest --preset windows-clangcl-ninja
 
   smoke-host-msvc:
@@ -112,15 +112,15 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Configure non-kernel smoke tests
-        working-directory: smoke
+        working-directory: tests/smoke
         run: cmake --preset windows-msvc-ninja
 
       - name: Build non-kernel smoke tests
-        working-directory: smoke
+        working-directory: tests/smoke
         run: cmake --build --preset windows-msvc-ninja
 
       - name: Run non-kernel smoke tests
-        working-directory: smoke
+        working-directory: tests/smoke
         run: ctest --preset windows-msvc-ninja
 
   smoke-host-linux:
@@ -132,13 +132,13 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Configure Linux smoke tests
-        run: cmake -S smoke -B smoke/build/linux-host -G Ninja
+        run: cmake -S tests/smoke -B tests/smoke/build/linux-host -G Ninja
 
       - name: Build Linux smoke tests
-        run: cmake --build smoke/build/linux-host
+        run: cmake --build tests/smoke/build/linux-host
 
       - name: Run Linux smoke tests
-        run: ctest --test-dir smoke/build/linux-host --output-on-failure
+        run: ctest --test-dir tests/smoke/build/linux-host --output-on-failure
 
   smoke-kernel-build:
     name: Smoke Kernel Build
@@ -165,11 +165,11 @@ jobs:
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Configure kernel smoke build
-        working-directory: smoke
+        working-directory: tests/smoke
         run: cmake --preset windows-msvc-ninja-driver
 
       - name: Build kernel smoke target
-        working-directory: smoke
+        working-directory: tests/smoke
         run: cmake --build --preset windows-msvc-ninja-driver --target protocyte_kernel_smoke
 
   fetchcontent-linux:
