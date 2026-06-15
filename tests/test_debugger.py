@@ -193,6 +193,9 @@ class _FakeLLDBValue:
         self.summary = summary
         self.prefer_synthetic = True
         self.synthetic_children_generated = True
+        self.parent: _FakeLLDBValue | None = None
+        for child in self.children.values():
+            child.parent = self
 
     def GetNonSyntheticValue(self):
         return self
@@ -280,6 +283,9 @@ class _FakeLLDBValue:
 
     def GetName(self) -> str:
         return self._name
+
+    def GetParent(self):
+        return self.parent or _InvalidLLDBValue()
 
     def SetPreferSyntheticValue(self, value: bool) -> None:
         self.prefer_synthetic = value
@@ -523,6 +529,82 @@ def test_string_provider_uses_string_summary_metadata_elements_and_raw_view(
     raw_provider = protocyte_lldb_module.ByteSpanSyntheticProvider(raw_view, {})
     assert protocyte_lldb_module.string_summary(raw_view, {}) is None
     assert _child_names(raw_provider) == ["bytes_"]
+
+
+def test_nested_raw_view_child_keeps_recursive_raw_mode(
+    protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    char_type = _FakeLLDBType("char", byte_size=1)
+    storage = _FakeLLDBValue(
+        "bytes_",
+        children={
+            "ctx_": _FakeLLDBValue("ctx_", address=0x4100, unsigned=0x4100),
+            "data_": _FakeLLDBValue(
+                "data_",
+                type_=_FakeLLDBType("char *", pointee=char_type),
+                unsigned=0x3100,
+            ),
+            "size_": _FakeLLDBValue("size_", unsigned=2),
+            "capacity_": _FakeLLDBValue("capacity_", unsigned=8),
+        },
+        type_=_FakeLLDBType(
+            "protocyte::Vector<unsigned char, protocyte::DefaultConfig>"
+        ),
+    )
+    string_bytes = _FakeLLDBValue(
+        "bytes_",
+        children={
+            "ctx_": _FakeLLDBValue("ctx_", address=0x4000, unsigned=0x4000),
+            "bytes_": storage,
+        },
+        type_=_FakeLLDBType("protocyte::Bytes<protocyte::DefaultConfig>"),
+    )
+    string_value = _FakeLLDBValue(
+        "name",
+        children={"bytes_": string_bytes},
+        type_=_FakeLLDBType("protocyte::String<protocyte::DefaultConfig>"),
+    )
+    monkeypatch.setattr(
+        protocyte_lldb_module,
+        "_read_byte_span",
+        lambda value, data_value, size_value, limit=64: (b"Hi", 2, 0x3100),
+    )
+
+    provider = protocyte_lldb_module.ByteSpanSyntheticProvider(string_value, {})
+    raw_string = provider.get_child_at_index(4)
+    raw_bytes = raw_string.GetChildAtIndex(0)
+
+    raw_bytes_provider = protocyte_lldb_module.ByteSpanSyntheticProvider(raw_bytes, {})
+
+    assert protocyte_lldb_module.bytes_summary(raw_bytes, {}) is None
+    assert _child_names(raw_bytes_provider) == ["ctx_", "bytes_"]
+
+
+def test_vector_raw_view_does_not_recurse_into_another_raw_view(
+    protocyte_lldb_module,
+) -> None:
+    int_type = _FakeLLDBType("int", byte_size=4)
+    vector = _FakeLLDBValue(
+        "values",
+        children={
+            "ctx_": _FakeLLDBValue("ctx_", address=0x2000, unsigned=0x2000),
+            "data_": _FakeLLDBValue(
+                "data_",
+                type_=_FakeLLDBType("int *", pointee=int_type),
+                unsigned=0x1000,
+            ),
+            "size_": _FakeLLDBValue("size_", unsigned=2),
+            "capacity_": _FakeLLDBValue("capacity_", unsigned=4),
+        },
+        type_=_FakeLLDBType("protocyte::Vector<int, protocyte::DefaultConfig>"),
+    )
+
+    provider = protocyte_lldb_module.VectorSyntheticProvider(vector, {})
+    raw_view = provider.get_child_at_index(4)
+    raw_provider = protocyte_lldb_module.VectorSyntheticProvider(raw_view, {})
+
+    assert protocyte_lldb_module.vector_summary(raw_view, {}) is None
+    assert _child_names(raw_provider) == ["ctx_", "data_", "size_", "capacity_"]
 
 
 def test_span_provider_registers_and_displays_indexed_children_with_raw_view(

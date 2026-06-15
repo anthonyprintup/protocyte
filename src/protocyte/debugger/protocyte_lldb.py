@@ -410,6 +410,20 @@ def _raw_children(value):
     return [raw] if raw.IsValid() else []
 
 
+def _disable_synthetic(value):
+    for method_name, method_value in (
+        ("SetPreferSyntheticValue", False),
+        ("SetSyntheticChildrenGenerated", False),
+    ):
+        method = getattr(value, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            method(method_value)
+        except Exception:
+            pass
+
+
 def _raw_view(value):
     raw = value.GetNonSyntheticValue()
     if not raw.IsValid():
@@ -424,17 +438,7 @@ def _raw_view(value):
         renamed = _renamed_value(value, raw, "Raw View")
     if not renamed.IsValid():
         return lldb.SBValue()
-    for method_name, method_value in (
-        ("SetPreferSyntheticValue", False),
-        ("SetSyntheticChildrenGenerated", False),
-    ):
-        method = getattr(renamed, method_name, None)
-        if not callable(method):
-            continue
-        try:
-            method(method_value)
-        except Exception:
-            pass
+    _disable_synthetic(renamed)
     return renamed if renamed.GetNumChildren() else lldb.SBValue()
 
 
@@ -449,20 +453,49 @@ def _is_raw_view_value(value):
     return (value.GetName() or "") == "Raw View"
 
 
+def _parent_value(value):
+    method = getattr(value, "GetParent", None)
+    if not callable(method):
+        return lldb.SBValue()
+    try:
+        parent = method()
+    except Exception:
+        return lldb.SBValue()
+    return parent if parent.IsValid() else lldb.SBValue()
+
+
+def _is_raw_tree_value(value):
+    current = value
+    for _depth in range(32):
+        if not current.IsValid():
+            return False
+        if _is_raw_view_value(current):
+            return True
+        current = _parent_value(current)
+    return False
+
+
 def _raw_member_children(value):
     raw = value.GetNonSyntheticValue()
     if not raw.IsValid():
         return []
-    return [
-        raw.GetChildAtIndex(index)
-        for index in range(raw.GetNumChildren())
-        if raw.GetChildAtIndex(index).IsValid()
-    ]
+    children = []
+    for index in range(raw.GetNumChildren()):
+        child = raw.GetChildAtIndex(index)
+        if child.IsValid():
+            _disable_synthetic(child)
+            children.append(child)
+    return children
+
+
+def _set_provider_value(provider, value):
+    provider.raw_mode = _is_raw_tree_value(value)
+    provider.value = value.GetNonSyntheticValue()
 
 
 def _set_raw_mode(provider):
     provider.raw_mode_children = []
-    if not _is_raw_view_value(provider.value):
+    if not provider.raw_mode:
         return False
     provider.raw_mode_children = _raw_member_children(provider.value)
     return True
@@ -479,6 +512,8 @@ def _raw_mode_child_at_index(provider, index):
 
 
 def status_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     error = _child(value, "error_")
     code = _child(error, "code")
     code_name = code.GetValue() if code.IsValid() else None
@@ -492,6 +527,8 @@ def status_summary(value, _internal_dict):
 
 
 def error_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     code = _child(value, "code")
     code_name = code.GetValue() if code.IsValid() else None
     offset = _unsigned(_child(value, "offset"), 0)
@@ -500,6 +537,8 @@ def error_summary(value, _internal_dict):
 
 
 def result_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     ok = _bool(_child(value, "ok_"))
     if ok:
         return "ok"
@@ -507,6 +546,8 @@ def result_summary(value, _internal_dict):
 
 
 def optional_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     ptr = _child(value.GetNonSyntheticValue(), "ptr_")
     if ptr.IsValid():
         return "some" if _pointer_value(ptr) else "none"
@@ -514,27 +555,29 @@ def optional_summary(value, _internal_dict):
 
 
 def box_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     ptr = _child(value, "ptr_")
     address = _pointer_value(ptr)
     return f"value=0x{address:x}" if address else "value=null"
 
 
 def vector_summary(value, _internal_dict):
-    if _is_raw_view_value(value):
+    if _is_raw_tree_value(value):
         return None
     _data, size, _capacity = _vector_storage(value)
     return _count_summary("size", _unsigned(size, 0))
 
 
 def bytes_summary(value, _internal_dict):
-    if _is_raw_view_value(value):
+    if _is_raw_tree_value(value):
         return None
     data, size, _capacity = _bytes_storage(value)
     return _bytes_summary_from_span(value, data, size)
 
 
 def string_summary(value, _internal_dict):
-    if _is_raw_view_value(value):
+    if _is_raw_tree_value(value):
         return None
     data_value, size_value, _capacity = _string_storage(value)
     data, size, address = _read_byte_span(value, data_value, size_value)
@@ -549,6 +592,8 @@ def string_summary(value, _internal_dict):
 
 
 def byte_view_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     return _bytes_summary_from_span(value, _child(value, "data"), _child(value, "size"))
 
 
@@ -557,14 +602,14 @@ def mutable_byte_view_summary(value, _internal_dict):
 
 
 def span_summary(value, _internal_dict):
-    if _is_raw_view_value(value):
+    if _is_raw_tree_value(value):
         return None
     _data, size = _span_storage(value)
     return _count_summary("size", _unsigned(size, 0))
 
 
 def hash_map_summary(value, _internal_dict):
-    if _is_raw_view_value(value):
+    if _is_raw_tree_value(value):
         return None
     size = _child(value, "size_")
     buckets = _child(value, "buckets_")
@@ -595,10 +640,12 @@ def slice_writer_summary(value, _internal_dict):
 
 class VectorSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            return
         self.data, self.size_value, self.capacity_value = _vector_storage(self.value)
         self.size = _unsigned(self.size_value, 0)
         self.element_type = _pointee_type(self.data)
@@ -616,9 +663,13 @@ class VectorSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
+        if self.raw_mode:
+            return len(self.raw_mode_children)
         return len(self.metadata_children) + self.size + len(self.raw_children)
 
     def get_child_index(self, name):
+        if self.raw_mode:
+            return _raw_mode_child_index(self, name)
         for index, child in enumerate(self.metadata_children):
             if child.GetName() == name:
                 return index
@@ -635,6 +686,8 @@ class VectorSyntheticProvider:
         return -1
 
     def get_child_at_index(self, index):
+        if self.raw_mode:
+            return _raw_mode_child_at_index(self, index)
         metadata_count = len(self.metadata_children)
         if 0 <= index < metadata_count:
             return self.metadata_children[index]
@@ -654,7 +707,7 @@ class VectorSyntheticProvider:
 
 class ByteSpanSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
@@ -694,12 +747,12 @@ class ByteSpanSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
-        if _is_raw_view_value(self.value):
+        if self.raw_mode:
             return len(self.raw_mode_children)
         return len(self.metadata_children) + self.size + len(self.raw_children)
 
     def get_child_index(self, name):
-        if _is_raw_view_value(self.value):
+        if self.raw_mode:
             return _raw_mode_child_index(self, name)
         for index, child in enumerate(self.metadata_children):
             if child.GetName() == name:
@@ -717,7 +770,7 @@ class ByteSpanSyntheticProvider:
         return -1
 
     def get_child_at_index(self, index):
-        if _is_raw_view_value(self.value):
+        if self.raw_mode:
             return _raw_mode_child_at_index(self, index)
         metadata_count = len(self.metadata_children)
         if 0 <= index < metadata_count:
@@ -738,10 +791,12 @@ class ByteSpanSyntheticProvider:
 
 class PointerValueSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            return
         if (self.value.GetTypeName() or "").startswith("protocyte::Box<"):
             self.ptr = _child(self.value, "ptr_")
         else:
@@ -750,11 +805,15 @@ class PointerValueSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
+        if self.raw_mode:
+            return len(self.raw_mode_children)
         return (
             1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
         ) + len(self.raw_children)
 
     def get_child_index(self, name):
+        if self.raw_mode:
+            return _raw_mode_child_index(self, name)
         value_count = (
             1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
         )
@@ -764,6 +823,8 @@ class PointerValueSyntheticProvider:
         return 0 if name == "value" else -1
 
     def get_child_at_index(self, index):
+        if self.raw_mode:
+            return _raw_mode_child_at_index(self, index)
         value_count = (
             1 if _pointer_value(self.ptr) != 0 and self.pointee_type.IsValid() else 0
         )
@@ -781,10 +842,12 @@ class PointerValueSyntheticProvider:
 
 class ResultSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            return
         self.ok = _bool(_child(self.value, "ok_"))
         self.value_ptr = _child(self.value, "value_")
         self.value_is_reference = _first_template_argument_is_lvalue_reference(
@@ -794,9 +857,13 @@ class ResultSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
+        if self.raw_mode:
+            return len(self.raw_mode_children)
         return 1 + len(self.raw_children)
 
     def get_child_index(self, name):
+        if self.raw_mode:
+            return _raw_mode_child_index(self, name)
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
             return 1 + raw_index
@@ -807,6 +874,8 @@ class ResultSyntheticProvider:
         return -1
 
     def get_child_at_index(self, index):
+        if self.raw_mode:
+            return _raw_mode_child_at_index(self, index)
         if 1 <= index < 1 + len(self.raw_children):
             return self.raw_children[index - 1]
         if index != 0:
@@ -830,10 +899,12 @@ class ResultSyntheticProvider:
 
 class OptionalSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            return
         self.ptr = _child(self.value, "ptr_")
         self.has_value = (
             _pointer_value(self.ptr) != 0
@@ -848,11 +919,15 @@ class OptionalSyntheticProvider:
         self.raw_children = _raw_children(self.value)
 
     def num_children(self):
+        if self.raw_mode:
+            return len(self.raw_mode_children)
         return (1 if self.has_value and self.value_type.IsValid() else 0) + len(
             self.raw_children
         )
 
     def get_child_index(self, name):
+        if self.raw_mode:
+            return _raw_mode_child_index(self, name)
         value_count = 1 if self.has_value and self.value_type.IsValid() else 0
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
@@ -860,6 +935,8 @@ class OptionalSyntheticProvider:
         return 0 if name == "value" and value_count else -1
 
     def get_child_at_index(self, index):
+        if self.raw_mode:
+            return _raw_mode_child_at_index(self, index)
         value_count = 1 if self.has_value and self.value_type.IsValid() else 0
         if value_count <= index < value_count + len(self.raw_children):
             return self.raw_children[index - value_count]
@@ -881,10 +958,12 @@ class OptionalSyntheticProvider:
 
 class HashMapSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            return
         self.entries = []
         buckets = _child(self.value, "buckets_")
         self.metadata_children = [
@@ -917,9 +996,13 @@ class HashMapSyntheticProvider:
                 self.entries.append(value)
 
     def num_children(self):
+        if self.raw_mode:
+            return len(self.raw_mode_children)
         return len(self.entries) + len(self.metadata_children) + len(self.raw_children)
 
     def get_child_index(self, name):
+        if self.raw_mode:
+            return _raw_mode_child_index(self, name)
         entry_count = len(self.entries)
         for index, child in enumerate(self.metadata_children):
             if child.GetName() == name:
@@ -938,6 +1021,8 @@ class HashMapSyntheticProvider:
         return -1
 
     def get_child_at_index(self, index):
+        if self.raw_mode:
+            return _raw_mode_child_at_index(self, index)
         entry_count = len(self.entries)
         metadata_count = len(self.metadata_children)
         if entry_count <= index < entry_count + metadata_count:
@@ -956,10 +1041,13 @@ class HashMapSyntheticProvider:
 
 class GeneratedMessageOneofSyntheticProvider:
     def __init__(self, value, _internal_dict):
-        self.value = value.GetNonSyntheticValue()
+        _set_provider_value(self, value)
         self.update()
 
     def update(self):
+        if _set_raw_mode(self):
+            self.children = self.raw_mode_children
+            return
         self.children = []
         self.real_child_count = self.value.GetNumChildren()
         for index in range(self.real_child_count):
@@ -1010,6 +1098,8 @@ class GeneratedMessageOneofSyntheticProvider:
 
 
 def oneof_summary(value, _internal_dict):
+    if _is_raw_tree_value(value):
+        return None
     parts = []
     value = value.GetNonSyntheticValue()
     for case_field_name in _case_field_names(value):
