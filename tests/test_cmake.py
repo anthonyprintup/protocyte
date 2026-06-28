@@ -203,6 +203,17 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: 
     runtime = file_set.file.add()
     runtime.name = "google/protobuf/descriptor.proto"
     runtime.syntax = "proto2"
+    timestamp = file_set.file.add()
+    timestamp.name = "google/protobuf/timestamp.proto"
+    timestamp.package = "google.protobuf"
+    timestamp.syntax = "proto3"
+    timestamp_message = timestamp.message_type.add()
+    timestamp_message.name = "Timestamp"
+    seconds = timestamp_message.field.add()
+    seconds.name = "seconds"
+    seconds.number = 1
+    seconds.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    seconds.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT64
     options = file_set.file.add()
     options.name = "protocyte/options.proto"
     options.syntax = "proto2"
@@ -211,7 +222,15 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: 
     user.name = "api/demo.proto"
     user.syntax = "proto3"
     user.dependency.append("protocyte/options.proto")
-    user.message_type.add().name = "Demo"
+    user.dependency.append("google/protobuf/timestamp.proto")
+    user_message = user.message_type.add()
+    user_message.name = "Demo"
+    created_at = user_message.field.add()
+    created_at.name = "created_at"
+    created_at.number = 1
+    created_at.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    created_at.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    created_at.type_name = ".google.protobuf.Timestamp"
     descriptor_set.write_bytes(file_set.SerializeToString())
     protoc = source_dir / "tools" / "protoc"
     plugin = source_dir / "tools" / "protoc-gen-protocyte"
@@ -243,9 +262,9 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: 
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
-    assert (build_dir / "headers.txt").read_text(encoding="utf-8").endswith(
-        "generated/api/demo.protocyte.hpp"
-    )
+    headers = (build_dir / "headers.txt").read_text(encoding="utf-8")
+    assert "generated/api/demo.protocyte.hpp" in headers
+    assert "generated/google/protobuf/timestamp.protocyte.hpp" in headers
 
 
 def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(tmp_path: Path) -> None:

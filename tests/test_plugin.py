@@ -1035,6 +1035,68 @@ def test_generates_empty_syntax_defaults_as_proto2() -> None:
     assert "packed_size_samples" not in header
 
 
+def test_proto2_default_semantics_follow_protobuf_spec() -> None:
+    model = build_model(_proto2_default_semantics_request())
+    fields = {field.name: field for field in model.messages["defaults.Defaults"].fields}
+
+    assert fields["implicit_int32"].explicit_presence
+    assert fields["implicit_int32"].default_cpp is None
+    assert fields["implicit_bool"].default_cpp is None
+    assert fields["implicit_string"].default_cpp is None
+    assert fields["implicit_bytes"].default_cpp is None
+    assert fields["implicit_message"].default_cpp is None
+    assert fields["implicit_numbers"].packed is False
+    assert fields["implicit_choice"].default_cpp == "5"
+    assert fields["explicit_choice"].default_cpp == "9"
+
+
+def test_empty_syntax_default_semantics_follow_proto2_spec() -> None:
+    request = _proto2_default_semantics_request()
+    request.proto_file[0].ClearField("syntax")
+
+    model = build_model(request)
+    fields = {field.name: field for field in model.messages["defaults.Defaults"].fields}
+
+    assert model.files["defaults.proto"].syntax == "proto2"
+    assert fields["implicit_int32"].explicit_presence
+    assert fields["implicit_numbers"].packed is False
+    assert fields["implicit_choice"].default_cpp == "5"
+    assert fields["explicit_choice"].default_cpp == "9"
+
+
+def test_generates_proto2_default_semantics() -> None:
+    response = generate_response(_proto2_default_semantics_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["defaults.protocyte.hpp"]
+    assert "constexpr ::protocyte::i32 implicit_int32() const noexcept { return implicit_int32_; }" in header
+    assert "constexpr bool implicit_bool() const noexcept { return implicit_bool_; }" in header
+    assert "::protocyte::StringView implicit_string() const noexcept { return implicit_string_.view(); }" in header
+    assert (
+        "::protocyte::Span<const ::protocyte::u8> implicit_bytes() const noexcept { return implicit_bytes_.view(); }"
+        in header
+    )
+    assert "bool has_implicit_message() const noexcept { return implicit_message_.has_value(); }" in header
+    assert "packed_size_implicit_numbers" not in header
+    assert (
+        "constexpr ::protocyte::i32 implicit_choice_raw() const noexcept { return has_implicit_choice_ ? implicit_choice_ : 5; }"
+        in header
+    )
+    assert (
+        "constexpr ::defaults::DefaultChoice implicit_choice() const noexcept { return static_cast<::defaults::DefaultChoice>(has_implicit_choice_ ? implicit_choice_ : 5); }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::i32 explicit_choice_raw() const noexcept { return has_explicit_choice_ ? explicit_choice_ : 9; }"
+        in header
+    )
+    assert (
+        "constexpr ::defaults::DefaultChoice explicit_choice() const noexcept { return static_cast<::defaults::DefaultChoice>(has_explicit_choice_ ? explicit_choice_ : 9); }"
+        in header
+    )
+
+
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("uses_legacy.proto")
@@ -3641,6 +3703,94 @@ def _proto2_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_INT64
     field.default_value = "-9223372036854775808"
+
+    return file
+
+
+def _proto2_default_semantics_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("defaults.proto")
+    request.proto_file.append(_proto2_default_semantics_file())
+    return request
+
+
+def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "defaults.proto"
+    file.package = "defaults"
+    file.syntax = "proto2"
+
+    enum = file.enum_type.add()
+    enum.name = "DefaultChoice"
+    value = enum.value.add()
+    value.name = "DEFAULT_CHOICE_UNKNOWN"
+    value.number = 5
+    value = enum.value.add()
+    value.name = "DEFAULT_CHOICE_READY"
+    value.number = 9
+
+    nested = file.message_type.add()
+    nested.name = "Nested"
+    field = nested.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    message = file.message_type.add()
+    message.name = "Defaults"
+
+    field = message.field.add()
+    field.name = "implicit_int32"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "implicit_bool"
+    field.number = 2
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BOOL
+
+    field = message.field.add()
+    field.name = "implicit_string"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+
+    field = message.field.add()
+    field.name = "implicit_bytes"
+    field.number = 4
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+
+    field = message.field.add()
+    field.name = "implicit_message"
+    field.number = 5
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".defaults.Nested"
+
+    field = message.field.add()
+    field.name = "implicit_numbers"
+    field.number = 6
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "implicit_choice"
+    field.number = 7
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_ENUM
+    field.type_name = ".defaults.DefaultChoice"
+
+    field = message.field.add()
+    field.name = "explicit_choice"
+    field.number = 8
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_ENUM
+    field.type_name = ".defaults.DefaultChoice"
+    field.default_value = "DEFAULT_CHOICE_READY"
 
     return file
 

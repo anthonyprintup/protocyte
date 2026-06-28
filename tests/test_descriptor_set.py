@@ -21,6 +21,37 @@ def _file(name: str, *dependencies: str) -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
+def _timestamp_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "google/protobuf/timestamp.proto"
+    file.package = "google.protobuf"
+    file.syntax = "proto3"
+    message = file.message_type.add()
+    message.name = "Timestamp"
+    seconds = message.field.add()
+    seconds.name = "seconds"
+    seconds.number = 1
+    seconds.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    seconds.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT64
+    nanos = message.field.add()
+    nanos.name = "nanos"
+    nanos.number = 2
+    nanos.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    nanos.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    return file
+
+
+def _file_with_timestamp_field(name: str) -> descriptor_pb2.FileDescriptorProto:
+    file = _file(name, "google/protobuf/timestamp.proto")
+    field = file.message_type[0].field.add()
+    field.name = "created_at"
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    field.type_name = ".google.protobuf.Timestamp"
+    return file
+
+
 def _write_descriptor_set(path: Path, *files: descriptor_pb2.FileDescriptorProto) -> None:
     descriptor_set = descriptor_pb2.FileDescriptorSet()
     descriptor_set.file.extend(files)
@@ -90,3 +121,17 @@ def test_discover_files_skips_google_protobuf_runtime_descriptors(tmp_path: Path
     )
 
     assert discover_files(load_descriptor_set(path)) == ["nested/user.proto"]
+
+
+def test_discover_files_includes_referenced_google_protobuf_message_descriptors(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _timestamp_file(),
+        _file_with_timestamp_field("api/event.proto"),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == [
+        "api/event.proto",
+        "google/protobuf/timestamp.proto",
+    ]

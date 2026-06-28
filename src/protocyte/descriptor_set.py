@@ -67,13 +67,76 @@ def validate_descriptor_set(
 
 def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str]:
     files = index_files(descriptor_set)
-    selected = sorted(
+    selected = {
         name
         for name in files
         if not name.startswith(_RUNTIME_PREFIX) and name not in _INTERNAL_DESCRIPTOR_FILES
-    )
-    _validate_import_graph(files, selected)
-    return selected
+    }
+    type_files = _index_declared_types(files.values())
+    stack = list(selected)
+    while stack:
+        file = files[stack.pop()]
+        for type_name in _referenced_type_names(file):
+            referenced = type_files.get(_normalize_type_name(type_name))
+            if referenced is None or referenced in selected or referenced in _INTERNAL_DESCRIPTOR_FILES:
+                continue
+            selected.add(referenced)
+            stack.append(referenced)
+
+    selected_list = sorted(selected)
+    _validate_import_graph(files, selected_list)
+    return selected_list
+
+
+def _index_declared_types(
+    files: Iterable[descriptor_pb2.FileDescriptorProto],
+) -> dict[str, str]:
+    declared: dict[str, str] = {}
+    for file in files:
+        package = tuple(part for part in file.package.split(".") if part)
+        for message in file.message_type:
+            for type_name in _message_type_names(package, message):
+                declared[type_name] = file.name
+        for enum in file.enum_type:
+            declared[_fully_qualified_name((*package, enum.name))] = file.name
+    return declared
+
+
+def _message_type_names(
+    prefix: tuple[str, ...],
+    message: descriptor_pb2.DescriptorProto,
+) -> Iterable[str]:
+    path = (*prefix, message.name)
+    yield _fully_qualified_name(path)
+    for nested in message.nested_type:
+        yield from _message_type_names(path, nested)
+    for enum in message.enum_type:
+        yield _fully_qualified_name((*path, enum.name))
+
+
+def _referenced_type_names(file: descriptor_pb2.FileDescriptorProto) -> Iterable[str]:
+    for message in file.message_type:
+        yield from _message_referenced_type_names(message)
+
+
+def _message_referenced_type_names(
+    message: descriptor_pb2.DescriptorProto,
+) -> Iterable[str]:
+    for field in message.field:
+        if field.type_name:
+            yield field.type_name
+    for nested in message.nested_type:
+        yield from _message_referenced_type_names(nested)
+
+
+def _fully_qualified_name(parts: Iterable[str]) -> str:
+    return "." + ".".join(part for part in parts if part)
+
+
+def _normalize_type_name(type_name: str) -> str:
+    if type_name.startswith("."):
+        return type_name
+    return f".{type_name}"
 
 
 def _validate_import_graph(

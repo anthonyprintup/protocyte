@@ -1410,6 +1410,13 @@ def _field_default_cpp(
     enum_type: EnumModel | None,
 ) -> str | None:
     if not proto.HasField("default_value"):
+        if (
+            file_syntax == "proto2"
+            and kind == "enum"
+            and enum_type is not None
+            and enum_type.values
+        ):
+            return str(enum_type.values[0].number)
         return None
     if file_syntax == "proto3":
         raise ProtocyteError(f"{owner_full_name}.{proto.name}: explicit default values are not allowed in proto3")
