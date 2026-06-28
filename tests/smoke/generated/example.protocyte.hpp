@@ -2910,6 +2910,9 @@ namespace test::ultimate {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
+            if (size > 4u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
+            }
             if (const auto st = byte_array_.resize(size); !st) {
                 return st;
             }
@@ -2956,6 +2959,9 @@ namespace test::ultimate {
         ::protocyte::Status resize_float_expr_array(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (size > 2u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
             if (const auto st = float_expr_array_.resize(size); !st) {
                 return st;
@@ -6455,6 +6461,9 @@ namespace test::ultimate {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
+            if (size > 8u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
+            }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
             }
@@ -6661,6 +6670,9 @@ namespace test::ultimate {
         ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (size > 6u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
             if (const auto st = external_bytes_.resize(size); !st) {
                 return st;

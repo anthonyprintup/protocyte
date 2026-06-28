@@ -64,6 +64,9 @@ namespace test::crosspkg {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
+            if (size > 15u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
+            }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
             }
@@ -271,6 +274,9 @@ namespace test::crosspkg {
         ::protocyte::Status resize_remote_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (size > 9u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
             if (const auto st = remote_bytes_.resize(size); !st) {
                 return st;
