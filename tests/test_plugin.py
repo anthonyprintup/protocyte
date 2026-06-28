@@ -753,6 +753,10 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
+        "return out.merge_partial_from(nested_reader)"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
         "template<class Config, class Reader> Status skip_field(typename Config::Context &ctx, Reader &reader,"
         in files["protocyte/runtime/runtime.hpp"]
     )
@@ -1128,6 +1132,8 @@ def test_generates_proto2_default_semantics() -> None:
         in header
     )
     assert "bool has_implicit_message() const noexcept { return implicit_message_.has_value(); }" in header
+    assert "if (implicit_message_.has_value()) {" in header
+    assert "has_implicit_message_" not in header
     assert "packed_size_implicit_numbers" not in header
     assert (
         "constexpr ::protocyte::i32 implicit_choice_raw() const noexcept { return has_implicit_choice_ ? implicit_choice_ : 5; }"
@@ -1419,6 +1425,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     )
     assert "template <typename Reader>" in header
     assert "::protocyte::Status merge_from(Reader& reader) noexcept" in header
+    assert "::protocyte::Status merge_partial_from(Reader& reader) noexcept" in header
+    assert "::protocyte::Status validate() const noexcept" in header
+    assert "if (const auto st = validate(); !st) { return st; }" in header
     assert "for (const auto &packed_value_samples : samples_) {" in header
     assert "if (const auto st = out->copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
@@ -2322,10 +2331,14 @@ def test_rejects_constant_name_collisions() -> None:
     reserved_response = generate_response(
         _constant_collision_request("reserved.proto", [("create", "i32", 1)])
     )
+    validate_reserved_response = generate_response(
+        _constant_collision_request("validate.proto", [("validate", "i32", 1)])
+    )
 
     assert "constant cannot be redefined" in duplicate_response.error
     assert "collides after C++ identifier normalization" in normalized_response.error
     assert "collides with generated API" in reserved_response.error
+    assert "collides with generated API" in validate_reserved_response.error
 
 
 def test_generated_header_emits_tagged_union_oneofs() -> None:

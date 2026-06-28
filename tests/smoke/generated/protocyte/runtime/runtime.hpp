@@ -4423,7 +4423,7 @@ namespace protocyte {
         }
         auto &open = *nested;
         auto nested_reader = open.reader_ref();
-        return out.merge_from(nested_reader).and_then([&open]() noexcept -> Status { return open.finish(); });
+        return out.merge_partial_from(nested_reader).and_then([&open]() noexcept -> Status { return open.finish(); });
     }
 
     template<class Writer, class Message>

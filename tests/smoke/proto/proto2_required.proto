@@ -1,0 +1,13 @@
+syntax = "proto2";
+
+package test.required;
+
+message RequiredChild {
+  required int32 id = 1;
+  optional string note = 2;
+}
+
+message RequiredParent {
+  optional RequiredChild child = 1;
+  repeated RequiredChild children = 2;
+}

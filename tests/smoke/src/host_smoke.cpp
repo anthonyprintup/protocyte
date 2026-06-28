@@ -19,6 +19,7 @@
 #include "cross_package.protocyte.hpp"
 #include "example.protocyte.hpp"
 #include "host_fixture.hpp"
+#include "proto2_required.protocyte.hpp"
 #include "protocyte/runtime/runtime.hpp"
 
 namespace {
@@ -98,6 +99,7 @@ namespace {
     using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
+    using RequiredParent = test::required::RequiredParent<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
@@ -2546,6 +2548,52 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         CHECK(parsed.f_int32() == 321);
         CHECK(parsed.map_str_int32().empty());
         CHECK(parsed.map_int32_str().empty());
+    }
+}
+
+TEST_CASE("proto2 required validation waits for embedded message merge", "[smoke][proto2][required]") {
+    auto ctx = make_context();
+
+    SECTION("split singular embedded message is validated after all occurrences are merged") {
+        static constexpr std::array<unsigned char, 13> encoded {
+            0x0a, 0x07, 0x12, 0x05, 'f', 'i', 'r', 's', 't', 0x0a, 0x02, 0x08, 0x7b,
+        };
+
+        RequiredParent parsed(ctx);
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+        require_success(parsed.merge_from(reader));
+        REQUIRE(reader.eof());
+        CHECK(ctx.recursion_depth == 0u);
+
+        REQUIRE(parsed.has_child());
+        const auto *child = parsed.child();
+        REQUIRE(child != nullptr);
+        CHECK(child->has_id());
+        CHECK(child->id() == 123);
+        CHECK(child->has_note());
+        CHECK(child->note() == std::string_view {"first"});
+    }
+
+    SECTION("missing required field in singular embedded message is rejected after parse") {
+        static constexpr std::array<unsigned char, 9> encoded {
+            0x0a, 0x07, 0x12, 0x05, 'e', 'm', 'p', 't', 'y',
+        };
+
+        RequiredParent parsed(ctx);
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("missing required field in repeated embedded message is rejected after parse") {
+        static constexpr std::array<unsigned char, 9> encoded {
+            0x12, 0x07, 0x12, 0x05, 'e', 'm', 'p', 't', 'y',
+        };
+
+        RequiredParent parsed(ctx);
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(ctx.recursion_depth == 0u);
     }
 }
 

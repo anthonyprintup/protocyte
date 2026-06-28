@@ -53,6 +53,12 @@ def main() -> int:
     cross_package_request.proto_file.extend([options_file(), example_file(), cross_package_file()])
     requests.append(cross_package_request)
 
+    proto2_required_request = plugin_pb2.CodeGeneratorRequest()
+    proto2_required_request.file_to_generate.append("proto2_required.proto")
+    proto2_required_request.parameter = _generator_parameter(*smoke_format_options)
+    proto2_required_request.proto_file.append(proto2_required_file())
+    requests.append(proto2_required_request)
+
     for request in requests:
         response = generate_response(request)
         if response.error:
@@ -631,6 +637,25 @@ def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
     nested_bytes.options.ParseFromString(array_option_bytes(expr="MIRRORED_COUNT"))
 
     add_field(msg, "nested", 3, F.TYPE_MESSAGE, type_name=".test.crosspkg.CrossPackageConstants.Nested")
+    return file
+
+
+def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "proto2_required.proto"
+    file.package = "test.required"
+    file.syntax = "proto2"
+
+    child = file.message_type.add()
+    child.name = "RequiredChild"
+    add_field(child, "id", 1, F.TYPE_INT32, label=F.LABEL_REQUIRED)
+    add_field(child, "note", 2, F.TYPE_STRING)
+
+    parent = file.message_type.add()
+    parent.name = "RequiredParent"
+    add_field(parent, "child", 1, F.TYPE_MESSAGE, type_name=".test.required.RequiredChild")
+    add_field(parent, "children", 2, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=".test.required.RequiredChild")
+
     return file
 
 

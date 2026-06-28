@@ -978,8 +978,10 @@ def _validate_constant_collisions(message: MessageModel) -> None:
         "copy_from",
         "parse",
         "merge_from",
+        "merge_partial_from",
         "serialize",
         "encoded_size",
+        "validate",
     }
     reserved.update(_nested_alias_cpp_names(message))
     for oneof in message.oneofs:
@@ -1114,8 +1116,10 @@ def _validate_oneof_collisions(message: MessageModel) -> None:
         "copy_from",
         "parse",
         "merge_from",
+        "merge_partial_from",
         "serialize",
         "encoded_size",
+        "validate",
     }
     reserved.update(_nested_alias_cpp_names(message))
     reserved.update(constant.cpp_name for constant in message.constants)
@@ -1158,8 +1162,10 @@ def _message_generated_cpp_names(message: MessageModel) -> set[str]:
         "copy_from",
         "parse",
         "merge_from",
+        "merge_partial_from",
         "serialize",
         "encoded_size",
+        "validate",
     }
     names.update(constant.cpp_name for constant in message.constants)
     for oneof in message.oneofs:
@@ -1182,8 +1188,10 @@ def _validate_field_collisions(message: MessageModel) -> None:
         "copy_from",
         "parse",
         "merge_from",
+        "merge_partial_from",
         "serialize",
         "encoded_size",
+        "validate",
     }
     reserved.update(_nested_alias_cpp_names(message))
     reserved.update(constant.cpp_name for constant in message.constants)

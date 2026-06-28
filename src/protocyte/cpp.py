@@ -1192,6 +1192,13 @@ def _emit_wire_api(
     w.line("template <typename Reader>")
     w.line("::protocyte::Status merge_from(Reader& reader) noexcept {")
     with w.indent():
+        w.line("if (const auto st = merge_partial_from(reader); !st) { return st; }")
+        w.line("return validate();")
+    w.line("}")
+    w.line()
+    w.line("template <typename Reader>")
+    w.line("::protocyte::Status merge_partial_from(Reader& reader) noexcept {")
+    with w.indent():
         w.line("while (!reader.eof()) {")
         with w.indent():
             w.line("const auto tag = ::protocyte::read_tag(reader);")
@@ -1219,8 +1226,6 @@ def _emit_wire_api(
                     "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
                 )
         w.line("}")
-        _emit_fixed_array_validation(w, message)
-        _emit_required_validation(w, message)
         w.line("return {};")
     w.line("}")
     w.line()
@@ -1228,8 +1233,7 @@ def _emit_wire_api(
     w.line("template <typename Writer>")
     w.line(f"::protocyte::Status serialize(Writer& {writer_name}) const noexcept {{")
     with w.indent():
-        _emit_fixed_array_validation(w, message)
-        _emit_required_validation(w, message)
+        w.line("if (const auto st = validate(); !st) { return st; }")
         for item in sorted(message.fields, key=lambda f: f.number):
             _emit_serialize_statement(w, item, options)
         w.line("return {};")
@@ -1238,14 +1242,21 @@ def _emit_wire_api(
     w.line("::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {")
     with w.indent():
         if message.fields:
-            _emit_fixed_array_validation(w, message, for_size=True)
-            _emit_required_validation(w, message, for_size=True)
+            w.line("if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }")
             w.line("::protocyte::usize total {};")
             for item in sorted(message.fields, key=lambda f: f.number):
                 _emit_size_statement(w, item, options)
             w.line("return total;")
         else:
             w.line("return ::protocyte::usize {};")
+    w.line("}")
+    w.line()
+    w.line("::protocyte::Status validate() const noexcept {")
+    with w.indent():
+        _emit_fixed_array_validation(w, message)
+        _emit_required_validation(w, message)
+        _emit_nested_validation(w, message)
+        w.line("return {};")
     w.line("}")
 
 
@@ -1287,6 +1298,37 @@ def _emit_required_validation(
                 w.line(f"return {error};")
             else:
                 w.line(f"return {error};")
+        w.line("}")
+
+
+def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
+    for item in sorted(message.fields, key=lambda f: f.number):
+        if item.kind == "map":
+            assert item.map_value is not None
+            if item.map_value.kind != "message":
+                continue
+            value_name = f"{item.cpp_name}_value"
+            w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
+            with w.indent():
+                w.line(f"if (const auto st = {value_name}.value.validate(); !st) {{ return st; }}")
+            w.line("}")
+            continue
+        if item.kind != "message":
+            continue
+        if item.repeated:
+            value_name = f"{item.cpp_name}_value"
+            w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
+            with w.indent():
+                w.line(f"if (const auto st = {value_name}.validate(); !st) {{ return st; }}")
+            w.line("}")
+            continue
+        if item.oneof_name is not None:
+            condition = f"{_oneof_case_member(item.oneof_name)} == {_oneof_case_type(item.oneof_name)}::{item.cpp_name}"
+            w.line(f"if ({condition} && {_member(item)}.has_value()) {{")
+        else:
+            w.line(f"if ({_member(item)}.has_value()) {{")
+        with w.indent():
+            w.line(f"if (const auto st = (*{_member(item)}).validate(); !st) {{ return st; }}")
         w.line("}")
 
 
@@ -2138,7 +2180,7 @@ def _storage_type(item: FieldModel, options: GeneratorOptions) -> str:
 
 
 def _has_presence_flag(item: FieldModel) -> bool:
-    return item.proto3_optional
+    return item.proto3_optional and item.kind != "message"
 
 
 def _field_with_number(item: FieldModel, number: int) -> FieldModel:
@@ -2266,10 +2308,10 @@ def _wire(item: FieldModel) -> str:
 def _presence(item: FieldModel) -> str:
     if item.fixed_bytes:
         return f"{_member(item)}.has_value()"
-    if _has_presence_flag(item):
-        return f"has_{item.cpp_name}_"
     if item.kind == "message":
         return f"{_member(item)}.has_value()"
+    if _has_presence_flag(item):
+        return f"has_{item.cpp_name}_"
     if item.kind in {"string", "bytes"}:
         return f"!{_member(item)}.empty()"
     if item.kind == "enum":
