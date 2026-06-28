@@ -5,8 +5,9 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory, text_encoding
 
+from protocyte.descriptor_set import validate_virtual_file_name
 from protocyte.errors import ProtocyteError
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
@@ -336,10 +337,13 @@ class FieldModel:
     array_expr: str | None = None
     array_cpp_max: str | None = None
     array_fixed: bool = False
+    explicit_presence: bool = False
+    required: bool = False
+    default_cpp: str | None = None
 
     @property
     def has_explicit_presence(self) -> bool:
-        return self.proto3_optional or self.oneof_name is not None or self.kind == "message"
+        return self.explicit_presence or self.oneof_name is not None or self.kind == "message"
 
     @property
     def array_enabled(self) -> bool:
@@ -648,7 +652,7 @@ class _ExprParser:
 
 def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> DescriptorModel:
     """Build a resolved model from a CodeGeneratorRequest-like object."""
-    files_by_name = {file.name: file for file in request.proto_file}
+    files_by_name = _index_request_files(request.proto_file)
     file_to_generate = list(request.file_to_generate)
     custom_options = _custom_options(request.proto_file)
 
@@ -657,9 +661,12 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         raise ProtocyteError(f"protoc request is missing file descriptors for: {', '.join(missing)}")
 
     for name in file_to_generate:
-        _require_proto3(files_by_name[name], f"target file {name}")
+        validate_virtual_file_name(name)
         if files_by_name[name].extension:
-            raise ProtocyteError(f"{name}: proto3 extensions are not supported")
+            raise ProtocyteError(f"{name}: extension declarations are not supported")
+        _reject_unsupported_file_features(files_by_name[name], f"target file {name}")
+
+    _validate_import_graph(files_by_name, file_to_generate)
 
     files: dict[str, FileModel] = {}
     messages: dict[str, MessageModel] = {}
@@ -695,7 +702,6 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     _validate_package_constant_namespace(files)
     _resolve_constants_and_arrays(files, messages)
-    _validate_references(file_to_generate, files, messages, enums)
     _compute_file_dependencies(file_to_generate, files)
     _mark_recursive_boxes(messages)
 
@@ -705,6 +711,39 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         messages=messages,
         enums=enums,
     )
+
+
+def _index_request_files(
+    proto_files: Iterable[descriptor_pb2.FileDescriptorProto],
+) -> dict[str, descriptor_pb2.FileDescriptorProto]:
+    files: dict[str, descriptor_pb2.FileDescriptorProto] = {}
+    for file in proto_files:
+        validate_virtual_file_name(file.name)
+        if file.name in files:
+            raise ProtocyteError(f"duplicate descriptor file name: {file.name}")
+        files[file.name] = file
+    return files
+
+
+def _validate_import_graph(
+    files: dict[str, descriptor_pb2.FileDescriptorProto],
+    roots: Iterable[str],
+) -> None:
+    stack = list(roots)
+    seen: set[str] = set()
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        file = files[name]
+        for dependency in file.dependency:
+            validate_virtual_file_name(dependency)
+            if dependency == descriptor_pb2.DESCRIPTOR.name and dependency not in files:
+                continue
+            if dependency not in files:
+                raise ProtocyteError(f"{name} imports missing descriptor {dependency}")
+            stack.append(dependency)
 
 
 def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -> _CustomOptions:
@@ -783,10 +822,7 @@ def strip_type_name(type_name: str) -> str:
     return type_name[1:] if type_name.startswith(".") else type_name
 
 
-def _require_proto3(file: descriptor_pb2.FileDescriptorProto, label: str) -> None:
-    if file.syntax != "proto3":
-        syntax = file.syntax or "<unspecified>"
-        raise ProtocyteError(f'{label}: expected syntax = "proto3", got {syntax!r}')
+def _reject_unsupported_file_features(file: descriptor_pb2.FileDescriptorProto, label: str) -> None:
     if hasattr(file, "edition") and getattr(file, "edition"):
         raise ProtocyteError(f"{label}: protobuf Editions are not supported in v1")
 
@@ -873,7 +909,7 @@ def _fill_message_details(
         )
 
     for field_proto in message.descriptor.field:
-        field_model = _build_field(message, field_proto, messages, enums, custom_options)
+        field_model = _build_field(message, files[message.file_name], field_proto, messages, enums, custom_options)
         message.fields.append(field_model)
         if field_model.oneof_index is not None and field_model.oneof_name is not None:
             oneof_fields[field_model.oneof_index].fields.append(field_model)
@@ -883,15 +919,6 @@ def _fill_message_details(
     _validate_nested_alias_collisions(message)
     _validate_constant_collisions(message)
     _validate_field_collisions(message)
-    if files[message.file_name].syntax == "proto3":
-        for field_model in message.fields:
-            if field_model.kind in {"message", "enum"}:
-                referenced_file = (
-                    field_model.message_type.file_name
-                    if field_model.message_type is not None
-                    else field_model.enum_type.file_name
-                )
-                _require_proto3(files[referenced_file].descriptor, f"{message.full_name}.{field_model.name}")
 
 
 def _build_file_constants(file_model: FileModel, custom_options: _CustomOptions) -> list[ConstantModel]:
@@ -1239,13 +1266,14 @@ def _cpp_package_key(package: str) -> tuple[str, ...]:
 
 def _build_field(
     owner: MessageModel,
+    file_model: FileModel,
     proto: descriptor_pb2.FieldDescriptorProto,
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
     custom_options: _CustomOptions,
 ) -> FieldModel:
     if proto.type == FieldDescriptorProto.TYPE_GROUP:
-        raise ProtocyteError(f"{owner.full_name}.{proto.name}: groups are not supported by proto3")
+        raise ProtocyteError(f"{owner.full_name}.{proto.name}: groups are not supported")
 
     oneof_index = proto.oneof_index if proto.HasField("oneof_index") else None
     oneof_name = None
@@ -1253,7 +1281,13 @@ def _build_field(
         oneof_name = owner.descriptor.oneof_decl[oneof_index].name
 
     repeated = proto.label == FieldDescriptorProto.LABEL_REPEATED
-    packed = _is_packed(proto)
+    required = proto.label == FieldDescriptorProto.LABEL_REQUIRED
+    explicit_presence = (
+        proto.proto3_optional
+        or required
+        or (file_model.syntax == "proto2" and proto.label == FieldDescriptorProto.LABEL_OPTIONAL and oneof_index is None)
+    )
+    packed = _is_packed(proto, file_model.syntax)
     kind = "scalar"
     cpp_type = SCALAR_CPP_TYPES.get(proto.type, "")
     message_type = None
@@ -1279,14 +1313,16 @@ def _build_field(
             kind = "map"
             key_proto = message_type.descriptor.field[0]
             value_proto = message_type.descriptor.field[1]
-            map_key = _build_field(message_type, key_proto, messages, enums, custom_options)
-            map_value = _build_field(message_type, value_proto, messages, enums, custom_options)
+            map_key = _build_field(message_type, file_model, key_proto, messages, enums, custom_options)
+            map_value = _build_field(message_type, file_model, value_proto, messages, enums, custom_options)
             cpp_type = f"typename Config::template Map<{map_key.cpp_type}, {map_value.cpp_type}>"
         else:
             kind = "message"
             cpp_type = ""
     elif proto.type not in SCALAR_CPP_TYPES:
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: unsupported field type {proto.type}")
+
+    default_cpp = _field_default_cpp(file_model.syntax, owner.full_name, proto, kind, enum_type)
 
     if array_fixed and array_max is None and array_expr is None:
         raise ProtocyteError(
@@ -1312,7 +1348,7 @@ def _build_field(
         label=proto.label,
         file_name=owner.file_name,
         repeated=repeated,
-        proto3_optional=proto.proto3_optional,
+        proto3_optional=explicit_presence,
         oneof_index=oneof_index,
         oneof_name=oneof_name,
         packed=packed,
@@ -1328,6 +1364,9 @@ def _build_field(
         array_expr=array_expr,
         array_cpp_max=None,
         array_fixed=array_fixed,
+        explicit_presence=explicit_presence,
+        required=required,
+        default_cpp=default_cpp,
     )
 
 
@@ -1346,7 +1385,63 @@ def _resolve(
         ) from exc
 
 
-def _is_packed(proto: descriptor_pb2.FieldDescriptorProto) -> bool:
+def _field_default_cpp(
+    file_syntax: str,
+    owner_full_name: str,
+    proto: descriptor_pb2.FieldDescriptorProto,
+    kind: str,
+    enum_type: EnumModel | None,
+) -> str | None:
+    if not proto.HasField("default_value"):
+        return None
+    if file_syntax == "proto3":
+        raise ProtocyteError(f"{owner_full_name}.{proto.name}: explicit default values are not allowed in proto3")
+    value = proto.default_value
+    if kind == "enum":
+        if enum_type is None:
+            return None
+        for enum_value in enum_type.values:
+            if enum_value.name == value:
+                return str(enum_value.number)
+        raise ProtocyteError(f"{owner_full_name}.{proto.name}: unknown enum default value {value!r}")
+    if kind == "string":
+        return f"::protocyte::StringView {{{_cpp_constant_value(CONSTANT_KIND_STRING, value)}}}"
+    if kind == "bytes":
+        try:
+            encoded = text_encoding.CUnescape(value)
+        except ValueError as exc:
+            raise ProtocyteError(f"{owner_full_name}.{proto.name}: invalid bytes default value {value!r}") from exc
+        return f"::protocyte::Span<const ::protocyte::u8> {{reinterpret_cast<const ::protocyte::u8*>({_cpp_string_literal(encoded)}), {len(encoded)}u}}"
+    if proto.type == FieldDescriptorProto.TYPE_BOOL:
+        if value not in {"true", "false"}:
+            raise ProtocyteError(f"{owner_full_name}.{proto.name}: invalid bool default value {value!r}")
+        return value
+    if proto.type == FieldDescriptorProto.TYPE_FLOAT:
+        return _floating_default_cpp(value, "::protocyte::f32", f"{owner_full_name}.{proto.name}")
+    if proto.type == FieldDescriptorProto.TYPE_DOUBLE:
+        return _floating_default_cpp(value, "::protocyte::f64", f"{owner_full_name}.{proto.name}")
+    if proto.type in SCALAR_CPP_TYPES:
+        return value
+    return None
+
+
+def _floating_default_cpp(value: str, cpp_type: str, label: str) -> str:
+    if value == "inf":
+        return f"::std::numeric_limits<{cpp_type}>::infinity()"
+    if value == "-inf":
+        return f"-::std::numeric_limits<{cpp_type}>::infinity()"
+    if value == "nan":
+        return f"::std::numeric_limits<{cpp_type}>::quiet_NaN()"
+    try:
+        numeric = float(value)
+    except ValueError as exc:
+        raise ProtocyteError(f"{label}: invalid floating-point default value {value!r}") from exc
+    if cpp_type == "::protocyte::f32":
+        return _cpp_constant_value(CONSTANT_KIND_FLOAT, numeric)
+    return _cpp_constant_value(CONSTANT_KIND_DOUBLE, numeric)
+
+
+def _is_packed(proto: descriptor_pb2.FieldDescriptorProto, file_syntax: str) -> bool:
     if proto.label != FieldDescriptorProto.LABEL_REPEATED:
         return False
     if proto.type not in PACKABLE_TYPES:
@@ -1356,7 +1451,7 @@ def _is_packed(proto: descriptor_pb2.FieldDescriptorProto) -> bool:
             return proto.options.packed
     except ValueError:
         pass
-    return True
+    return file_syntax == "proto3"
 
 
 def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[str, MessageModel]) -> None:
@@ -1510,33 +1605,6 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
                 )
             field_model.array_max = numeric
             field_model.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
-
-
-def _validate_references(
-    file_to_generate: list[str],
-    files: dict[str, FileModel],
-    messages: dict[str, MessageModel],
-    enums: dict[str, EnumModel],
-) -> None:
-    generated = set(file_to_generate)
-    for file_name in generated:
-        file_model = files[file_name]
-        for message in _walk_messages(file_model.messages):
-            for field_model in message.fields:
-                targets: list[str] = []
-                if field_model.message_type is not None:
-                    targets.append(field_model.message_type.file_name)
-                if field_model.enum_type is not None:
-                    targets.append(field_model.enum_type.file_name)
-                if field_model.map_value and field_model.map_value.message_type is not None:
-                    targets.append(field_model.map_value.message_type.file_name)
-                if field_model.map_value and field_model.map_value.enum_type is not None:
-                    targets.append(field_model.map_value.enum_type.file_name)
-                for target in targets:
-                    _require_proto3(
-                        files[target].descriptor,
-                        f"{message.full_name}.{field_model.name} referenced type file {target}",
-                    )
 
 
 def _compute_file_dependencies(file_to_generate: list[str], files: dict[str, FileModel]) -> None:

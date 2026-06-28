@@ -842,17 +842,168 @@ def test_runtime_string_assign_checks_size_limit_before_utf8_validation() -> Non
     ) < assign_owned_body.index("validate_utf8(bytes.view())")
 
 
-def test_rejects_non_proto3_target() -> None:
+def test_rejects_generated_extension_declarations() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("legacy.proto")
     file = request.proto_file.add()
     file.name = "legacy.proto"
     file.syntax = "proto2"
     file.message_type.add().name = "Legacy"
+    extension = file.extension.add()
+    extension.name = "legacy_extension"
+    extension.number = 100
+    extension.label = F.LABEL_OPTIONAL
+    extension.type = F.TYPE_INT32
+    extension.extendee = ".legacy.Legacy"
 
     response = generate_response(request)
 
-    assert 'expected syntax = "proto3"' in response.error
+    assert "legacy.proto: extension declarations are not supported" in response.error
+
+
+def test_descriptor_request_with_descriptor_proto_generates_only_selected_user_files() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("arrays.proto")
+    request.proto_file.extend(
+        [
+            descriptor_pb2.FileDescriptorProto.FromString(descriptor_pb2.DESCRIPTOR.serialized_pb),
+            _options_file(),
+            _constant_array_file(),
+        ]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert [file.name for file in response.file] == ["arrays.protocyte.cpp", "arrays.protocyte.hpp"]
+
+
+def test_rejects_duplicate_descriptor_file_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("simple.proto")
+    request.proto_file.extend([_simple_file(), _simple_file()])
+
+    response = generate_response(request)
+
+    assert "duplicate descriptor file name: simple.proto" in response.error
+
+
+def test_rejects_missing_import_dependency() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("imports_missing.proto")
+    file = request.proto_file.add()
+    file.name = "imports_missing.proto"
+    file.syntax = "proto3"
+    file.dependency.append("missing.proto")
+    file.message_type.add().name = "ImportsMissing"
+
+    response = generate_response(request)
+
+    assert "imports_missing.proto imports missing descriptor missing.proto" in response.error
+
+
+def test_rejects_proto3_explicit_defaults_from_descriptor_semantics() -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[0].default_value = "7"
+
+    response = generate_response(request)
+
+    assert "demo.Sample.id: explicit default values are not allowed in proto3" in response.error
+
+
+def test_rejects_selected_group_fields() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("legacy_group.proto")
+    file = request.proto_file.add()
+    file.name = "legacy_group.proto"
+    file.package = "legacy"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "Legacy"
+    group = message.field.add()
+    group.name = "Payload"
+    group.number = 1
+    group.label = F.LABEL_OPTIONAL
+    group.type = F.TYPE_GROUP
+
+    response = generate_response(request)
+
+    assert "legacy.Legacy.Payload: groups are not supported" in response.error
+
+
+def test_rejects_selected_edition_files() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("edition.proto")
+    file = request.proto_file.add()
+    file.name = "edition.proto"
+    file.package = "demo"
+    file.edition = descriptor_pb2.EDITION_2023
+    file.message_type.add().name = "EditionMessage"
+
+    response = generate_response(request)
+
+    assert "target file edition.proto: protobuf Editions are not supported in v1" in response.error
+
+
+def test_proto2_model_tracks_presence_defaults_required_and_unpacked_repeated() -> None:
+    model = build_model(_proto2_request())
+    fields = {field.name: field for field in model.messages["legacy.Legacy"].fields}
+
+    assert fields["count"].explicit_presence
+    assert not fields["count"].required
+    assert fields["count"].default_cpp == "7"
+    assert fields["label"].explicit_presence
+    assert fields["label"].default_cpp == '::protocyte::StringView {"legacy", 6u}'
+    assert fields["name"].explicit_presence
+    assert fields["name"].required
+    assert fields["samples"].packed is False
+    assert fields["blob"].default_cpp == (
+        '::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x01""\\xff"), 2u}'
+    )
+    assert fields["ratio"].default_cpp == "::std::numeric_limits<::protocyte::f32>::infinity()"
+    assert fields["precise"].default_cpp == "::std::numeric_limits<::protocyte::f64>::quiet_NaN()"
+
+
+def test_generates_proto2_presence_defaults_and_required_validation() -> None:
+    response = generate_response(_proto2_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["legacy.protocyte.hpp"]
+    assert "constexpr ::protocyte::i32 count() const noexcept { return has_count_ ? count_ : 7; }" in header
+    assert "constexpr bool has_count() const noexcept { return has_count_; }" in header
+    assert 'label() const noexcept { return has_label_ ? label_.view() : ::protocyte::StringView {"legacy", 6u}; }' in header
+    assert "bool has_name_ {};" in header
+    assert "bool has_name() const noexcept { return has_name_; }" in header
+    assert "if (!has_name()) {" in header
+    assert "::protocyte::ErrorCode::invalid_argument, {}, FieldNumber::name" in header
+    assert "for (const auto &samples_value : samples_) {" in header
+    assert "packed_size_samples" not in header
+    assert "#include <limits>" in header
+    assert (
+        'blob() const noexcept { return has_blob_ ? blob_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x01""\\xff"), 2u}; }'
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::f32 ratio() const noexcept { return has_ratio_ ? ratio_ : ::std::numeric_limits<::protocyte::f32>::infinity(); }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::f64 precise() const noexcept { return has_precise_ ? precise_ : ::std::numeric_limits<::protocyte::f64>::quiet_NaN(); }"
+        in header
+    )
+
+
+def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("uses_legacy.proto")
+    request.proto_file.extend([_proto2_dependency_file(), _proto3_uses_proto2_dependency_file()])
+
+    response = generate_response(request)
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    assert '#include "legacy_dep.protocyte.hpp"' in files["uses_legacy.protocyte.hpp"]
 
 
 def test_generation_succeeds_without_clang_format_on_path(
@@ -1756,7 +1907,7 @@ def test_rejects_internal_typed_constant_literal_overflow_and_array_exclusivity(
     with pytest.raises(
         ProtocyteError, match="protocyte.array requires exactly one of max or expr"
     ):
-        _build_field(owner, array_field, {}, {}, array_options)
+        _build_field(owner, SimpleNamespace(syntax="proto3"), array_field, {}, {}, array_options)
 
 
 def test_rejects_invalid_constant_cpp_identifier() -> None:
@@ -3370,6 +3521,106 @@ def _empty_file() -> descriptor_pb2.FileDescriptorProto:
     message = file.message_type.add()
     message.name = "Empty"
 
+    return file
+
+
+def _proto2_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("legacy.proto")
+    request.proto_file.append(_proto2_file())
+    return request
+
+
+def _proto2_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "legacy.proto"
+    file.package = "legacy"
+    file.syntax = "proto2"
+
+    message = file.message_type.add()
+    message.name = "Legacy"
+
+    field = message.field.add()
+    field.name = "count"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.default_value = "7"
+
+    field = message.field.add()
+    field.name = "label"
+    field.number = 2
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field.default_value = "legacy"
+
+    field = message.field.add()
+    field.name = "name"
+    field.number = 3
+    field.label = F.LABEL_REQUIRED
+    field.type = F.TYPE_STRING
+
+    field = message.field.add()
+    field.name = "samples"
+    field.number = 4
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+
+    field = message.field.add()
+    field.name = "blob"
+    field.number = 5
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.default_value = r"\001\377"
+
+    field = message.field.add()
+    field.name = "ratio"
+    field.number = 6
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_FLOAT
+    field.default_value = "inf"
+
+    field = message.field.add()
+    field.name = "precise"
+    field.number = 7
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_DOUBLE
+    field.default_value = "nan"
+
+    return file
+
+
+def _proto2_dependency_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "legacy_dep.proto"
+    file.package = "legacy"
+    file.syntax = "proto2"
+
+    message = file.message_type.add()
+    message.name = "LegacyDep"
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    return file
+
+
+def _proto3_uses_proto2_dependency_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "uses_legacy.proto"
+    file.package = "modern"
+    file.syntax = "proto3"
+    file.dependency.append("legacy_dep.proto")
+
+    message = file.message_type.add()
+    message.name = "UsesLegacy"
+    field = message.field.add()
+    field.name = "legacy"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".legacy.LegacyDep"
     return file
 
 

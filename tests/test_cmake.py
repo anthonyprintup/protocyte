@@ -1,7 +1,30 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+from google.protobuf import descriptor_pb2
+
+
+def _find_real_protoc(repo_root: Path) -> Path:
+    candidates: list[Path] = []
+    if found := shutil.which("protoc"):
+        candidates.append(Path(found))
+
+    executable_name = "protoc.exe" if os.name == "nt" else "protoc"
+    for root in (repo_root / "build", repo_root / "tests"):
+        if root.exists():
+            candidates.extend(root.glob(f"**/{executable_name}"))
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    pytest.skip("real protoc executable is not available")
 
 
 def test_posix_wrapper_shell_quotes_single_quotes(tmp_path: Path) -> None:
@@ -114,6 +137,321 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
                 '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
                 "    DISCOVER",
                 ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+def test_generate_accepts_descriptor_set_protos_without_proto_root(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    descriptor_set.write_bytes(b"placeholder")
+    protoc = source_dir / "tools" / "protoc"
+    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_codegen LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS nested/demo.proto",
+                "    GENERATED_HEADERS_VAR generated_headers",
+                "    GENERATED_SOURCES_VAR generated_sources",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/headers.txt" "${generated_headers}")',
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sources.txt" "${generated_sources}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    assert (build_dir / "headers.txt").read_text(encoding="utf-8").endswith(
+        "generated/nested/demo.protocyte.hpp"
+    )
+    assert (build_dir / "sources.txt").read_text(encoding="utf-8").endswith(
+        "generated/nested/demo.protocyte.cpp"
+    )
+
+
+def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    runtime = file_set.file.add()
+    runtime.name = "google/protobuf/descriptor.proto"
+    runtime.syntax = "proto2"
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.dependency.append("google/protobuf/descriptor.proto")
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    protoc = source_dir / "tools" / "protoc"
+    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_discover LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                "    GENERATED_HEADERS_VAR generated_headers",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/headers.txt" "${generated_headers}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    assert (build_dir / "headers.txt").read_text(encoding="utf-8").endswith(
+        "generated/api/demo.protocyte.hpp"
+    )
+
+
+def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    descriptor_set.write_bytes(b"placeholder")
+    protoc = source_dir / "tools" / "protoc"
+    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_unsafe_name LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS nested/./demo.proto",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "descriptor file name contains an unsafe path segment: nested/./demo.proto" in (
+        result.stdout + result.stderr
+    )
+
+
+def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_paths(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    descriptor_set.write_bytes(b"placeholder")
+    tools_dir = source_dir / "tools"
+    tools_dir.mkdir()
+    args_path = build_dir / "protoc_args.txt"
+    fake_protoc_py = tools_dir / "fake_protoc.py"
+    fake_protoc_py.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                f"Path({str(args_path)!r}).parent.mkdir(parents=True, exist_ok=True)",
+                f"Path({str(args_path)!r}).write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')",
+                "out_dir = None",
+                "for arg in sys.argv[1:]:",
+                "    if arg.startswith('--protocyte_out='):",
+                "        out_dir = Path(arg.split('=', 1)[1])",
+                "if out_dir is None:",
+                "    raise SystemExit('missing --protocyte_out')",
+                "for name in sys.argv[1:]:",
+                "    if not name.endswith('.proto'):",
+                "        continue",
+                "    base = out_dir / name.removesuffix('.proto')",
+                "    base.parent.mkdir(parents=True, exist_ok=True)",
+                "    base.with_suffix('.protocyte.hpp').write_text('// h\\n', encoding='utf-8')",
+                "    base.with_suffix('.protocyte.cpp').write_text('// cc\\n', encoding='utf-8')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        protoc = tools_dir / "protoc.cmd"
+        protoc.write_text(f'@echo off\r\n"{Path(sys.executable)}" "{fake_protoc_py}" %*\r\n', encoding="utf-8")
+    else:
+        protoc = tools_dir / "protoc"
+        protoc.write_text(f'#!/usr/bin/env sh\nexec "{Path(sys.executable)}" "{fake_protoc_py}" "$@"\n', encoding="utf-8")
+        protoc.chmod(0o755)
+    plugin = tools_dir / "protoc-gen-protocyte"
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_build LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS nested/demo.proto",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True)
+
+    args = args_path.read_text(encoding="utf-8").splitlines()
+    assert f"--descriptor_set_in={descriptor_set.as_posix()}" in args
+    assert not any(arg.startswith("--proto_path=") for arg in args)
+    assert "nested/demo.proto" in args
+
+
+def test_descriptor_set_codegen_builds_with_real_protoc_descriptor_set_in(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    descriptor_set = source_dir / "descriptor_set.pb"
+    demo_proto = proto_dir / "api" / "demo.proto"
+    demo_proto.parent.mkdir()
+    demo_proto.write_text(
+        'syntax = "proto3"; package api; message Demo { int32 id = 1; }\n',
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            str(protoc),
+            f"--proto_path={proto_dir}",
+            f"--descriptor_set_out={descriptor_set}",
+            "--include_imports",
+            "api/demo.proto",
+        ],
+        cwd=proto_dir,
+        check=True,
+    )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(real_descriptor_set_build LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS api/demo.proto",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True)
+
+    header = build_dir / "generated" / "api" / "demo.protocyte.hpp"
+    source = build_dir / "generated" / "api" / "demo.protocyte.cpp"
+    assert header.is_file()
+    assert source.is_file()
+    assert "struct Demo" in header.read_text(encoding="utf-8")
+
+
+def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    descriptor_set.write_bytes(b"placeholder")
+    protoc = source_dir / "tools" / "protoc"
+    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_library LANGUAGES CXX)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'add_subdirectory("{repo_root.as_posix()}" "${{CMAKE_CURRENT_BINARY_DIR}}/protocyte")',
+                "protocyte_add_descriptor_set_library(",
+                "    TARGET demo_proto",
+                "    ALIAS demo::proto",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                "    FILES nested/demo.proto",
+                ")",
+                "if(NOT TARGET demo::proto)",
+                '    message(FATAL_ERROR "descriptor-set alias target was not created")',
+                "endif()",
                 "",
             ]
         ),
