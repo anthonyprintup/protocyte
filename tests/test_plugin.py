@@ -911,6 +911,51 @@ def test_rejects_proto3_explicit_defaults_from_descriptor_semantics() -> None:
     assert "demo.Sample.id: explicit default values are not allowed in proto3" in response.error
 
 
+def test_rejects_proto2_repeated_field_defaults_from_descriptor_semantics() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("bad_defaults.proto")
+    file = request.proto_file.add()
+    file.name = "bad_defaults.proto"
+    file.package = "bad"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "BadDefaults"
+    field = message.field.add()
+    field.name = "ids"
+    field.number = 1
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_INT32
+    field.default_value = "7"
+
+    response = generate_response(request)
+
+    assert "bad.BadDefaults.ids: repeated fields cannot have default values" in response.error
+
+
+def test_rejects_proto2_message_field_defaults_from_descriptor_semantics() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("bad_defaults.proto")
+    file = request.proto_file.add()
+    file.name = "bad_defaults.proto"
+    file.package = "bad"
+    file.syntax = "proto2"
+    nested = file.message_type.add()
+    nested.name = "Nested"
+    message = file.message_type.add()
+    message.name = "BadDefaults"
+    field = message.field.add()
+    field.name = "nested"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".bad.Nested"
+    field.default_value = "nested"
+
+    response = generate_response(request)
+
+    assert "bad.BadDefaults.nested: message fields cannot have default values" in response.error
+
+
 def test_rejects_selected_group_fields() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("legacy_group.proto")
@@ -1048,6 +1093,9 @@ def test_proto2_default_semantics_follow_protobuf_spec() -> None:
     assert fields["implicit_numbers"].packed is False
     assert fields["implicit_choice"].default_cpp == "5"
     assert fields["explicit_choice"].default_cpp == "9"
+    assert fields["implicit_choices"].default_cpp is None
+    assert fields["required_int32"].required
+    assert fields["required_int32"].default_cpp == "17"
 
 
 def test_empty_syntax_default_semantics_follow_proto2_spec() -> None:
@@ -1062,6 +1110,8 @@ def test_empty_syntax_default_semantics_follow_proto2_spec() -> None:
     assert fields["implicit_numbers"].packed is False
     assert fields["implicit_choice"].default_cpp == "5"
     assert fields["explicit_choice"].default_cpp == "9"
+    assert fields["implicit_choices"].default_cpp is None
+    assert fields["required_int32"].default_cpp == "17"
 
 
 def test_generates_proto2_default_semantics() -> None:
@@ -1093,6 +1143,30 @@ def test_generates_proto2_default_semantics() -> None:
     )
     assert (
         "constexpr ::defaults::DefaultChoice explicit_choice() const noexcept { return static_cast<::defaults::DefaultChoice>(has_explicit_choice_ ? explicit_choice_ : 9); }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::i32 oneof_int32() const noexcept { return has_oneof_int32() ? choice.oneof_int32 : 11; }"
+        in header
+    )
+    assert (
+        '::protocyte::StringView oneof_string() const noexcept { return has_oneof_string() ? choice.oneof_string.view() : ::protocyte::StringView {"chosen", 6u}; }'
+        in header
+    )
+    assert (
+        '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x02""\\xfe"), 2u}; }'
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::i32 implicit_oneof_choice_raw() const noexcept { return has_implicit_oneof_choice() ? choice.implicit_oneof_choice : 5; }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::i32 explicit_oneof_choice_raw() const noexcept { return has_explicit_oneof_choice() ? choice.explicit_oneof_choice : 9; }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::i32 required_int32() const noexcept { return has_required_int32_ ? required_int32_ : 17; }"
         in header
     )
 
@@ -3791,6 +3865,64 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     field.type = F.TYPE_ENUM
     field.type_name = ".defaults.DefaultChoice"
     field.default_value = "DEFAULT_CHOICE_READY"
+
+    oneof = message.oneof_decl.add()
+    oneof.name = "choice"
+
+    field = message.field.add()
+    field.name = "oneof_int32"
+    field.number = 9
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.oneof_index = 0
+    field.default_value = "11"
+
+    field = message.field.add()
+    field.name = "oneof_string"
+    field.number = 10
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field.oneof_index = 0
+    field.default_value = "chosen"
+
+    field = message.field.add()
+    field.name = "oneof_bytes"
+    field.number = 11
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.oneof_index = 0
+    field.default_value = r"\002\376"
+
+    field = message.field.add()
+    field.name = "implicit_oneof_choice"
+    field.number = 12
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_ENUM
+    field.type_name = ".defaults.DefaultChoice"
+    field.oneof_index = 0
+
+    field = message.field.add()
+    field.name = "explicit_oneof_choice"
+    field.number = 13
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_ENUM
+    field.type_name = ".defaults.DefaultChoice"
+    field.oneof_index = 0
+    field.default_value = "DEFAULT_CHOICE_READY"
+
+    field = message.field.add()
+    field.name = "implicit_choices"
+    field.number = 14
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_ENUM
+    field.type_name = ".defaults.DefaultChoice"
+
+    field = message.field.add()
+    field.name = "required_int32"
+    field.number = 15
+    field.label = F.LABEL_REQUIRED
+    field.type = F.TYPE_INT32
+    field.default_value = "17"
 
     return file
 

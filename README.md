@@ -209,9 +209,10 @@ protocyte_add_descriptor_set_library(
 ```
 
 `DISCOVER` is available for descriptor sets and generates every non-runtime
-descriptor by default. `google/protobuf/*.proto` descriptors are kept as
-dependencies for option/type resolution but are skipped as outputs unless named
-explicitly in `PROTOS`/`FILES`.
+descriptor by default. `google/protobuf/*.proto` descriptors are kept for
+option/type resolution; unreferenced runtime descriptors stay dependency-only,
+while referenced runtime message/enum descriptors are generated when selected
+files need their generated types.
 
 Absolute Windows and POSIX paths are safe to use in `OPTIONS`.
 

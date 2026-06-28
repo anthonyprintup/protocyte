@@ -707,4 +707,11 @@ function(protocyte_add_descriptor_set_library)
     endif()
 
     protocyte_add_proto_library(${args})
+
+    foreach(name IN ITEMS GENERATED_HEADERS_VAR GENERATED_SOURCES_VAR GENERATED_TARGET_VAR)
+        if(PROTOCYTE_${name})
+            set(output_var "${PROTOCYTE_${name}}")
+            set(${output_var} ${${output_var}} PARENT_SCOPE)
+        endif()
+    endforeach()
 endfunction()

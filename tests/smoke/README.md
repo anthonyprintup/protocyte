@@ -391,8 +391,9 @@ protocyte_add_descriptor_set_library(
 
 In descriptor-set mode, `FILES`/`PROTOS` entries are not filesystem paths.
 Imports, including `google/protobuf/*.proto`, are resolved from the descriptor
-set itself. Runtime descriptors are skipped by `DISCOVER` and are not generated
-unless explicitly listed.
+set itself. Unreferenced runtime descriptors stay dependency-only under
+`DISCOVER`; referenced runtime message/enum descriptors are generated when
+selected files need their generated types.
 
 If protobuf is not already available to that consumer project and you want
 protocyte to fetch it, set `PROTOCYTE_FETCH_PROTOBUF=ON` before

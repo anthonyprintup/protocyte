@@ -1415,11 +1415,16 @@ def _field_default_cpp(
             and kind == "enum"
             and enum_type is not None
             and enum_type.values
+            and proto.label != FieldDescriptorProto.LABEL_REPEATED
         ):
             return str(enum_type.values[0].number)
         return None
     if file_syntax == "proto3":
         raise ProtocyteError(f"{owner_full_name}.{proto.name}: explicit default values are not allowed in proto3")
+    if proto.label == FieldDescriptorProto.LABEL_REPEATED:
+        raise ProtocyteError(f"{owner_full_name}.{proto.name}: repeated fields cannot have default values")
+    if kind in {"message", "map"}:
+        raise ProtocyteError(f"{owner_full_name}.{proto.name}: message fields cannot have default values")
     value = proto.default_value
     if kind == "enum":
         if enum_type is None:

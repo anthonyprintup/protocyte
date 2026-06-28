@@ -1063,15 +1063,17 @@ def _emit_oneof_accessors(
     )
     if item.kind in {"string", "bytes"}:
         if item.kind == "string":
+            fallback = item.default_cpp or "::protocyte::StringView{}"
             _emit_string_view_accessor(
                 w,
                 item.cpp_name,
-                f"has_{item.cpp_name}() ? {_member(item)}.view() : ::protocyte::StringView{{}}",
+                f"has_{item.cpp_name}() ? {_member(item)}.view() : {fallback}",
             )
         else:
             view_type = "::protocyte::Span<const ::protocyte::u8>"
+            fallback = item.default_cpp or f"{view_type}{{}}"
             w.line(
-                f"{view_type} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : {view_type}{{}}; }}"
+                f"{view_type} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : {fallback}; }}"
             )
 
         def emit_setter_body() -> None:
@@ -1139,7 +1141,7 @@ def _emit_oneof_accessors(
     if item.kind == "enum":
         enum_typ = _enum_type(item.enum_type, options)
         w.line(
-            f"constexpr ::protocyte::i32 {item.cpp_name}_raw() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)} : 0; }}"
+            f"constexpr ::protocyte::i32 {item.cpp_name}_raw() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)} : {_default(item)}; }}"
         )
         w.line(
             f"constexpr {enum_typ} {item.cpp_name}() const noexcept {{ return static_cast<{enum_typ}>({item.cpp_name}_raw()); }}"
