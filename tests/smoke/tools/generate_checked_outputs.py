@@ -666,6 +666,51 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     fixed.default_value = "xyz"
     fixed.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
 
+    mode = file.enum_type.add()
+    mode.name = "Proto2DefaultMode"
+    value = mode.value.add()
+    value.name = "PROTO2_DEFAULT_MODE_UNKNOWN"
+    value.number = 5
+    value = mode.value.add()
+    value.name = "PROTO2_DEFAULT_MODE_READY"
+    value.number = 9
+
+    defaults = file.message_type.add()
+    defaults.name = "Proto2DefaultValues"
+    field = add_field(defaults, "double_value", 1, F.TYPE_DOUBLE)
+    field.default_value = "1.5"
+    field = add_field(defaults, "float_value", 2, F.TYPE_FLOAT)
+    field.default_value = "-2.25"
+    field = add_field(defaults, "int64_value", 3, F.TYPE_INT64)
+    field.default_value = "-1234567890123"
+    field = add_field(defaults, "uint64_value", 4, F.TYPE_UINT64)
+    field.default_value = "1234567890123"
+    field = add_field(defaults, "int32_value", 5, F.TYPE_INT32)
+    field.default_value = "-12345"
+    field = add_field(defaults, "fixed64_value", 6, F.TYPE_FIXED64)
+    field.default_value = "12345678901234"
+    field = add_field(defaults, "fixed32_value", 7, F.TYPE_FIXED32)
+    field.default_value = "123456789"
+    field = add_field(defaults, "bool_value", 8, F.TYPE_BOOL)
+    field.default_value = "true"
+    field = add_field(defaults, "string_value", 9, F.TYPE_STRING)
+    field.default_value = "default-text"
+    field = add_field(defaults, "bytes_value", 10, F.TYPE_BYTES)
+    field.default_value = "default-bytes"
+    field = add_field(defaults, "uint32_value", 11, F.TYPE_UINT32)
+    field.default_value = "456789"
+    field = add_field(defaults, "enum_value", 12, F.TYPE_ENUM, type_name=".test.required.Proto2DefaultMode")
+    field.default_value = "PROTO2_DEFAULT_MODE_READY"
+    field = add_field(defaults, "sfixed32_value", 13, F.TYPE_SFIXED32)
+    field.default_value = "-54321"
+    field = add_field(defaults, "sfixed64_value", 14, F.TYPE_SFIXED64)
+    field.default_value = "-9876543210"
+    field = add_field(defaults, "sint32_value", 15, F.TYPE_SINT32)
+    field.default_value = "-23456"
+    field = add_field(defaults, "sint64_value", 16, F.TYPE_SINT64)
+    field.default_value = "-123456789012"
+    add_field(defaults, "implicit_enum_value", 17, F.TYPE_ENUM, type_name=".test.required.Proto2DefaultMode")
+
     return file
 
 

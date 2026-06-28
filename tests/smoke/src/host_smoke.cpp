@@ -102,6 +102,8 @@ namespace {
     using RequiredChild = test::required::RequiredChild<>;
     using RequiredParent = test::required::RequiredParent<>;
     using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
+    using Proto2DefaultMode = test::required::Proto2DefaultMode;
+    using Proto2DefaultValues = test::required::Proto2DefaultValues<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
@@ -180,6 +182,10 @@ namespace {
     constexpr uint8_t proto2_bounded_default[] = {'a', 'b', 'c'};
     constexpr uint8_t proto2_fixed_default[] = {'x', 'y', 'z'};
     constexpr uint8_t proto2_custom_bytes[] = {0x31u, 0x32u, 0x33u};
+    constexpr uint8_t proto2_default_string[] = {'d', 'e', 'f', 'a', 'u', 'l', 't', '-', 't', 'e', 'x', 't'};
+    constexpr uint8_t proto2_default_bytes[] = {'d', 'e', 'f', 'a', 'u', 'l', 't', '-', 'b', 'y', 't', 'e', 's'};
+    constexpr uint8_t proto2_replacement_string[] = {'r', 'e', 'p', 'l', 'a', 'c', 'e', 'd'};
+    constexpr uint8_t proto2_replacement_bytes[] = {0xc0u, 0xd0u, 0xe0u};
     constexpr uint8_t proto2_default_bytes_wire[] = {
         0x0au, 0x03u, 'a', 'b', 'c', 0x12u, 0x03u, 'x', 'y', 'z',
     };
@@ -2668,6 +2674,179 @@ TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smok
     message.clear_fixed_bytes();
     CHECK_FALSE(message.has_fixed_bytes());
     CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
+}
+
+TEST_CASE("proto2 default accessors cover all supported defaultable types", "[smoke][proto2][defaults]") {
+    auto ctx = make_context();
+    Proto2DefaultValues message(ctx);
+
+    CHECK_FALSE(message.has_double_value());
+    CHECK(message.double_value() == 1.5);
+    CHECK_FALSE(message.has_float_value());
+    CHECK(message.float_value() == -2.25f);
+    CHECK_FALSE(message.has_int64_value());
+    CHECK(message.int64_value() == -1234567890123ll);
+    CHECK_FALSE(message.has_uint64_value());
+    CHECK(message.uint64_value() == 1234567890123ull);
+    CHECK_FALSE(message.has_int32_value());
+    CHECK(message.int32_value() == -12345);
+    CHECK_FALSE(message.has_fixed64_value());
+    CHECK(message.fixed64_value() == 12345678901234ull);
+    CHECK_FALSE(message.has_fixed32_value());
+    CHECK(message.fixed32_value() == 123456789u);
+    CHECK_FALSE(message.has_bool_value());
+    CHECK(message.bool_value());
+    CHECK_FALSE(message.has_string_value());
+    CHECK(view_equal(message.string_value(), view_of(proto2_default_string)));
+    CHECK_FALSE(message.has_bytes_value());
+    CHECK(view_equal(message.bytes_value(), view_of(proto2_default_bytes)));
+    CHECK_FALSE(message.has_uint32_value());
+    CHECK(message.uint32_value() == 456789u);
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+    CHECK_FALSE(message.has_sfixed32_value());
+    CHECK(message.sfixed32_value() == -54321);
+    CHECK_FALSE(message.has_sfixed64_value());
+    CHECK(message.sfixed64_value() == -9876543210ll);
+    CHECK_FALSE(message.has_sint32_value());
+    CHECK(message.sint32_value() == -23456);
+    CHECK_FALSE(message.has_sint64_value());
+    CHECK(message.sint64_value() == -123456789012ll);
+    CHECK_FALSE(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+
+    auto absent_size = message.encoded_size();
+    require_success(absent_size);
+    CHECK(*absent_size == 0u);
+    std::array<uint8_t, 1> absent_encoded {};
+    protocyte::SliceWriter absent_writer(absent_encoded.data(), 0u);
+    require_success(message.serialize(absent_writer));
+    CHECK(absent_writer.position() == 0u);
+
+    auto &mutable_string = message.mutable_string_value();
+    CHECK(message.has_string_value());
+    CHECK(mutable_string.empty());
+    CHECK(message.string_value() == std::string_view {});
+    assign_string(mutable_string, view_of(proto2_replacement_string));
+    CHECK(view_equal(message.string_value(), view_of(proto2_replacement_string)));
+    message.clear_string_value();
+    CHECK_FALSE(message.has_string_value());
+    CHECK(view_equal(message.string_value(), view_of(proto2_default_string)));
+
+    auto &mutable_bytes = message.mutable_bytes_value();
+    CHECK(message.has_bytes_value());
+    CHECK(mutable_bytes.empty());
+    CHECK(message.bytes_value().empty());
+    assign_bytes(mutable_bytes, view_of(proto2_replacement_bytes));
+    CHECK(view_equal(message.bytes_value(), view_of(proto2_replacement_bytes)));
+    message.clear_bytes_value();
+    CHECK_FALSE(message.has_bytes_value());
+    CHECK(view_equal(message.bytes_value(), view_of(proto2_default_bytes)));
+
+    require_success(message.set_double_value(3.5));
+    CHECK(message.has_double_value());
+    CHECK(message.double_value() == 3.5);
+    message.clear_double_value();
+    CHECK_FALSE(message.has_double_value());
+    CHECK(message.double_value() == 1.5);
+
+    require_success(message.set_float_value(4.5f));
+    CHECK(message.has_float_value());
+    CHECK(message.float_value() == 4.5f);
+    message.clear_float_value();
+    CHECK_FALSE(message.has_float_value());
+    CHECK(message.float_value() == -2.25f);
+
+    require_success(message.set_int64_value(-77ll));
+    CHECK(message.has_int64_value());
+    CHECK(message.int64_value() == -77ll);
+    message.clear_int64_value();
+    CHECK_FALSE(message.has_int64_value());
+    CHECK(message.int64_value() == -1234567890123ll);
+
+    require_success(message.set_uint64_value(88ull));
+    CHECK(message.has_uint64_value());
+    CHECK(message.uint64_value() == 88ull);
+    message.clear_uint64_value();
+    CHECK_FALSE(message.has_uint64_value());
+    CHECK(message.uint64_value() == 1234567890123ull);
+
+    require_success(message.set_int32_value(-99));
+    CHECK(message.has_int32_value());
+    CHECK(message.int32_value() == -99);
+    message.clear_int32_value();
+    CHECK_FALSE(message.has_int32_value());
+    CHECK(message.int32_value() == -12345);
+
+    require_success(message.set_fixed64_value(100ull));
+    CHECK(message.has_fixed64_value());
+    CHECK(message.fixed64_value() == 100ull);
+    message.clear_fixed64_value();
+    CHECK_FALSE(message.has_fixed64_value());
+    CHECK(message.fixed64_value() == 12345678901234ull);
+
+    require_success(message.set_fixed32_value(101u));
+    CHECK(message.has_fixed32_value());
+    CHECK(message.fixed32_value() == 101u);
+    message.clear_fixed32_value();
+    CHECK_FALSE(message.has_fixed32_value());
+    CHECK(message.fixed32_value() == 123456789u);
+
+    require_success(message.set_bool_value(false));
+    CHECK(message.has_bool_value());
+    CHECK_FALSE(message.bool_value());
+    message.clear_bool_value();
+    CHECK_FALSE(message.has_bool_value());
+    CHECK(message.bool_value());
+
+    require_success(message.set_uint32_value(102u));
+    CHECK(message.has_uint32_value());
+    CHECK(message.uint32_value() == 102u);
+    message.clear_uint32_value();
+    CHECK_FALSE(message.has_uint32_value());
+    CHECK(message.uint32_value() == 456789u);
+
+    require_success(message.set_enum_value(Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN));
+    CHECK(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+    message.clear_enum_value();
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+
+    require_success(message.set_sfixed32_value(-103));
+    CHECK(message.has_sfixed32_value());
+    CHECK(message.sfixed32_value() == -103);
+    message.clear_sfixed32_value();
+    CHECK_FALSE(message.has_sfixed32_value());
+    CHECK(message.sfixed32_value() == -54321);
+
+    require_success(message.set_sfixed64_value(-104ll));
+    CHECK(message.has_sfixed64_value());
+    CHECK(message.sfixed64_value() == -104ll);
+    message.clear_sfixed64_value();
+    CHECK_FALSE(message.has_sfixed64_value());
+    CHECK(message.sfixed64_value() == -9876543210ll);
+
+    require_success(message.set_sint32_value(-105));
+    CHECK(message.has_sint32_value());
+    CHECK(message.sint32_value() == -105);
+    message.clear_sint32_value();
+    CHECK_FALSE(message.has_sint32_value());
+    CHECK(message.sint32_value() == -23456);
+
+    require_success(message.set_sint64_value(-106ll));
+    CHECK(message.has_sint64_value());
+    CHECK(message.sint64_value() == -106ll);
+    message.clear_sint64_value();
+    CHECK_FALSE(message.has_sint64_value());
+    CHECK(message.sint64_value() == -123456789012ll);
+
+    require_success(message.set_implicit_enum_value(Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY));
+    CHECK(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+    message.clear_implicit_enum_value();
+    CHECK_FALSE(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
 }
 
 TEST_CASE("Hosted allocator honors requested alignment", "[smoke][allocator]") {

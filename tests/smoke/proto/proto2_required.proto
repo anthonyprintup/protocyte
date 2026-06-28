@@ -18,3 +18,28 @@ message Proto2ArrayDefaults {
   optional bytes bounded_bytes = 1 [default = "abc", (protocyte.array) = { max: 8 }];
   optional bytes fixed_bytes = 2 [default = "xyz", (protocyte.array) = { max: 3, fixed: true }];
 }
+
+enum Proto2DefaultMode {
+  PROTO2_DEFAULT_MODE_UNKNOWN = 5;
+  PROTO2_DEFAULT_MODE_READY = 9;
+}
+
+message Proto2DefaultValues {
+  optional double double_value = 1 [default = 1.5];
+  optional float float_value = 2 [default = -2.25];
+  optional int64 int64_value = 3 [default = -1234567890123];
+  optional uint64 uint64_value = 4 [default = 1234567890123];
+  optional int32 int32_value = 5 [default = -12345];
+  optional fixed64 fixed64_value = 6 [default = 12345678901234];
+  optional fixed32 fixed32_value = 7 [default = 123456789];
+  optional bool bool_value = 8 [default = true];
+  optional string string_value = 9 [default = "default-text"];
+  optional bytes bytes_value = 10 [default = "default-bytes"];
+  optional uint32 uint32_value = 11 [default = 456789];
+  optional Proto2DefaultMode enum_value = 12 [default = PROTO2_DEFAULT_MODE_READY];
+  optional sfixed32 sfixed32_value = 13 [default = -54321];
+  optional sfixed64 sfixed64_value = 14 [default = -9876543210];
+  optional sint32 sint32_value = 15 [default = -23456];
+  optional sint64 sint64_value = 16 [default = -123456789012];
+  optional Proto2DefaultMode implicit_enum_value = 17;
+}
