@@ -27,6 +27,15 @@ def _find_real_protoc(repo_root: Path) -> Path:
     pytest.skip("real protoc executable is not available")
 
 
+def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_config = (repo_root / "cmake" / "Protocyte.cmake").read_text(encoding="utf-8")
+    installed_config = (repo_root / "cmake" / "protocyteConfig.cmake.in").read_text(encoding="utf-8")
+
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in source_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
+
+
 def test_posix_wrapper_shell_quotes_single_quotes(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cmake_script = tmp_path / "quote_test.cmake"

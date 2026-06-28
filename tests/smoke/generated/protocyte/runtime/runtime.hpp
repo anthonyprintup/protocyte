@@ -4415,6 +4415,14 @@ namespace protocyte {
         });
     }
 
+    template<class Message, class Reader> Status merge_message_fragment(Message &out, Reader &reader) noexcept {
+        if constexpr (requires { out.merge_partial_from(reader); }) {
+            return out.merge_partial_from(reader);
+        } else {
+            return out.merge_from(reader);
+        }
+    }
+
     template<class Config, class Reader, class Message>
     Status read_message(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
         auto nested = open_nested_message<Config>(ctx, reader, field_number);
@@ -4423,7 +4431,9 @@ namespace protocyte {
         }
         auto &open = *nested;
         auto nested_reader = open.reader_ref();
-        return out.merge_partial_from(nested_reader).and_then([&open]() noexcept -> Status { return open.finish(); });
+        return merge_message_fragment(out, nested_reader).and_then([&open]() noexcept -> Status {
+            return open.finish();
+        });
     }
 
     template<class Writer, class Message>

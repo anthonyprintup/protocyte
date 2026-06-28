@@ -753,7 +753,19 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "return out.merge_partial_from(nested_reader)"
+        "Status merge_message_fragment(Message &out, Reader &reader) noexcept"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "if constexpr (requires { out.merge_partial_from(reader); })"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "return out.merge_partial_from(reader)"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "return out.merge_from(reader)"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (

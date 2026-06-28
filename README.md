@@ -20,8 +20,9 @@ with the human maintainers and contributors.
 
 ## What It Supports
 
-Protocyte currently targets `proto3` schemas and advertises
-`FEATURE_PROTO3_OPTIONAL`.
+Protocyte currently targets protobuf message schemas, advertises
+`FEATURE_PROTO3_OPTIONAL` for proto3 optional fields, and supports the proto2
+message-codec subset listed below.
 
 Generated code supports:
 

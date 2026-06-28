@@ -214,6 +214,15 @@ namespace {
         };
     }
 
+    struct MergeFromOnlyMessage {
+        bool merged {};
+
+        template<class Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+            merged = reader.eof();
+            return {};
+        }
+    };
+
     template<class L, protocyte::usize LExtent, class R, protocyte::usize RExtent>
     bool view_equal(protocyte::Span<L, LExtent> lhs, protocyte::Span<R, RExtent> rhs) noexcept {
         return protocyte::bytes_equal(lhs, rhs);
@@ -2674,6 +2683,23 @@ TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke]
         require_failure(protocyte::skip_field(skip_reader, protocyte::WireType::LEN),
                         protocyte::ErrorCode::integer_overflow);
     }
+}
+
+TEST_CASE("read_message accepts merge_from-only message adapters", "[smoke][runtime][compat]") {
+    auto ctx = make_context();
+    constexpr std::array<protocyte::u8, 2u> encoded {0x0au, 0x00u};
+    protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+    auto tag = protocyte::read_tag(reader);
+    require_success(tag);
+    CHECK(tag->field_number == 1u);
+    CHECK(tag->wire_type == protocyte::WireType::LEN);
+
+    MergeFromOnlyMessage parsed {};
+    require_success(protocyte::read_message<Config>(ctx, reader, tag->field_number, parsed));
+
+    CHECK(parsed.merged);
+    CHECK(reader.eof());
 }
 
 TEST_CASE("Result<void> carries status without a payload", "[smoke][runtime]") {
