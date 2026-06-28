@@ -15,7 +15,9 @@ def test_proto2_array_backed_bytes_accessors_apply_default_values() -> None:
     files = {item.name: item.content for item in response.file}
     header = files["array_defaults.protocyte.hpp"]
     compact_header = _without_whitespace(header)
-    assert "template<class Value>::protocyte::Status" not in header
+    assert "autoset_bounded_bytes" not in compact_header
+    assert "autoset_fixed_bytes" not in compact_header
+    assert "autoset_oneof_bytes" not in compact_header
     assert (
         _without_whitespace(
             '::protocyte::Span<const ::protocyte::u8> bounded_bytes() const noexcept { return has_bounded_bytes_ ? bounded_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("abc"), 3u}; }'
