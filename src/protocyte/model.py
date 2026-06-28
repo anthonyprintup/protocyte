@@ -689,7 +689,7 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         files[file.name] = FileModel(
             name=file.name,
             package=file.package,
-            syntax=file.syntax,
+            syntax=_file_syntax(file),
             descriptor=file,
         )
 
@@ -833,6 +833,10 @@ def proto_full_name(file: descriptor_pb2.FileDescriptorProto, path: str) -> str:
 
 def strip_type_name(type_name: str) -> str:
     return type_name[1:] if type_name.startswith(".") else type_name
+
+
+def _file_syntax(file: descriptor_pb2.FileDescriptorProto) -> str:
+    return file.syntax or "proto2"
 
 
 def _reject_unsupported_file_features(file: descriptor_pb2.FileDescriptorProto, label: str) -> None:

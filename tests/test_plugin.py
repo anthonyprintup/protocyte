@@ -949,6 +949,7 @@ def test_proto2_model_tracks_presence_defaults_required_and_unpacked_repeated() 
     model = build_model(_proto2_request())
     fields = {field.name: field for field in model.messages["legacy.Legacy"].fields}
 
+    assert model.files["legacy.proto"].syntax == "proto2"
     assert fields["count"].explicit_presence
     assert not fields["count"].required
     assert fields["count"].default_cpp == "7"
@@ -964,6 +965,19 @@ def test_proto2_model_tracks_presence_defaults_required_and_unpacked_repeated() 
     assert fields["precise"].default_cpp == "::std::numeric_limits<::protocyte::f64>::quiet_NaN()"
     assert fields["max_counter"].default_cpp == "18446744073709551615ull"
     assert fields["min_counter"].default_cpp == "(-9223372036854775807ll - 1ll)"
+
+
+def test_empty_syntax_model_uses_proto2_presence_defaults_and_packing() -> None:
+    request = _proto2_request()
+    request.proto_file[0].ClearField("syntax")
+
+    model = build_model(request)
+    fields = {field.name: field for field in model.messages["legacy.Legacy"].fields}
+
+    assert model.files["legacy.proto"].syntax == "proto2"
+    assert fields["count"].explicit_presence
+    assert fields["count"].default_cpp == "7"
+    assert fields["samples"].packed is False
 
 
 def test_generates_proto2_presence_defaults_and_required_validation() -> None:
@@ -1005,6 +1019,20 @@ def test_generates_proto2_presence_defaults_and_required_validation() -> None:
         "constexpr ::protocyte::i64 min_counter() const noexcept { return has_min_counter_ ? min_counter_ : (-9223372036854775807ll - 1ll); }"
         in header
     )
+
+
+def test_generates_empty_syntax_defaults_as_proto2() -> None:
+    request = _proto2_request()
+    request.proto_file[0].ClearField("syntax")
+
+    response = generate_response(request)
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["legacy.protocyte.hpp"]
+    assert "constexpr ::protocyte::i32 count() const noexcept { return has_count_ ? count_ : 7; }" in header
+    assert "constexpr bool has_count() const noexcept { return has_count_; }" in header
+    assert "packed_size_samples" not in header
 
 
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
