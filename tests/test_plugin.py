@@ -1174,23 +1174,23 @@ def test_generates_proto2_default_semantics() -> None:
         in header
     )
     assert (
-        "constexpr ::protocyte::i32 oneof_int32() const noexcept { return has_oneof_int32() ? choice.oneof_int32 : 11; }"
+        "constexpr ::protocyte::i32 oneof_int32() const noexcept { return has_oneof_int32() ? choice_.oneof_int32_ : 11; }"
         in header
     )
     assert (
-        '::protocyte::StringView oneof_string() const noexcept { return has_oneof_string() ? choice.oneof_string.view() : ::protocyte::StringView {"chosen", 6u}; }'
+        '::protocyte::StringView oneof_string() const noexcept { return has_oneof_string() ? choice_.oneof_string_.view() : ::protocyte::StringView {"chosen", 6u}; }'
         in header
     )
     assert (
-        '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x02""\\xfe"), 2u}; }'
+        '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice_.oneof_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x02""\\xfe"), 2u}; }'
         in header
     )
     assert (
-        "constexpr ::protocyte::i32 implicit_oneof_choice_raw() const noexcept { return has_implicit_oneof_choice() ? choice.implicit_oneof_choice : 5; }"
+        "constexpr ::protocyte::i32 implicit_oneof_choice_raw() const noexcept { return has_implicit_oneof_choice() ? choice_.implicit_oneof_choice_ : 5; }"
         in header
     )
     assert (
-        "constexpr ::protocyte::i32 explicit_oneof_choice_raw() const noexcept { return has_explicit_oneof_choice() ? choice.explicit_oneof_choice : 9; }"
+        "constexpr ::protocyte::i32 explicit_oneof_choice_raw() const noexcept { return has_explicit_oneof_choice() ? choice_.explicit_oneof_choice_ : 9; }"
         in header
     )
     assert (
@@ -2394,46 +2394,46 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "template <typename T>" in header
     assert "static void destroy_at_(T* value) noexcept { value->~T(); }" in header
     assert "void clear_choice() noexcept {" in header
-    assert "destroy_at_(&choice.text);" in header
-    assert "destroy_at_(&choice.inner);" in header
+    assert "destroy_at_(&choice_.text_);" in header
+    assert "destroy_at_(&choice_.inner_);" in header
     assert "#include <string_view>" not in header
     assert (
         "  ::protocyte::StringView text() const noexcept { "
-        "return has_text() ? choice.text.view() : ::protocyte::StringView{}; }"
+        "return has_text() ? choice_.text_.view() : ::protocyte::StringView{}; }"
     ) in header
     assert "::std::string_view text()" not in header
     assert "::protocyte::Span<const char> text()" not in header
     assert "union ChoiceStorage {" in header
     assert "ChoiceStorage() noexcept {}" in header
     assert "~ChoiceStorage() noexcept {}" in header
-    assert "} choice;" in header
-    assert "typename Config::String text;" in header
-    assert "::protocyte::i32 count;" in header
+    assert "} choice_;" in header
+    assert "typename Config::String text_;" in header
+    assert "::protocyte::i32 count_;" in header
     assert (
-        "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner;"
+        "typename Config::template Optional<::demo::Carrier_Inner<Config>> inner_;"
         in header
     )
     assert (
-        "new (&choice.text) typename Config::String {::protocyte::move(temp)};"
+        "new (&choice_.text_) typename Config::String {::protocyte::move(temp)};"
         in header
     )
-    assert "new (&choice.count) ::protocyte::i32 {value};" in header
+    assert "new (&choice_.count_) ::protocyte::i32 {value};" in header
     assert (
-        "new (&choice.inner) typename Config::template Optional<::demo::Carrier_Inner<Config>> {};"
+        "new (&choice_.inner_) typename Config::template Optional<::demo::Carrier_Inner<Config>> {};"
         in header
     )
     assert (
-        "return has_inner() && choice.inner.has_value() ? choice.inner.operator->() : nullptr;"
+        "return has_inner() && choice_.inner_.has_value() ? choice_.inner_.operator->() : nullptr;"
         in header
     )
     assert (
         "::protocyte::Result<::demo::Carrier_Inner<Config>&> ensure_inner() noexcept"
         in header
     )
-    assert "return *choice.inner;" in header
-    assert "new (&choice.none)::protocyte::u8(0u);" not in header
-    assert "::protocyte::u8 none;" not in header
-    assert "return choice.inner.emplace(*ctx_).transform(" in header
+    assert "return *choice_.inner_;" in header
+    assert "new (&choice_.none_)::protocyte::u8(0u);" not in header
+    assert "::protocyte::u8 none_;" not in header
+    assert "return choice_.inner_.emplace(*ctx_).transform(" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
     assert "choice_case_ == ChoiceCase::inner" in header
@@ -2445,8 +2445,28 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert protected.index(
         "ChoiceCase choice_case_ {ChoiceCase::none};"
     ) < protected.index("union ChoiceStorage {")
-    assert protected.index("} choice;") < protected.index("::protocyte::i32 after_{};")
+    assert protected.index("} choice_;") < protected.index("::protocyte::i32 after_{};")
     assert "typename Config::String text = " not in header
+
+
+def test_generated_header_suffixes_shadow_prone_oneof_storage() -> None:
+    response = generate_response(_shadowing_oneof_request())
+
+    assert not response.error
+    header = next(
+        file.content
+        for file in response.file
+        if file.name == "shadowing_oneof.protocyte.hpp"
+    )
+
+    assert "ValueCase value_case_ {ValueCase::none};" in header
+    assert "} value_;" in header
+    assert "bool bool_value_;" in header
+    assert "new (&value_.bool_value_) bool {value};" in header
+    assert "new (&value.bool_value) bool {value};" not in header
+    assert "constexpr bool bool_value() const noexcept { return has_bool_value() ? value_.bool_value_ : false; }" in header
+    assert "::protocyte::Status set_bool_value(const bool value) noexcept" in header
+    assert "constexpr ValueCase value_case() const noexcept { return value_case_; }" in header
 
 
 def test_generated_header_uses_normalized_oneof_case_type() -> None:
@@ -2518,7 +2538,7 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     assert "const auto view = data_value.mutable_view();" in header
     assert "if (const auto st = reader.read(view.data(), view.size()); !st)" in header
     assert (
-        "new (&choice.data) ::protocyte::ByteArray<8u> {::protocyte::move(data_value)};"
+        "new (&choice_.data_) ::protocyte::ByteArray<8u> {::protocyte::move(data_value)};"
         in header
     )
     assert "choice_case_ = ChoiceCase::data;" in header
@@ -2528,11 +2548,11 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
     before_commit = after_read.split("clear_choice();", maxsplit=1)[0]
     assert "return st;" in before_commit
     assert (
-        "static_cast<void>(choice.data.resize_for_overwrite(old_data_size));"
+        "static_cast<void>(choice_.data_.resize_for_overwrite(old_data_size));"
         not in header
     )
     assert "if (*len > ctx_->limits.max_string_bytes) {" in header
-    assert "new (&choice.data)::protocyte::ByteArray<8u> {ctx_};" not in header
+    assert "new (&choice_.data_)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 
 def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
@@ -2553,13 +2573,13 @@ def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
     )[1]
     ensure_body = ensure_body.split("template <typename Reader>", maxsplit=1)[0]
 
-    assert "auto ensured = choice.child.ensure();" in ensure_body
+    assert "auto ensured = choice_.child_.ensure();" in ensure_body
     assert (
-        "if (!ensured) {\n      destroy_at_(&choice.child);\n      return ensured;\n    }"
+        "if (!ensured) {\n      destroy_at_(&choice_.child_);\n      return ensured;\n    }"
         in ensure_body
     )
     assert ensure_body.index(
-        "auto ensured = choice.child.ensure();"
+        "auto ensured = choice_.child_.ensure();"
     ) < ensure_body.index("choice_case_ = ChoiceCase::child;")
 
 
@@ -2607,7 +2627,7 @@ def test_generated_encoded_size_omits_redundant_uint64_varint_casts() -> None:
     assert "::protocyte::varint_size(version_)" in encoded_size_body
     assert "::protocyte::varint_size(values_value)" in encoded_size_body
     assert "::protocyte::varint_size(loose_values_value)" in encoded_size_body
-    assert "::protocyte::varint_size(choice.choice_value)" in encoded_size_body
+    assert "::protocyte::varint_size(choice_.choice_value_)" in encoded_size_body
     assert "::protocyte::varint_size(entry.key)" in encoded_size_body
     assert "::protocyte::varint_size(entry.value)" in encoded_size_body
     assert (
@@ -2623,7 +2643,7 @@ def test_generated_encoded_size_omits_redundant_uint64_varint_casts() -> None:
         not in encoded_size_body
     )
     assert (
-        "::protocyte::varint_size(static_cast<::protocyte::u64>(choice.choice_value))"
+        "::protocyte::varint_size(static_cast<::protocyte::u64>(choice_.choice_value_))"
         not in encoded_size_body
     )
     assert (
@@ -2880,6 +2900,13 @@ def _oneof_array_request() -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_array.proto")
     request.proto_file.extend([_options_file(), _oneof_file(array_bytes=True)])
+    return request
+
+
+def _shadowing_oneof_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("shadowing_oneof.proto")
+    request.proto_file.append(_shadowing_oneof_file())
     return request
 
 
@@ -3675,6 +3702,26 @@ def _keyword_oneof_file() -> descriptor_pb2.FileDescriptorProto:
     field.number = 1
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_INT32
+    field.oneof_index = 0
+
+    return file
+
+
+def _shadowing_oneof_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "shadowing_oneof.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "AnyValue"
+    message.oneof_decl.add().name = "value"
+
+    field = message.field.add()
+    field.name = "bool_value"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BOOL
     field.oneof_index = 0
 
     return file

@@ -1329,7 +1329,7 @@ def _field_generated_cpp_names(field_model: FieldModel) -> set[str]:
 def _oneof_generated_cpp_names(oneof: OneofModel) -> set[str]:
     lower = cpp_identifier(oneof.name)
     return {
-        lower,
+        f"{lower}_",
         f"{lower}_case",
         f"{lower}_case_",
         f"clear_{lower}",

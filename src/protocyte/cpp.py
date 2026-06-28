@@ -2426,11 +2426,11 @@ def _oneof_storage_type(oneof: OneofModel) -> str:
 
 
 def _oneof_storage_member(oneof_name: str) -> str:
-    return cpp_identifier(oneof_name)
+    return f"{cpp_identifier(oneof_name)}_"
 
 
 def _oneof_member_name(item: FieldModel) -> str:
-    return item.cpp_name
+    return f"{item.cpp_name}_"
 
 
 def _array_max_literal(item: FieldModel) -> str:

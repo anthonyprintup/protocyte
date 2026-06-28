@@ -40,7 +40,7 @@ def test_proto2_array_backed_bytes_accessors_apply_default_values() -> None:
     assert "has_fixed_bytes_ = true" not in header
     assert (
         _without_whitespace(
-            '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x01""\\xfe"), 2u}; }'
+            '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice_.oneof_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x01""\\xfe"), 2u}; }'
         )
         in compact_header
     )

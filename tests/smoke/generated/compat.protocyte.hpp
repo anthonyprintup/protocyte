@@ -296,26 +296,26 @@ namespace protocyte_smoke::test::compat {
             has_opt_string_ = other.has_opt_string_;
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    new (&special_oneof.oneof_string)
-                        typename Config::String {::protocyte::move(other.special_oneof.oneof_string)};
+                    new (&special_oneof_.oneof_string_)
+                        typename Config::String {::protocyte::move(other.special_oneof_.oneof_string_)};
                     special_oneof_case_ = Special_oneofCase::oneof_string;
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    new (&special_oneof.oneof_int32)::protocyte::i32 {other.special_oneof.oneof_int32};
+                    new (&special_oneof_.oneof_int32_)::protocyte::i32 {other.special_oneof_.oneof_int32_};
                     special_oneof_case_ = Special_oneofCase::oneof_int32;
                     break;
                 }
                 case Special_oneofCase::oneof_nested: {
-                    new (&special_oneof.oneof_nested) typename Config::template Optional<
+                    new (&special_oneof_.oneof_nested_) typename Config::template Optional<
                         ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                        ::protocyte::move(other.special_oneof.oneof_nested)};
+                        ::protocyte::move(other.special_oneof_.oneof_nested_)};
                     special_oneof_case_ = Special_oneofCase::oneof_nested;
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&special_oneof.oneof_bytes)
-                        typename Config::Bytes {::protocyte::move(other.special_oneof.oneof_bytes)};
+                    new (&special_oneof_.oneof_bytes_)
+                        typename Config::Bytes {::protocyte::move(other.special_oneof_.oneof_bytes_)};
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
                 }
@@ -360,26 +360,26 @@ namespace protocyte_smoke::test::compat {
             map_int32_str_ = ::protocyte::move(other.map_int32_str_);
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    new (&special_oneof.oneof_string)
-                        typename Config::String {::protocyte::move(other.special_oneof.oneof_string)};
+                    new (&special_oneof_.oneof_string_)
+                        typename Config::String {::protocyte::move(other.special_oneof_.oneof_string_)};
                     special_oneof_case_ = Special_oneofCase::oneof_string;
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    new (&special_oneof.oneof_int32)::protocyte::i32 {other.special_oneof.oneof_int32};
+                    new (&special_oneof_.oneof_int32_)::protocyte::i32 {other.special_oneof_.oneof_int32_};
                     special_oneof_case_ = Special_oneofCase::oneof_int32;
                     break;
                 }
                 case Special_oneofCase::oneof_nested: {
-                    new (&special_oneof.oneof_nested) typename Config::template Optional<
+                    new (&special_oneof_.oneof_nested_) typename Config::template Optional<
                         ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
-                        ::protocyte::move(other.special_oneof.oneof_nested)};
+                        ::protocyte::move(other.special_oneof_.oneof_nested_)};
                     special_oneof_case_ = Special_oneofCase::oneof_nested;
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    new (&special_oneof.oneof_bytes)
-                        typename Config::Bytes {::protocyte::move(other.special_oneof.oneof_bytes)};
+                    new (&special_oneof_.oneof_bytes_)
+                        typename Config::Bytes {::protocyte::move(other.special_oneof_.oneof_bytes_)};
                     special_oneof_case_ = Special_oneofCase::oneof_bytes;
                     break;
                 }
@@ -538,18 +538,18 @@ namespace protocyte_smoke::test::compat {
         void clear_special_oneof() noexcept {
             switch (special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    destroy_at_(&special_oneof.oneof_string);
+                    destroy_at_(&special_oneof_.oneof_string_);
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
                     break;
                 }
                 case Special_oneofCase::oneof_nested: {
-                    destroy_at_(&special_oneof.oneof_nested);
+                    destroy_at_(&special_oneof_.oneof_nested_);
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    destroy_at_(&special_oneof.oneof_bytes);
+                    destroy_at_(&special_oneof_.oneof_bytes_);
                     break;
                 }
                 case Special_oneofCase::none:
@@ -753,7 +753,7 @@ namespace protocyte_smoke::test::compat {
             return special_oneof_case_ == Special_oneofCase::oneof_string;
         }
         ::protocyte::StringView oneof_string() const noexcept {
-            return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::StringView {};
+            return has_oneof_string() ? special_oneof_.oneof_string_.view() : ::protocyte::StringView {};
         }
         template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
@@ -767,7 +767,7 @@ namespace protocyte_smoke::test::compat {
                 return st;
             }
             clear_special_oneof();
-            new (&special_oneof.oneof_string) typename Config::String {::protocyte::move(temp)};
+            new (&special_oneof_.oneof_string_) typename Config::String {::protocyte::move(temp)};
             special_oneof_case_ = Special_oneofCase::oneof_string;
             return {};
         }
@@ -783,7 +783,7 @@ namespace protocyte_smoke::test::compat {
                 return st;
             }
             clear_special_oneof();
-            new (&special_oneof.oneof_string) typename Config::String {::protocyte::move(temp)};
+            new (&special_oneof_.oneof_string_) typename Config::String {::protocyte::move(temp)};
             special_oneof_case_ = Special_oneofCase::oneof_string;
             return {};
         }
@@ -792,11 +792,11 @@ namespace protocyte_smoke::test::compat {
             return special_oneof_case_ == Special_oneofCase::oneof_int32;
         }
         constexpr ::protocyte::i32 oneof_int32() const noexcept {
-            return has_oneof_int32() ? special_oneof.oneof_int32 : 0;
+            return has_oneof_int32() ? special_oneof_.oneof_int32_ : 0;
         }
         ::protocyte::Status set_oneof_int32(const ::protocyte::i32 value) noexcept {
             clear_special_oneof();
-            new (&special_oneof.oneof_int32)::protocyte::i32 {value};
+            new (&special_oneof_.oneof_int32_)::protocyte::i32 {value};
             special_oneof_case_ = Special_oneofCase::oneof_int32;
             return {};
         }
@@ -805,24 +805,24 @@ namespace protocyte_smoke::test::compat {
             return special_oneof_case_ == Special_oneofCase::oneof_nested;
         }
         const ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> *oneof_nested() const noexcept {
-            return has_oneof_nested() && special_oneof.oneof_nested.has_value() ?
-                       special_oneof.oneof_nested.operator->() :
+            return has_oneof_nested() && special_oneof_.oneof_nested_.has_value() ?
+                       special_oneof_.oneof_nested_.operator->() :
                        nullptr;
         }
         ::protocyte::Result<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> &>
         ensure_oneof_nested() noexcept {
             if (!has_oneof_nested()) {
                 clear_special_oneof();
-                new (&special_oneof.oneof_nested) typename Config::template Optional<
+                new (&special_oneof_.oneof_nested_) typename Config::template Optional<
                     ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {};
             }
             special_oneof_case_ = Special_oneofCase::oneof_nested;
-            if (special_oneof.oneof_nested.has_value()) {
-                return *special_oneof.oneof_nested;
+            if (special_oneof_.oneof_nested_.has_value()) {
+                return *special_oneof_.oneof_nested_;
             }
-            return special_oneof.oneof_nested.emplace(*ctx_).transform(
+            return special_oneof_.oneof_nested_.emplace(*ctx_).transform(
                 [this]() noexcept -> ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> & {
-                    return *special_oneof.oneof_nested;
+                    return *special_oneof_.oneof_nested_;
                 });
         }
 
@@ -830,7 +830,7 @@ namespace protocyte_smoke::test::compat {
             return special_oneof_case_ == Special_oneofCase::oneof_bytes;
         }
         ::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept {
-            return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {};
+            return has_oneof_bytes() ? special_oneof_.oneof_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
         template<class Value>::protocyte::Status set_oneof_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
@@ -844,7 +844,7 @@ namespace protocyte_smoke::test::compat {
                 return st;
             }
             clear_special_oneof();
-            new (&special_oneof.oneof_bytes) typename Config::Bytes {::protocyte::move(temp)};
+            new (&special_oneof_.oneof_bytes_) typename Config::Bytes {::protocyte::move(temp)};
             special_oneof_case_ = Special_oneofCase::oneof_bytes;
             return {};
         }
@@ -1247,7 +1247,7 @@ namespace protocyte_smoke::test::compat {
                             return st;
                         }
                         clear_special_oneof();
-                        new (&special_oneof.oneof_string)
+                        new (&special_oneof_.oneof_string_)
                             typename Config::String {::protocyte::move(oneof_string_value)};
                         special_oneof_case_ = Special_oneofCase::oneof_string;
                         break;
@@ -1261,7 +1261,7 @@ namespace protocyte_smoke::test::compat {
                             return st;
                         }
                         clear_special_oneof();
-                        new (&special_oneof.oneof_int32)::protocyte::i32 {::protocyte::move(oneof_int32_value)};
+                        new (&special_oneof_.oneof_int32_)::protocyte::i32 {::protocyte::move(oneof_int32_value)};
                         special_oneof_case_ = Special_oneofCase::oneof_int32;
                         break;
                     }
@@ -1271,8 +1271,8 @@ namespace protocyte_smoke::test::compat {
                                                            field_number);
                         }
                         ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> oneof_nested_value {*ctx_};
-                        if (has_oneof_nested() && special_oneof.oneof_nested.has_value()) {
-                            if (const auto st = oneof_nested_value.copy_from(*special_oneof.oneof_nested); !st) {
+                        if (has_oneof_nested() && special_oneof_.oneof_nested_.has_value()) {
+                            if (const auto st = oneof_nested_value.copy_from(*special_oneof_.oneof_nested_); !st) {
                                 return st;
                             }
                         }
@@ -1289,7 +1289,7 @@ namespace protocyte_smoke::test::compat {
                             return st;
                         }
                         clear_special_oneof();
-                        new (&special_oneof.oneof_nested) typename Config::template Optional<
+                        new (&special_oneof_.oneof_nested_) typename Config::template Optional<
                             ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>> {
                             ::protocyte::move(oneof_nested_committed)};
                         special_oneof_case_ = Special_oneofCase::oneof_nested;
@@ -1303,7 +1303,8 @@ namespace protocyte_smoke::test::compat {
                             return st;
                         }
                         clear_special_oneof();
-                        new (&special_oneof.oneof_bytes) typename Config::Bytes {::protocyte::move(oneof_bytes_value)};
+                        new (&special_oneof_.oneof_bytes_)
+                            typename Config::Bytes {::protocyte::move(oneof_bytes_value)};
                         special_oneof_case_ = Special_oneofCase::oneof_bytes;
                         break;
                     }
@@ -1658,21 +1659,22 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_case_ == Special_oneofCase::oneof_string) {
                 if (const auto st = ::protocyte::write_string_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::oneof_string),
-                        special_oneof.oneof_string.view());
+                        special_oneof_.oneof_string_.view());
                     !st) {
                     return st;
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_int32) {
                 if (const auto st = ::protocyte::write_int32_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_int32), special_oneof.oneof_int32);
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_int32), special_oneof_.oneof_int32_);
                     !st) {
                     return st;
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
                 if (const auto st = ::protocyte::write_message_field(
-                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_nested), *special_oneof.oneof_nested);
+                        writer, static_cast<::protocyte::u32>(FieldNumber::oneof_nested),
+                        *special_oneof_.oneof_nested_);
                     !st) {
                     return st;
                 }
@@ -1680,7 +1682,7 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_case_ == Special_oneofCase::oneof_bytes) {
                 if (const auto st =
                         ::protocyte::write_bytes_field(writer, static_cast<::protocyte::u32>(FieldNumber::oneof_bytes),
-                                                       special_oneof.oneof_bytes.view());
+                                                       special_oneof_.oneof_bytes_.view());
                     !st) {
                     return st;
                 }
@@ -2010,7 +2012,7 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_case_ == Special_oneofCase::oneof_string) {
                 const auto st_size =
                     ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::oneof_string),
-                                                             special_oneof.oneof_string.size())
+                                                             special_oneof_.oneof_string_.size())
                         .and_then([&](const ::protocyte::usize field_size) noexcept
                                       -> ::protocyte::Result<::protocyte::usize> {
                             return ::protocyte::add_size(total, field_size);
@@ -2023,7 +2025,7 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_case_ == Special_oneofCase::oneof_int32) {
                 const auto st_size = ::protocyte::add_size(
                     total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::oneof_int32)) +
-                               ::protocyte::varint_size(static_cast<::protocyte::u64>(special_oneof.oneof_int32)));
+                               ::protocyte::varint_size(static_cast<::protocyte::u64>(special_oneof_.oneof_int32_)));
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -2032,7 +2034,7 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
                 const auto st_size =
                     ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::oneof_nested),
-                                                    *special_oneof.oneof_nested)
+                                                    *special_oneof_.oneof_nested_)
                         .and_then([&](const ::protocyte::usize nested_size) noexcept
                                       -> ::protocyte::Result<::protocyte::usize> {
                             return ::protocyte::add_size(total, nested_size);
@@ -2045,7 +2047,7 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_case_ == Special_oneofCase::oneof_bytes) {
                 const auto st_size =
                     ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::oneof_bytes),
-                                                             special_oneof.oneof_bytes.size())
+                                                             special_oneof_.oneof_bytes_.size())
                         .and_then([&](const ::protocyte::usize field_size) noexcept
                                       -> ::protocyte::Result<::protocyte::usize> {
                             return ::protocyte::add_size(total, field_size);
@@ -2161,8 +2163,8 @@ namespace protocyte_smoke::test::compat {
                     return st;
                 }
             }
-            if (special_oneof_case_ == Special_oneofCase::oneof_nested && special_oneof.oneof_nested.has_value()) {
-                if (const auto st = (*special_oneof.oneof_nested).validate(); !st) {
+            if (special_oneof_case_ == Special_oneofCase::oneof_nested && special_oneof_.oneof_nested_.has_value()) {
+                if (const auto st = (*special_oneof_.oneof_nested_).validate(); !st) {
                     return st;
                 }
             }
@@ -2194,12 +2196,12 @@ namespace protocyte_smoke::test::compat {
         union Special_oneofStorage {
             Special_oneofStorage() noexcept {}
             ~Special_oneofStorage() noexcept {}
-            typename Config::String oneof_string;
-            ::protocyte::i32 oneof_int32;
+            typename Config::String oneof_string_;
+            ::protocyte::i32 oneof_int32_;
             typename Config::template Optional<::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config>>
-                oneof_nested;
-            typename Config::Bytes oneof_bytes;
-        } special_oneof;
+                oneof_nested_;
+            typename Config::Bytes oneof_bytes_;
+        } special_oneof_;
         ::protocyte::i32 opt_int32_ {};
         bool has_opt_int32_ {};
         typename Config::String opt_string_;
