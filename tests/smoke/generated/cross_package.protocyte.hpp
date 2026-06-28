@@ -64,6 +64,9 @@ namespace test::crosspkg {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
+            if (size > 15u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
+            }
             if (const auto st = nested_bytes_.resize(size); !st) {
                 return st;
             }
@@ -109,6 +112,13 @@ namespace test::crosspkg {
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            if (const auto st = merge_partial_from(reader); !st) {
+                return st;
+            }
+            return validate();
+        }
+
+        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -160,6 +170,9 @@ namespace test::crosspkg {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
             if (!nested_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::nested_bytes), nested_bytes_.view());
@@ -171,6 +184,9 @@ namespace test::crosspkg {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
             ::protocyte::usize total {};
             if (!nested_bytes_.empty()) {
                 const auto st_size = ::protocyte::length_delimited_field_size(
@@ -186,6 +202,8 @@ namespace test::crosspkg {
             }
             return total;
         }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
     protected:
         Context *ctx_;
         ::protocyte::ByteArray<15u> nested_bytes_;
@@ -257,6 +275,9 @@ namespace test::crosspkg {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
+            if (size > 9u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
+            }
             if (const auto st = remote_bytes_.resize(size); !st) {
                 return st;
             }
@@ -319,6 +340,13 @@ namespace test::crosspkg {
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            if (const auto st = merge_partial_from(reader); !st) {
+                return st;
+            }
+            return validate();
+        }
+
+        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -415,7 +443,7 @@ namespace test::crosspkg {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, nested_value);
                             !st) {
                             return st;
                         }
@@ -437,6 +465,9 @@ namespace test::crosspkg {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
             if (!remote_bytes_.empty()) {
                 if (const auto st = ::protocyte::write_bytes_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::remote_bytes), remote_bytes_.view());
@@ -482,6 +513,9 @@ namespace test::crosspkg {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
             ::protocyte::usize total {};
             if (!remote_bytes_.empty()) {
                 const auto st_size = ::protocyte::length_delimited_field_size(
@@ -531,6 +565,15 @@ namespace test::crosspkg {
                 total = *st_size;
             }
             return total;
+        }
+
+        ::protocyte::Status validate() const noexcept {
+            if (nested_.has_value()) {
+                if (const auto st = (*nested_).validate(); !st) {
+                    return st;
+                }
+            }
+            return {};
         }
     protected:
         Context *ctx_;

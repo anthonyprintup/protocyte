@@ -19,6 +19,7 @@ set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
 set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
 set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
 set(PROTOCYTE_CROSS_PACKAGE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/cross_package.proto")
+set(PROTOCYTE_PROTO2_REQUIRED_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/proto2_required.proto")
 set(PROTOCYTE_BENCHMARK_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/benchmark.proto")
 set(PROTOCYTE_GENERATED_DIR "${CMAKE_CURRENT_LIST_DIR}/generated")
 set(
@@ -40,6 +41,8 @@ set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.hpp"
+    "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/protocyte/runtime/runtime.hpp"
 )
 
@@ -126,12 +129,21 @@ if(PROTOCYTE_SMOKE_REGENERATE)
         OPTIONS ${PROTOCYTE_SMOKE_FORMAT_OPTIONS}
     )
 
+    protocyte_generate(
+        TARGET protocyte_smoke_proto2_required_codegen
+        PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
+        OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
+        PROTOS "${PROTOCYTE_PROTO2_REQUIRED_PROTO}"
+        OPTIONS ${PROTOCYTE_SMOKE_FORMAT_OPTIONS}
+    )
+
     add_custom_target(protocyte_smoke_regenerate)
     add_dependencies(
         protocyte_smoke_regenerate
         protocyte_smoke_example_codegen
         protocyte_smoke_compat_codegen
         protocyte_smoke_cross_package_codegen
+        protocyte_smoke_proto2_required_codegen
     )
 endif()
 
@@ -239,6 +251,7 @@ add_executable(protocyte_host_smoke
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
 )
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")
 target_compile_definitions(

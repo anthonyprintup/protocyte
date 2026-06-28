@@ -20,8 +20,9 @@ with the human maintainers and contributors.
 
 ## What It Supports
 
-Protocyte currently targets `proto3` schemas and advertises
-`FEATURE_PROTO3_OPTIONAL`.
+Protocyte currently targets protobuf message schemas, advertises
+`FEATURE_PROTO3_OPTIONAL` for proto3 optional fields, and supports the proto2
+message-codec subset listed below.
 
 Generated code supports:
 
@@ -41,11 +42,14 @@ smaller while preserving protobuf wire behavior.
 
 ## Current Limits
 
-- `proto2` files are rejected.
+- `proto2` message codecs support normal optional, required, repeated, default,
+  enum, string, bytes, message, map, and oneof field generation, but generated
+  extension fields are not supported.
 - Protobuf Editions are rejected in v1.
-- Proto3 extension declarations are not supported.
 - Groups are not supported.
 - `protocyte.array` cannot be applied to map fields.
+- Services and methods are accepted in descriptor graphs but do not generate
+  RPC stubs.
 
 ## Usage
 
@@ -84,6 +88,21 @@ The plugin emits:
 - `foo.protocyte.hpp`
 - `foo.protocyte.cpp`
 - `protocyte/runtime/runtime.hpp` when runtime emission is enabled
+
+Generate from a descriptor set when `.proto` source is not the authority:
+
+```powershell
+protoc `
+  --descriptor_set_in=descriptor_set.pb `
+  --plugin=protoc-gen-protocyte=path\to\protoc-gen-protocyte `
+  --protocyte_out=generated `
+  core.proto messages.proto settings.proto
+```
+
+The names after `--protocyte_out` are descriptor names inside
+`descriptor_set.pb`, not filesystem paths. Imported descriptors from the set are
+available for type and custom-option resolution, but Protocyte only emits files
+listed for generation.
 
 ## CMake Integration
 
@@ -158,6 +177,43 @@ protocyte_add_proto_library(
         "clang_format_config=${CMAKE_SOURCE_DIR}/.clang-format"
 )
 ```
+
+Descriptor-set inputs use the same target-oriented API. In this mode `PROTOS`
+are virtual descriptor names inside the set and `PROTO_ROOT` is omitted:
+
+```cmake
+protocyte_add_proto_library(
+    TARGET recovered_proto
+    ALIAS recovered::proto
+    DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb"
+    PROTOS
+        core.proto
+        messages.proto
+        settings.proto
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    HOSTED_ALLOCATOR
+)
+```
+
+The convenience wrapper is equivalent and names the descriptor-set intent more
+directly:
+
+```cmake
+protocyte_add_descriptor_set_library(
+    TARGET recovered_proto
+    ALIAS recovered::proto
+    DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb"
+    FILES core.proto messages.proto settings.proto
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    HOSTED_ALLOCATOR
+)
+```
+
+`DISCOVER` is available for descriptor sets and generates every non-runtime
+descriptor by default. `google/protobuf/*.proto` descriptors are kept for
+option/type resolution; unreferenced runtime descriptors stay dependency-only,
+while referenced runtime message/enum descriptors are generated when selected
+files need their generated types.
 
 Absolute Windows and POSIX paths are safe to use in `OPTIONS`.
 
@@ -245,6 +301,10 @@ The full end-to-end examples, including building a static library from
 generated translation units, are in [tests/smoke/README.md](tests/smoke/README.md),
 [tests/fetchcontent/CMakeLists.txt](tests/fetchcontent/CMakeLists.txt), and
 [tests/find_package/CMakeLists.txt](tests/find_package/CMakeLists.txt).
+
+Descriptor-set mode intentionally does not require a protobuf include tree for
+descriptors already present in the set. Source-mode generation still uses
+`PROTO_ROOT`/`IMPORT_DIRS` and still needs import roots for source parsing.
 
 ## Debugging
 

@@ -364,6 +364,37 @@ protocyte_generate(
 )
 ```
 
+Descriptor-set generation is the preferred path when descriptors were recovered
+from a binary and rendered `.proto` files are only inspection artifacts. First
+produce a descriptor set with imports:
+
+```powershell
+protoc `
+  --proto_path="${PROTO_ROOT}" `
+  --proto_path="${PROTOCYTE_PROTO_DIR}" `
+  --include_imports `
+  --descriptor_set_out="${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb" `
+  "${PROTO_ROOT}/sensors/sensor.proto"
+```
+
+Then generate from descriptor names inside that set:
+
+```cmake
+protocyte_add_descriptor_set_library(
+    TARGET sensor_proto
+    DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb"
+    FILES sensors/sensor.proto
+    OUT_DIR "${GENERATED_DIR}"
+    HOSTED_ALLOCATOR
+)
+```
+
+In descriptor-set mode, `FILES`/`PROTOS` entries are not filesystem paths.
+Imports, including `google/protobuf/*.proto`, are resolved from the descriptor
+set itself. Unreferenced runtime descriptors stay dependency-only under
+`DISCOVER`; referenced runtime message/enum descriptors are generated when
+selected files need their generated types.
+
 If protobuf is not already available to that consumer project and you want
 protocyte to fetch it, set `PROTOCYTE_FETCH_PROTOBUF=ON` before
 `find_package(protocyte CONFIG REQUIRED)`.

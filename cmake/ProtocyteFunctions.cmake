@@ -18,6 +18,91 @@ function(_protocyte_encode_generator_parameter out_var value)
     set(${out_var} "_protocyte_options_hex=${encoded}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_descriptor_name_is_unsafe out_var name)
+    if(IS_ABSOLUTE "${name}" OR "${name}" MATCHES "^[A-Za-z]:" OR "${name}" MATCHES "\\\\")
+        set(${out_var} TRUE PARENT_SCOPE)
+    else()
+        set(${out_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(_protocyte_validate_descriptor_name name)
+    if("${name}" STREQUAL "")
+        message(FATAL_ERROR "descriptor file name must not be empty")
+    endif()
+    _protocyte_descriptor_name_is_unsafe(name_is_unsafe "${name}")
+    if(name_is_unsafe)
+        message(FATAL_ERROR "descriptor file name must be a relative virtual path using '/': ${name}")
+    endif()
+    if("${name}" MATCHES "(^|/)(\\.|\\.\\.)(/|$)" OR "${name}" MATCHES "(^/|//|/$)")
+        message(FATAL_ERROR "descriptor file name contains an unsafe path segment: ${name}")
+    endif()
+endfunction()
+
+function(_protocyte_descriptor_outputs out_headers out_sources out_dir)
+    set(headers)
+    set(sources)
+    foreach(proto_name IN LISTS ARGN)
+        _protocyte_validate_descriptor_name("${proto_name}")
+        get_filename_component(proto_rel_dir "${proto_name}" DIRECTORY)
+        get_filename_component(proto_stem "${proto_name}" NAME_WLE)
+        if(proto_rel_dir STREQUAL "")
+            set(protocyte_base "${out_dir}/${proto_stem}.protocyte")
+        else()
+            set(protocyte_base "${out_dir}/${proto_rel_dir}/${proto_stem}.protocyte")
+        endif()
+        list(APPEND headers "${protocyte_base}.hpp")
+        list(APPEND sources "${protocyte_base}.cpp")
+    endforeach()
+    set(${out_headers} ${headers} PARENT_SCOPE)
+    set(${out_sources} ${sources} PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_split_discovered_descriptor_names out_var discovered)
+    string(REPLACE "\r\n" "\n" discovered_normalized "${discovered}")
+    string(REPLACE "\r" "\n" discovered_normalized "${discovered_normalized}")
+    string(REPLACE "\n" ";" discovered_list "${discovered_normalized}")
+    set(${out_var} ${discovered_list} PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_discover_descriptor_set out_var descriptor_set)
+    _protocyte_get_internal(protocyte_python_source_root PYTHON_SOURCE_ROOT)
+    if("${protocyte_python_source_root}" STREQUAL "")
+        message(FATAL_ERROR "protocyte is missing PROTOCYTE_PYTHON_SOURCE_ROOT")
+    endif()
+    if(NOT EXISTS "${descriptor_set}")
+        message(FATAL_ERROR "protocyte descriptor-set DISCOVER requires an existing file: ${descriptor_set}")
+    endif()
+    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
+    set(protocyte_discovery_pythonpath "${protocyte_python_source_root}")
+    if(DEFINED ENV{PYTHONPATH} AND NOT "$ENV{PYTHONPATH}" STREQUAL "")
+        if(CMAKE_HOST_WIN32)
+            set(protocyte_pythonpath_separator ";")
+        else()
+            set(protocyte_pythonpath_separator ":")
+        endif()
+        set(protocyte_discovery_pythonpath "${protocyte_python_source_root}${protocyte_pythonpath_separator}$ENV{PYTHONPATH}")
+    endif()
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env "PYTHONPATH=${protocyte_discovery_pythonpath}"
+            "${Python3_EXECUTABLE}" -m protocyte.descriptor_set list "${descriptor_set}"
+        OUTPUT_VARIABLE discovered
+        ERROR_VARIABLE discover_error
+        RESULT_VARIABLE discover_result
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT discover_result EQUAL 0)
+        message(FATAL_ERROR "failed to inspect descriptor set '${descriptor_set}': ${discover_error}")
+    endif()
+    if(discovered STREQUAL "")
+        set(${out_var} "" PARENT_SCOPE)
+        return()
+    endif()
+    _protocyte_split_discovered_descriptor_names(discovered_list "${discovered}")
+    set(${out_var} ${discovered_list} PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_get_internal out_var name)
     get_property(value GLOBAL PROPERTY "PROTOCYTE_INTERNAL_${name}")
     if(NOT DEFINED value OR value STREQUAL "")
@@ -204,6 +289,7 @@ function(protocyte_generate)
     set(options DISCOVER EMIT_RUNTIME)
     set(oneValueArgs
         TARGET
+        DESCRIPTOR_SET
         PROTO_ROOT
         OUT_DIR
         GENERATED_HEADERS_VAR
@@ -219,7 +305,7 @@ function(protocyte_generate)
     if(NOT PROTOCYTE_TARGET)
         message(FATAL_ERROR "protocyte_generate requires TARGET")
     endif()
-    if(NOT PROTOCYTE_PROTO_ROOT)
+    if(NOT PROTOCYTE_DESCRIPTOR_SET AND NOT PROTOCYTE_PROTO_ROOT)
         message(FATAL_ERROR "protocyte_generate requires PROTO_ROOT")
     endif()
     if(NOT PROTOCYTE_OUT_DIR)
@@ -229,7 +315,24 @@ function(protocyte_generate)
         message(FATAL_ERROR "protocyte_generate accepts either DISCOVER or PROTOS, not both")
     endif()
 
-    if(IS_ABSOLUTE "${PROTOCYTE_PROTO_ROOT}")
+    if(PROTOCYTE_DESCRIPTOR_SET)
+        if(IS_ABSOLUTE "${PROTOCYTE_DESCRIPTOR_SET}")
+            set(protocyte_descriptor_set "${PROTOCYTE_DESCRIPTOR_SET}")
+        else()
+            cmake_path(
+                ABSOLUTE_PATH PROTOCYTE_DESCRIPTOR_SET
+                BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                NORMALIZE
+                OUTPUT_VARIABLE protocyte_descriptor_set
+            )
+        endif()
+        if(PROTOCYTE_PROTO_ROOT)
+            message(FATAL_ERROR "protocyte_generate accepts either DESCRIPTOR_SET or PROTO_ROOT, not both")
+        endif()
+        if(PROTOCYTE_IMPORT_DIRS)
+            message(FATAL_ERROR "protocyte_generate does not use IMPORT_DIRS with DESCRIPTOR_SET")
+        endif()
+    elseif(IS_ABSOLUTE "${PROTOCYTE_PROTO_ROOT}")
         set(protocyte_proto_root "${PROTOCYTE_PROTO_ROOT}")
     else()
         cmake_path(
@@ -240,7 +343,11 @@ function(protocyte_generate)
         )
     endif()
 
-    if(PROTOCYTE_DISCOVER)
+    if(PROTOCYTE_DESCRIPTOR_SET AND PROTOCYTE_DISCOVER)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_descriptor_set}")
+        protocyte_setup_codegen()
+        _protocyte_discover_descriptor_set(protocyte_proto_files "${protocyte_descriptor_set}")
+    elseif(PROTOCYTE_DISCOVER)
         file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${protocyte_proto_root}/*.proto")
     else()
         set(protocyte_proto_files ${PROTOCYTE_PROTOS})
@@ -250,28 +357,39 @@ function(protocyte_generate)
         message(FATAL_ERROR "protocyte_generate did not receive any .proto files")
     endif()
 
-    protocyte_setup_codegen()
+    if(NOT PROTOCYTE_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
+        protocyte_setup_codegen()
+    endif()
     _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
     _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
     _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
 
     set(normalized_proto_files)
-    foreach(proto_file IN LISTS protocyte_proto_files)
-        if(IS_ABSOLUTE "${proto_file}")
-            set(proto_abs "${proto_file}")
-        else()
-            cmake_path(ABSOLUTE_PATH proto_file BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE proto_abs)
-        endif()
+    if(PROTOCYTE_DESCRIPTOR_SET)
+        foreach(proto_file IN LISTS protocyte_proto_files)
+            _protocyte_validate_descriptor_name("${proto_file}")
+            list(APPEND normalized_proto_files "${proto_file}")
+        endforeach()
+        list(REMOVE_DUPLICATES normalized_proto_files)
+        list(SORT normalized_proto_files)
+    else()
+        foreach(proto_file IN LISTS protocyte_proto_files)
+            if(IS_ABSOLUTE "${proto_file}")
+                set(proto_abs "${proto_file}")
+            else()
+                cmake_path(ABSOLUTE_PATH proto_file BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE proto_abs)
+            endif()
 
-        file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_abs}")
-        if(proto_rel MATCHES "^[.][.]")
-            message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
-        endif()
+            file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_abs}")
+            if(proto_rel MATCHES "^[.][.]")
+                message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
+            endif()
 
-        list(APPEND normalized_proto_files "${proto_abs}")
-    endforeach()
-    list(REMOVE_DUPLICATES normalized_proto_files)
-    list(SORT normalized_proto_files)
+            list(APPEND normalized_proto_files "${proto_abs}")
+        endforeach()
+        list(REMOVE_DUPLICATES normalized_proto_files)
+        list(SORT normalized_proto_files)
+    endif()
 
     set(generator_options ${PROTOCYTE_OPTIONS})
     if(PROTOCYTE_NAMESPACE_PREFIX)
@@ -301,20 +419,24 @@ function(protocyte_generate)
 
     set(protocyte_generated_headers)
     set(protocyte_generated_sources)
-    foreach(proto_file IN LISTS normalized_proto_files)
-        file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
-        get_filename_component(proto_rel_dir "${proto_rel}" DIRECTORY)
-        get_filename_component(proto_stem "${proto_rel}" NAME_WLE)
+    if(PROTOCYTE_DESCRIPTOR_SET)
+        _protocyte_descriptor_outputs(protocyte_generated_headers protocyte_generated_sources "${PROTOCYTE_OUT_DIR}" ${normalized_proto_files})
+    else()
+        foreach(proto_file IN LISTS normalized_proto_files)
+            file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
+            get_filename_component(proto_rel_dir "${proto_rel}" DIRECTORY)
+            get_filename_component(proto_stem "${proto_rel}" NAME_WLE)
 
-        if(proto_rel_dir STREQUAL "")
-            set(protocyte_base "${PROTOCYTE_OUT_DIR}/${proto_stem}.protocyte")
-        else()
-            set(protocyte_base "${PROTOCYTE_OUT_DIR}/${proto_rel_dir}/${proto_stem}.protocyte")
-        endif()
+            if(proto_rel_dir STREQUAL "")
+                set(protocyte_base "${PROTOCYTE_OUT_DIR}/${proto_stem}.protocyte")
+            else()
+                set(protocyte_base "${PROTOCYTE_OUT_DIR}/${proto_rel_dir}/${proto_stem}.protocyte")
+            endif()
 
-        list(APPEND protocyte_generated_headers "${protocyte_base}.hpp")
-        list(APPEND protocyte_generated_sources "${protocyte_base}.cpp")
-    endforeach()
+            list(APPEND protocyte_generated_headers "${protocyte_base}.hpp")
+            list(APPEND protocyte_generated_sources "${protocyte_base}.cpp")
+        endforeach()
+    endif()
 
     if(PROTOCYTE_EMIT_RUNTIME)
         list(APPEND protocyte_generated_headers "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.hpp")
@@ -325,35 +447,43 @@ function(protocyte_generate)
         ${protocyte_generated_sources}
     )
 
-    set(
-        protocyte_import_dirs
-        "${protocyte_proto_root}"
-        ${PROTOCYTE_IMPORT_DIRS}
-        "${protocyte_proto_dir}"
-        "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"
-    )
-    list(REMOVE_DUPLICATES protocyte_import_dirs)
-
-    set(has_protobuf_descriptor_proto FALSE)
-    foreach(import_dir IN LISTS protocyte_import_dirs)
-        if(EXISTS "${import_dir}/google/protobuf/descriptor.proto")
-            set(has_protobuf_descriptor_proto TRUE)
-            break()
-        endif()
-    endforeach()
-
-    if(NOT has_protobuf_descriptor_proto)
-        message(
-            FATAL_ERROR
-            "protocyte_generate could not locate google/protobuf/descriptor.proto. "
-            "Install protobuf headers or configure a matching import root via PROTOCYTE_PROTOBUF_IMPORT_DIR/IMPORT_DIRS."
-        )
-    endif()
-
     set(protoc_proto_paths)
-    foreach(import_dir IN LISTS protocyte_import_dirs)
-        list(APPEND protoc_proto_paths "--proto_path=${import_dir}")
-    endforeach()
+    set(protoc_descriptor_args)
+    set(protocyte_input_depends)
+    if(NOT PROTOCYTE_DESCRIPTOR_SET)
+        set(protocyte_input_depends ${normalized_proto_files})
+        set(
+            protocyte_import_dirs
+            "${protocyte_proto_root}"
+            ${PROTOCYTE_IMPORT_DIRS}
+            "${protocyte_proto_dir}"
+            "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"
+        )
+        list(REMOVE_DUPLICATES protocyte_import_dirs)
+
+        set(has_protobuf_descriptor_proto FALSE)
+        foreach(import_dir IN LISTS protocyte_import_dirs)
+            if(EXISTS "${import_dir}/google/protobuf/descriptor.proto")
+                set(has_protobuf_descriptor_proto TRUE)
+                break()
+            endif()
+        endforeach()
+
+        if(NOT has_protobuf_descriptor_proto)
+            message(
+                FATAL_ERROR
+                "protocyte_generate could not locate google/protobuf/descriptor.proto. "
+                "Install protobuf headers or configure a matching import root via PROTOCYTE_PROTOBUF_IMPORT_DIR/IMPORT_DIRS."
+            )
+        endif()
+
+        foreach(import_dir IN LISTS protocyte_import_dirs)
+            list(APPEND protoc_proto_paths "--proto_path=${import_dir}")
+        endforeach()
+    else()
+        list(APPEND protoc_descriptor_args "--descriptor_set_in=${protocyte_descriptor_set}")
+        list(APPEND protocyte_input_depends "${protocyte_descriptor_set}")
+    endif()
 
     if(encoded_generator_parameter STREQUAL "")
         set(protocyte_out_arg "--protocyte_out=${PROTOCYTE_OUT_DIR}")
@@ -365,12 +495,13 @@ function(protocyte_generate)
         OUTPUT ${protocyte_outputs}
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_OUT_DIR}"
         COMMAND "${PROTOCYTE_PROTOC_EXECUTABLE}"
+            ${protoc_descriptor_args}
             ${protoc_proto_paths}
             "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_EXECUTABLE}"
             "${protocyte_out_arg}"
             ${normalized_proto_files}
         DEPENDS
-            ${normalized_proto_files}
+            ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
             "${protocyte_options_proto}"
             ${protocyte_generator_sources}
@@ -397,6 +528,7 @@ function(protocyte_add_proto_library)
         TARGET
         ALIAS
         TYPE
+        DESCRIPTOR_SET
         PROTO_ROOT
         OUT_DIR
         GENERATED_HEADERS_VAR
@@ -419,8 +551,11 @@ function(protocyte_add_proto_library)
             "protocyte_add_proto_library TARGET must not contain '::'; use ALIAS to expose a namespaced target"
         )
     endif()
-    if(NOT PROTOCYTE_PROTO_ROOT)
+    if(NOT PROTOCYTE_DESCRIPTOR_SET AND NOT PROTOCYTE_PROTO_ROOT)
         message(FATAL_ERROR "protocyte_add_proto_library requires PROTO_ROOT")
+    endif()
+    if(PROTOCYTE_DESCRIPTOR_SET AND PROTOCYTE_PROTO_ROOT)
+        message(FATAL_ERROR "protocyte_add_proto_library accepts either DESCRIPTOR_SET or PROTO_ROOT, not both")
     endif()
     if(PROTOCYTE_EMIT_RUNTIME AND PROTOCYTE_RUNTIME_TARGET)
         message(FATAL_ERROR "protocyte_add_proto_library accepts either EMIT_RUNTIME or RUNTIME_TARGET, not both")
@@ -461,12 +596,16 @@ function(protocyte_add_proto_library)
     set(protocyte_codegen_target "${PROTOCYTE_TARGET}__protocyte_codegen")
     set(protocyte_generate_args
         TARGET "${protocyte_codegen_target}"
-        PROTO_ROOT "${PROTOCYTE_PROTO_ROOT}"
         OUT_DIR "${protocyte_out_dir}"
         GENERATED_HEADERS_VAR protocyte_generated_headers
         GENERATED_SOURCES_VAR protocyte_generated_sources
         GENERATED_TARGET_VAR protocyte_generated_target
     )
+    if(PROTOCYTE_DESCRIPTOR_SET)
+        list(APPEND protocyte_generate_args DESCRIPTOR_SET "${PROTOCYTE_DESCRIPTOR_SET}")
+    else()
+        list(APPEND protocyte_generate_args PROTO_ROOT "${PROTOCYTE_PROTO_ROOT}")
+    endif()
     if(PROTOCYTE_DISCOVER)
         list(APPEND protocyte_generate_args DISCOVER)
     else()
@@ -544,4 +683,61 @@ function(protocyte_add_proto_library)
     if(PROTOCYTE_GENERATED_TARGET_VAR)
         set(${PROTOCYTE_GENERATED_TARGET_VAR} ${protocyte_generated_target} PARENT_SCOPE)
     endif()
+endfunction()
+
+function(protocyte_add_descriptor_set_library)
+    set(options DISCOVER EMIT_RUNTIME HOSTED_ALLOCATOR)
+    set(oneValueArgs
+        TARGET
+        ALIAS
+        TYPE
+        DESCRIPTOR_SET
+        OUT_DIR
+        GENERATED_HEADERS_VAR
+        GENERATED_SOURCES_VAR
+        GENERATED_TARGET_VAR
+        RUNTIME_TARGET
+        RUNTIME_PREFIX
+        NAMESPACE_PREFIX
+        INCLUDE_PREFIX
+    )
+    set(multiValueArgs FILES DEPENDS OPTIONS)
+    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if(NOT PROTOCYTE_DESCRIPTOR_SET)
+        message(FATAL_ERROR "protocyte_add_descriptor_set_library requires DESCRIPTOR_SET")
+    endif()
+
+    set(args
+        TARGET "${PROTOCYTE_TARGET}"
+        DESCRIPTOR_SET "${PROTOCYTE_DESCRIPTOR_SET}"
+    )
+    foreach(name IN ITEMS ALIAS TYPE OUT_DIR GENERATED_HEADERS_VAR GENERATED_SOURCES_VAR GENERATED_TARGET_VAR RUNTIME_TARGET RUNTIME_PREFIX NAMESPACE_PREFIX INCLUDE_PREFIX)
+        if(PROTOCYTE_${name})
+            list(APPEND args ${name} "${PROTOCYTE_${name}}")
+        endif()
+    endforeach()
+    foreach(name IN ITEMS DISCOVER EMIT_RUNTIME HOSTED_ALLOCATOR)
+        if(PROTOCYTE_${name})
+            list(APPEND args ${name})
+        endif()
+    endforeach()
+    if(PROTOCYTE_FILES)
+        list(APPEND args PROTOS ${PROTOCYTE_FILES})
+    endif()
+    if(PROTOCYTE_DEPENDS)
+        list(APPEND args DEPENDS ${PROTOCYTE_DEPENDS})
+    endif()
+    if(PROTOCYTE_OPTIONS)
+        list(APPEND args OPTIONS ${PROTOCYTE_OPTIONS})
+    endif()
+
+    protocyte_add_proto_library(${args})
+
+    foreach(name IN ITEMS GENERATED_HEADERS_VAR GENERATED_SOURCES_VAR GENERATED_TARGET_VAR)
+        if(PROTOCYTE_${name})
+            set(output_var "${PROTOCYTE_${name}}")
+            set(${output_var} ${${output_var}} PARENT_SCOPE)
+        endif()
+    endforeach()
 endfunction()

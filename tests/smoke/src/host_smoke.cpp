@@ -19,6 +19,7 @@
 #include "cross_package.protocyte.hpp"
 #include "example.protocyte.hpp"
 #include "host_fixture.hpp"
+#include "proto2_required.protocyte.hpp"
 #include "protocyte/runtime/runtime.hpp"
 
 namespace {
@@ -98,6 +99,11 @@ namespace {
     using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
+    using RequiredChild = test::required::RequiredChild<>;
+    using RequiredParent = test::required::RequiredParent<>;
+    using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
+    using Proto2DefaultMode = test::required::Proto2DefaultMode;
+    using Proto2DefaultValues = test::required::Proto2DefaultValues<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
@@ -173,6 +179,17 @@ namespace {
     constexpr uint8_t repeated_bytes_1[] = {0x22u, 0x23u};
     constexpr uint8_t repeated_bytes_2[] = {0x34u, 0x35u, 0x36u, 0x37u};
     constexpr uint8_t repeated_bytes_3[] = {0x48u, 0x49u, 0x4au};
+    constexpr uint8_t proto2_bounded_default[] = {'a', 'b', 'c'};
+    constexpr uint8_t proto2_bounded_resized_default[] = {'a', 'b', 'c', 0x00u, 0x00u};
+    constexpr uint8_t proto2_fixed_default[] = {'x', 'y', 'z'};
+    constexpr uint8_t proto2_custom_bytes[] = {0x31u, 0x32u, 0x33u};
+    constexpr uint8_t proto2_default_string[] = {'d', 'e', 'f', 'a', 'u', 'l', 't', '-', 't', 'e', 'x', 't'};
+    constexpr uint8_t proto2_default_bytes[] = {'d', 'e', 'f', 'a', 'u', 'l', 't', '-', 'b', 'y', 't', 'e', 's'};
+    constexpr uint8_t proto2_replacement_string[] = {'r', 'e', 'p', 'l', 'a', 'c', 'e', 'd'};
+    constexpr uint8_t proto2_replacement_bytes[] = {0xc0u, 0xd0u, 0xe0u};
+    constexpr uint8_t proto2_default_bytes_wire[] = {
+        0x0au, 0x03u, 'a', 'b', 'c', 0x12u, 0x03u, 'x', 'y', 'z',
+    };
     constexpr uint8_t sha256_bytes[] = {
         0x10u, 0x21u, 0x32u, 0x43u, 0x54u, 0x65u, 0x76u, 0x87u, 0x98u, 0xa9u, 0xbau, 0xcbu, 0xdcu, 0xedu, 0xfeu, 0x0fu,
         0x1eu, 0x2du, 0x3cu, 0x4bu, 0x5au, 0x69u, 0x78u, 0x87u, 0x96u, 0xa5u, 0xb4u, 0xc3u, 0xd2u, 0xe1u, 0xf0u, 0x0fu,
@@ -211,6 +228,15 @@ namespace {
             protocyte::Limits {},
         };
     }
+
+    struct MergeFromOnlyMessage {
+        bool merged {};
+
+        template<class Reader> protocyte::Status merge_from(Reader &reader) noexcept {
+            merged = reader.eof();
+            return {};
+        }
+    };
 
     template<class L, protocyte::usize LExtent, class R, protocyte::usize RExtent>
     bool view_equal(protocyte::Span<L, LExtent> lhs, protocyte::Span<R, RExtent> rhs) noexcept {
@@ -2549,6 +2575,320 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     }
 }
 
+TEST_CASE("proto2 required validation waits for embedded message merge", "[smoke][proto2][required]") {
+    auto ctx = make_context();
+
+    SECTION("split singular embedded message is validated after all occurrences are merged") {
+        static constexpr std::array<unsigned char, 13> encoded {
+            0x0a, 0x07, 0x12, 0x05, 'f', 'i', 'r', 's', 't', 0x0a, 0x02, 0x08, 0x7b,
+        };
+
+        RequiredParent parsed(ctx);
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+        require_success(parsed.merge_from(reader));
+        REQUIRE(reader.eof());
+        CHECK(ctx.recursion_depth == 0u);
+
+        REQUIRE(parsed.has_child());
+        const auto *child = parsed.child();
+        REQUIRE(child != nullptr);
+        CHECK(child->has_id());
+        CHECK(child->id() == 123);
+        CHECK(child->has_note());
+        CHECK(child->note() == std::string_view {"first"});
+    }
+
+    SECTION("missing required field in singular embedded message is rejected after parse") {
+        static constexpr std::array<unsigned char, 9> encoded {
+            0x0a, 0x07, 0x12, 0x05, 'e', 'm', 'p', 't', 'y',
+        };
+
+        RequiredParent parsed(ctx);
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("missing required field in repeated embedded message is rejected after parse") {
+        static constexpr std::array<unsigned char, 9> encoded {
+            0x12, 0x07, 0x12, 0x05, 'e', 'm', 'p', 't', 'y',
+        };
+
+        RequiredParent parsed(ctx);
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+}
+
+TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smoke][proto2][defaults]") {
+    auto ctx = make_context();
+    Proto2ArrayDefaults message(ctx);
+
+    CHECK_FALSE(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK(message.bounded_bytes_size() == sizeof(proto2_bounded_default));
+    CHECK_FALSE(message.has_fixed_bytes());
+    CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
+
+    auto absent_size = message.encoded_size();
+    require_success(absent_size);
+    CHECK(*absent_size == 0u);
+    std::array<uint8_t, 1> absent_encoded {};
+    protocyte::SliceWriter absent_writer(absent_encoded.data(), 0u);
+    require_success(message.serialize(absent_writer));
+    CHECK(absent_writer.position() == 0u);
+
+    require_success(message.set_bounded_bytes(view_of(proto2_bounded_default)));
+    require_success(message.set_fixed_bytes(view_of(proto2_fixed_default)));
+    auto explicit_default_size = message.encoded_size();
+    require_success(explicit_default_size);
+    REQUIRE(*explicit_default_size == sizeof(proto2_default_bytes_wire));
+    std::array<uint8_t, sizeof(proto2_default_bytes_wire)> explicit_default_encoded {};
+    protocyte::SliceWriter explicit_default_writer(explicit_default_encoded.data(), explicit_default_encoded.size());
+    require_success(message.serialize(explicit_default_writer));
+    REQUIRE(explicit_default_writer.position() == explicit_default_encoded.size());
+    CHECK(view_equal(
+        protocyte::Span<const protocyte::u8> {explicit_default_encoded.data(), explicit_default_writer.position()},
+        view_of(proto2_default_bytes_wire)));
+
+    Proto2ArrayDefaults parsed(ctx);
+    protocyte::SliceReader explicit_default_reader(explicit_default_encoded.data(), explicit_default_writer.position());
+    require_success(parsed.merge_from(explicit_default_reader));
+    REQUIRE(explicit_default_reader.eof());
+    CHECK(parsed.has_bounded_bytes());
+    CHECK(view_equal(parsed.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK(parsed.has_fixed_bytes());
+    CHECK(view_equal(parsed.fixed_bytes(), view_of(proto2_fixed_default)));
+
+    message.clear_bounded_bytes();
+    message.clear_fixed_bytes();
+    require_success(message.set_bounded_bytes(view_of(proto2_custom_bytes)));
+    CHECK(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_custom_bytes)));
+    message.clear_bounded_bytes();
+    CHECK_FALSE(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK(message.bounded_bytes_size() == sizeof(proto2_bounded_default));
+
+    auto mutable_default = message.mutable_bounded_bytes();
+    CHECK(message.has_bounded_bytes());
+    CHECK(view_equal(mutable_default, view_of(proto2_bounded_default)));
+    CHECK(message.bounded_bytes_size() == sizeof(proto2_bounded_default));
+
+    message.clear_bounded_bytes();
+    require_success(message.resize_bounded_bytes(sizeof(proto2_bounded_resized_default)));
+    CHECK(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_resized_default)));
+    message.clear_bounded_bytes();
+
+    require_success(message.set_fixed_bytes(view_of(proto2_custom_bytes)));
+    CHECK(message.has_fixed_bytes());
+    CHECK(view_equal(message.fixed_bytes(), view_of(proto2_custom_bytes)));
+    message.clear_fixed_bytes();
+    CHECK_FALSE(message.has_fixed_bytes());
+    CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
+
+    auto mutable_fixed_default = message.mutable_fixed_bytes();
+    CHECK(message.has_fixed_bytes());
+    CHECK(view_equal(mutable_fixed_default, view_of(proto2_fixed_default)));
+}
+
+TEST_CASE("proto2 default accessors cover all supported defaultable types", "[smoke][proto2][defaults]") {
+    auto ctx = make_context();
+    Proto2DefaultValues message(ctx);
+
+    CHECK_FALSE(message.has_double_value());
+    CHECK(message.double_value() == 1.5);
+    CHECK_FALSE(message.has_float_value());
+    CHECK(message.float_value() == -2.25f);
+    CHECK_FALSE(message.has_int64_value());
+    CHECK(message.int64_value() == -1234567890123ll);
+    CHECK_FALSE(message.has_uint64_value());
+    CHECK(message.uint64_value() == 1234567890123ull);
+    CHECK_FALSE(message.has_int32_value());
+    CHECK(message.int32_value() == -12345);
+    CHECK_FALSE(message.has_fixed64_value());
+    CHECK(message.fixed64_value() == 12345678901234ull);
+    CHECK_FALSE(message.has_fixed32_value());
+    CHECK(message.fixed32_value() == 123456789u);
+    CHECK_FALSE(message.has_bool_value());
+    CHECK(message.bool_value());
+    CHECK_FALSE(message.has_string_value());
+    CHECK(view_equal(message.string_value(), view_of(proto2_default_string)));
+    CHECK_FALSE(message.has_bytes_value());
+    CHECK(view_equal(message.bytes_value(), view_of(proto2_default_bytes)));
+    CHECK_FALSE(message.has_uint32_value());
+    CHECK(message.uint32_value() == 456789u);
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+    CHECK_FALSE(message.has_sfixed32_value());
+    CHECK(message.sfixed32_value() == -54321);
+    CHECK_FALSE(message.has_sfixed64_value());
+    CHECK(message.sfixed64_value() == -9876543210ll);
+    CHECK_FALSE(message.has_sint32_value());
+    CHECK(message.sint32_value() == -23456);
+    CHECK_FALSE(message.has_sint64_value());
+    CHECK(message.sint64_value() == -123456789012ll);
+    CHECK_FALSE(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+
+    auto absent_size = message.encoded_size();
+    require_success(absent_size);
+    CHECK(*absent_size == 0u);
+    std::array<uint8_t, 1> absent_encoded {};
+    protocyte::SliceWriter absent_writer(absent_encoded.data(), 0u);
+    require_success(message.serialize(absent_writer));
+    CHECK(absent_writer.position() == 0u);
+
+    auto &mutable_string = message.mutable_string_value();
+    CHECK(message.has_string_value());
+    CHECK(mutable_string.empty());
+    CHECK(message.string_value() == std::string_view {});
+    assign_string(mutable_string, view_of(proto2_replacement_string));
+    CHECK(view_equal(message.string_value(), view_of(proto2_replacement_string)));
+    message.clear_string_value();
+    CHECK_FALSE(message.has_string_value());
+    CHECK(view_equal(message.string_value(), view_of(proto2_default_string)));
+
+    auto &mutable_bytes = message.mutable_bytes_value();
+    CHECK(message.has_bytes_value());
+    CHECK(mutable_bytes.empty());
+    CHECK(message.bytes_value().empty());
+    assign_bytes(mutable_bytes, view_of(proto2_replacement_bytes));
+    CHECK(view_equal(message.bytes_value(), view_of(proto2_replacement_bytes)));
+    message.clear_bytes_value();
+    CHECK_FALSE(message.has_bytes_value());
+    CHECK(view_equal(message.bytes_value(), view_of(proto2_default_bytes)));
+
+    require_success(message.set_double_value(3.5));
+    CHECK(message.has_double_value());
+    CHECK(message.double_value() == 3.5);
+    message.clear_double_value();
+    CHECK_FALSE(message.has_double_value());
+    CHECK(message.double_value() == 1.5);
+
+    require_success(message.set_float_value(4.5f));
+    CHECK(message.has_float_value());
+    CHECK(message.float_value() == 4.5f);
+    message.clear_float_value();
+    CHECK_FALSE(message.has_float_value());
+    CHECK(message.float_value() == -2.25f);
+
+    require_success(message.set_int64_value(-77ll));
+    CHECK(message.has_int64_value());
+    CHECK(message.int64_value() == -77ll);
+    message.clear_int64_value();
+    CHECK_FALSE(message.has_int64_value());
+    CHECK(message.int64_value() == -1234567890123ll);
+
+    require_success(message.set_uint64_value(88ull));
+    CHECK(message.has_uint64_value());
+    CHECK(message.uint64_value() == 88ull);
+    message.clear_uint64_value();
+    CHECK_FALSE(message.has_uint64_value());
+    CHECK(message.uint64_value() == 1234567890123ull);
+
+    require_success(message.set_int32_value(-99));
+    CHECK(message.has_int32_value());
+    CHECK(message.int32_value() == -99);
+    message.clear_int32_value();
+    CHECK_FALSE(message.has_int32_value());
+    CHECK(message.int32_value() == -12345);
+
+    require_success(message.set_fixed64_value(100ull));
+    CHECK(message.has_fixed64_value());
+    CHECK(message.fixed64_value() == 100ull);
+    message.clear_fixed64_value();
+    CHECK_FALSE(message.has_fixed64_value());
+    CHECK(message.fixed64_value() == 12345678901234ull);
+
+    require_success(message.set_fixed32_value(101u));
+    CHECK(message.has_fixed32_value());
+    CHECK(message.fixed32_value() == 101u);
+    message.clear_fixed32_value();
+    CHECK_FALSE(message.has_fixed32_value());
+    CHECK(message.fixed32_value() == 123456789u);
+
+    require_success(message.set_bool_value(false));
+    CHECK(message.has_bool_value());
+    CHECK_FALSE(message.bool_value());
+    message.clear_bool_value();
+    CHECK_FALSE(message.has_bool_value());
+    CHECK(message.bool_value());
+
+    require_success(message.set_uint32_value(102u));
+    CHECK(message.has_uint32_value());
+    CHECK(message.uint32_value() == 102u);
+    message.clear_uint32_value();
+    CHECK_FALSE(message.has_uint32_value());
+    CHECK(message.uint32_value() == 456789u);
+
+    require_success(message.set_enum_value(Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN));
+    CHECK(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+    message.clear_enum_value();
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+
+    require_success(message.set_sfixed32_value(-103));
+    CHECK(message.has_sfixed32_value());
+    CHECK(message.sfixed32_value() == -103);
+    message.clear_sfixed32_value();
+    CHECK_FALSE(message.has_sfixed32_value());
+    CHECK(message.sfixed32_value() == -54321);
+
+    require_success(message.set_sfixed64_value(-104ll));
+    CHECK(message.has_sfixed64_value());
+    CHECK(message.sfixed64_value() == -104ll);
+    message.clear_sfixed64_value();
+    CHECK_FALSE(message.has_sfixed64_value());
+    CHECK(message.sfixed64_value() == -9876543210ll);
+
+    require_success(message.set_sint32_value(-105));
+    CHECK(message.has_sint32_value());
+    CHECK(message.sint32_value() == -105);
+    message.clear_sint32_value();
+    CHECK_FALSE(message.has_sint32_value());
+    CHECK(message.sint32_value() == -23456);
+
+    require_success(message.set_sint64_value(-106ll));
+    CHECK(message.has_sint64_value());
+    CHECK(message.sint64_value() == -106ll);
+    message.clear_sint64_value();
+    CHECK_FALSE(message.has_sint64_value());
+    CHECK(message.sint64_value() == -123456789012ll);
+
+    require_success(message.set_implicit_enum_value(Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY));
+    CHECK(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+    message.clear_implicit_enum_value();
+    CHECK_FALSE(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+}
+
+TEST_CASE("proto2 enum fields reject undeclared values", "[smoke][proto2][enum]") {
+    auto ctx = make_context();
+
+    Proto2DefaultValues message(ctx);
+    require_failure(message.set_enum_value_raw(7), protocyte::ErrorCode::invalid_argument);
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+
+    require_failure(message.set_implicit_enum_value_raw(7), protocyte::ErrorCode::invalid_argument);
+    CHECK_FALSE(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+
+    static constexpr std::array<unsigned char, 2> encoded_unknown_enum {
+        0x60,
+        0x07,
+    };
+    protocyte::SliceReader reader(encoded_unknown_enum.data(), encoded_unknown_enum.size());
+    require_failure(message.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+}
+
 TEST_CASE("Hosted allocator honors requested alignment", "[smoke][allocator]") {
     auto allocator = protocyte::hosted_allocator();
     auto *raw = allocator.allocate(allocator.state, sizeof(HostedOverAligned), alignof(HostedOverAligned));
@@ -2626,6 +2966,45 @@ TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke]
         require_failure(protocyte::skip_field(skip_reader, protocyte::WireType::LEN),
                         protocyte::ErrorCode::integer_overflow);
     }
+}
+
+TEST_CASE("read_message accepts merge_from-only message adapters", "[smoke][runtime][compat]") {
+    auto ctx = make_context();
+    constexpr std::array<protocyte::u8, 2u> encoded {0x0au, 0x00u};
+    protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+    auto tag = protocyte::read_tag(reader);
+    require_success(tag);
+    CHECK(tag->field_number == 1u);
+    CHECK(tag->wire_type == protocyte::WireType::LEN);
+
+    MergeFromOnlyMessage parsed {};
+    require_success(protocyte::read_message<Config>(ctx, reader, tag->field_number, parsed));
+
+    CHECK(parsed.merged);
+    CHECK(reader.eof());
+}
+
+TEST_CASE("read_message validates standalone generated message payloads", "[smoke][runtime][proto2]") {
+    auto ctx = make_context();
+    constexpr std::array<protocyte::u8, 9u> encoded {
+        0x0au, 0x07u, 0x12u, 0x05u, 'e', 'm', 'p', 't', 'y',
+    };
+    protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+    auto tag = protocyte::read_tag(reader);
+    require_success(tag);
+    CHECK(tag->field_number == 1u);
+    CHECK(tag->wire_type == protocyte::WireType::LEN);
+
+    RequiredChild parsed(ctx);
+    require_failure(protocyte::read_message<Config>(ctx, reader, tag->field_number, parsed),
+                    protocyte::ErrorCode::invalid_argument);
+
+    CHECK(reader.eof());
+    CHECK(ctx.recursion_depth == 0u);
+    CHECK_FALSE(parsed.has_id());
+    CHECK_FALSE(parsed.has_note());
 }
 
 TEST_CASE("Result<void> carries status without a payload", "[smoke][runtime]") {

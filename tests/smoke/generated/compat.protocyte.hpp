@@ -110,6 +110,13 @@ namespace protocyte_smoke::test::compat {
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            if (const auto st = merge_partial_from(reader); !st) {
+                return st;
+            }
+            return validate();
+        }
+
+        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -146,6 +153,9 @@ namespace protocyte_smoke::test::compat {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
             if (value_ != 0) {
                 if (const auto st = ::protocyte::write_int32_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::value), value_);
@@ -164,6 +174,9 @@ namespace protocyte_smoke::test::compat {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
             ::protocyte::usize total {};
             if (value_ != 0) {
                 const auto st_size = ::protocyte::add_size(
@@ -188,6 +201,8 @@ namespace protocyte_smoke::test::compat {
             }
             return total;
         }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
     protected:
         Context *ctx_;
         ::protocyte::i32 value_ {};
@@ -916,6 +931,13 @@ namespace protocyte_smoke::test::compat {
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            if (const auto st = merge_partial_from(reader); !st) {
+                return st;
+            }
+            return validate();
+        }
+
+        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -1063,7 +1085,7 @@ namespace protocyte_smoke::test::compat {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, nested_value);
                             !st) {
                             return st;
                         }
@@ -1254,8 +1276,8 @@ namespace protocyte_smoke::test::compat {
                                 return st;
                             }
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, oneof_nested_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                      oneof_nested_value);
                             !st) {
                             return st;
                         }
@@ -1454,6 +1476,9 @@ namespace protocyte_smoke::test::compat {
         }
 
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
             if (f_int32_ != 0) {
                 if (const auto st = ::protocyte::write_int32_field(
                         writer, static_cast<::protocyte::u32>(FieldNumber::f_int32), f_int32_);
@@ -1772,6 +1797,9 @@ namespace protocyte_smoke::test::compat {
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
             ::protocyte::usize total {};
             if (f_int32_ != 0) {
                 const auto st_size = ::protocyte::add_size(
@@ -2125,6 +2153,20 @@ namespace protocyte_smoke::test::compat {
                 total = *st_size;
             }
             return total;
+        }
+
+        ::protocyte::Status validate() const noexcept {
+            if (nested_.has_value()) {
+                if (const auto st = (*nested_).validate(); !st) {
+                    return st;
+                }
+            }
+            if (special_oneof_case_ == Special_oneofCase::oneof_nested && special_oneof.oneof_nested.has_value()) {
+                if (const auto st = (*special_oneof.oneof_nested).validate(); !st) {
+                    return st;
+                }
+            }
+            return {};
         }
     protected:
         Context *ctx_;
