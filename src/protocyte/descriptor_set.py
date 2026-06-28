@@ -11,6 +11,7 @@ from protocyte.errors import ProtocyteError
 
 
 _RUNTIME_PREFIX = "google/protobuf/"
+_INTERNAL_DESCRIPTOR_FILES = {"protocyte/options.proto"}
 
 
 def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
@@ -66,7 +67,11 @@ def validate_descriptor_set(
 
 def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str]:
     files = index_files(descriptor_set)
-    selected = sorted(name for name in files if not name.startswith(_RUNTIME_PREFIX))
+    selected = sorted(
+        name
+        for name in files
+        if not name.startswith(_RUNTIME_PREFIX) and name not in _INTERNAL_DESCRIPTOR_FILES
+    )
     _validate_import_graph(files, selected)
     return selected
 

@@ -1280,7 +1280,7 @@ def _emit_required_validation(
             continue
         w.line(f"if (!has_{item.cpp_name}()) {{")
         with w.indent():
-            error = f"::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, FieldNumber::{_field_number_name(item)})"
+            error = f"::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)})"
             if for_size:
                 w.line(f"return {error};")
             else:

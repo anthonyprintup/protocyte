@@ -57,6 +57,7 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
     if(NOT EXISTS "${descriptor_set}")
         message(FATAL_ERROR "protocyte descriptor-set DISCOVER requires an existing file: ${descriptor_set}")
     endif()
+    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
     execute_process(
         COMMAND
             "${CMAKE_COMMAND}" -E env "PYTHONPATH=${protocyte_python_source_root}"

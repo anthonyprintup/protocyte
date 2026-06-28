@@ -85,6 +85,7 @@ def test_discover_files_skips_google_protobuf_runtime_descriptors(tmp_path: Path
     _write_descriptor_set(
         path,
         _file("google/protobuf/descriptor.proto"),
+        _file("protocyte/options.proto", "google/protobuf/descriptor.proto"),
         _file("nested/user.proto", "google/protobuf/descriptor.proto"),
     )
 

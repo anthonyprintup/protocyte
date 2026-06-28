@@ -976,7 +976,10 @@ def test_generates_proto2_presence_defaults_and_required_validation() -> None:
     assert "bool has_name_ {};" in header
     assert "bool has_name() const noexcept { return has_name_; }" in header
     assert "if (!has_name()) {" in header
-    assert "::protocyte::ErrorCode::invalid_argument, {}, FieldNumber::name" in header
+    assert (
+        "::protocyte::ErrorCode::invalid_argument, {}, static_cast<::protocyte::u32>(FieldNumber::name)"
+        in header
+    )
     assert "for (const auto &samples_value : samples_) {" in header
     assert "packed_size_samples" not in header
     assert "#include <limits>" in header
