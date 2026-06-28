@@ -70,7 +70,7 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
     selected = {
         name
         for name, file in files.items()
-        if not name.startswith(_RUNTIME_PREFIX) and _is_discoverable_target(file)
+        if not name.startswith(_RUNTIME_PREFIX) and _is_initial_discoverable_target(file)
     }
     type_files = _index_declared_types(files.values())
     stack = list(selected)
@@ -78,7 +78,11 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
         file = files[stack.pop()]
         for type_name in _referenced_type_names(file):
             referenced = type_files.get(_normalize_type_name(type_name))
-            if referenced is None or referenced in selected or referenced in _INTERNAL_DESCRIPTOR_FILES:
+            if (
+                referenced is None
+                or referenced in selected
+                or not _is_referenced_type_discoverable(files[referenced])
+            ):
                 continue
             selected.add(referenced)
             stack.append(referenced)
@@ -88,13 +92,22 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
     return selected_list
 
 
-def _is_discoverable_target(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_extensions(file)
+def _is_initial_discoverable_target(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    return (
+        _is_referenced_type_discoverable(file)
+        and not _declares_google_protobuf_option_extension(file)
+    )
 
 
-def _declares_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    if file.extension:
-        return True
+def _is_referenced_type_discoverable(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_message_scoped_extensions(file)
+
+
+def _declares_google_protobuf_option_extension(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    return any(extension.extendee.startswith(".google.protobuf.") for extension in file.extension)
+
+
+def _declares_message_scoped_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
     return any(_message_declares_extensions(message) for message in file.message_type)
 
 

@@ -115,6 +115,55 @@ def test_generator_parameter_encoding_uses_hex_transport(tmp_path: Path) -> None
     assert encoded_output.read_text(encoding="utf-8") == expected
 
 
+def test_cmake_discovery_split_normalizes_crlf_descriptor_names(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "split_discovered_names.cmake"
+    output = tmp_path / "names.txt"
+
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                '_protocyte_split_discovered_descriptor_names(names "api/one.proto\r\napi/two.proto")',
+                'foreach(name IN LISTS names)',
+                '    string(APPEND encoded "${name}|")',
+                "endforeach()",
+                f'file(WRITE "{output.as_posix()}" "${{encoded}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
+
+    assert output.read_text(encoding="utf-8") == "api/one.proto|api/two.proto|"
+
+
+def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "descriptor_name_validator.cmake"
+    output = tmp_path / "unsafe.txt"
+
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                '_protocyte_descriptor_name_is_unsafe(unsafe "C:foo.proto")',
+                f'file(WRITE "{output.as_posix()}" "${{unsafe}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
+
+    assert output.read_text(encoding="utf-8") == "TRUE"
+
+
 def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"

@@ -93,6 +93,27 @@ def _file_with_nested_extension() -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
+def _file_with_top_level_extension() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "legacy.proto"
+    file.package = "legacy"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "Legacy"
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    extension = file.extension.add()
+    extension.name = "legacy_extension"
+    extension.number = 100
+    extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    extension.extendee = ".legacy.Legacy"
+    return file
+
+
 def _file_with_custom_marker_field(name: str) -> descriptor_pb2.FileDescriptorProto:
     file = _file(name, "custom/options.proto")
     field = file.message_type[0].field.add()
@@ -199,6 +220,15 @@ def test_discover_files_skips_imported_custom_option_extension_descriptors(tmp_p
     )
 
     assert discover_files(load_descriptor_set(path)) == ["api/request.proto"]
+
+
+def test_discover_files_includes_user_files_with_top_level_extension_declarations(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(path, _file_with_top_level_extension())
+
+    assert discover_files(load_descriptor_set(path)) == ["legacy.proto"]
 
 
 def test_discover_files_includes_extension_descriptors_referenced_by_message_fields(tmp_path: Path) -> None:
