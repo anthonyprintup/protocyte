@@ -1025,19 +1025,7 @@ def _build_raw_constants(owner: str, raw_constants: list[_RawConstantOption]) ->
 def _validate_constant_collisions(message: MessageModel) -> None:
     seen_names: set[str] = set()
     seen_cpp_names: set[str] = set()
-    reserved = {
-        "Context",
-        "FieldNumber",
-        "create",
-        "clone",
-        "copy_from",
-        "parse",
-        "merge_from",
-        "merge_partial_from",
-        "serialize",
-        "encoded_size",
-        "validate",
-    }
+    reserved = _message_fixed_generated_cpp_names(message)
     reserved.update(_nested_alias_cpp_names(message))
     for oneof in message.oneofs:
         reserved.update(_oneof_generated_cpp_names(oneof))
@@ -1163,19 +1151,7 @@ def _validate_oneof_collisions(message: MessageModel) -> None:
     if message.is_map_entry:
         return
     seen_generated_names: dict[str, str] = {}
-    reserved = {
-        "Context",
-        "FieldNumber",
-        "create",
-        "clone",
-        "copy_from",
-        "parse",
-        "merge_from",
-        "merge_partial_from",
-        "serialize",
-        "encoded_size",
-        "validate",
-    }
+    reserved = _message_fixed_generated_cpp_names(message)
     reserved.update(_nested_alias_cpp_names(message))
     reserved.update(constant.cpp_name for constant in message.constants)
 
@@ -1183,6 +1159,8 @@ def _validate_oneof_collisions(message: MessageModel) -> None:
         lower = cpp_identifier(oneof.name)
         if not lower or lower == "_":
             raise ProtocyteError(f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier")
+        if lower in reserved:
+            raise ProtocyteError(f"{message.full_name}.{oneof.name}: oneof collides with generated API")
         generated_names = _oneof_generated_cpp_names(oneof)
         if generated_names & reserved:
             raise ProtocyteError(f"{message.full_name}.{oneof.name}: oneof collides with generated API")
@@ -1209,19 +1187,7 @@ def _nested_alias_cpp_items(message: MessageModel) -> Iterable[tuple[str, str]]:
 
 
 def _message_generated_cpp_names(message: MessageModel) -> set[str]:
-    names = {
-        "Context",
-        "FieldNumber",
-        "create",
-        "clone",
-        "copy_from",
-        "parse",
-        "merge_from",
-        "merge_partial_from",
-        "serialize",
-        "encoded_size",
-        "validate",
-    }
+    names = _message_fixed_generated_cpp_names(message)
     names.update(constant.cpp_name for constant in message.constants)
     for oneof in message.oneofs:
         names.update(_oneof_generated_cpp_names(oneof))
@@ -1230,14 +1196,11 @@ def _message_generated_cpp_names(message: MessageModel) -> set[str]:
     return names
 
 
-def _validate_field_collisions(message: MessageModel) -> None:
-    if message.is_map_entry:
-        return
-    seen_cpp_names: dict[str, str] = {}
-    seen_generated_names: dict[str, str] = {}
-    reserved = {
+def _message_fixed_generated_cpp_names(message: MessageModel) -> set[str]:
+    names = {
         "Context",
         "FieldNumber",
+        "context",
         "create",
         "clone",
         "copy_from",
@@ -1247,7 +1210,19 @@ def _validate_field_collisions(message: MessageModel) -> None:
         "serialize",
         "encoded_size",
         "validate",
+        "ctx_",
     }
+    if message.oneofs:
+        names.add("destroy_at_")
+    return names
+
+
+def _validate_field_collisions(message: MessageModel) -> None:
+    if message.is_map_entry:
+        return
+    seen_cpp_names: dict[str, str] = {}
+    seen_generated_names: dict[str, str] = {}
+    reserved = _message_fixed_generated_cpp_names(message)
     reserved.update(_nested_alias_cpp_names(message))
     reserved.update(constant.cpp_name for constant in message.constants)
     for oneof in message.oneofs:

@@ -385,12 +385,9 @@ def _oneof_payload(value, prefix, case_name):
     payload = _child(value, f"{case_name}_")
     if payload.IsValid():
         return payload
-    union_value = _child(value, prefix)
+    union_value = _child(value, f"{prefix}_")
     if not union_value.IsValid():
         return lldb.SBValue()
-    payload = _child(union_value, case_name)
-    if payload.IsValid():
-        return payload
     return _child(union_value, f"{case_name}_")
 
 

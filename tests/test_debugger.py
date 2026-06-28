@@ -646,6 +646,58 @@ def test_span_provider_registers_and_displays_indexed_children_with_raw_view(
     assert _child_names(provider) == ["[0]", "[1]", "Raw View"]
 
 
+def test_oneof_provider_reads_suffixed_union_storage(
+    protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(protocyte_lldb_module, "_raw_children", lambda value: [])
+    payload = _FakeLLDBValue("text_", address=-1, value='"hello"')
+    message = _FakeLLDBValue(
+        "message",
+        children={
+            "choice_case_": _FakeLLDBValue(
+                "choice_case_",
+                address=-1,
+                value="demo::Carrier::ChoiceCase::text",
+            ),
+            "choice_": _FakeLLDBValue("choice_", children={"text_": payload}),
+        },
+    )
+
+    provider = protocyte_lldb_module.GeneratedMessageOneofSyntheticProvider(
+        message, {}
+    )
+
+    assert _child_names(provider) == ["choice_case_", "choice_", "choice: text"]
+    assert provider.get_child_at_index(2).GetValue() == '"hello"'
+
+
+def test_oneof_provider_does_not_read_legacy_unsuffixed_union_storage(
+    protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(protocyte_lldb_module, "_raw_children", lambda value: [])
+    message = _FakeLLDBValue(
+        "message",
+        children={
+            "choice_case_": _FakeLLDBValue(
+                "choice_case_",
+                address=-1,
+                value="demo::Carrier::ChoiceCase::text",
+            ),
+            "choice": _FakeLLDBValue(
+                "choice",
+                children={"text_": _FakeLLDBValue("text_", address=-1, value='"hello"')},
+            ),
+        },
+    )
+
+    provider = protocyte_lldb_module.GeneratedMessageOneofSyntheticProvider(
+        message, {}
+    )
+
+    assert _child_names(provider) == ["choice_case_", "choice", "choice: text"]
+    assert provider.get_child_at_index(2).GetValue() == "demo::Carrier::ChoiceCase::text"
+
+
 def test_lldb_init_module_registers_span_formatter(protocyte_lldb_module) -> None:
     debugger = _FakeDebugger()
 

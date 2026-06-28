@@ -2501,6 +2501,17 @@ def test_rejects_oneof_cpp_name_collisions() -> None:
     assert "after C++ identifier normalization" in response.error
 
 
+@pytest.mark.parametrize("oneof_name", ["ctx", "context", "destroy_at"])
+def test_rejects_oneof_fixed_generated_name_collisions(oneof_name: str) -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("oneof_internal_collision.proto")
+    request.proto_file.append(_oneof_internal_collision_file(oneof_name))
+
+    response = generate_response(request)
+
+    assert "oneof collides with generated API" in response.error
+
+
 @pytest.mark.parametrize("field_name", ["choice_case_", "none"])
 def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
@@ -3747,6 +3758,26 @@ def _oneof_collision_file() -> descriptor_pb2.FileDescriptorProto:
         field.label = F.LABEL_OPTIONAL
         field.type = F.TYPE_INT32
         field.oneof_index = index
+
+    return file
+
+
+def _oneof_internal_collision_file(oneof_name: str) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "oneof_internal_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.oneof_decl.add().name = oneof_name
+
+    field = message.field.add()
+    field.name = "flag"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BOOL
+    field.oneof_index = 0
 
     return file
 
