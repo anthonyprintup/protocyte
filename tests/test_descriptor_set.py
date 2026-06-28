@@ -52,6 +52,56 @@ def _file_with_timestamp_field(name: str) -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
+def _custom_options_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "custom/options.proto"
+    file.package = "custom"
+    file.syntax = "proto2"
+    file.dependency.append("google/protobuf/descriptor.proto")
+    message = file.message_type.add()
+    message.name = "Marker"
+    value = message.field.add()
+    value.name = "value"
+    value.number = 1
+    value.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    value.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+    extension = file.extension.add()
+    extension.name = "marker"
+    extension.number = 50001
+    extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    extension.type_name = ".custom.Marker"
+    extension.extendee = ".google.protobuf.MessageOptions"
+    return file
+
+
+def _file_with_nested_extension() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "custom/nested_options.proto"
+    file.package = "custom"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "Owner"
+    extension = message.extension.add()
+    extension.name = "legacy_marker"
+    extension.number = 100
+    extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    extension.extendee = ".custom.Owner"
+    return file
+
+
+def _file_with_custom_marker_field(name: str) -> descriptor_pb2.FileDescriptorProto:
+    file = _file(name, "custom/options.proto")
+    field = file.message_type[0].field.add()
+    field.name = "marker"
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+    field.type_name = ".custom.Marker"
+    return file
+
+
 def _write_descriptor_set(path: Path, *files: descriptor_pb2.FileDescriptorProto) -> None:
     descriptor_set = descriptor_pb2.FileDescriptorSet()
     descriptor_set.file.extend(files)
@@ -135,3 +185,38 @@ def test_discover_files_includes_referenced_google_protobuf_message_descriptors(
         "api/event.proto",
         "google/protobuf/timestamp.proto",
     ]
+
+
+def test_discover_files_skips_imported_custom_option_extension_descriptors(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _file("google/protobuf/descriptor.proto"),
+        _custom_options_file(),
+        _file("api/request.proto", "custom/options.proto"),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == ["api/request.proto"]
+
+
+def test_discover_files_includes_extension_descriptors_referenced_by_message_fields(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _file("google/protobuf/descriptor.proto"),
+        _custom_options_file(),
+        _file_with_custom_marker_field("api/request.proto"),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == ["api/request.proto", "custom/options.proto"]
+
+
+def test_discover_files_skips_message_scoped_extension_descriptors(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _file_with_nested_extension(),
+        _file("api/request.proto", "custom/nested_options.proto"),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == ["api/request.proto"]

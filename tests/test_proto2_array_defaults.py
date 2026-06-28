@@ -1,3 +1,4 @@
+import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
@@ -23,6 +24,12 @@ def test_proto2_array_backed_bytes_accessors_apply_default_values() -> None:
     )
     assert (
         _without_whitespace(
+            "::protocyte::usize bounded_bytes_size() const noexcept { return bounded_bytes().size(); }"
+        )
+        in compact_header
+    )
+    assert (
+        _without_whitespace(
             '::protocyte::Span<const ::protocyte::u8> fixed_bytes() const noexcept { return has_fixed_bytes() ? fixed_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("xyz"), 3u}; }'
         )
         in compact_header
@@ -35,6 +42,55 @@ def test_proto2_array_backed_bytes_accessors_apply_default_values() -> None:
         )
         in compact_header
     )
+
+
+@pytest.mark.parametrize(
+    ("default_value", "max_value", "fixed", "expected_error"),
+    [
+        ("abcd", 3, False, "default value size exceeds protocyte.array max"),
+        ("xy", 3, True, "default value size must match fixed protocyte.array max"),
+        ("wxyz", 3, True, "default value size must match fixed protocyte.array max"),
+    ],
+)
+def test_proto2_array_backed_bytes_defaults_must_fit_declared_array_bounds(
+    default_value: str,
+    max_value: int,
+    fixed: bool,
+    expected_error: str,
+) -> None:
+    request = _proto2_array_default_bound_request(
+        default_value=default_value,
+        max_value=max_value,
+        fixed=fixed,
+    )
+
+    response = generate_response(request)
+
+    assert expected_error in response.error
+
+
+@pytest.mark.parametrize(
+    ("default_value", "fixed", "expected_error"),
+    [
+        ("abcd", False, "default value size exceeds protocyte.array max"),
+        ("xy", True, "default value size must match fixed protocyte.array max"),
+        ("wxyz", True, "default value size must match fixed protocyte.array max"),
+    ],
+)
+def test_proto2_array_backed_bytes_defaults_must_fit_resolved_expression_bounds(
+    default_value: str,
+    fixed: bool,
+    expected_error: str,
+) -> None:
+    request = _proto2_array_default_bound_request(
+        default_value=default_value,
+        expr="3",
+        fixed=fixed,
+    )
+
+    response = generate_response(request)
+
+    assert expected_error in response.error
 
 
 def _without_whitespace(value: str) -> str:
@@ -86,6 +142,54 @@ def _proto2_array_defaults_file() -> descriptor_pb2.FileDescriptorProto:
     field.default_value = r"\001\376"
     field.options.ParseFromString(_array_option_bytes(max_value=8))
 
+    return file
+
+
+def _proto2_array_default_bound_request(
+    *,
+    default_value: str,
+    max_value: int | None = None,
+    expr: str | None = None,
+    fixed: bool = False,
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("bad_array_default.proto")
+    request.proto_file.extend(
+        [
+            _options_file(),
+            _proto2_array_default_bound_file(
+                default_value=default_value,
+                max_value=max_value,
+                expr=expr,
+                fixed=fixed,
+            ),
+        ]
+    )
+    return request
+
+
+def _proto2_array_default_bound_file(
+    *,
+    default_value: str,
+    max_value: int | None,
+    expr: str | None,
+    fixed: bool,
+) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "bad_array_default.proto"
+    file.package = "defaults"
+    file.syntax = "proto2"
+    file.dependency.append("protocyte/options.proto")
+
+    message = file.message_type.add()
+    message.name = "BadArrayDefault"
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.default_value = default_value
+    field.options.ParseFromString(_array_option_bytes(max_value=max_value, expr=expr, fixed=fixed))
     return file
 
 
@@ -190,7 +294,8 @@ def _add_oneof_field(
 
 def _array_option_bytes(
     *,
-    max_value: int,
+    max_value: int | None = None,
+    expr: str | None = None,
     fixed: bool = False,
 ) -> bytes:
     pool = descriptor_pool.DescriptorPool()
@@ -202,7 +307,10 @@ def _array_option_bytes(
 
     options = field_options_cls()
     array_options = options.Extensions[array_ext]
-    array_options.max = max_value
+    if max_value is not None:
+        array_options.max = max_value
+    if expr is not None:
+        array_options.expr = expr
     if fixed:
         array_options.fixed = True
     return options.SerializeToString()

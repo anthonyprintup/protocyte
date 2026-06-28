@@ -842,6 +842,18 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(
             f"if (ctx_->limits.max_string_bytes < {bound}) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
         )
+        if item.default_cpp is not None:
+            w.line(f"if (!has_{item.cpp_name}()) {{")
+            w.push()
+            w.line(f"const auto default_value = {item.default_cpp};")
+            w.line(
+                "if (default_value.size() > ctx_->limits.max_string_bytes) { return ::protocyte::Span<::protocyte::u8>{}; }"
+            )
+            w.line(
+                f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
+            )
+            w.pop()
+            w.line("}")
         w.line(f"return {_member(item)}.mutable_view();")
         w.pop()
         w.line("}")
@@ -877,9 +889,10 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             w.line(
                 f"bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
             )
-        w.line(
-            f"::protocyte::usize {item.cpp_name}_size() const noexcept {{ return {_member(item)}.size(); }}"
-        )
+        size_expr = f"{_member(item)}.size()"
+        if _has_presence_flag(item) and item.default_cpp is not None:
+            size_expr = f"{item.cpp_name}().size()"
+        w.line(f"::protocyte::usize {item.cpp_name}_size() const noexcept {{ return {size_expr}; }}")
         w.line(
             f"static constexpr ::protocyte::usize {item.cpp_name}_max_size() noexcept {{ return {bound}; }}"
         )
@@ -890,10 +903,25 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(
             "if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
         )
+        w.line(
+            f"if (size > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {{}}); }}"
+        )
         if item.array_fixed:
             w.line(
                 f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}"
             )
+        if _has_presence_flag(item) and item.default_cpp is not None:
+            w.line(f"if (!has_{item.cpp_name}_) {{")
+            w.push()
+            w.line(f"const auto default_value = {item.default_cpp};")
+            w.line(
+                "if (default_value.size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
+            )
+            w.line(
+                f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return st; }}"
+            )
+            w.pop()
+            w.line("}")
         w.line(
             f"if (const auto st = {_member(item)}.resize(size); !st) {{ return st; }}"
         )
@@ -932,6 +960,18 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             w.line(f"if ({_member(item)}.size() != {bound}) {{")
             w.push()
             w.line(f"static_cast<void>({_member(item)}.resize({bound}));")
+            w.pop()
+            w.line("}")
+        if _has_presence_flag(item) and item.default_cpp is not None:
+            w.line(f"if (!has_{item.cpp_name}_) {{")
+            w.push()
+            w.line(f"const auto default_value = {item.default_cpp};")
+            w.line(
+                "if (default_value.size() > ctx_->limits.max_string_bytes) { return ::protocyte::Span<::protocyte::u8>{}; }"
+            )
+            w.line(
+                f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
+            )
             w.pop()
             w.line("}")
         if item.proto3_optional:
@@ -2220,6 +2260,7 @@ def _field_with_number(item: FieldModel, number: int) -> FieldModel:
         explicit_presence=False,
         required=False,
         default_cpp=item.default_cpp,
+        default_byte_size=item.default_byte_size,
     )
 
 

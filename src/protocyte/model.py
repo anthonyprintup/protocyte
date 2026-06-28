@@ -353,6 +353,7 @@ class FieldModel:
     explicit_presence: bool = False
     required: bool = False
     default_cpp: str | None = None
+    default_byte_size: int | None = None
 
     @property
     def has_explicit_presence(self) -> bool:
@@ -1363,6 +1364,7 @@ def _build_field(
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: unsupported field type {proto.type}")
 
     default_cpp = _field_default_cpp(file_model.syntax, owner.full_name, proto, kind, enum_type)
+    default_byte_size = _field_default_byte_size(owner.full_name, proto, kind)
 
     if array_fixed and array_max is None and array_expr is None:
         raise ProtocyteError(
@@ -1379,6 +1381,8 @@ def _build_field(
             raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array.max must be greater than zero")
         if array_expr is not None and not array_expr.strip():
             raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array.expr must not be empty")
+        if array_max is not None and default_byte_size is not None:
+            _validate_array_default_byte_size(owner.full_name, proto.name, default_byte_size, array_max, array_fixed)
 
     return FieldModel(
         name=proto.name,
@@ -1407,6 +1411,7 @@ def _build_field(
         explicit_presence=explicit_presence,
         required=required,
         default_cpp=default_cpp,
+        default_byte_size=default_byte_size,
     )
 
 
@@ -1459,10 +1464,7 @@ def _field_default_cpp(
     if kind == "string":
         return f"::protocyte::StringView {{{_cpp_constant_value(CONSTANT_KIND_STRING, value)}}}"
     if kind == "bytes":
-        try:
-            encoded = text_encoding.CUnescape(value)
-        except ValueError as exc:
-            raise ProtocyteError(f"{owner_full_name}.{proto.name}: invalid bytes default value {value!r}") from exc
+        encoded = _decode_bytes_default(owner_full_name, proto)
         return f"::protocyte::Span<const ::protocyte::u8> {{reinterpret_cast<const ::protocyte::u8*>({_cpp_string_literal(encoded)}), {len(encoded)}u}}"
     if proto.type == FieldDescriptorProto.TYPE_BOOL:
         if value not in {"true", "false"}:
@@ -1477,6 +1479,39 @@ def _field_default_cpp(
     if proto.type in SCALAR_CPP_TYPES:
         return value
     return None
+
+
+def _field_default_byte_size(
+    owner_full_name: str,
+    proto: descriptor_pb2.FieldDescriptorProto,
+    kind: str,
+) -> int | None:
+    if kind != "bytes" or not proto.HasField("default_value"):
+        return None
+    return len(_decode_bytes_default(owner_full_name, proto))
+
+
+def _decode_bytes_default(owner_full_name: str, proto: descriptor_pb2.FieldDescriptorProto) -> bytes:
+    try:
+        return text_encoding.CUnescape(proto.default_value)
+    except ValueError as exc:
+        raise ProtocyteError(
+            f"{owner_full_name}.{proto.name}: invalid bytes default value {proto.default_value!r}"
+        ) from exc
+
+
+def _validate_array_default_byte_size(
+    owner_full_name: str,
+    field_name: str,
+    default_size: int,
+    array_max: int,
+    array_fixed: bool,
+) -> None:
+    label = f"{owner_full_name}.{field_name}"
+    if array_fixed and default_size != array_max:
+        raise ProtocyteError(f"{label}: default value size must match fixed protocyte.array max")
+    if not array_fixed and default_size > array_max:
+        raise ProtocyteError(f"{label}: default value size exceeds protocyte.array max")
 
 
 def _integer_default_cpp(value: str, kind: str, label: str) -> str:
@@ -1667,6 +1702,14 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
                 )
             field_model.array_max = numeric
             field_model.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
+            if field_model.default_byte_size is not None:
+                _validate_array_default_byte_size(
+                    message.full_name,
+                    field_model.name,
+                    field_model.default_byte_size,
+                    numeric,
+                    field_model.array_fixed,
+                )
 
 
 def _compute_file_dependencies(file_to_generate: list[str], files: dict[str, FileModel]) -> None:

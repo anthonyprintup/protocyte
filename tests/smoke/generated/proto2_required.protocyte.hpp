@@ -509,11 +509,24 @@ namespace test::required {
                        ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("abc"), 3u};
         }
         bool has_bounded_bytes() const noexcept { return has_bounded_bytes_; }
-        ::protocyte::usize bounded_bytes_size() const noexcept { return bounded_bytes_.size(); }
+        ::protocyte::usize bounded_bytes_size() const noexcept { return bounded_bytes().size(); }
         static constexpr ::protocyte::usize bounded_bytes_max_size() noexcept { return 8u; }
         ::protocyte::Status resize_bounded_bytes(const ::protocyte::usize size) noexcept {
             if (size > ctx_->limits.max_string_bytes) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (size > 8u) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
+            }
+            if (!has_bounded_bytes_) {
+                const auto default_value =
+                    ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("abc"), 3u};
+                if (default_value.size() > ctx_->limits.max_string_bytes) {
+                    return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+                }
+                if (const auto st = bounded_bytes_.assign(default_value); !st) {
+                    return st;
+                }
             }
             if (const auto st = bounded_bytes_.resize(size); !st) {
                 return st;
@@ -532,6 +545,16 @@ namespace test::required {
             return {};
         }
         ::protocyte::Span<::protocyte::u8> mutable_bounded_bytes() noexcept {
+            if (!has_bounded_bytes_) {
+                const auto default_value =
+                    ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("abc"), 3u};
+                if (default_value.size() > ctx_->limits.max_string_bytes) {
+                    return ::protocyte::Span<::protocyte::u8> {};
+                }
+                if (const auto st = bounded_bytes_.assign(default_value); !st) {
+                    return ::protocyte::Span<::protocyte::u8> {};
+                }
+            }
             has_bounded_bytes_ = true;
             return bounded_bytes_.mutable_view();
         }
@@ -565,6 +588,16 @@ namespace test::required {
         ::protocyte::Span<::protocyte::u8> mutable_fixed_bytes() noexcept {
             if (ctx_->limits.max_string_bytes < 3u) {
                 return ::protocyte::Span<::protocyte::u8> {};
+            }
+            if (!has_fixed_bytes()) {
+                const auto default_value =
+                    ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("xyz"), 3u};
+                if (default_value.size() > ctx_->limits.max_string_bytes) {
+                    return ::protocyte::Span<::protocyte::u8> {};
+                }
+                if (const auto st = fixed_bytes_.assign(default_value); !st) {
+                    return ::protocyte::Span<::protocyte::u8> {};
+                }
             }
             return fixed_bytes_.mutable_view();
         }

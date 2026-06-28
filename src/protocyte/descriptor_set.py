@@ -69,8 +69,8 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
     files = index_files(descriptor_set)
     selected = {
         name
-        for name in files
-        if not name.startswith(_RUNTIME_PREFIX) and name not in _INTERNAL_DESCRIPTOR_FILES
+        for name, file in files.items()
+        if not name.startswith(_RUNTIME_PREFIX) and _is_discoverable_target(file)
     }
     type_files = _index_declared_types(files.values())
     stack = list(selected)
@@ -86,6 +86,22 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
     selected_list = sorted(selected)
     _validate_import_graph(files, selected_list)
     return selected_list
+
+
+def _is_discoverable_target(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_extensions(file)
+
+
+def _declares_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    if file.extension:
+        return True
+    return any(_message_declares_extensions(message) for message in file.message_type)
+
+
+def _message_declares_extensions(message: descriptor_pb2.DescriptorProto) -> bool:
+    if message.extension:
+        return True
+    return any(_message_declares_extensions(nested) for nested in message.nested_type)
 
 
 def _index_declared_types(

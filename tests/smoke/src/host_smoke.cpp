@@ -180,6 +180,7 @@ namespace {
     constexpr uint8_t repeated_bytes_2[] = {0x34u, 0x35u, 0x36u, 0x37u};
     constexpr uint8_t repeated_bytes_3[] = {0x48u, 0x49u, 0x4au};
     constexpr uint8_t proto2_bounded_default[] = {'a', 'b', 'c'};
+    constexpr uint8_t proto2_bounded_resized_default[] = {'a', 'b', 'c', 0x00u, 0x00u};
     constexpr uint8_t proto2_fixed_default[] = {'x', 'y', 'z'};
     constexpr uint8_t proto2_custom_bytes[] = {0x31u, 0x32u, 0x33u};
     constexpr uint8_t proto2_default_string[] = {'d', 'e', 'f', 'a', 'u', 'l', 't', '-', 't', 'e', 'x', 't'};
@@ -2626,6 +2627,7 @@ TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smok
 
     CHECK_FALSE(message.has_bounded_bytes());
     CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK(message.bounded_bytes_size() == sizeof(proto2_bounded_default));
     CHECK_FALSE(message.has_fixed_bytes());
     CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
 
@@ -2667,6 +2669,18 @@ TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smok
     message.clear_bounded_bytes();
     CHECK_FALSE(message.has_bounded_bytes());
     CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK(message.bounded_bytes_size() == sizeof(proto2_bounded_default));
+
+    auto mutable_default = message.mutable_bounded_bytes();
+    CHECK(message.has_bounded_bytes());
+    CHECK(view_equal(mutable_default, view_of(proto2_bounded_default)));
+    CHECK(message.bounded_bytes_size() == sizeof(proto2_bounded_default));
+
+    message.clear_bounded_bytes();
+    require_success(message.resize_bounded_bytes(sizeof(proto2_bounded_resized_default)));
+    CHECK(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_resized_default)));
+    message.clear_bounded_bytes();
 
     require_success(message.set_fixed_bytes(view_of(proto2_custom_bytes)));
     CHECK(message.has_fixed_bytes());
@@ -2674,6 +2688,10 @@ TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smok
     message.clear_fixed_bytes();
     CHECK_FALSE(message.has_fixed_bytes());
     CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
+
+    auto mutable_fixed_default = message.mutable_fixed_bytes();
+    CHECK(message.has_fixed_bytes());
+    CHECK(view_equal(mutable_fixed_default, view_of(proto2_fixed_default)));
 }
 
 TEST_CASE("proto2 default accessors cover all supported defaultable types", "[smoke][proto2][defaults]") {
