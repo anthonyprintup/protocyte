@@ -1150,6 +1150,10 @@ namespace test::required {
         }
         constexpr bool has_enum_value() const noexcept { return has_enum_value_; }
         ::protocyte::Status set_enum_value_raw(const ::protocyte::i32 value) noexcept {
+            if (value != 5 && value != 9) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
+                                               static_cast<::protocyte::u32>(FieldNumber::enum_value));
+            }
             enum_value_ = value;
             has_enum_value_ = true;
             return {};
@@ -1225,6 +1229,10 @@ namespace test::required {
         }
         constexpr bool has_implicit_enum_value() const noexcept { return has_implicit_enum_value_; }
         ::protocyte::Status set_implicit_enum_value_raw(const ::protocyte::i32 value) noexcept {
+            if (value != 5 && value != 9) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
+                                               static_cast<::protocyte::u32>(FieldNumber::implicit_enum_value));
+            }
             implicit_enum_value_ = value;
             has_implicit_enum_value_ = true;
             return {};
@@ -1372,11 +1380,15 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::enum_value: {
-                        if (const auto st = ::protocyte::read_enum_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { enum_value_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_enum_value = ::protocyte::read_enum_field(reader, wire_type, field_number);
+                        if (!decoded_enum_value) {
+                            return decoded_enum_value.status();
                         }
+                        const auto enum_value_value = *decoded_enum_value;
+                        if (enum_value_value != 5 && enum_value_value != 9) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {}, field_number);
+                        }
+                        enum_value_ = enum_value_value;
                         has_enum_value_ = true;
                         break;
                     }
@@ -1421,12 +1433,16 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::implicit_enum_value: {
-                        if (const auto st =
-                                ::protocyte::read_enum_field(reader, wire_type, field_number)
-                                    .transform([&](const auto decoded) noexcept { implicit_enum_value_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_implicit_enum_value =
+                            ::protocyte::read_enum_field(reader, wire_type, field_number);
+                        if (!decoded_implicit_enum_value) {
+                            return decoded_implicit_enum_value.status();
                         }
+                        const auto implicit_enum_value_value = *decoded_implicit_enum_value;
+                        if (implicit_enum_value_value != 5 && implicit_enum_value_value != 9) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {}, field_number);
+                        }
+                        implicit_enum_value_ = implicit_enum_value_value;
                         has_implicit_enum_value_ = true;
                         break;
                     }
@@ -1729,7 +1745,21 @@ namespace test::required {
             return total;
         }
 
-        ::protocyte::Status validate() const noexcept { return {}; }
+        ::protocyte::Status validate() const noexcept {
+            if (has_enum_value_) {
+                if (enum_value_ != 5 && enum_value_ != 9) {
+                    return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
+                                                   static_cast<::protocyte::u32>(FieldNumber::enum_value));
+                }
+            }
+            if (has_implicit_enum_value_) {
+                if (implicit_enum_value_ != 5 && implicit_enum_value_ != 9) {
+                    return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
+                                                   static_cast<::protocyte::u32>(FieldNumber::implicit_enum_value));
+                }
+            }
+            return {};
+        }
     protected:
         Context *ctx_;
         ::protocyte::f64 double_value_ {};

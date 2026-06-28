@@ -2867,6 +2867,28 @@ TEST_CASE("proto2 default accessors cover all supported defaultable types", "[sm
     CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
 }
 
+TEST_CASE("proto2 enum fields reject undeclared values", "[smoke][proto2][enum]") {
+    auto ctx = make_context();
+
+    Proto2DefaultValues message(ctx);
+    require_failure(message.set_enum_value_raw(7), protocyte::ErrorCode::invalid_argument);
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+
+    require_failure(message.set_implicit_enum_value_raw(7), protocyte::ErrorCode::invalid_argument);
+    CHECK_FALSE(message.has_implicit_enum_value());
+    CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+
+    static constexpr std::array<unsigned char, 2> encoded_unknown_enum {
+        0x60,
+        0x07,
+    };
+    protocyte::SliceReader reader(encoded_unknown_enum.data(), encoded_unknown_enum.size());
+    require_failure(message.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+    CHECK_FALSE(message.has_enum_value());
+    CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+}
+
 TEST_CASE("Hosted allocator honors requested alignment", "[smoke][allocator]") {
     auto allocator = protocyte::hosted_allocator();
     auto *raw = allocator.allocate(allocator.state, sizeof(HostedOverAligned), alignof(HostedOverAligned));

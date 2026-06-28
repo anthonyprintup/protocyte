@@ -354,6 +354,7 @@ class FieldModel:
     required: bool = False
     default_cpp: str | None = None
     default_byte_size: int | None = None
+    enum_closed: bool = False
 
     @property
     def has_explicit_presence(self) -> bool:
@@ -677,8 +678,6 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     for name in file_to_generate:
         validate_virtual_file_name(name)
         file = files_by_name[name]
-        if file.extension:
-            raise ProtocyteError(f"{name}: extension declarations are not supported")
         _reject_unsupported_extension_declarations(file)
         _reject_unsupported_file_features(file, f"target file {name}")
 
@@ -1412,6 +1411,7 @@ def _build_field(
         required=required,
         default_cpp=default_cpp,
         default_byte_size=default_byte_size,
+        enum_closed=kind == "enum" and file_model.syntax == "proto2",
     )
 
 

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from google.protobuf import descriptor_pb2
+from google.protobuf.compiler import plugin_pb2
 
 from protocyte.descriptor_set import (
     discover_files,
@@ -10,6 +11,7 @@ from protocyte.descriptor_set import (
     validate_virtual_file_name,
 )
 from protocyte.errors import ProtocyteError
+from protocyte.plugin import generate_response
 
 
 def _file(name: str, *dependencies: str) -> descriptor_pb2.FileDescriptorProto:
@@ -209,6 +211,34 @@ def test_discover_files_includes_extension_descriptors_referenced_by_message_fie
     )
 
     assert discover_files(load_descriptor_set(path)) == ["api/request.proto", "custom/options.proto"]
+
+
+def test_discovered_extension_descriptor_type_files_can_generate_referenced_messages(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    descriptor_set = descriptor_pb2.FileDescriptorSet()
+    descriptor_set.file.extend(
+        [
+            descriptor_pb2.FileDescriptorProto.FromString(descriptor_pb2.DESCRIPTOR.serialized_pb),
+            _custom_options_file(),
+            _file_with_custom_marker_field("api/request.proto"),
+        ]
+    )
+    path.write_bytes(descriptor_set.SerializeToString())
+
+    loaded = load_descriptor_set(path)
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.extend(discover_files(loaded))
+    request.proto_file.extend(loaded.file)
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {item.name for item in response.file} == {
+        "api/request.protocyte.cpp",
+        "api/request.protocyte.hpp",
+        "custom/options.protocyte.cpp",
+        "custom/options.protocyte.hpp",
+    }
 
 
 def test_discover_files_skips_message_scoped_extension_descriptors(tmp_path: Path) -> None:

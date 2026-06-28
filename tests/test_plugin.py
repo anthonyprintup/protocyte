@@ -858,13 +858,20 @@ def test_runtime_string_assign_checks_size_limit_before_utf8_validation() -> Non
     ) < assign_owned_body.index("validate_utf8(bytes.view())")
 
 
-def test_rejects_generated_extension_declarations() -> None:
+def test_allows_generating_messages_from_files_with_top_level_extension_declarations() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("legacy.proto")
     file = request.proto_file.add()
     file.name = "legacy.proto"
+    file.package = "legacy"
     file.syntax = "proto2"
-    file.message_type.add().name = "Legacy"
+    message = file.message_type.add()
+    message.name = "Legacy"
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
     extension = file.extension.add()
     extension.name = "legacy_extension"
     extension.number = 100
@@ -874,7 +881,10 @@ def test_rejects_generated_extension_declarations() -> None:
 
     response = generate_response(request)
 
-    assert "legacy.proto: extension declarations are not supported" in response.error
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    assert "legacy.protocyte.hpp" in files
+    assert "legacy_extension" not in files["legacy.protocyte.hpp"]
 
 
 def test_descriptor_request_with_descriptor_proto_generates_only_selected_user_files() -> None:
@@ -1187,6 +1197,21 @@ def test_generates_proto2_default_semantics() -> None:
         "constexpr ::protocyte::i32 required_int32() const noexcept { return has_required_int32_ ? required_int32_ : 17; }"
         in header
     )
+
+
+def test_generates_closed_enum_validation_for_proto2_enums() -> None:
+    response = generate_response(_proto2_default_semantics_request())
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["defaults.protocyte.hpp"]
+    assert "if (value != 5 && value != 9) {" in header
+    assert (
+        "::protocyte::ErrorCode::invalid_argument, {}, static_cast<::protocyte::u32>(FieldNumber::implicit_choice)"
+        in header
+    )
+    assert "implicit_choices_value != 5 && implicit_choices_value != 9" in header
+    assert "explicit_oneof_choice_value != 5 && explicit_oneof_choice_value != 9" in header
 
 
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:

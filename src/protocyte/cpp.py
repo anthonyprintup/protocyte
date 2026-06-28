@@ -1058,12 +1058,20 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             w.line(
                 f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
             )
-        w.line(
-            f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{ {_member(item)} = value;"
+        w.line(f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{")
+        w.push()
+        _emit_closed_enum_reject(
+            w,
+            item,
+            _closed_enum_invalid_condition(item, "value"),
+            field_number=_field_number_u32(item),
         )
+        w.line(f"{_member(item)} = value;")
         if item.proto3_optional:
             w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return {}; }")
+        w.line("return {};")
+        w.pop()
+        w.line("}")
         w.line(
             f"::protocyte::Status set_{item.cpp_name}(const {enum_typ} value) noexcept {{ return set_{item.cpp_name}_raw(static_cast<::protocyte::i32>(value)); }}"
         )
@@ -1198,6 +1206,12 @@ def _emit_oneof_accessors(
             f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{"
         )
         w.push()
+        _emit_closed_enum_reject(
+            w,
+            item,
+            _closed_enum_invalid_condition(item, "value"),
+            field_number=_field_number_u32(item),
+        )
         w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
         w.line(f"{case_member} = {case_type}::{item.cpp_name};")
@@ -1302,6 +1316,7 @@ def _emit_wire_api(
     w.line("::protocyte::Status validate() const noexcept {")
     with w.indent():
         _emit_fixed_array_validation(w, message)
+        _emit_closed_enum_validation(w, message)
         _emit_required_validation(w, message)
         _emit_nested_validation(w, message)
         w.line("return {};")
@@ -1347,6 +1362,55 @@ def _emit_required_validation(
             else:
                 w.line(f"return {error};")
         w.line("}")
+
+
+def _emit_closed_enum_validation(
+    w: CppWriter, message: MessageModel, *, for_size: bool = False
+) -> None:
+    del for_size
+    for item in sorted(message.fields, key=lambda f: f.number):
+        if item.kind == "map":
+            assert item.map_key is not None and item.map_value is not None
+            for map_item, value_expr in (
+                (item.map_key, f"{item.cpp_name}_entry.key"),
+                (item.map_value, f"{item.cpp_name}_entry.value"),
+            ):
+                condition = _closed_enum_invalid_condition(map_item, value_expr)
+                if condition is None:
+                    continue
+                w.line(f"for (const auto &{item.cpp_name}_entry : {_member(item)}) {{")
+                with w.indent():
+                    _emit_closed_enum_reject(w, item, condition)
+                w.line("}")
+            continue
+
+        condition = _closed_enum_invalid_condition(item, _member(item))
+        if condition is None:
+            continue
+        if item.repeated:
+            value_name = f"{item.cpp_name}_value"
+            w.line(f"for (const auto {value_name} : {_member(item)}) {{")
+            with w.indent():
+                _emit_closed_enum_reject(
+                    w, item, _closed_enum_invalid_condition(item, value_name)
+                )
+            w.line("}")
+            continue
+        if item.oneof_name is not None:
+            case_member = _oneof_case_member(item.oneof_name)
+            case_type = _oneof_case_type(item.oneof_name)
+            w.line(f"if ({case_member} == {case_type}::{item.cpp_name}) {{")
+            with w.indent():
+                _emit_closed_enum_reject(w, item, condition)
+            w.line("}")
+            continue
+        if _has_presence_flag(item):
+            w.line(f"if (has_{item.cpp_name}_) {{")
+            with w.indent():
+                _emit_closed_enum_reject(w, item, condition)
+            w.line("}")
+            continue
+        _emit_closed_enum_reject(w, item, condition)
 
 
 def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
@@ -1758,7 +1822,7 @@ def _emit_read_named_value(
             f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, {field_number}, {target}); !st) {{ return st; }}"
         )
     else:
-        _emit_read_scalar(w, item, reader, target, options)
+        _emit_read_scalar(w, item, reader, target, options, field_number_expr=field_number)
 
 
 def _emit_read_scalar(
@@ -1769,10 +1833,26 @@ def _emit_read_scalar(
     options: GeneratorOptions,
     *,
     checked: bool = False,
+    field_number_expr: str | None = None,
 ) -> None:
     del options
     helper = _scalar_read_helper(item, checked=checked)
     args = f"{reader}, wire_type, field_number" if checked else reader
+    error_field_number = "field_number" if checked else field_number_expr
+    if item.enum_closed:
+        result_name = f"decoded_{item.cpp_name}"
+        value_name = f"{item.cpp_name}_value"
+        w.line(f"const auto {result_name} = ::protocyte::{helper}({args});")
+        w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
+        w.line(f"const auto {value_name} = *{result_name};")
+        _emit_closed_enum_reject(
+            w,
+            item,
+            _closed_enum_invalid_condition(item, value_name),
+            field_number=error_field_number,
+        )
+        w.line(f"{target} = {value_name};")
+        return
     w.line(
         f"if (const auto st = ::protocyte::{helper}({args}).transform([&](const auto decoded) noexcept {{ {target} = decoded; }}); !st) {{ return st; }}"
     )
@@ -2293,6 +2373,32 @@ def _default(item: FieldModel) -> str:
     if item.kind == "enum":
         return "0"
     return SCALAR_DEFAULTS.get(item.proto_type, "{}")
+
+
+def _closed_enum_invalid_condition(item: FieldModel, value_expr: str) -> str | None:
+    if not item.enum_closed or item.enum_type is None:
+        return None
+    if not item.enum_type.values:
+        return "true"
+    return " && ".join(f"{value_expr} != {value.number}" for value in item.enum_type.values)
+
+
+def _emit_closed_enum_reject(
+    w: CppWriter,
+    item: FieldModel,
+    condition: str | None,
+    *,
+    field_number: str | None = None,
+) -> None:
+    if condition is None:
+        return
+    field_arg = field_number or _field_number_u32(item)
+    w.line(f"if ({condition}) {{")
+    with w.indent():
+        w.line(
+            f"return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {field_arg});"
+        )
+    w.line("}")
 
 
 def _field_number_name(item: FieldModel) -> str:
