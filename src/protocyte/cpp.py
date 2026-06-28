@@ -743,8 +743,6 @@ def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) ->
     ) -> None:
         if template_prefix:
             w.line("template<class Value>")
-            signature = signature.replace("::protocyte::Status ", "auto ", 1)
-            signature = signature.replace(" noexcept", " noexcept -> ::protocyte::Status", 1)
         w.line(signature)
         if requires_expr is not None:
             w.line(f"    requires({requires_expr})")

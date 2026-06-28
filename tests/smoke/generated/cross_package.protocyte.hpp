@@ -82,7 +82,7 @@ namespace test::crosspkg {
             return {};
         }
         ::protocyte::Span<::protocyte::u8> mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
-        template<class Value> auto set_nested_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -293,7 +293,7 @@ namespace test::crosspkg {
             return {};
         }
         ::protocyte::Span<::protocyte::u8> mutable_remote_bytes() noexcept { return remote_bytes_.mutable_view(); }
-        template<class Value> auto set_remote_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_remote_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);

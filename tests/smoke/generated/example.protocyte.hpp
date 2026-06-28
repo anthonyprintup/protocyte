@@ -100,7 +100,7 @@ namespace test::ultimate {
 
         ::protocyte::StringView description() const noexcept { return description_.view(); }
         typename Config::String &mutable_description() noexcept { return description_; }
-        template<class Value> auto set_description(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_description(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -114,7 +114,7 @@ namespace test::ultimate {
             description_ = ::protocyte::move(temp);
             return {};
         }
-        template<class Value> auto set_description(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_description(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -412,7 +412,7 @@ namespace test::ultimate {
 
         ::protocyte::StringView name() const noexcept { return name_.view(); }
         typename Config::String &mutable_name() noexcept { return name_; }
-        template<class Value> auto set_name(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_name(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -426,7 +426,7 @@ namespace test::ultimate {
             name_ = ::protocyte::move(temp);
             return {};
         }
-        template<class Value> auto set_name(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_name(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -1192,7 +1192,7 @@ namespace test::ultimate {
 
         ::protocyte::StringView extreme() const noexcept { return extreme_.view(); }
         typename Config::String &mutable_extreme() noexcept { return extreme_; }
-        template<class Value> auto set_extreme(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_extreme(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -1206,7 +1206,7 @@ namespace test::ultimate {
             extreme_ = ::protocyte::move(temp);
             return {};
         }
-        template<class Value> auto set_extreme(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_extreme(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -1243,7 +1243,7 @@ namespace test::ultimate {
         ::protocyte::StringView text() const noexcept {
             return has_text() ? deep_oneof.text.view() : ::protocyte::StringView {};
         }
-        template<class Value> auto set_text(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_text(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -1259,7 +1259,7 @@ namespace test::ultimate {
             deep_oneof_case_ = Deep_oneofCase::text;
             return {};
         }
-        template<class Value> auto set_text(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_text(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -2377,7 +2377,7 @@ namespace test::ultimate {
 
         ::protocyte::StringView f_string() const noexcept { return f_string_.view(); }
         typename Config::String &mutable_f_string() noexcept { return f_string_; }
-        template<class Value> auto set_f_string(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2391,7 +2391,7 @@ namespace test::ultimate {
             f_string_ = ::protocyte::move(temp);
             return {};
         }
-        template<class Value> auto set_f_string(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_f_string(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -2409,7 +2409,7 @@ namespace test::ultimate {
 
         ::protocyte::Span<const ::protocyte::u8> f_bytes() const noexcept { return f_bytes_.view(); }
         typename Config::Bytes &mutable_f_bytes() noexcept { return f_bytes_; }
-        template<class Value> auto set_f_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_f_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2479,7 +2479,7 @@ namespace test::ultimate {
         ::protocyte::StringView oneof_string() const noexcept {
             return has_oneof_string() ? special_oneof.oneof_string.view() : ::protocyte::StringView {};
         }
-        template<class Value> auto set_oneof_string(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2495,7 +2495,7 @@ namespace test::ultimate {
             special_oneof_case_ = Special_oneofCase::oneof_string;
             return {};
         }
-        template<class Value> auto set_oneof_string(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_oneof_string(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -2553,7 +2553,7 @@ namespace test::ultimate {
         ::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept {
             return has_oneof_bytes() ? special_oneof.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {};
         }
-        template<class Value> auto set_oneof_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_oneof_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2580,7 +2580,7 @@ namespace test::ultimate {
             return has_crazy_plain_bytes() ? crazy_bytes_oneof.crazy_plain_bytes.view() :
                                              ::protocyte::Span<const ::protocyte::u8> {};
         }
-        template<class Value> auto set_crazy_plain_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_crazy_plain_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2604,7 +2604,7 @@ namespace test::ultimate {
             return has_crazy_bounded_bytes() ? crazy_bytes_oneof.crazy_bounded_bytes.view() :
                                                ::protocyte::Span<const ::protocyte::u8> {};
         }
-        template<class Value> auto set_crazy_bounded_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_crazy_bounded_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2631,7 +2631,7 @@ namespace test::ultimate {
             return has_crazy_fixed_bytes() ? crazy_bytes_oneof.crazy_fixed_bytes.view() :
                                              ::protocyte::Span<const ::protocyte::u8> {};
         }
-        template<class Value> auto set_crazy_fixed_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_crazy_fixed_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2818,7 +2818,7 @@ namespace test::ultimate {
             has_opt_string_ = true;
             return opt_string_;
         }
-        template<class Value> auto set_opt_string(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2833,7 +2833,7 @@ namespace test::ultimate {
             has_opt_string_ = true;
             return {};
         }
-        template<class Value> auto set_opt_string(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_opt_string(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -2885,7 +2885,7 @@ namespace test::ultimate {
             }
             return sha256_.resize_for_overwrite(size);
         }
-        template<class Value> auto set_sha256(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_sha256(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2928,7 +2928,7 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Span<::protocyte::u8> mutable_byte_array() noexcept { return byte_array_.mutable_view(); }
-        template<class Value> auto set_byte_array(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_byte_array(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -2980,7 +2980,7 @@ namespace test::ultimate {
         ::protocyte::Span<::protocyte::u8> mutable_float_expr_array() noexcept {
             return float_expr_array_.mutable_view();
         }
-        template<class Value> auto set_float_expr_array(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_float_expr_array(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -6236,7 +6236,7 @@ namespace test::ultimate {
 
         ::protocyte::StringView tag() const noexcept { return tag_.view(); }
         typename Config::String &mutable_tag() noexcept { return tag_; }
-        template<class Value> auto set_tag(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_tag(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -6250,7 +6250,7 @@ namespace test::ultimate {
             tag_ = ::protocyte::move(temp);
             return {};
         }
-        template<class Value> auto set_tag(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_tag(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -6479,7 +6479,7 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Span<::protocyte::u8> mutable_nested_bytes() noexcept { return nested_bytes_.mutable_view(); }
-        template<class Value> auto set_nested_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_nested_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -6689,7 +6689,7 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Span<::protocyte::u8> mutable_external_bytes() noexcept { return external_bytes_.mutable_view(); }
-        template<class Value> auto set_external_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_external_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);

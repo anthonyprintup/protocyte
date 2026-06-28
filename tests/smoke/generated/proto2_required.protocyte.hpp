@@ -83,7 +83,7 @@ namespace test::required {
             has_note_ = true;
             return note_;
         }
-        template<class Value> auto set_note(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_note(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -98,7 +98,7 @@ namespace test::required {
             has_note_ = true;
             return {};
         }
-        template<class Value> auto set_note(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_note(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -558,7 +558,7 @@ namespace test::required {
             has_bounded_bytes_ = true;
             return bounded_bytes_.mutable_view();
         }
-        template<class Value> auto set_bounded_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_bounded_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -607,7 +607,7 @@ namespace test::required {
             }
             return fixed_bytes_.resize_for_overwrite(size);
         }
-        template<class Value> auto set_fixed_bytes(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_fixed_bytes(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -1067,7 +1067,7 @@ namespace test::required {
             has_string_value_ = true;
             return string_value_;
         }
-        template<class Value> auto set_string_value(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_string_value(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -1082,7 +1082,7 @@ namespace test::required {
             has_string_value_ = true;
             return {};
         }
-        template<class Value> auto set_string_value(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_string_value(const Value &value) noexcept
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -1112,7 +1112,7 @@ namespace test::required {
             has_bytes_value_ = true;
             return bytes_value_;
         }
-        template<class Value> auto set_bytes_value(const Value &value) noexcept -> ::protocyte::Status
+        template<class Value>::protocyte::Status set_bytes_value(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);

@@ -1942,21 +1942,22 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
         "::protocyte::Span<const ::protocyte::u8> digest() const noexcept { return digest_.view(); }"
         in header
     )
+    compact_header = "".join(header.split())
     assert (
-        "template<class Value>\n  auto set_digest(const Value &value) noexcept -> ::protocyte::Status"
-        in header
+        "template<classValue>::protocyte::Statusset_digest(constValue&value)noexcept"
+        in compact_header
     )
     assert (
-        "template<class Value>\n  auto set_blob(const Value &value) noexcept -> ::protocyte::Status"
-        in header
+        "template<classValue>::protocyte::Statusset_blob(constValue&value)noexcept"
+        in compact_header
     )
     assert (
-        header.count(
-            "template<class Value>\n  auto set_blob(const Value &value) noexcept -> ::protocyte::Status"
+        compact_header.count(
+            "template<classValue>::protocyte::Statusset_blob(constValue&value)noexcept"
         )
         == 1
     )
-    assert "template<class Value>::protocyte::Status" not in header
+    assert "autoset_blob" not in compact_header
     assert "requires(::protocyte::TextSource<Value>)" not in header
     assert "requires(::protocyte::ByteSpanSource<Value>)" in header
     assert "::protocyte::ByteViewConvertible" not in header
@@ -2498,11 +2499,12 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
         for file in response.file
         if file.name == "oneof_array.protocyte.hpp"
     )
+    compact_header = "".join(header.split())
     assert (
-        "template<class Value>\n  auto set_data(const Value &value) noexcept -> ::protocyte::Status"
-        in header
+        "template<classValue>::protocyte::Statusset_data(constValue&value)noexcept"
+        in compact_header
     )
-    assert "template<class Value>::protocyte::Status" not in header
+    assert "autoset_data" not in compact_header
     assert "requires(::protocyte::ByteSpanSource<Value>)" in header
     assert "const auto view = ::protocyte::byte_span_of(value);" in header
     assert "if (const auto st = temp.assign(*view); !st)" in header
