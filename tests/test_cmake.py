@@ -276,6 +276,115 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: 
     assert "generated/google/protobuf/timestamp.protocyte.hpp" in headers
 
 
+def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    protoc = source_dir / "tools" / "protoc"
+    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_discover_configure_depends LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                ")",
+                "get_property(configure_depends DIRECTORY PROPERTY CMAKE_CONFIGURE_DEPENDS)",
+                f'if(NOT "{descriptor_set.as_posix()}" IN_LIST configure_depends)',
+                '    message(FATAL_ERROR "descriptor-set DISCOVER did not track descriptor set as a configure input")',
+                "endif()",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+def test_descriptor_set_discover_preserves_existing_pythonpath(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    pythonpath_dir = source_dir / "pythonpath"
+    pythonpath_dir.mkdir()
+    marker = build_dir / "pythonpath_seen.txt"
+    (pythonpath_dir / "sitecustomize.py").write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                f"protocyte_source_root = Path({str(repo_root / 'src')!r}).resolve()",
+                "has_protocyte_source = any(Path(entry).resolve() == protocyte_source_root for entry in sys.path if entry)",
+                "is_descriptor_set_discovery = any('descriptor_set' in arg for arg in sys.argv)",
+                "if has_protocyte_source and is_descriptor_set_discovery:",
+                f"    Path({str(marker)!r}).parent.mkdir(parents=True, exist_ok=True)",
+                f"    Path({str(marker)!r}).write_text('seen', encoding='utf-8')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    protoc = source_dir / "tools" / "protoc"
+    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_discover_pythonpath LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(pythonpath_dir)
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True, env=env)
+
+    assert marker.read_text(encoding="utf-8") == "seen"
+
+
 def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"

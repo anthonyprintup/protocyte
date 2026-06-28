@@ -58,9 +58,18 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
         message(FATAL_ERROR "protocyte descriptor-set DISCOVER requires an existing file: ${descriptor_set}")
     endif()
     find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
+    set(protocyte_discovery_pythonpath "${protocyte_python_source_root}")
+    if(DEFINED ENV{PYTHONPATH} AND NOT "$ENV{PYTHONPATH}" STREQUAL "")
+        if(CMAKE_HOST_WIN32)
+            set(protocyte_pythonpath_separator ";")
+        else()
+            set(protocyte_pythonpath_separator ":")
+        endif()
+        set(protocyte_discovery_pythonpath "${protocyte_python_source_root}${protocyte_pythonpath_separator}$ENV{PYTHONPATH}")
+    endif()
     execute_process(
         COMMAND
-            "${CMAKE_COMMAND}" -E env "PYTHONPATH=${protocyte_python_source_root}"
+            "${CMAKE_COMMAND}" -E env "PYTHONPATH=${protocyte_discovery_pythonpath}"
             "${Python3_EXECUTABLE}" -m protocyte.descriptor_set list "${descriptor_set}"
         OUTPUT_VARIABLE discovered
         ERROR_VARIABLE discover_error
@@ -319,6 +328,7 @@ function(protocyte_generate)
     endif()
 
     if(PROTOCYTE_DESCRIPTOR_SET AND PROTOCYTE_DISCOVER)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_descriptor_set}")
         protocyte_setup_codegen()
         _protocyte_discover_descriptor_set(protocyte_proto_files "${protocyte_descriptor_set}")
     elseif(PROTOCYTE_DISCOVER)
