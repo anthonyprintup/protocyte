@@ -962,6 +962,8 @@ def test_proto2_model_tracks_presence_defaults_required_and_unpacked_repeated() 
     )
     assert fields["ratio"].default_cpp == "::std::numeric_limits<::protocyte::f32>::infinity()"
     assert fields["precise"].default_cpp == "::std::numeric_limits<::protocyte::f64>::quiet_NaN()"
+    assert fields["max_counter"].default_cpp == "18446744073709551615ull"
+    assert fields["min_counter"].default_cpp == "(-9223372036854775807ll - 1ll)"
 
 
 def test_generates_proto2_presence_defaults_and_required_validation() -> None:
@@ -993,6 +995,14 @@ def test_generates_proto2_presence_defaults_and_required_validation() -> None:
     )
     assert (
         "constexpr ::protocyte::f64 precise() const noexcept { return has_precise_ ? precise_ : ::std::numeric_limits<::protocyte::f64>::quiet_NaN(); }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::u64 max_counter() const noexcept { return has_max_counter_ ? max_counter_ : 18446744073709551615ull; }"
+        in header
+    )
+    assert (
+        "constexpr ::protocyte::i64 min_counter() const noexcept { return has_min_counter_ ? min_counter_ : (-9223372036854775807ll - 1ll); }"
         in header
     )
 
@@ -3589,6 +3599,20 @@ def _proto2_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_DOUBLE
     field.default_value = "nan"
+
+    field = message.field.add()
+    field.name = "max_counter"
+    field.number = 8
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_UINT64
+    field.default_value = "18446744073709551615"
+
+    field = message.field.add()
+    field.name = "min_counter"
+    field.number = 9
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT64
+    field.default_value = "-9223372036854775808"
 
     return file
 

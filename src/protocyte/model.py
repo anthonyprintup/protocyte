@@ -159,6 +159,19 @@ CONSTANT_KIND_FLOAT = "float"
 CONSTANT_KIND_DOUBLE = "double"
 CONSTANT_KIND_STRING = "string"
 
+INTEGER_CONSTANT_KINDS = {
+    FieldDescriptorProto.TYPE_INT32: CONSTANT_KIND_INT32,
+    FieldDescriptorProto.TYPE_SINT32: CONSTANT_KIND_INT32,
+    FieldDescriptorProto.TYPE_SFIXED32: CONSTANT_KIND_INT32,
+    FieldDescriptorProto.TYPE_INT64: CONSTANT_KIND_INT64,
+    FieldDescriptorProto.TYPE_SINT64: CONSTANT_KIND_INT64,
+    FieldDescriptorProto.TYPE_SFIXED64: CONSTANT_KIND_INT64,
+    FieldDescriptorProto.TYPE_UINT32: CONSTANT_KIND_UINT32,
+    FieldDescriptorProto.TYPE_FIXED32: CONSTANT_KIND_UINT32,
+    FieldDescriptorProto.TYPE_UINT64: CONSTANT_KIND_UINT64,
+    FieldDescriptorProto.TYPE_FIXED64: CONSTANT_KIND_UINT64,
+}
+
 _CONSTANT_OPTION_VALUE_FIELDS = {
     "boolean": (CONSTANT_KIND_BOOL, False),
     "boolean_expr": (CONSTANT_KIND_BOOL, True),
@@ -1420,9 +1433,19 @@ def _field_default_cpp(
         return _floating_default_cpp(value, "::protocyte::f32", f"{owner_full_name}.{proto.name}")
     if proto.type == FieldDescriptorProto.TYPE_DOUBLE:
         return _floating_default_cpp(value, "::protocyte::f64", f"{owner_full_name}.{proto.name}")
+    if proto.type in INTEGER_CONSTANT_KINDS:
+        return _integer_default_cpp(value, INTEGER_CONSTANT_KINDS[proto.type], f"{owner_full_name}.{proto.name}")
     if proto.type in SCALAR_CPP_TYPES:
         return value
     return None
+
+
+def _integer_default_cpp(value: str, kind: str, label: str) -> str:
+    try:
+        numeric = int(value, 10)
+    except ValueError as exc:
+        raise ProtocyteError(f"{label}: invalid integer default value {value!r}") from exc
+    return _cpp_constant_value(kind, _coerce_integer(kind, numeric, label))
 
 
 def _floating_default_cpp(value: str, cpp_type: str, label: str) -> str:
