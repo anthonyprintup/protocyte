@@ -675,9 +675,11 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     for name in file_to_generate:
         validate_virtual_file_name(name)
-        if files_by_name[name].extension:
+        file = files_by_name[name]
+        if file.extension:
             raise ProtocyteError(f"{name}: extension declarations are not supported")
-        _reject_unsupported_file_features(files_by_name[name], f"target file {name}")
+        _reject_unsupported_extension_declarations(file)
+        _reject_unsupported_file_features(file, f"target file {name}")
 
     _validate_import_graph(files_by_name, file_to_generate)
 
@@ -842,6 +844,19 @@ def _file_syntax(file: descriptor_pb2.FileDescriptorProto) -> str:
 def _reject_unsupported_file_features(file: descriptor_pb2.FileDescriptorProto, label: str) -> None:
     if hasattr(file, "edition") and getattr(file, "edition"):
         raise ProtocyteError(f"{label}: protobuf Editions are not supported in v1")
+
+
+def _reject_unsupported_extension_declarations(file: descriptor_pb2.FileDescriptorProto) -> None:
+    def reject_message_extensions(message: descriptor_pb2.DescriptorProto, path: str) -> None:
+        if message.extension:
+            raise ProtocyteError(
+                f"{file.name}: message {proto_full_name(file, path)}: extension declarations are not supported"
+            )
+        for nested in message.nested_type:
+            reject_message_extensions(nested, f"{path}.{nested.name}")
+
+    for message in file.message_type:
+        reject_message_extensions(message, message.name)
 
 
 def _build_enum(

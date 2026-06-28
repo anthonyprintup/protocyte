@@ -23,6 +23,11 @@ namespace test::required {
             {"children", 2u, "message", true, true, false},
         };
 
+        static const FieldInfo Proto2ArrayDefaults_fields[] = {
+            {"bounded_bytes", 1u, "bytes", false, true, false},
+            {"fixed_bytes", 2u, "bytes", false, true, false},
+        };
+
     } // namespace protocyte_reflection
 
 } // namespace test::required

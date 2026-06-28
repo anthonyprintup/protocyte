@@ -56,7 +56,7 @@ def main() -> int:
     proto2_required_request = plugin_pb2.CodeGeneratorRequest()
     proto2_required_request.file_to_generate.append("proto2_required.proto")
     proto2_required_request.parameter = _generator_parameter(*smoke_format_options)
-    proto2_required_request.proto_file.append(proto2_required_file())
+    proto2_required_request.proto_file.extend([options_file(), proto2_required_file()])
     requests.append(proto2_required_request)
 
     for request in requests:
@@ -645,6 +645,7 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     file.name = "proto2_required.proto"
     file.package = "test.required"
     file.syntax = "proto2"
+    file.dependency.append("protocyte/options.proto")
 
     child = file.message_type.add()
     child.name = "RequiredChild"
@@ -655,6 +656,15 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     parent.name = "RequiredParent"
     add_field(parent, "child", 1, F.TYPE_MESSAGE, type_name=".test.required.RequiredChild")
     add_field(parent, "children", 2, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=".test.required.RequiredChild")
+
+    array_defaults = file.message_type.add()
+    array_defaults.name = "Proto2ArrayDefaults"
+    bounded = add_field(array_defaults, "bounded_bytes", 1, F.TYPE_BYTES)
+    bounded.default_value = "abc"
+    bounded.options.ParseFromString(array_option_bytes(max_value=8))
+    fixed = add_field(array_defaults, "fixed_bytes", 2, F.TYPE_BYTES)
+    fixed.default_value = "xyz"
+    fixed.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
 
     return file
 

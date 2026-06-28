@@ -743,6 +743,8 @@ def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) ->
     ) -> None:
         if template_prefix:
             w.line("template<class Value>")
+            signature = signature.replace("::protocyte::Status ", "auto ", 1)
+            signature = signature.replace(" noexcept", " noexcept -> ::protocyte::Status", 1)
         w.line(signature)
         if requires_expr is not None:
             w.line(f"    requires({requires_expr})")
@@ -827,8 +829,11 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(
             f"bool has_{item.cpp_name}() const noexcept {{ return {_member(item)}.has_value(); }}"
         )
+        expr = f"{_member(item)}.view()"
+        if item.default_cpp is not None:
+            expr = f"has_{item.cpp_name}() ? {_member(item)}.view() : {item.default_cpp}"
         w.line(
-            f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {_member(item)}.view(); }}"
+            f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {expr}; }}"
         )
         w.line(
             f"::protocyte::Span<::protocyte::u8> mutable_{item.cpp_name}() noexcept {{"
@@ -862,8 +867,11 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         return
     if item.kind == "bytes" and item.array_enabled:
         bound = _array_max_literal(item)
+        expr = f"{_member(item)}.view()"
+        if _has_presence_flag(item) and item.default_cpp is not None:
+            expr = f"has_{item.cpp_name}_ ? {_member(item)}.view() : {item.default_cpp}"
         w.line(
-            f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {_member(item)}.view(); }}"
+            f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {expr}; }}"
         )
         if item.proto3_optional:
             w.line(
@@ -2180,7 +2188,7 @@ def _storage_type(item: FieldModel, options: GeneratorOptions) -> str:
 
 
 def _has_presence_flag(item: FieldModel) -> bool:
-    return item.proto3_optional and item.kind != "message"
+    return item.proto3_optional and item.kind != "message" and not item.fixed_bytes
 
 
 def _field_with_number(item: FieldModel, number: int) -> FieldModel:

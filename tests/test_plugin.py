@@ -1918,19 +1918,20 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
         in header
     )
     assert (
-        "template<class Value>\n  ::protocyte::Status set_digest(const Value &value) noexcept"
+        "template<class Value>\n  auto set_digest(const Value &value) noexcept -> ::protocyte::Status"
         in header
     )
     assert (
-        "template<class Value>\n  ::protocyte::Status set_blob(const Value &value) noexcept"
+        "template<class Value>\n  auto set_blob(const Value &value) noexcept -> ::protocyte::Status"
         in header
     )
     assert (
         header.count(
-            "template<class Value>\n  ::protocyte::Status set_blob(const Value &value) noexcept"
+            "template<class Value>\n  auto set_blob(const Value &value) noexcept -> ::protocyte::Status"
         )
         == 1
     )
+    assert "template<class Value>::protocyte::Status" not in header
     assert "requires(::protocyte::TextSource<Value>)" not in header
     assert "requires(::protocyte::ByteSpanSource<Value>)" in header
     assert "::protocyte::ByteViewConvertible" not in header
@@ -2473,9 +2474,10 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
         if file.name == "oneof_array.protocyte.hpp"
     )
     assert (
-        "template<class Value>\n  ::protocyte::Status set_data(const Value &value) noexcept"
+        "template<class Value>\n  auto set_data(const Value &value) noexcept -> ::protocyte::Status"
         in header
     )
+    assert "template<class Value>::protocyte::Status" not in header
     assert "requires(::protocyte::ByteSpanSource<Value>)" in header
     assert "const auto view = ::protocyte::byte_span_of(value);" in header
     assert "if (const auto st = temp.assign(*view); !st)" in header

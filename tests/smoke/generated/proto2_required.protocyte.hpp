@@ -9,6 +9,7 @@ namespace test::required {
 
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredChild;
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredParent;
+    template<typename Config = ::protocyte::DefaultConfig> struct Proto2ArrayDefaults;
 
     template<typename Config> struct RequiredChild {
         using Context = typename Config::Context;
@@ -76,7 +77,7 @@ namespace test::required {
             has_note_ = true;
             return note_;
         }
-        template<class Value>::protocyte::Status set_note(const Value &value) noexcept
+        template<class Value> auto set_note(const Value &value) noexcept -> ::protocyte::Status
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::byte_span_of(value);
@@ -91,7 +92,7 @@ namespace test::required {
             has_note_ = true;
             return {};
         }
-        template<class Value>::protocyte::Status set_note(const Value &value) noexcept
+        template<class Value> auto set_note(const Value &value) noexcept -> ::protocyte::Status
             requires(::protocyte::TextSource<Value>)
         {
             const auto view = ::protocyte::text_byte_span_of(value);
@@ -443,6 +444,305 @@ namespace test::required {
         Context *ctx_;
         typename Config::template Optional<::test::required::RequiredChild<Config>> child_;
         typename Config::template Vector<::test::required::RequiredChild<Config>> children_;
+    };
+
+    template<typename Config> struct Proto2ArrayDefaults {
+        using Context = typename Config::Context;
+        enum struct FieldNumber : ::protocyte::u32 {
+            bounded_bytes = 1u,
+            fixed_bytes = 2u,
+        };
+
+        explicit Proto2ArrayDefaults(Context &ctx) noexcept: ctx_ {&ctx} {}
+
+        static ::protocyte::Result<Proto2ArrayDefaults> create(Context &ctx) noexcept {
+            return Proto2ArrayDefaults {ctx};
+        }
+        Context *context() const noexcept { return ctx_; }
+        Proto2ArrayDefaults(Proto2ArrayDefaults &&) noexcept = default;
+        Proto2ArrayDefaults &operator=(Proto2ArrayDefaults &&) noexcept = default;
+        Proto2ArrayDefaults(const Proto2ArrayDefaults &) = delete;
+        Proto2ArrayDefaults &operator=(const Proto2ArrayDefaults &) = delete;
+
+        ::protocyte::Status copy_from(const Proto2ArrayDefaults &other) noexcept {
+            if (this == &other) {
+                return {};
+            }
+            if (other.has_bounded_bytes()) {
+                if (const auto st = set_bounded_bytes(other.bounded_bytes()); !st) {
+                    return st;
+                }
+            } else {
+                clear_bounded_bytes();
+            }
+            if (other.has_fixed_bytes()) {
+                if (const auto st = set_fixed_bytes(other.fixed_bytes()); !st) {
+                    return st;
+                }
+            } else {
+                clear_fixed_bytes();
+            }
+            return {};
+        }
+
+        ::protocyte::Result<Proto2ArrayDefaults> clone() const noexcept {
+            auto out = Proto2ArrayDefaults::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out->copy_from(*this); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return out;
+        }
+
+        ::protocyte::Span<const ::protocyte::u8> bounded_bytes() const noexcept {
+            return has_bounded_bytes_ ?
+                       bounded_bytes_.view() :
+                       ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("abc"), 3u};
+        }
+        bool has_bounded_bytes() const noexcept { return has_bounded_bytes_; }
+        ::protocyte::usize bounded_bytes_size() const noexcept { return bounded_bytes_.size(); }
+        static constexpr ::protocyte::usize bounded_bytes_max_size() noexcept { return 8u; }
+        ::protocyte::Status resize_bounded_bytes(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = bounded_bytes_.resize(size); !st) {
+                return st;
+            }
+            has_bounded_bytes_ = true;
+            return {};
+        }
+        ::protocyte::Status resize_bounded_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = bounded_bytes_.resize_for_overwrite(size); !st) {
+                return st;
+            }
+            has_bounded_bytes_ = true;
+            return {};
+        }
+        ::protocyte::Span<::protocyte::u8> mutable_bounded_bytes() noexcept {
+            has_bounded_bytes_ = true;
+            return bounded_bytes_.mutable_view();
+        }
+        template<class Value> auto set_bounded_bytes(const Value &value) noexcept -> ::protocyte::Status
+            requires(::protocyte::ByteSpanSource<Value>)
+        {
+            const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            if (view->size() > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            if (const auto st = bounded_bytes_.assign(*view); !st) {
+                return st;
+            }
+            has_bounded_bytes_ = true;
+            return {};
+        }
+        void clear_bounded_bytes() noexcept {
+            bounded_bytes_.clear();
+            has_bounded_bytes_ = false;
+        }
+
+        bool has_fixed_bytes() const noexcept { return fixed_bytes_.has_value(); }
+        ::protocyte::Span<const ::protocyte::u8> fixed_bytes() const noexcept {
+            return has_fixed_bytes() ?
+                       fixed_bytes_.view() :
+                       ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("xyz"), 3u};
+        }
+        ::protocyte::Span<::protocyte::u8> mutable_fixed_bytes() noexcept {
+            if (ctx_->limits.max_string_bytes < 3u) {
+                return ::protocyte::Span<::protocyte::u8> {};
+            }
+            return fixed_bytes_.mutable_view();
+        }
+        ::protocyte::Status resize_fixed_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
+            if (size > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            return fixed_bytes_.resize_for_overwrite(size);
+        }
+        template<class Value> auto set_fixed_bytes(const Value &value) noexcept -> ::protocyte::Status
+            requires(::protocyte::ByteSpanSource<Value>)
+        {
+            const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return view.status();
+            }
+            if (view->size() > ctx_->limits.max_string_bytes) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
+            }
+            return fixed_bytes_.assign(*view);
+        }
+        void clear_fixed_bytes() noexcept { fixed_bytes_.clear(); }
+
+        template<typename Reader>
+        static ::protocyte::Result<Proto2ArrayDefaults> parse(Context &ctx, Reader &reader) noexcept {
+            auto out = Proto2ArrayDefaults::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out->merge_from(reader); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            if (const auto st = merge_partial_from(reader); !st) {
+                return st;
+            }
+            return validate();
+        }
+
+        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::bounded_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                           field_number);
+                        }
+                        auto len = ::protocyte::read_length_delimited_size(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (*len > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                           field_number);
+                        }
+                        if (*len > 8u) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
+                                                           field_number);
+                        }
+                        if (const auto st = reader.can_read(*len); !st) {
+                            return st;
+                        }
+                        ::protocyte::ByteArray<8u> bounded_bytes_value {};
+                        if (const auto st = bounded_bytes_value.resize_for_overwrite(*len); !st) {
+                            return st;
+                        }
+                        const auto view = bounded_bytes_value.mutable_view();
+                        if (const auto st = reader.read(view.data(), view.size()); !st) {
+                            return st;
+                        }
+                        bounded_bytes_ = ::protocyte::move(bounded_bytes_value);
+                        has_bounded_bytes_ = true;
+                        break;
+                    }
+                    case FieldNumber::fixed_bytes: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                           field_number);
+                        }
+                        auto len = ::protocyte::read_length_delimited_size(reader);
+                        if (!len) {
+                            return len.status();
+                        }
+                        if (*len > ctx_->limits.max_string_bytes) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                           field_number);
+                        }
+                        if (*len != 3u) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
+                                                           field_number);
+                        }
+                        if (const auto st = reader.can_read(*len); !st) {
+                            return st;
+                        }
+                        ::protocyte::FixedByteArray<3u> fixed_bytes_value {};
+                        if (const auto st = fixed_bytes_value.resize_for_overwrite(*len); !st) {
+                            return st;
+                        }
+                        const auto view = fixed_bytes_value.mutable_view();
+                        if (const auto st = reader.read(view.data(), view.size()); !st) {
+                            return st;
+                        }
+                        fixed_bytes_ = ::protocyte::move(fixed_bytes_value);
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            return {};
+        }
+
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if (has_bounded_bytes_) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::bounded_bytes), bounded_bytes_.view());
+                    !st) {
+                    return st;
+                }
+            }
+            if (fixed_bytes_.has_value()) {
+                if (const auto st = ::protocyte::write_bytes_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::fixed_bytes), fixed_bytes_.view());
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            if (has_bounded_bytes_) {
+                const auto st_size =
+                    ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::bounded_bytes),
+                                                             bounded_bytes_.size())
+                        .and_then([&](const ::protocyte::usize field_size) noexcept
+                                      -> ::protocyte::Result<::protocyte::usize> {
+                            return ::protocyte::add_size(total, field_size);
+                        });
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
+                }
+                total = *st_size;
+            }
+            if (fixed_bytes_.has_value()) {
+                const auto st_size = ::protocyte::length_delimited_field_size(
+                                         static_cast<::protocyte::u32>(FieldNumber::fixed_bytes), fixed_bytes_.size())
+                                         .and_then([&](const ::protocyte::usize field_size) noexcept
+                                                       -> ::protocyte::Result<::protocyte::usize> {
+                                             return ::protocyte::add_size(total, field_size);
+                                         });
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
+                }
+                total = *st_size;
+            }
+            return total;
+        }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
+    protected:
+        Context *ctx_;
+        ::protocyte::ByteArray<8u> bounded_bytes_;
+        bool has_bounded_bytes_ {};
+        ::protocyte::FixedByteArray<3u> fixed_bytes_;
     };
 
 } // namespace test::required

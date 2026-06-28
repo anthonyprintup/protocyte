@@ -100,6 +100,7 @@ namespace {
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
     using RequiredParent = test::required::RequiredParent<>;
+    using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
@@ -175,6 +176,12 @@ namespace {
     constexpr uint8_t repeated_bytes_1[] = {0x22u, 0x23u};
     constexpr uint8_t repeated_bytes_2[] = {0x34u, 0x35u, 0x36u, 0x37u};
     constexpr uint8_t repeated_bytes_3[] = {0x48u, 0x49u, 0x4au};
+    constexpr uint8_t proto2_bounded_default[] = {'a', 'b', 'c'};
+    constexpr uint8_t proto2_fixed_default[] = {'x', 'y', 'z'};
+    constexpr uint8_t proto2_custom_bytes[] = {0x31u, 0x32u, 0x33u};
+    constexpr uint8_t proto2_default_bytes_wire[] = {
+        0x0au, 0x03u, 'a', 'b', 'c', 0x12u, 0x03u, 'x', 'y', 'z',
+    };
     constexpr uint8_t sha256_bytes[] = {
         0x10u, 0x21u, 0x32u, 0x43u, 0x54u, 0x65u, 0x76u, 0x87u, 0x98u, 0xa9u, 0xbau, 0xcbu, 0xdcu, 0xedu, 0xfeu, 0x0fu,
         0x1eu, 0x2du, 0x3cu, 0x4bu, 0x5au, 0x69u, 0x78u, 0x87u, 0x96u, 0xa5u, 0xb4u, 0xc3u, 0xd2u, 0xe1u, 0xf0u, 0x0fu,
@@ -2604,6 +2611,62 @@ TEST_CASE("proto2 required validation waits for embedded message merge", "[smoke
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_argument);
         CHECK(ctx.recursion_depth == 0u);
     }
+}
+
+TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smoke][proto2][defaults]") {
+    auto ctx = make_context();
+    Proto2ArrayDefaults message(ctx);
+
+    CHECK_FALSE(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK_FALSE(message.has_fixed_bytes());
+    CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
+
+    auto absent_size = message.encoded_size();
+    require_success(absent_size);
+    CHECK(*absent_size == 0u);
+    std::array<uint8_t, 1> absent_encoded {};
+    protocyte::SliceWriter absent_writer(absent_encoded.data(), 0u);
+    require_success(message.serialize(absent_writer));
+    CHECK(absent_writer.position() == 0u);
+
+    require_success(message.set_bounded_bytes(view_of(proto2_bounded_default)));
+    require_success(message.set_fixed_bytes(view_of(proto2_fixed_default)));
+    auto explicit_default_size = message.encoded_size();
+    require_success(explicit_default_size);
+    REQUIRE(*explicit_default_size == sizeof(proto2_default_bytes_wire));
+    std::array<uint8_t, sizeof(proto2_default_bytes_wire)> explicit_default_encoded {};
+    protocyte::SliceWriter explicit_default_writer(explicit_default_encoded.data(), explicit_default_encoded.size());
+    require_success(message.serialize(explicit_default_writer));
+    REQUIRE(explicit_default_writer.position() == explicit_default_encoded.size());
+    CHECK(view_equal(
+        protocyte::Span<const protocyte::u8> {explicit_default_encoded.data(), explicit_default_writer.position()},
+        view_of(proto2_default_bytes_wire)));
+
+    Proto2ArrayDefaults parsed(ctx);
+    protocyte::SliceReader explicit_default_reader(explicit_default_encoded.data(), explicit_default_writer.position());
+    require_success(parsed.merge_from(explicit_default_reader));
+    REQUIRE(explicit_default_reader.eof());
+    CHECK(parsed.has_bounded_bytes());
+    CHECK(view_equal(parsed.bounded_bytes(), view_of(proto2_bounded_default)));
+    CHECK(parsed.has_fixed_bytes());
+    CHECK(view_equal(parsed.fixed_bytes(), view_of(proto2_fixed_default)));
+
+    message.clear_bounded_bytes();
+    message.clear_fixed_bytes();
+    require_success(message.set_bounded_bytes(view_of(proto2_custom_bytes)));
+    CHECK(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_custom_bytes)));
+    message.clear_bounded_bytes();
+    CHECK_FALSE(message.has_bounded_bytes());
+    CHECK(view_equal(message.bounded_bytes(), view_of(proto2_bounded_default)));
+
+    require_success(message.set_fixed_bytes(view_of(proto2_custom_bytes)));
+    CHECK(message.has_fixed_bytes());
+    CHECK(view_equal(message.fixed_bytes(), view_of(proto2_custom_bytes)));
+    message.clear_fixed_bytes();
+    CHECK_FALSE(message.has_fixed_bytes());
+    CHECK(view_equal(message.fixed_bytes(), view_of(proto2_fixed_default)));
 }
 
 TEST_CASE("Hosted allocator honors requested alignment", "[smoke][allocator]") {

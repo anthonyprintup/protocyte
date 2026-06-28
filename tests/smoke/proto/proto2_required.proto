@@ -2,6 +2,8 @@ syntax = "proto2";
 
 package test.required;
 
+import "protocyte/options.proto";
+
 message RequiredChild {
   required int32 id = 1;
   optional string note = 2;
@@ -10,4 +12,9 @@ message RequiredChild {
 message RequiredParent {
   optional RequiredChild child = 1;
   repeated RequiredChild children = 2;
+}
+
+message Proto2ArrayDefaults {
+  optional bytes bounded_bytes = 1 [default = "abc", (protocyte.array) = { max: 8 }];
+  optional bytes fixed_bytes = 2 [default = "xyz", (protocyte.array) = { max: 3, fixed: true }];
 }
