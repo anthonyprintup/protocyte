@@ -437,7 +437,7 @@ namespace test::required {
 
         ::protocyte::Status validate() const noexcept {
             if (child_.has_value()) {
-                if (const auto st = (*child_).validate(); !st) {
+                if (const auto st = child_->validate(); !st) {
                     return st;
                 }
             }

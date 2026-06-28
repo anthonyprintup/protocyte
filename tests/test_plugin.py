@@ -2426,6 +2426,8 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
         "return has_inner() && choice_.inner_.has_value() ? choice_.inner_.operator->() : nullptr;"
         in header
     )
+    assert "if (const auto st = choice_.inner_->validate(); !st) { return st; }" in header
+    assert "(*choice_.inner_).validate()" not in header
     assert (
         "::protocyte::Result<::demo::Carrier_Inner<Config>&> ensure_inner() noexcept"
         in header

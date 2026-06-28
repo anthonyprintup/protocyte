@@ -1438,7 +1438,7 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
         else:
             w.line(f"if ({_member(item)}.has_value()) {{")
         with w.indent():
-            w.line(f"if (const auto st = (*{_member(item)}).validate(); !st) {{ return st; }}")
+            w.line(f"if (const auto st = {_member(item)}->validate(); !st) {{ return st; }}")
         w.line("}")
 
 

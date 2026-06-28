@@ -612,7 +612,7 @@ namespace test::ultimate {
 
         ::protocyte::Status validate() const noexcept {
             if (inner_.has_value()) {
-                if (const auto st = (*inner_).validate(); !st) {
+                if (const auto st = inner_->validate(); !st) {
                     return st;
                 }
             }
@@ -5729,12 +5729,12 @@ namespace test::ultimate {
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
             }
             if (nested1_.has_value()) {
-                if (const auto st = (*nested1_).validate(); !st) {
+                if (const auto st = nested1_->validate(); !st) {
                     return st;
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_msg && special_oneof_.oneof_msg_.has_value()) {
-                if (const auto st = (*special_oneof_.oneof_msg_).validate(); !st) {
+                if (const auto st = special_oneof_.oneof_msg_->validate(); !st) {
                     return st;
                 }
             }
@@ -5749,7 +5749,7 @@ namespace test::ultimate {
                 }
             }
             if (recursive_self_.has_value()) {
-                if (const auto st = (*recursive_self_).validate(); !st) {
+                if (const auto st = recursive_self_->validate(); !st) {
                     return st;
                 }
             }
@@ -5759,25 +5759,25 @@ namespace test::ultimate {
                 }
             }
             if (extreme_nesting_.has_value()) {
-                if (const auto st = (*extreme_nesting_).validate(); !st) {
+                if (const auto st = extreme_nesting_->validate(); !st) {
                     return st;
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_repeated_bytes &&
                 crazy_bytes_oneof_.crazy_repeated_bytes_.has_value()) {
-                if (const auto st = (*crazy_bytes_oneof_.crazy_repeated_bytes_).validate(); !st) {
+                if (const auto st = crazy_bytes_oneof_.crazy_repeated_bytes_->validate(); !st) {
                     return st;
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_bounded_repeated_bytes &&
                 crazy_bytes_oneof_.crazy_bounded_repeated_bytes_.has_value()) {
-                if (const auto st = (*crazy_bytes_oneof_.crazy_bounded_repeated_bytes_).validate(); !st) {
+                if (const auto st = crazy_bytes_oneof_.crazy_bounded_repeated_bytes_->validate(); !st) {
                     return st;
                 }
             }
             if (crazy_bytes_oneof_case_ == Crazy_bytes_oneofCase::crazy_fixed_repeated_bytes &&
                 crazy_bytes_oneof_.crazy_fixed_repeated_bytes_.has_value()) {
-                if (const auto st = (*crazy_bytes_oneof_.crazy_fixed_repeated_bytes_).validate(); !st) {
+                if (const auto st = crazy_bytes_oneof_.crazy_fixed_repeated_bytes_->validate(); !st) {
                     return st;
                 }
             }
@@ -6403,7 +6403,7 @@ namespace test::ultimate {
 
         ::protocyte::Status validate() const noexcept {
             if (ref_.has_value()) {
-                if (const auto st = (*ref_).validate(); !st) {
+                if (const auto st = ref_->validate(); !st) {
                     return st;
                 }
             }
@@ -6968,7 +6968,7 @@ namespace test::ultimate {
 
         ::protocyte::Status validate() const noexcept {
             if (nested_.has_value()) {
-                if (const auto st = (*nested_).validate(); !st) {
+                if (const auto st = nested_->validate(); !st) {
                     return st;
                 }
             }

@@ -2159,12 +2159,12 @@ namespace protocyte_smoke::test::compat {
 
         ::protocyte::Status validate() const noexcept {
             if (nested_.has_value()) {
-                if (const auto st = (*nested_).validate(); !st) {
+                if (const auto st = nested_->validate(); !st) {
                     return st;
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested && special_oneof_.oneof_nested_.has_value()) {
-                if (const auto st = (*special_oneof_.oneof_nested_).validate(); !st) {
+                if (const auto st = special_oneof_.oneof_nested_->validate(); !st) {
                     return st;
                 }
             }
