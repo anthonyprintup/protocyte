@@ -223,6 +223,7 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: 
             [
                 "cmake_minimum_required(VERSION 3.24)",
                 "project(descriptor_set_discover LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
                 f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
                 f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
                 f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
