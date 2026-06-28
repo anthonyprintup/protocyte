@@ -1430,7 +1430,7 @@ def _emit_read_repeated_value(
         typ = _field_type(item, options)
         w.line(f"{typ} value{{*ctx_}};")
         w.line(
-            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, value).and_then([&]() noexcept {{ return {target}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, field_number, value).and_then([&]() noexcept {{ return {target}.push_back(::protocyte::move(value)); }}); !st) {{ return st; }}"
         )
         return
     w.line(f"{_element_type(item, options)} value{{}};")
@@ -1535,7 +1535,7 @@ def _emit_read_staged_message(
             )
         w.line("}")
     w.line(
-        f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, field_number, {value_name}); !st) {{ return st; }}"
+        f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, field_number, {value_name}); !st) {{ return st; }}"
     )
     if item.oneof_name:
         _emit_commit_oneof_value(w, item, value_name, options)
@@ -1715,7 +1715,7 @@ def _emit_read_named_value(
         )
     elif item.kind == "message":
         w.line(
-            f"if (const auto st = ::protocyte::read_message<Config>(*ctx_, {reader}, {field_number}, {target}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, {field_number}, {target}); !st) {{ return st; }}"
         )
     else:
         _emit_read_scalar(w, item, reader, target, options)

@@ -1085,7 +1085,7 @@ namespace protocyte_smoke::test::compat {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, nested_value);
                             !st) {
                             return st;
                         }
@@ -1276,8 +1276,8 @@ namespace protocyte_smoke::test::compat {
                                 return st;
                             }
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, oneof_nested_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                      oneof_nested_value);
                             !st) {
                             return st;
                         }

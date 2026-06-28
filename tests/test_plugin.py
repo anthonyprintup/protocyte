@@ -1482,7 +1482,7 @@ def test_generated_header_contains_expected_field_api() -> None:
         in header
     )
     assert (
-        "if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, self_value); !st) { return st; }"
+        "if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, self_value); !st) { return st; }"
         in header
     )
     assert (

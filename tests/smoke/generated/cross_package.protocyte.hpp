@@ -437,7 +437,7 @@ namespace test::crosspkg {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, nested_value);
                             !st) {
                             return st;
                         }

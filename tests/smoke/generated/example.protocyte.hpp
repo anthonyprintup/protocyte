@@ -519,7 +519,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, inner_value);
+                        if (const auto st =
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, inner_value);
                             !st) {
                             return st;
                         }
@@ -3326,7 +3327,7 @@ namespace test::ultimate {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested1_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, nested1_value);
                             !st) {
                             return st;
                         }
@@ -3373,7 +3374,7 @@ namespace test::ultimate {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, oneof_msg_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, oneof_msg_value);
                             !st) {
                             return st;
                         }
@@ -3674,7 +3675,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    if (const auto st = ::protocyte::read_message<Config>(
+                                    if (const auto st = ::protocyte::read_message_partial<Config>(
                                             *ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value),
                                             value);
                                         !st) {
@@ -3743,7 +3744,7 @@ namespace test::ultimate {
                                             ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
                                             static_cast<::protocyte::u32>(EntryFieldNumber::value));
                                     }
-                                    if (const auto st = ::protocyte::read_message<Config>(
+                                    if (const auto st = ::protocyte::read_message_partial<Config>(
                                             *ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value),
                                             value);
                                         !st) {
@@ -3782,8 +3783,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, recursive_self_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                      recursive_self_value);
                             !st) {
                             return st;
                         }
@@ -3798,10 +3799,10 @@ namespace test::ultimate {
                                                            field_number);
                         }
                         ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config> value {*ctx_};
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, value)
-                                                .and_then([&]() noexcept {
-                                                    return lots_of_nested_.push_back(::protocyte::move(value));
-                                                });
+                        if (const auto st =
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, value)
+                                    .and_then(
+                                        [&]() noexcept { return lots_of_nested_.push_back(::protocyte::move(value)); });
                             !st) {
                             return st;
                         }
@@ -3882,8 +3883,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, extreme_nesting_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                      extreme_nesting_value);
                             !st) {
                             return st;
                         }
@@ -4214,8 +4215,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number,
-                                                                              crazy_repeated_bytes_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                      crazy_repeated_bytes_value);
                             !st) {
                             return st;
                         }
@@ -4249,8 +4250,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number,
-                                                                              crazy_bounded_repeated_bytes_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(
+                                *ctx_, reader, field_number, crazy_bounded_repeated_bytes_value);
                             !st) {
                             return st;
                         }
@@ -4284,8 +4285,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number,
-                                                                              crazy_fixed_repeated_bytes_value);
+                        if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                      crazy_fixed_repeated_bytes_value);
                             !st) {
                             return st;
                         }
@@ -6318,7 +6319,8 @@ namespace test::ultimate {
                                 return st;
                             }
                         }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, ref_value);
+                        if (const auto st =
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, ref_value);
                             !st) {
                             return st;
                         }
@@ -6825,7 +6827,7 @@ namespace test::ultimate {
                             }
                         }
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, nested_value);
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, nested_value);
                             !st) {
                             return st;
                         }

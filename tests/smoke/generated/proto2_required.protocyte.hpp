@@ -339,7 +339,8 @@ namespace test::required {
                                 return st;
                             }
                         }
-                        if (const auto st = ::protocyte::read_message<Config>(*ctx_, reader, field_number, child_value);
+                        if (const auto st =
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, child_value);
                             !st) {
                             return st;
                         }
@@ -355,7 +356,7 @@ namespace test::required {
                         }
                         ::test::required::RequiredChild<Config> value {*ctx_};
                         if (const auto st =
-                                ::protocyte::read_message<Config>(*ctx_, reader, field_number, value)
+                                ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, value)
                                     .and_then([&]() noexcept { return children_.push_back(::protocyte::move(value)); });
                             !st) {
                             return st;

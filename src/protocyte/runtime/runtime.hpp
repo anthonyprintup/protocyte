@@ -4423,8 +4423,32 @@ namespace protocyte {
         }
     }
 
-    template<class Config, class Reader, class Message>
-    Status read_message(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
+    template<class Message, class Reader> Status merge_message(Message &out, Reader &reader) noexcept {
+        if constexpr (requires { out.merge_from(reader); }) {
+            return out.merge_from(reader);
+        } else {
+            return merge_message_fragment(out, reader);
+        }
+    }
+
+    template<class Message> Status commit_read_message(Message &out, Message &parsed) noexcept {
+        if constexpr (requires { out = protocyte::move(parsed); }) {
+            out = protocyte::move(parsed);
+            return {};
+        } else if constexpr (requires { out.copy_from(parsed); }) {
+            return out.copy_from(parsed);
+        } else if constexpr (requires { out = parsed; }) {
+            out = parsed;
+            return {};
+        } else {
+            static_assert(AlwaysFalse<Message>::value,
+                          "protocyte read_message requires move assignment, copy_from, or copy assignment");
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
+    }
+
+    template<class Config, class Reader, class Message> Status
+    read_message_partial(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
         auto nested = open_nested_message<Config>(ctx, reader, field_number);
         if (!nested) {
             return nested.status();
@@ -4434,6 +4458,52 @@ namespace protocyte {
         return merge_message_fragment(out, nested_reader).and_then([&open]() noexcept -> Status {
             return open.finish();
         });
+    }
+
+    template<class Config, class Reader, class Message>
+    Status read_message_staged(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out,
+                               Message &parsed) noexcept {
+        auto nested = open_nested_message<Config>(ctx, reader, field_number);
+        if (!nested) {
+            return nested.status();
+        }
+        auto &open = *nested;
+        auto nested_reader = open.reader_ref();
+        return merge_message(parsed, nested_reader)
+            .and_then([&open]() noexcept -> Status { return open.finish(); })
+            .and_then([&out, &parsed]() noexcept -> Status { return commit_read_message(out, parsed); });
+    }
+
+    template<class Config, class Reader, class Message>
+    Status read_message(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
+        using Context = typename Config::Context;
+        if constexpr (
+            requires(Context &value) { Message {value}; } &&
+            requires(Message &dst, const Message &src) { dst.copy_from(src); }) {
+            Message parsed {ctx};
+            if (const auto st = parsed.copy_from(out); !st) {
+                return st;
+            }
+            return read_message_staged<Config>(ctx, reader, field_number, out, parsed);
+        } else if constexpr (requires(const Message &src) { Message {src}; }) {
+            Message parsed {out};
+            return read_message_staged<Config>(ctx, reader, field_number, out, parsed);
+        } else if constexpr (
+            requires { Message {}; } && requires(Message &dst, const Message &src) { dst.copy_from(src); }) {
+            Message parsed {};
+            if (const auto st = parsed.copy_from(out); !st) {
+                return st;
+            }
+            return read_message_staged<Config>(ctx, reader, field_number, out, parsed);
+        } else if constexpr (requires { Message {}; } && requires(Message &dst, const Message &src) { dst = src; }) {
+            Message parsed {};
+            parsed = out;
+            return read_message_staged<Config>(ctx, reader, field_number, out, parsed);
+        } else {
+            static_assert(AlwaysFalse<Message>::value,
+                          "protocyte read_message requires copy construction, copy_from, or copy assignment");
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
+        }
     }
 
     template<class Writer, class Message>

@@ -99,6 +99,7 @@ namespace {
     using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
+    using RequiredChild = test::required::RequiredChild<>;
     using RequiredParent = test::required::RequiredParent<>;
     using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
@@ -2763,6 +2764,28 @@ TEST_CASE("read_message accepts merge_from-only message adapters", "[smoke][runt
 
     CHECK(parsed.merged);
     CHECK(reader.eof());
+}
+
+TEST_CASE("read_message validates standalone generated message payloads", "[smoke][runtime][proto2]") {
+    auto ctx = make_context();
+    constexpr std::array<protocyte::u8, 9u> encoded {
+        0x0au, 0x07u, 0x12u, 0x05u, 'e', 'm', 'p', 't', 'y',
+    };
+    protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+    auto tag = protocyte::read_tag(reader);
+    require_success(tag);
+    CHECK(tag->field_number == 1u);
+    CHECK(tag->wire_type == protocyte::WireType::LEN);
+
+    RequiredChild parsed(ctx);
+    require_failure(protocyte::read_message<Config>(ctx, reader, tag->field_number, parsed),
+                    protocyte::ErrorCode::invalid_argument);
+
+    CHECK(reader.eof());
+    CHECK(ctx.recursion_depth == 0u);
+    CHECK_FALSE(parsed.has_id());
+    CHECK_FALSE(parsed.has_note());
 }
 
 TEST_CASE("Result<void> carries status without a payload", "[smoke][runtime]") {
