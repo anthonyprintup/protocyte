@@ -13,21 +13,32 @@ def test_proto2_array_backed_bytes_accessors_apply_default_values() -> None:
     assert not response.error
     files = {item.name: item.content for item in response.file}
     header = files["array_defaults.protocyte.hpp"]
+    compact_header = _without_whitespace(header)
     assert "template<class Value>::protocyte::Status" not in header
     assert (
-        '::protocyte::Span<const ::protocyte::u8> bounded_bytes() const noexcept { return has_bounded_bytes_ ? bounded_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("abc"), 3u}; }'
-        in header
+        _without_whitespace(
+            '::protocyte::Span<const ::protocyte::u8> bounded_bytes() const noexcept { return has_bounded_bytes_ ? bounded_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("abc"), 3u}; }'
+        )
+        in compact_header
     )
     assert (
-        '::protocyte::Span<const ::protocyte::u8> fixed_bytes() const noexcept { return has_fixed_bytes() ? fixed_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("xyz"), 3u}; }'
-        in header
+        _without_whitespace(
+            '::protocyte::Span<const ::protocyte::u8> fixed_bytes() const noexcept { return has_fixed_bytes() ? fixed_bytes_.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("xyz"), 3u}; }'
+        )
+        in compact_header
     )
     assert "bool has_fixed_bytes_" not in header
     assert "has_fixed_bytes_ = true" not in header
     assert (
-        '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x01""\\xfe"), 2u}; }'
-        in header
+        _without_whitespace(
+            '::protocyte::Span<const ::protocyte::u8> oneof_bytes() const noexcept { return has_oneof_bytes() ? choice.oneof_bytes.view() : ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8*>("\\x01""\\xfe"), 2u}; }'
+        )
+        in compact_header
     )
+
+
+def _without_whitespace(value: str) -> str:
+    return "".join(value.split())
 
 
 def _proto2_array_defaults_request() -> plugin_pb2.CodeGeneratorRequest:
