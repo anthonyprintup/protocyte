@@ -677,16 +677,15 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     if missing:
         raise ProtocyteError(f"protoc request is missing file descriptors for: {', '.join(missing)}")
 
-    selected_files = set(file_to_generate)
-    for file in files_by_name.values():
-        _validate_extension_declarations(file, selected_for_generation=file.name in selected_files)
-
     for name in file_to_generate:
         validate_virtual_file_name(name)
         file = files_by_name[name]
         _reject_unsupported_file_features(file, f"target file {name}")
 
-    _validate_import_graph(files_by_name, file_to_generate)
+    selected_files = set(file_to_generate)
+    reachable_files = _validate_import_graph(files_by_name, file_to_generate)
+    for name in reachable_files:
+        _validate_extension_declarations(files_by_name[name], selected_for_generation=name in selected_files)
 
     files: dict[str, FileModel] = {}
     messages: dict[str, MessageModel] = {}
@@ -748,7 +747,7 @@ def _index_request_files(
 def _validate_import_graph(
     files: dict[str, descriptor_pb2.FileDescriptorProto],
     roots: Iterable[str],
-) -> None:
+) -> set[str]:
     stack = list(roots)
     seen: set[str] = set()
     while stack:
@@ -764,6 +763,7 @@ def _validate_import_graph(
             if dependency not in files:
                 raise ProtocyteError(f"{name} imports missing descriptor {dependency}")
             stack.append(dependency)
+    return seen
 
 
 def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -> _CustomOptions:

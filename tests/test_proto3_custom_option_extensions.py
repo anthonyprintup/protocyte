@@ -78,6 +78,14 @@ def test_rejects_unselected_proto3_non_option_extension_dependency() -> None:
         build_model(_request(options_file, consumer_file, selected=["example/api.proto"]))
 
 
+def test_ignores_unrelated_proto3_non_option_extension_outside_selected_graph() -> None:
+    invalid_file = _proto3_file_with_top_level_extension(".example.options.AccessPolicy")
+    invalid_file.name = "unrelated/options.proto"
+    consumer_file = _consumer_file_with_no_imports()
+
+    build_model(_request(invalid_file, consumer_file, selected=["example/api.proto"]))
+
+
 def test_rejects_proto3_nested_non_option_extensions() -> None:
     file = _proto3_file_with_nested_extension(".example.options.AccessPolicy")
 
@@ -302,6 +310,21 @@ def _consumer_file_without_custom_options() -> descriptor_pb2.FileDescriptorProt
     file.package = "example.api"
     file.syntax = "proto3"
     file.dependency.append("example/options.proto")
+    message = file.message_type.add()
+    message.name = "Request"
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    return file
+
+
+def _consumer_file_with_no_imports() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "example/api.proto"
+    file.package = "example.api"
+    file.syntax = "proto3"
     message = file.message_type.add()
     message.name = "Request"
     field = message.field.add()
