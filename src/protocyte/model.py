@@ -9,6 +9,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory, te
 
 from protocyte.descriptor_set import validate_virtual_file_name
 from protocyte.errors import ProtocyteError
+from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_extension
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
 
@@ -150,6 +151,7 @@ PACKABLE_TYPES = set(SCALAR_CPP_TYPES) | {FieldDescriptorProto.TYPE_ENUM}
 ARRAY_OPTION_NAME = "protocyte.array"
 CONSTANT_OPTION_NAME = "protocyte.constant"
 PACKAGE_CONSTANT_OPTION_NAME = "protocyte.package_constant"
+_CUSTOM_OPTION_EXTENDEES = CUSTOM_OPTION_EXTENDEES
 CONSTANT_KIND_BOOL = "bool"
 CONSTANT_KIND_INT32 = "int32"
 CONSTANT_KIND_INT64 = "int64"
@@ -678,10 +680,12 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     for name in file_to_generate:
         validate_virtual_file_name(name)
         file = files_by_name[name]
-        _reject_unsupported_extension_declarations(file)
         _reject_unsupported_file_features(file, f"target file {name}")
 
-    _validate_import_graph(files_by_name, file_to_generate)
+    selected_files = set(file_to_generate)
+    reachable_files = _validate_import_graph(files_by_name, file_to_generate)
+    for name in reachable_files:
+        _validate_extension_declarations(files_by_name[name], selected_for_generation=name in selected_files)
 
     files: dict[str, FileModel] = {}
     messages: dict[str, MessageModel] = {}
@@ -743,7 +747,7 @@ def _index_request_files(
 def _validate_import_graph(
     files: dict[str, descriptor_pb2.FileDescriptorProto],
     roots: Iterable[str],
-) -> None:
+) -> set[str]:
     stack = list(roots)
     seen: set[str] = set()
     while stack:
@@ -759,6 +763,7 @@ def _validate_import_graph(
             if dependency not in files:
                 raise ProtocyteError(f"{name} imports missing descriptor {dependency}")
             stack.append(dependency)
+    return seen
 
 
 def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -> _CustomOptions:
@@ -846,17 +851,52 @@ def _reject_unsupported_file_features(file: descriptor_pb2.FileDescriptorProto, 
         raise ProtocyteError(f"{label}: protobuf Editions are not supported in v1")
 
 
-def _reject_unsupported_extension_declarations(file: descriptor_pb2.FileDescriptorProto) -> None:
-    def reject_message_extensions(message: descriptor_pb2.DescriptorProto, path: str) -> None:
-        if message.extension:
+def _is_custom_option_extension(field: descriptor_pb2.FieldDescriptorProto) -> bool:
+    return is_custom_option_extension(field)
+
+
+def _validate_extension_declarations(
+    file: descriptor_pb2.FileDescriptorProto,
+    *,
+    selected_for_generation: bool,
+) -> None:
+    syntax = _file_syntax(file)
+
+    def validate_extension(
+        extension: descriptor_pb2.FieldDescriptorProto,
+        path: str | None,
+    ) -> None:
+        if _is_custom_option_extension(extension):
+            return
+        if syntax == "proto3":
+            raise ProtocyteError(
+                f"{file.name}: extension {_extension_full_name(file, path, extension)} "
+                f"extends unsupported proto3 target {extension.extendee}"
+            )
+        if selected_for_generation and path is not None:
             raise ProtocyteError(
                 f"{file.name}: message {proto_full_name(file, path)}: extension declarations are not supported"
             )
-        for nested in message.nested_type:
-            reject_message_extensions(nested, f"{path}.{nested.name}")
 
+    def validate_message_extensions(message: descriptor_pb2.DescriptorProto, path: str) -> None:
+        for extension in message.extension:
+            validate_extension(extension, path)
+        for nested in message.nested_type:
+            validate_message_extensions(nested, f"{path}.{nested.name}")
+
+    for extension in file.extension:
+        validate_extension(extension, None)
     for message in file.message_type:
-        reject_message_extensions(message, message.name)
+        validate_message_extensions(message, message.name)
+
+
+def _extension_full_name(
+    file: descriptor_pb2.FileDescriptorProto,
+    path: str | None,
+    extension: descriptor_pb2.FieldDescriptorProto,
+) -> str:
+    extension_path = f"{path}.{extension.name}" if path is not None else extension.name
+    return proto_full_name(file, extension_path)
 
 
 def _build_enum(
@@ -1312,6 +1352,8 @@ def _build_field(
     enums: dict[str, EnumModel],
     custom_options: _CustomOptions,
 ) -> FieldModel:
+    if proto.extendee:
+        raise ProtocyteError(f"{owner.full_name}.{proto.name}: extension fields are not supported for codec generation")
     if proto.type == FieldDescriptorProto.TYPE_GROUP:
         raise ProtocyteError(f"{owner.full_name}.{proto.name}: groups are not supported")
 

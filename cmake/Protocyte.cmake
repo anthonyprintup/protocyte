@@ -11,6 +11,7 @@ set(
     "${PROTOCYTE_PACKAGE_ROOT}/cpp.py"
     "${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"
     "${PROTOCYTE_PACKAGE_ROOT}/errors.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/extensions.py"
     "${PROTOCYTE_PACKAGE_ROOT}/main.py"
     "${PROTOCYTE_PACKAGE_ROOT}/model.py"
     "${PROTOCYTE_PACKAGE_ROOT}/parameters.py"

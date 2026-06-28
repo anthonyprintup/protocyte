@@ -8,6 +8,7 @@ from google.protobuf import descriptor_pb2
 from google.protobuf.message import DecodeError
 
 from protocyte.errors import ProtocyteError
+from protocyte.extensions import is_custom_option_extension
 
 
 _RUNTIME_PREFIX = "google/protobuf/"
@@ -95,26 +96,161 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
 def _is_initial_discoverable_target(file: descriptor_pb2.FileDescriptorProto) -> bool:
     return (
         _is_referenced_type_discoverable(file)
-        and not _declares_google_protobuf_option_extension(file)
+        and not _is_pure_custom_option_definition(file)
     )
 
 
 def _is_referenced_type_discoverable(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_message_scoped_extensions(file)
+    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_unsupported_message_scoped_extensions(file)
 
 
-def _declares_google_protobuf_option_extension(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return any(extension.extendee.startswith(".google.protobuf.") for extension in file.extension)
+def _is_pure_custom_option_definition(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    declarations = list(_extension_declarations(file))
+    extensions = [extension for extension, _ in declarations]
+    if (
+        not extensions
+        or any(not is_custom_option_extension(extension) for extension in extensions)
+        or file.service
+    ):
+        return False
+    declared_type_names = set(_declared_type_names(file))
+    helper_roots = _custom_option_helper_roots(file, declarations, declared_type_names)
+    return all(_is_extension_helper_type(type_name, helper_roots) for type_name in declared_type_names)
 
 
-def _declares_message_scoped_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return any(_message_declares_extensions(message) for message in file.message_type)
+def _extension_declarations(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> Iterable[tuple[descriptor_pb2.FieldDescriptorProto, str | None]]:
+    for extension in file.extension:
+        yield extension, None
+    package = tuple(part for part in file.package.split(".") if part)
+    for message in file.message_type:
+        yield from _message_extension_declarations(message, (*package, message.name))
 
 
-def _message_declares_extensions(message: descriptor_pb2.DescriptorProto) -> bool:
-    if message.extension:
+def _message_extension_declarations(
+    message: descriptor_pb2.DescriptorProto,
+    path: tuple[str, ...],
+) -> Iterable[tuple[descriptor_pb2.FieldDescriptorProto, str]]:
+    scope = _fully_qualified_name(path)
+    for extension in message.extension:
+        yield extension, scope
+    for nested in message.nested_type:
+        yield from _message_extension_declarations(nested, (*path, nested.name))
+
+
+def _custom_option_helper_roots(
+    file: descriptor_pb2.FileDescriptorProto,
+    declarations: Iterable[tuple[descriptor_pb2.FieldDescriptorProto, str | None]],
+    declared_type_names: set[str],
+) -> set[str]:
+    helper_roots = set[str]()
+    for extension, _ in declarations:
+        if extension.type_name:
+            helper_roots.add(_normalize_type_name(extension.type_name))
+
+    declared_messages = _index_declared_message_types(file)
+    _expand_custom_option_helper_roots(declared_messages, declared_type_names, helper_roots)
+    _add_namespace_container_roots(declared_messages, helper_roots)
+    return helper_roots
+
+
+def _expand_custom_option_helper_roots(
+    declared_messages: dict[str, descriptor_pb2.DescriptorProto],
+    declared_type_names: set[str],
+    helper_roots: set[str],
+) -> None:
+    stack = list(helper_roots)
+    while stack:
+        root = stack.pop()
+        for type_name, message in declared_messages.items():
+            if not _is_extension_helper_type(type_name, {root}):
+                continue
+            for referenced in _message_direct_referenced_type_names(message):
+                normalized = _normalize_type_name(referenced)
+                if normalized in declared_type_names and not _is_extension_helper_type(normalized, helper_roots):
+                    helper_roots.add(normalized)
+                    stack.append(normalized)
+
+
+def _add_namespace_container_roots(
+    declared_messages: dict[str, descriptor_pb2.DescriptorProto],
+    helper_roots: set[str],
+) -> None:
+    namespace_roots = set[str]()
+    changed = True
+    while changed:
+        changed = False
+        for type_name, message in declared_messages.items():
+            if type_name in namespace_roots or _is_extension_helper_type(type_name, helper_roots):
+                continue
+            if _is_namespace_only_custom_option_scope(type_name, message, helper_roots, namespace_roots):
+                namespace_roots.add(type_name)
+                changed = True
+    helper_roots.update(namespace_roots)
+
+
+def _is_namespace_only_custom_option_scope(
+    type_name: str,
+    message: descriptor_pb2.DescriptorProto,
+    helper_roots: set[str],
+    namespace_roots: set[str],
+) -> bool:
+    if message.field or message.oneof_decl or message.extension_range or message.reserved_range or message.reserved_name:
+        return False
+    child_type_names = [
+        *(f"{type_name}.{nested.name}" for nested in message.nested_type),
+        *(f"{type_name}.{enum.name}" for enum in message.enum_type),
+    ]
+    if any(
+        not _is_extension_helper_type(child_type_name, helper_roots) and child_type_name not in namespace_roots
+        for child_type_name in child_type_names
+    ):
+        return False
+    return bool(message.extension or child_type_names)
+
+
+def _is_extension_helper_type(type_name: str, helper_roots: set[str]) -> bool:
+    return any(type_name == root or type_name.startswith(f"{root}.") for root in helper_roots)
+
+
+def _declares_unsupported_message_scoped_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    return any(_message_declares_unsupported_extensions(message) for message in file.message_type)
+
+
+def _message_declares_unsupported_extensions(message: descriptor_pb2.DescriptorProto) -> bool:
+    if any(not is_custom_option_extension(extension) for extension in message.extension):
         return True
-    return any(_message_declares_extensions(nested) for nested in message.nested_type)
+    return any(_message_declares_unsupported_extensions(nested) for nested in message.nested_type)
+
+
+def _declared_type_names(file: descriptor_pb2.FileDescriptorProto) -> Iterable[str]:
+    package = tuple(part for part in file.package.split(".") if part)
+    for message in file.message_type:
+        yield from _message_type_names(package, message)
+    for enum in file.enum_type:
+        yield _fully_qualified_name((*package, enum.name))
+
+
+def _index_declared_message_types(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> dict[str, descriptor_pb2.DescriptorProto]:
+    declared: dict[str, descriptor_pb2.DescriptorProto] = {}
+    package = tuple(part for part in file.package.split(".") if part)
+    for message in file.message_type:
+        _index_message_type(declared, package, message)
+    return declared
+
+
+def _index_message_type(
+    declared: dict[str, descriptor_pb2.DescriptorProto],
+    prefix: tuple[str, ...],
+    message: descriptor_pb2.DescriptorProto,
+) -> None:
+    path = (*prefix, message.name)
+    declared[_fully_qualified_name(path)] = message
+    for nested in message.nested_type:
+        _index_message_type(declared, path, nested)
 
 
 def _index_declared_types(
@@ -151,11 +287,17 @@ def _referenced_type_names(file: descriptor_pb2.FileDescriptorProto) -> Iterable
 def _message_referenced_type_names(
     message: descriptor_pb2.DescriptorProto,
 ) -> Iterable[str]:
+    yield from _message_direct_referenced_type_names(message)
+    for nested in message.nested_type:
+        yield from _message_referenced_type_names(nested)
+
+
+def _message_direct_referenced_type_names(
+    message: descriptor_pb2.DescriptorProto,
+) -> Iterable[str]:
     for field in message.field:
         if field.type_name:
             yield field.type_name
-    for nested in message.nested_type:
-        yield from _message_referenced_type_names(nested)
 
 
 def _fully_qualified_name(parts: Iterable[str]) -> str:
