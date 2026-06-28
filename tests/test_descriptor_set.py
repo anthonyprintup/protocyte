@@ -77,6 +77,33 @@ def _custom_options_file() -> descriptor_pb2.FileDescriptorProto:
     return file
 
 
+def _extension_range_options_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "custom/extension_range_options.proto"
+    file.package = "custom"
+    file.syntax = "proto3"
+    file.dependency.append("google/protobuf/descriptor.proto")
+    extension = file.extension.add()
+    extension.name = "range_label"
+    extension.number = 50001
+    extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+    extension.extendee = ".google.protobuf.ExtensionRangeOptions"
+    return file
+
+
+def _mixed_custom_options_file() -> descriptor_pb2.FileDescriptorProto:
+    file = _custom_options_file()
+    message = file.message_type.add()
+    message.name = "PublicPayload"
+    field = message.field.add()
+    field.name = "id"
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+    return file
+
+
 def _file_with_nested_extension() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = "custom/nested_options.proto"
@@ -111,6 +138,21 @@ def _file_with_top_level_extension() -> descriptor_pb2.FileDescriptorProto:
     extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
     extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
     extension.extendee = ".legacy.Legacy"
+    return file
+
+
+def _proto3_file_with_google_protobuf_non_option_extension() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "custom/timestamp_extension.proto"
+    file.package = "custom"
+    file.syntax = "proto3"
+    file.dependency.append("google/protobuf/timestamp.proto")
+    extension = file.extension.add()
+    extension.name = "timestamp_marker"
+    extension.number = 50000
+    extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    extension.extendee = ".google.protobuf.Timestamp"
     return file
 
 
@@ -222,6 +264,29 @@ def test_discover_files_skips_imported_custom_option_extension_descriptors(tmp_p
     assert discover_files(load_descriptor_set(path)) == ["api/request.proto"]
 
 
+def test_discover_files_skips_imported_extension_range_option_descriptors(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _file("google/protobuf/descriptor.proto"),
+        _extension_range_options_file(),
+        _file("api/request.proto", "custom/extension_range_options.proto"),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == ["api/request.proto"]
+
+
+def test_discover_files_includes_custom_option_files_with_public_messages(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _file("google/protobuf/descriptor.proto"),
+        _mixed_custom_options_file(),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == ["custom/options.proto"]
+
+
 def test_discover_files_includes_user_files_with_top_level_extension_declarations(
     tmp_path: Path,
 ) -> None:
@@ -229,6 +294,19 @@ def test_discover_files_includes_user_files_with_top_level_extension_declaration
     _write_descriptor_set(path, _file_with_top_level_extension())
 
     assert discover_files(load_descriptor_set(path)) == ["legacy.proto"]
+
+
+def test_discover_files_includes_non_option_google_protobuf_extension_descriptors(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _timestamp_file(),
+        _proto3_file_with_google_protobuf_non_option_extension(),
+    )
+
+    assert discover_files(load_descriptor_set(path)) == ["custom/timestamp_extension.proto"]
 
 
 def test_discover_files_includes_extension_descriptors_referenced_by_message_fields(tmp_path: Path) -> None:

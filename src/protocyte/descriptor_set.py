@@ -8,6 +8,7 @@ from google.protobuf import descriptor_pb2
 from google.protobuf.message import DecodeError
 
 from protocyte.errors import ProtocyteError
+from protocyte.extensions import is_custom_option_extension
 
 
 _RUNTIME_PREFIX = "google/protobuf/"
@@ -95,26 +96,66 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
 def _is_initial_discoverable_target(file: descriptor_pb2.FileDescriptorProto) -> bool:
     return (
         _is_referenced_type_discoverable(file)
-        and not _declares_google_protobuf_option_extension(file)
+        and not _is_pure_custom_option_definition(file)
     )
 
 
 def _is_referenced_type_discoverable(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_message_scoped_extensions(file)
+    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_unsupported_message_scoped_extensions(file)
 
 
-def _declares_google_protobuf_option_extension(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return any(extension.extendee.startswith(".google.protobuf.") for extension in file.extension)
+def _is_pure_custom_option_definition(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    extensions = list(_extensions(file))
+    if (
+        not extensions
+        or any(not is_custom_option_extension(extension) for extension in extensions)
+        or file.service
+    ):
+        return False
+    helper_roots = {
+        _normalize_type_name(extension.type_name)
+        for extension in extensions
+        if extension.type_name
+    }
+    return all(_is_extension_helper_type(type_name, helper_roots) for type_name in _declared_type_names(file))
 
 
-def _declares_message_scoped_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return any(_message_declares_extensions(message) for message in file.message_type)
+def _extensions(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> Iterable[descriptor_pb2.FieldDescriptorProto]:
+    yield from file.extension
+    for message in file.message_type:
+        yield from _message_extensions(message)
 
 
-def _message_declares_extensions(message: descriptor_pb2.DescriptorProto) -> bool:
-    if message.extension:
+def _message_extensions(
+    message: descriptor_pb2.DescriptorProto,
+) -> Iterable[descriptor_pb2.FieldDescriptorProto]:
+    yield from message.extension
+    for nested in message.nested_type:
+        yield from _message_extensions(nested)
+
+
+def _is_extension_helper_type(type_name: str, helper_roots: set[str]) -> bool:
+    return any(type_name == root or type_name.startswith(f"{root}.") for root in helper_roots)
+
+
+def _declares_unsupported_message_scoped_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
+    return any(_message_declares_unsupported_extensions(message) for message in file.message_type)
+
+
+def _message_declares_unsupported_extensions(message: descriptor_pb2.DescriptorProto) -> bool:
+    if any(not is_custom_option_extension(extension) for extension in message.extension):
         return True
-    return any(_message_declares_extensions(nested) for nested in message.nested_type)
+    return any(_message_declares_unsupported_extensions(nested) for nested in message.nested_type)
+
+
+def _declared_type_names(file: descriptor_pb2.FileDescriptorProto) -> Iterable[str]:
+    package = tuple(part for part in file.package.split(".") if part)
+    for message in file.message_type:
+        yield from _message_type_names(package, message)
+    for enum in file.enum_type:
+        yield _fully_qualified_name((*package, enum.name))
 
 
 def _index_declared_types(

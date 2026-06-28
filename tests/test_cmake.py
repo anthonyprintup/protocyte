@@ -34,6 +34,8 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
 
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in source_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in source_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in installed_config
 
 
 def test_posix_wrapper_shell_quotes_single_quotes(tmp_path: Path) -> None:
