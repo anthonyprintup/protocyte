@@ -2523,6 +2523,35 @@ def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
     assert "field collides with generated API" in response.error
 
 
+@pytest.mark.parametrize(
+    ("oneof_name", "field_name"),
+    [
+        ("class", "class_"),
+        ("choice", "choice"),
+    ],
+)
+def test_rejects_field_backing_member_collisions_with_oneof_storage(
+    oneof_name: str, field_name: str
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("field_backing_collision.proto")
+    request.proto_file.append(_field_backing_collision_file(oneof_name, field_name))
+
+    response = generate_response(request)
+
+    assert "field collides with generated API" in response.error
+
+
+def test_rejects_presence_flag_collisions_with_oneof_storage() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("presence_flag_collision.proto")
+    request.proto_file.append(_presence_flag_collision_file())
+
+    response = generate_response(request)
+
+    assert "field collides with generated API" in response.error
+
+
 def test_generated_header_parses_bounded_oneof_bytes() -> None:
     response = generate_response(_oneof_array_request())
 
@@ -3798,6 +3827,60 @@ def _oneof_member_collision_file(field_name: str) -> descriptor_pb2.FileDescript
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_INT32
     field.oneof_index = 0
+
+    return file
+
+
+def _field_backing_collision_file(
+    oneof_name: str, field_name: str
+) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "field_backing_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.oneof_decl.add().name = oneof_name
+
+    field = message.field.add()
+    field.name = field_name
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    oneof_field = message.field.add()
+    oneof_field.name = "flag"
+    oneof_field.number = 2
+    oneof_field.label = F.LABEL_OPTIONAL
+    oneof_field.type = F.TYPE_BOOL
+    oneof_field.oneof_index = 0
+
+    return file
+
+
+def _presence_flag_collision_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "presence_flag_collision.proto"
+    file.package = "demo"
+    file.syntax = "proto2"
+
+    message = file.message_type.add()
+    message.name = "Broken"
+    message.oneof_decl.add().name = "has_flag"
+
+    field = message.field.add()
+    field.name = "flag"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    oneof_field = message.field.add()
+    oneof_field.name = "choice"
+    oneof_field.number = 2
+    oneof_field.label = F.LABEL_OPTIONAL
+    oneof_field.type = F.TYPE_BOOL
+    oneof_field.oneof_index = 0
 
     return file
 

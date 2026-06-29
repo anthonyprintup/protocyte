@@ -1265,6 +1265,10 @@ def _field_generated_cpp_names(field_model: FieldModel) -> set[str]:
             names.add(f"set_{cpp_name}")
         return names
 
+    names.add(f"{cpp_name}_")
+    if field_model.proto3_optional and field_model.kind != "message" and not field_model.fixed_bytes:
+        names.add(f"has_{cpp_name}_")
+
     names.add(f"clear_{cpp_name}")
     if field_model.repeated and field_model.kind != "map":
         names.add(f"mutable_{cpp_name}")
@@ -1273,13 +1277,21 @@ def _field_generated_cpp_names(field_model: FieldModel) -> set[str]:
     elif field_model.kind == "message":
         names.update({f"has_{cpp_name}", f"ensure_{cpp_name}"})
     elif field_model.fixed_bytes:
-        names.update({f"has_{cpp_name}", f"mutable_{cpp_name}", f"set_{cpp_name}"})
+        names.update(
+            {
+                f"has_{cpp_name}",
+                f"mutable_{cpp_name}",
+                f"resize_{cpp_name}_for_overwrite",
+                f"set_{cpp_name}",
+            }
+        )
     elif field_model.kind == "bytes" and field_model.array_enabled:
         names.update(
             {
                 f"{cpp_name}_size",
                 f"{cpp_name}_max_size",
                 f"resize_{cpp_name}",
+                f"resize_{cpp_name}_for_overwrite",
                 f"mutable_{cpp_name}",
                 f"set_{cpp_name}",
             }
