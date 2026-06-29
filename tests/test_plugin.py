@@ -2471,6 +2471,37 @@ def test_generated_header_suffixes_shadow_prone_oneof_storage() -> None:
     assert "constexpr ValueCase value_case() const noexcept { return value_case_; }" in header
 
 
+def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
+    model = build_model(_oneof_request())
+    registry = protocyte_cpp._build_message_cpp_name_registry(
+        model.messages["demo.Carrier"], protocyte_cpp.GeneratorOptions()
+    )
+
+    class_scope = registry.scope("demo.Carrier")
+    choice_scope = registry.scope("demo.Carrier::ChoiceStorage")
+    choice_case_scope = registry.scope("demo.Carrier::ChoiceCase")
+    field_number_scope = registry.scope("demo.Carrier::FieldNumber")
+
+    assert class_scope.owner("ctx_") == "generated context storage"
+    assert class_scope.owner("choice_") == "oneof choice storage"
+    assert class_scope.owner("choice_case_") == "oneof choice case storage"
+    assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
+    assert class_scope.owner("text_") is None
+    assert choice_scope.owner("text_") == "oneof field text storage"
+    assert choice_case_scope.owner("none") == "oneof choice empty case"
+    assert choice_case_scope.owner("text") == "oneof field text case"
+    assert field_number_scope.owner("text") == "field text number"
+
+
+def test_cpp_function_registry_rejects_parameters_that_shadow_visible_storage() -> None:
+    function_scope = protocyte_cpp._CppFunctionScope(
+        "demo.Message::set_flag", visible_storage={"value"}
+    )
+
+    with pytest.raises(ProtocyteError, match="parameter 'value' shadows visible generated storage"):
+        function_scope.parameter("value")
+
+
 def test_generated_header_uses_normalized_oneof_case_type() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("keyword_oneof.proto")
