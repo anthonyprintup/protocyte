@@ -16,6 +16,7 @@ namespace test::required {
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredParent;
     template<typename Config = ::protocyte::DefaultConfig> struct Proto2ArrayDefaults;
     template<typename Config = ::protocyte::DefaultConfig> struct Proto2DefaultValues;
+    template<typename Config = ::protocyte::DefaultConfig> struct OneofShadowingValue;
 
     template<typename Config> struct RequiredChild {
         using Context = typename Config::Context;
@@ -436,7 +437,7 @@ namespace test::required {
 
         ::protocyte::Status validate() const noexcept {
             if (child_.has_value()) {
-                if (const auto st = (*child_).validate(); !st) {
+                if (const auto st = child_->validate(); !st) {
                     return st;
                 }
             }
@@ -1796,6 +1797,211 @@ namespace test::required {
         bool has_sint64_value_ {};
         ::protocyte::i32 implicit_enum_value_ {};
         bool has_implicit_enum_value_ {};
+    };
+
+    template<typename Config> struct OneofShadowingValue {
+        using Context = typename Config::Context;
+        enum struct ValueCase : ::protocyte::u32 {
+            none = 0u,
+            bool_value = 1u,
+        };
+
+        enum struct FieldNumber : ::protocyte::u32 {
+            bool_value = 1u,
+        };
+
+        explicit OneofShadowingValue(Context &ctx) noexcept: ctx_ {&ctx} {}
+
+        static ::protocyte::Result<OneofShadowingValue> create(Context &ctx) noexcept {
+            return OneofShadowingValue {ctx};
+        }
+        Context *context() const noexcept { return ctx_; }
+        OneofShadowingValue(OneofShadowingValue &&other) noexcept: ctx_ {other.ctx_} {
+            switch (other.value_case_) {
+                case ValueCase::bool_value: {
+                    new (&value_.bool_value_) bool {other.value_.bool_value_};
+                    value_case_ = ValueCase::bool_value;
+                    break;
+                }
+                case ValueCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_value();
+        }
+        OneofShadowingValue &operator=(OneofShadowingValue &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+            clear_value();
+            ctx_ = other.ctx_;
+            switch (other.value_case_) {
+                case ValueCase::bool_value: {
+                    new (&value_.bool_value_) bool {other.value_.bool_value_};
+                    value_case_ = ValueCase::bool_value;
+                    break;
+                }
+                case ValueCase::none:
+                default: {
+                    break;
+                }
+            }
+            other.clear_value();
+            return *this;
+        }
+        ~OneofShadowingValue() noexcept { clear_value(); }
+        OneofShadowingValue(const OneofShadowingValue &) = delete;
+        OneofShadowingValue &operator=(const OneofShadowingValue &) = delete;
+
+        template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
+
+        ::protocyte::Status copy_from(const OneofShadowingValue &other) noexcept {
+            if (this == &other) {
+                return {};
+            }
+            switch (other.value_case_) {
+                case ValueCase::bool_value: {
+                    if (const auto st = set_bool_value(other.bool_value()); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                case ValueCase::none:
+                default: {
+                    clear_value();
+                    break;
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<OneofShadowingValue> clone() const noexcept {
+            auto out = OneofShadowingValue::create(*ctx_);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out->copy_from(*this); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return out;
+        }
+
+        constexpr ValueCase value_case() const noexcept { return value_case_; }
+        void clear_value() noexcept {
+            switch (value_case_) {
+                case ValueCase::bool_value: {
+                    break;
+                }
+                case ValueCase::none:
+                default: {
+                    break;
+                }
+            }
+            value_case_ = ValueCase::none;
+        }
+
+        constexpr bool has_bool_value() const noexcept { return value_case_ == ValueCase::bool_value; }
+        constexpr bool bool_value() const noexcept { return has_bool_value() ? value_.bool_value_ : false; }
+        ::protocyte::Status set_bool_value(const bool value) noexcept {
+            clear_value();
+            new (&value_.bool_value_) bool {value};
+            value_case_ = ValueCase::bool_value;
+            return {};
+        }
+
+        template<typename Reader>
+        static ::protocyte::Result<OneofShadowingValue> parse(Context &ctx, Reader &reader) noexcept {
+            auto out = OneofShadowingValue::create(ctx);
+            if (!out) {
+                return out;
+            }
+            if (const auto st = out->merge_from(reader); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return out;
+        }
+
+        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            if (const auto st = merge_partial_from(reader); !st) {
+                return st;
+            }
+            return validate();
+        }
+
+        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                switch (static_cast<FieldNumber>(field_number)) {
+                    case FieldNumber::bool_value: {
+                        bool bool_value_value {};
+                        if (const auto st =
+                                ::protocyte::read_bool_field(reader, wire_type, field_number)
+                                    .transform([&](const auto decoded) noexcept { bool_value_value = decoded; });
+                            !st) {
+                            return st;
+                        }
+                        clear_value();
+                        new (&value_.bool_value_) bool {::protocyte::move(bool_value_value)};
+                        value_case_ = ValueCase::bool_value;
+                        break;
+                    }
+                    default: {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                }
+            }
+            return {};
+        }
+
+        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if (value_case_ == ValueCase::bool_value) {
+                if (const auto st = ::protocyte::write_bool_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::bool_value), value_.bool_value_);
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            if (value_case_ == ValueCase::bool_value) {
+                const auto st_size = ::protocyte::add_size(
+                    total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::bool_value)) +
+                               ::protocyte::varint_size(static_cast<::protocyte::u64>(value_.bool_value_)));
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
+                }
+                total = *st_size;
+            }
+            return total;
+        }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
+    protected:
+        Context *ctx_;
+        ValueCase value_case_ {ValueCase::none};
+        union ValueStorage {
+            ValueStorage() noexcept {}
+            ~ValueStorage() noexcept {}
+            bool bool_value_;
+        } value_;
     };
 
 } // namespace test::required

@@ -48,6 +48,10 @@ namespace test::required {
             {"implicit_enum_value", 17u, "enum", false, true, false},
         };
 
+        static const FieldInfo OneofShadowingValue_fields[] = {
+            {"bool_value", 1u, "scalar", false, true, false},
+        };
+
     } // namespace protocyte_reflection
 
 } // namespace test::required

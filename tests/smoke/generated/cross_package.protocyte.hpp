@@ -569,7 +569,7 @@ namespace test::crosspkg {
 
         ::protocyte::Status validate() const noexcept {
             if (nested_.has_value()) {
-                if (const auto st = (*nested_).validate(); !st) {
+                if (const auto st = nested_->validate(); !st) {
                     return st;
                 }
             }

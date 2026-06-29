@@ -711,6 +711,11 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     field.default_value = "-123456789012"
     add_field(defaults, "implicit_enum_value", 17, F.TYPE_ENUM, type_name=".test.required.Proto2DefaultMode")
 
+    shadowing = file.message_type.add()
+    shadowing.name = "OneofShadowingValue"
+    shadowing.oneof_decl.add().name = "value"
+    add_field(shadowing, "bool_value", 1, F.TYPE_BOOL, oneof_index=0)
+
     return file
 
 

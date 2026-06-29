@@ -43,3 +43,9 @@ message Proto2DefaultValues {
   optional sint64 sint64_value = 16 [default = -123456789012];
   optional Proto2DefaultMode implicit_enum_value = 17;
 }
+
+message OneofShadowingValue {
+  oneof value {
+    bool bool_value = 1;
+  }
+}

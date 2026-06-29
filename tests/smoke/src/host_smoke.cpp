@@ -104,6 +104,7 @@ namespace {
     using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
     using Proto2DefaultMode = test::required::Proto2DefaultMode;
     using Proto2DefaultValues = test::required::Proto2DefaultValues<>;
+    using OneofShadowingValue = test::required::OneofShadowingValue<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
@@ -2865,6 +2866,16 @@ TEST_CASE("proto2 default accessors cover all supported defaultable types", "[sm
     message.clear_implicit_enum_value();
     CHECK_FALSE(message.has_implicit_enum_value());
     CHECK(message.implicit_enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN);
+}
+
+TEST_CASE("oneof scalar setters avoid storage name shadowing", "[smoke][oneof]") {
+    auto ctx = make_context();
+    OneofShadowingValue message(ctx);
+
+    require_success(message.set_bool_value(true));
+    CHECK(message.value_case() == OneofShadowingValue::ValueCase::bool_value);
+    CHECK(message.has_bool_value());
+    CHECK(message.bool_value());
 }
 
 TEST_CASE("proto2 enum fields reject undeclared values", "[smoke][proto2][enum]") {

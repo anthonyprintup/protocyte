@@ -128,9 +128,62 @@ class CppWriter:
         return "\n".join(self.lines) + "\n"
 
 
+@dataclass
+class _CppNameScope:
+    label: str
+    names: dict[str, str] = field(default_factory=dict)
+
+    def owner(self, name: str) -> str | None:
+        return self.names.get(name)
+
+    def reserve(self, name: str, owner: str, *, error: str | None = None) -> None:
+        existing = self.names.get(name)
+        if existing is not None and existing != owner:
+            raise ProtocyteError(
+                error
+                or f"{self.label}: generated C++ name {name!r} from {owner} collides with {existing}"
+            )
+        self.names[name] = owner
+
+
+@dataclass
+class _CppNameRegistry:
+    scopes: dict[str, _CppNameScope] = field(default_factory=dict)
+
+    def scope(self, label: str) -> _CppNameScope:
+        scope = self.scopes.get(label)
+        if scope is None:
+            scope = _CppNameScope(label)
+            self.scopes[label] = scope
+        return scope
+
+
+@dataclass
+class _CppFunctionScope:
+    label: str
+    visible_storage: set[str] = field(default_factory=set)
+    names: set[str] = field(default_factory=set)
+
+    def parameter(self, name: str) -> None:
+        self._reserve(name, "parameter")
+
+    def local(self, name: str) -> None:
+        self._reserve(name, "local")
+
+    def _reserve(self, name: str, kind: str) -> None:
+        if name in self.visible_storage:
+            raise ProtocyteError(
+                f"{self.label}: {kind} {name!r} shadows visible generated storage"
+            )
+        if name in self.names:
+            raise ProtocyteError(f"{self.label}: {kind} {name!r} is already declared")
+        self.names.add(name)
+
+
 def generate_outputs(
     model: DescriptorModel, options: GeneratorOptions
 ) -> dict[str, str]:
+    _validate_generated_cpp_names(model, options)
     outputs: dict[str, str] = {}
     if options.emit_runtime:
         outputs.update(runtime_files(options.runtime_prefix))
@@ -207,6 +260,338 @@ def _find_clang_format_config() -> Path | None:
             if config.is_file():
                 return config
     return None
+
+
+def _validate_generated_cpp_names(
+    model: DescriptorModel, options: GeneratorOptions
+) -> None:
+    for file_model in model.generated_files():
+        for message in _walk_generated_messages(file_model.messages):
+            if not message.is_map_entry:
+                _build_message_cpp_name_registry(message, options)
+
+
+def _walk_generated_messages(messages: list[MessageModel]) -> Iterator[MessageModel]:
+    for message in messages:
+        yield message
+        yield from _walk_generated_messages(message.nested_messages)
+
+
+def _build_message_cpp_name_registry(
+    message: MessageModel, options: GeneratorOptions
+) -> _CppNameRegistry:
+    registry = _CppNameRegistry()
+    class_scope = registry.scope(message.full_name)
+
+    class_scope.reserve("Context", "generated context alias")
+    class_scope.reserve("ctx_", "generated context storage")
+    for enum in message.nested_enums:
+        class_scope.reserve(
+            cpp_identifier(enum.name),
+            f"nested enum {enum.name} alias",
+            error=f"{message.full_name}.{enum.name}: nested type alias collides with generated API",
+        )
+    for nested in message.nested_messages:
+        if nested.is_map_entry:
+            continue
+        class_scope.reserve(
+            cpp_identifier(nested.name),
+            f"nested message {nested.name} alias",
+            error=f"{message.full_name}.{nested.name}: nested type alias collides with generated API",
+        )
+
+    for constant in message.constants:
+        class_scope.reserve(
+            constant.cpp_name,
+            f"constant {constant.name}",
+            error=f"{message.full_name}.{constant.name}: constant collides with generated API",
+        )
+
+    for oneof in message.oneofs:
+        _reserve_oneof_case_enum_cpp_names(registry, class_scope, message, oneof)
+    _reserve_field_number_enum_cpp_names(registry, class_scope, message)
+
+    _reserve_message_function_cpp_names(class_scope, message)
+
+    visible_storage = _message_visible_storage_names(message)
+    _reserve_message_function_parameter_cpp_names(message, visible_storage)
+
+    for oneof in message.oneofs:
+        _reserve_oneof_cpp_names(registry, class_scope, message, oneof, options)
+    for item in message.fields:
+        _reserve_field_cpp_names(class_scope, message, item)
+
+    return registry
+
+
+def _reserve_message_function_cpp_names(
+    class_scope: _CppNameScope, message: MessageModel
+) -> None:
+    for name, owner in (
+        ("create", "generated create function"),
+        ("context", "generated context accessor"),
+        ("copy_from", "generated copy function"),
+        ("clone", "generated clone function"),
+        ("parse", "generated parse function"),
+        ("merge_from", "generated merge function"),
+        ("merge_partial_from", "generated partial merge function"),
+        ("serialize", "generated serialize function"),
+        ("encoded_size", "generated size function"),
+        ("validate", "generated validate function"),
+    ):
+        _reserve_generated_class_name(class_scope, message, name, owner)
+    if message.oneofs:
+        _reserve_generated_class_name(
+            class_scope, message, "destroy_at_", "generated oneof destroy helper"
+        )
+
+
+def _reserve_generated_class_name(
+    class_scope: _CppNameScope, message: MessageModel, name: str, owner: str
+) -> None:
+    existing = class_scope.owner(name)
+    if existing is not None and existing != owner:
+        if existing.startswith("constant "):
+            constant_name = existing.removeprefix("constant ")
+            raise ProtocyteError(
+                f"{message.full_name}.{constant_name}: constant collides with generated API"
+            )
+        if existing.startswith("nested enum ") or existing.startswith(
+            "nested message "
+        ):
+            nested_name = existing.split(" ", 2)[2].removesuffix(" alias")
+            raise ProtocyteError(
+                f"{message.full_name}.{nested_name}: nested type alias collides with generated API"
+            )
+        if existing.startswith("field "):
+            field_name = existing.split(" ", 2)[1]
+            raise ProtocyteError(
+                f"{message.full_name}.{field_name}: field collides with generated API"
+            )
+        if existing.startswith("oneof "):
+            oneof_name = existing.split(" ", 2)[1]
+            raise ProtocyteError(
+                f"{message.full_name}.{oneof_name}: oneof collides with generated API"
+            )
+    class_scope.reserve(name, owner)
+
+
+def _reserve_message_function_parameter_cpp_names(
+    message: MessageModel, visible_storage: set[str]
+) -> None:
+    def function(name: str, *parameters: str) -> None:
+        scope = _CppFunctionScope(f"{message.full_name}::{name}", visible_storage)
+        for parameter in parameters:
+            scope.parameter(parameter)
+
+    function(message.cpp_name, "ctx")
+    function("create", "ctx")
+    if message.oneofs:
+        function(f"{message.cpp_name} move constructor", "other")
+        function("operator= move", "other")
+        function("destroy_at_", "value")
+    function("copy_from", "other")
+    function("parse", "ctx", "reader")
+    function("merge_from", "reader")
+    function("merge_partial_from", "reader")
+    if message.fields:
+        function("serialize", "writer")
+
+    for item in message.fields:
+        _reserve_field_function_parameter_cpp_names(message, item, visible_storage)
+
+
+def _reserve_field_function_parameter_cpp_names(
+    message: MessageModel, item: FieldModel, visible_storage: set[str]
+) -> None:
+    def function(name: str, *parameters: str) -> None:
+        scope = _CppFunctionScope(f"{message.full_name}::{name}", visible_storage)
+        for parameter in parameters:
+            scope.parameter(parameter)
+
+    if item.repeated and item.kind != "map":
+        return
+    if item.kind == "map":
+        return
+    if item.kind == "message":
+        return
+    if item.fixed_bytes:
+        function(f"resize_{item.cpp_name}_for_overwrite", "size")
+        function(f"set_{item.cpp_name}", "value")
+        return
+    if item.kind == "bytes" and item.array_enabled:
+        function(f"resize_{item.cpp_name}", "size")
+        function(f"resize_{item.cpp_name}_for_overwrite", "size")
+        function(f"set_{item.cpp_name}", "value")
+        return
+    if item.kind in {"string", "bytes"}:
+        function(f"set_{item.cpp_name}", "value")
+        return
+    if item.kind == "enum":
+        function(f"set_{item.cpp_name}_raw", "value")
+        function(f"set_{item.cpp_name}", "value")
+        return
+    function(f"set_{item.cpp_name}", "value")
+
+
+def _reserve_oneof_case_enum_cpp_names(
+    registry: _CppNameRegistry,
+    class_scope: _CppNameScope,
+    message: MessageModel,
+    oneof: OneofModel,
+) -> None:
+    class_scope.reserve(
+        _oneof_case_type(oneof.name),
+        f"oneof {oneof.name} case type",
+        error=f"{message.full_name}.{oneof.name}: oneof collides with generated API",
+    )
+    enum_scope = registry.scope(f"{message.full_name}::{_oneof_case_type(oneof.name)}")
+    enum_scope.reserve("none", f"oneof {oneof.name} empty case")
+    for item in oneof.fields:
+        enum_scope.reserve(
+            item.cpp_name,
+            f"oneof field {item.name} case",
+            error=f"{message.full_name}.{item.name}: field collides with generated API",
+        )
+
+
+def _reserve_field_number_enum_cpp_names(
+    registry: _CppNameRegistry, class_scope: _CppNameScope, message: MessageModel
+) -> None:
+    if not message.fields:
+        return
+    class_scope.reserve("FieldNumber", "generated field number enum")
+    enum_scope = registry.scope(f"{message.full_name}::FieldNumber")
+    for item in sorted(message.fields, key=lambda field: field.number):
+        enum_scope.reserve(
+            _field_number_name(item),
+            f"field {item.name} number",
+            error=f"{message.full_name}.{item.name}: field collides with generated API",
+        )
+
+
+def _reserve_oneof_cpp_names(
+    registry: _CppNameRegistry,
+    class_scope: _CppNameScope,
+    message: MessageModel,
+    oneof: OneofModel,
+    options: GeneratorOptions,
+) -> None:
+    del options
+    lower = cpp_identifier(oneof.name)
+    if class_scope.owner(lower) is not None:
+        raise ProtocyteError(
+            f"{message.full_name}.{oneof.name}: oneof collides with generated API"
+        )
+    for name, owner in (
+        (f"{lower}_case", f"oneof {oneof.name} case accessor"),
+        (f"clear_{lower}", f"oneof {oneof.name} clear function"),
+        (_oneof_case_member(oneof.name), f"oneof {oneof.name} case storage"),
+        (_oneof_storage_type(oneof), f"oneof {oneof.name} storage type"),
+        (_oneof_storage_member(oneof.name), f"oneof {oneof.name} storage"),
+    ):
+        class_scope.reserve(
+            name,
+            owner,
+            error=f"{message.full_name}.{oneof.name}: oneof collides with generated API",
+        )
+
+    union_scope = registry.scope(f"{message.full_name}::{_oneof_storage_type(oneof)}")
+    for item in oneof.fields:
+        union_scope.reserve(
+            _oneof_member_name(item),
+            f"oneof field {item.name} storage",
+            error=f"{message.full_name}.{item.name}: field collides with generated API",
+        )
+
+
+def _reserve_field_cpp_names(
+    class_scope: _CppNameScope, message: MessageModel, item: FieldModel
+) -> None:
+    for name, owner in _field_class_cpp_name_items(item):
+        class_scope.reserve(
+            name,
+            owner,
+            error=f"{message.full_name}.{item.name}: field collides with generated API",
+        )
+
+
+def _field_class_cpp_name_items(item: FieldModel) -> Iterator[tuple[str, str]]:
+    cpp_name = item.cpp_name
+    yield cpp_name, f"field {item.name} accessor"
+    if item.oneof_name is not None:
+        yield f"has_{cpp_name}", f"oneof field {item.name} presence accessor"
+        if item.kind == "message":
+            yield f"ensure_{cpp_name}", f"oneof field {item.name} ensure accessor"
+        elif item.kind == "enum":
+            yield f"{cpp_name}_raw", f"oneof field {item.name} raw accessor"
+            yield f"set_{cpp_name}_raw", f"oneof field {item.name} raw setter"
+            yield f"set_{cpp_name}", f"oneof field {item.name} setter"
+        else:
+            yield f"set_{cpp_name}", f"oneof field {item.name} setter"
+        return
+
+    yield _member(item), f"field {item.name} storage"
+    if _has_presence_flag(item):
+        yield f"has_{cpp_name}_", f"field {item.name} presence storage"
+
+    yield f"clear_{cpp_name}", f"field {item.name} clear function"
+    if item.repeated and item.kind != "map":
+        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
+    elif item.kind == "map":
+        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
+    elif item.kind == "message":
+        yield f"has_{cpp_name}", f"field {item.name} presence accessor"
+        yield f"ensure_{cpp_name}", f"field {item.name} ensure accessor"
+    elif item.fixed_bytes:
+        yield f"has_{cpp_name}", f"field {item.name} presence accessor"
+        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
+        yield (
+            f"resize_{cpp_name}_for_overwrite",
+            f"field {item.name} overwrite resize function",
+        )
+        yield f"set_{cpp_name}", f"field {item.name} setter"
+    elif item.kind == "bytes" and item.array_enabled:
+        yield f"{cpp_name}_size", f"field {item.name} size accessor"
+        yield f"{cpp_name}_max_size", f"field {item.name} max size accessor"
+        yield f"resize_{cpp_name}", f"field {item.name} resize function"
+        yield (
+            f"resize_{cpp_name}_for_overwrite",
+            f"field {item.name} overwrite resize function",
+        )
+        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
+        yield f"set_{cpp_name}", f"field {item.name} setter"
+        if item.proto3_optional:
+            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
+    elif item.kind in {"string", "bytes"}:
+        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
+        yield f"set_{cpp_name}", f"field {item.name} setter"
+        if item.proto3_optional:
+            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
+    elif item.kind == "enum":
+        yield f"{cpp_name}_raw", f"field {item.name} raw accessor"
+        yield f"set_{cpp_name}_raw", f"field {item.name} raw setter"
+        yield f"set_{cpp_name}", f"field {item.name} setter"
+        if item.proto3_optional:
+            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
+    else:
+        yield f"set_{cpp_name}", f"field {item.name} setter"
+        if item.proto3_optional:
+            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
+
+
+def _message_visible_storage_names(message: MessageModel) -> set[str]:
+    names = {"ctx_"}
+    for oneof in message.oneofs:
+        names.add(_oneof_case_member(oneof.name))
+        names.add(_oneof_storage_member(oneof.name))
+    for item in message.fields:
+        if item.oneof_name is not None:
+            continue
+        names.add(_member(item))
+        if _has_presence_flag(item):
+            names.add(f"has_{item.cpp_name}_")
+    return names
 
 
 def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
@@ -829,7 +1214,9 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         )
         expr = f"{_member(item)}.view()"
         if item.default_cpp is not None:
-            expr = f"has_{item.cpp_name}() ? {_member(item)}.view() : {item.default_cpp}"
+            expr = (
+                f"has_{item.cpp_name}() ? {_member(item)}.view() : {item.default_cpp}"
+            )
         w.line(
             f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {expr}; }}"
         )
@@ -890,7 +1277,9 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         size_expr = f"{_member(item)}.size()"
         if _has_presence_flag(item) and item.default_cpp is not None:
             size_expr = f"{item.cpp_name}().size()"
-        w.line(f"::protocyte::usize {item.cpp_name}_size() const noexcept {{ return {size_expr}; }}")
+        w.line(
+            f"::protocyte::usize {item.cpp_name}_size() const noexcept {{ return {size_expr}; }}"
+        )
         w.line(
             f"static constexpr ::protocyte::usize {item.cpp_name}_max_size() noexcept {{ return {bound}; }}"
         )
@@ -1056,7 +1445,9 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             w.line(
                 f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
             )
-        w.line(f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{")
+        w.line(
+            f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{"
+        )
         w.push()
         _emit_closed_enum_reject(
             w,
@@ -1302,7 +1693,9 @@ def _emit_wire_api(
     w.line("::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {")
     with w.indent():
         if message.fields:
-            w.line("if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }")
+            w.line(
+                "if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }"
+            )
             w.line("::protocyte::usize total {};")
             for item in sorted(message.fields, key=lambda f: f.number):
                 _emit_size_statement(w, item, options)
@@ -1420,7 +1813,9 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
             value_name = f"{item.cpp_name}_value"
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
-                w.line(f"if (const auto st = {value_name}.value.validate(); !st) {{ return st; }}")
+                w.line(
+                    f"if (const auto st = {value_name}.value.validate(); !st) {{ return st; }}"
+                )
             w.line("}")
             continue
         if item.kind != "message":
@@ -1429,7 +1824,9 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
             value_name = f"{item.cpp_name}_value"
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
-                w.line(f"if (const auto st = {value_name}.validate(); !st) {{ return st; }}")
+                w.line(
+                    f"if (const auto st = {value_name}.validate(); !st) {{ return st; }}"
+                )
             w.line("}")
             continue
         if item.oneof_name is not None:
@@ -1438,7 +1835,9 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
         else:
             w.line(f"if ({_member(item)}.has_value()) {{")
         with w.indent():
-            w.line(f"if (const auto st = (*{_member(item)}).validate(); !st) {{ return st; }}")
+            w.line(
+                f"if (const auto st = {_member(item)}->validate(); !st) {{ return st; }}"
+            )
         w.line("}")
 
 
@@ -1820,7 +2219,9 @@ def _emit_read_named_value(
             f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, {field_number}, {target}); !st) {{ return st; }}"
         )
     else:
-        _emit_read_scalar(w, item, reader, target, options, field_number_expr=field_number)
+        _emit_read_scalar(
+            w, item, reader, target, options, field_number_expr=field_number
+        )
 
 
 def _emit_read_scalar(
@@ -2378,7 +2779,9 @@ def _closed_enum_invalid_condition(item: FieldModel, value_expr: str) -> str | N
         return None
     if not item.enum_type.values:
         return "true"
-    return " && ".join(f"{value_expr} != {value.number}" for value in item.enum_type.values)
+    return " && ".join(
+        f"{value_expr} != {value.number}" for value in item.enum_type.values
+    )
 
 
 def _emit_closed_enum_reject(
@@ -2426,11 +2829,11 @@ def _oneof_storage_type(oneof: OneofModel) -> str:
 
 
 def _oneof_storage_member(oneof_name: str) -> str:
-    return cpp_identifier(oneof_name)
+    return f"{cpp_identifier(oneof_name)}_"
 
 
 def _oneof_member_name(item: FieldModel) -> str:
-    return item.cpp_name
+    return f"{item.cpp_name}_"
 
 
 def _array_max_literal(item: FieldModel) -> str:
@@ -2564,7 +2967,8 @@ def _file_uses_string_view(file_model: FileModel) -> bool:
 def _file_uses_numeric_limits(file_model: FileModel) -> bool:
     for message in _walk_messages(file_model.messages):
         if any(
-            field.default_cpp is not None and "::std::numeric_limits" in field.default_cpp
+            field.default_cpp is not None
+            and "::std::numeric_limits" in field.default_cpp
             for field in message.fields
         ):
             return True
