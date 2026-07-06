@@ -53,6 +53,24 @@ def test_runtime_rejects_unmatched_end_group_in_skip_field() -> None:
     assert "case WireType::EGROUP: return {};" not in runtime_header
 
 
+def test_runtime_varint_read_helpers_use_direct_fast_paths() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+
+    read_varint_body = runtime_header.split(
+        "template<class Reader> Result<u64> read_varint(Reader &reader) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Writer> Status write_varint", maxsplit=1)[0]
+    length_body = runtime_header.split(
+        "template<class Reader> Result<usize> read_length_delimited_size(Reader &reader) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader>", maxsplit=1)[0]
+
+    assert "const auto first = reader.read_byte();" in read_varint_body
+    assert "if ((*first & 0x80u) == 0u)" in read_varint_body
+    assert "const auto len = read_varint(reader);" in length_body
+    assert "return read_varint(reader).and_then" not in length_body
+
+
 def test_kernel_smoke_provides_debug_string_view_crt_shims() -> None:
     source = (
         Path(__file__).resolve().parents[1]
@@ -731,7 +749,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "if (len > static_cast<u64>(~static_cast<usize>(0u))) {"
+        "if (*len > static_cast<u64>(~static_cast<usize>(0u))) {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (

@@ -3897,10 +3897,18 @@ namespace protocyte {
     };
 
     template<class Reader> Result<u64> read_varint(Reader &reader) noexcept {
-        u64 value {};
-        u32 shift {};
-        for (u32 i {}; i < 10u; ++i) {
-            auto byte = reader.read_byte();
+        const auto first = reader.read_byte();
+        if (!first) {
+            return protocyte::unexpected(first.error());
+        }
+        if ((*first & 0x80u) == 0u) {
+            return static_cast<u64>(*first);
+        }
+
+        u64 value {static_cast<u64>(*first & 0x7Fu)};
+        u32 shift {7u};
+        for (u32 i {1u}; i < 10u; ++i) {
+            const auto byte = reader.read_byte();
             if (!byte) {
                 return protocyte::unexpected(byte.error());
             }
@@ -4387,12 +4395,14 @@ namespace protocyte {
     }
 
     template<class Reader> Result<usize> read_length_delimited_size(Reader &reader) noexcept {
-        return read_varint(reader).and_then([&reader](const u64 len) noexcept -> Result<usize> {
-            if (len > static_cast<u64>(~static_cast<usize>(0u))) {
-                return protocyte::unexpected(ErrorCode::integer_overflow, reader.position());
-            }
-            return static_cast<usize>(len);
-        });
+        const auto len = read_varint(reader);
+        if (!len) {
+            return protocyte::unexpected(len.error());
+        }
+        if (*len > static_cast<u64>(~static_cast<usize>(0u))) {
+            return protocyte::unexpected(ErrorCode::integer_overflow, reader.position());
+        }
+        return static_cast<usize>(*len);
     }
 
     template<class Config, class Reader>
