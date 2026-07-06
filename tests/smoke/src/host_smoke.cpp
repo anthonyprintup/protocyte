@@ -2963,6 +2963,63 @@ TEST_CASE("write_uint64 emits canonical varint bytes", "[smoke][runtime]") {
     for (protocyte::usize index {}; index < expected.size(); ++index) { CHECK(encoded[index] == expected[index]); }
 }
 
+TEST_CASE("read_varint decodes canonical varint byte sequences", "[smoke][runtime]") {
+    struct ReadVarintCase {
+        std::string_view name;
+        std::array<protocyte::u8, 10u> bytes;
+        protocyte::usize size;
+        protocyte::u64 expected;
+    };
+
+    constexpr std::array<ReadVarintCase, 4u> cases {{
+        {"zero", {0x00u}, 1u, 0u},
+        {"largest single-byte value", {0x7fu}, 1u, 127u},
+        {"smallest two-byte value", {0x80u, 0x01u}, 2u, 128u},
+        {
+            "maximum uint64",
+            {0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0x01u},
+            10u,
+            std::numeric_limits<protocyte::u64>::max(),
+        },
+    }};
+
+    for (const auto &item : cases) {
+        CAPTURE(item.name);
+        protocyte::SliceReader reader(item.bytes.data(), item.size);
+
+        const auto value = protocyte::read_varint(reader);
+
+        require_success(value);
+        CHECK(*value == item.expected);
+        CHECK(reader.position() == item.size);
+        CHECK(reader.eof());
+    }
+}
+
+TEST_CASE("read_varint rejects truncated and overflowing byte sequences", "[smoke][runtime]") {
+    SECTION("truncated continuation input") {
+        constexpr std::array<protocyte::u8, 1u> truncated {0x80u};
+        protocyte::SliceReader reader(truncated.data(), truncated.size());
+
+        const auto value = protocyte::read_varint(reader);
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(reader.position() == truncated.size());
+    }
+
+    SECTION("overflowing 10th-byte input") {
+        constexpr std::array<protocyte::u8, 10u> overflowing {
+            0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x80u, 0x02u,
+        };
+        protocyte::SliceReader reader(overflowing.data(), overflowing.size());
+
+        const auto value = protocyte::read_varint(reader);
+
+        require_failure(value, protocyte::ErrorCode::malformed_varint);
+        CHECK(reader.position() == overflowing.size());
+    }
+}
+
 TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke][runtime]") {
     if constexpr (sizeof(protocyte::usize) == sizeof(protocyte::u64)) {
         SUCCEED("usize can represent every u64 length on this target");
