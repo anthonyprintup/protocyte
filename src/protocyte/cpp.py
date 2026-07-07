@@ -1883,15 +1883,23 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                 if not item.repeated_array and bulk_width is not None:
                     w.line(f"if (*len % {bulk_width} == 0u) {{")
                     with w.indent():
+                        direct_bulk_requires = (
+                            "::std::endian::native == ::std::endian::little && "
+                            "requires(Reader &source, const ::protocyte::usize bytes, "
+                            f"decltype({_member(item)}) &target, const ::protocyte::usize values) "
+                            "{ { source.can_read(bytes) } -> ::std::same_as<::protocyte::Status>; "
+                            "{ target.append_trivial_from_reader(source, values) } "
+                            "-> ::std::same_as<::protocyte::Status>; }"
+                        )
                         w.line(
-                            "if constexpr (requires(Reader &source, const ::protocyte::usize bytes) { source.can_read(bytes); }) {"
+                            f"if constexpr ({direct_bulk_requires}) {{"
                         )
                         with w.indent():
                             w.line(
                                 "if (const auto st = reader.can_read(*len); !st) { return st; }"
                             )
                             w.line(
-                                f"if (const auto st = ::protocyte::read_fixed_width_packed_values(reader, *len, {_member(item)}); !st) {{ return st; }}"
+                                f"if (const auto st = {_member(item)}.append_trivial_from_reader(reader, *len / {bulk_width}); !st) {{ return st; }}"
                             )
                             w.line("break;")
                         w.line("}")

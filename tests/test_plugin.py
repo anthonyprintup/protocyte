@@ -1572,10 +1572,17 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "opt_name = 2u," in header
     assert "case FieldNumber::id: {" in header
     assert "case FieldNumber::opt_name: {" in header
+    assert "::std::endian::native == ::std::endian::little" in header
+    assert "decltype(samples_) &target" in header
     assert (
-        "if (const auto st = ::protocyte::read_fixed_width_packed_values(reader, *len, samples_); !st) { return st; }"
+        "{ target.append_trivial_from_reader(source, values) } -> ::std::same_as<::protocyte::Status>;"
         in header
     )
+    assert (
+        "if (const auto st = samples_.append_trivial_from_reader(reader, *len / 4u); !st) { return st; }"
+        in header
+    )
+    assert "read_fixed_width_packed_values(reader, *len, samples_)" not in header
     assert "read_fixed_width_packed_values(reader, *len, packed_signed_samples_values)" not in header
     assert "const auto decoded_signed_samples = ::protocyte::read_sfixed32(packed);" in header
     assert "const auto decoded_samples = ::protocyte::read_float(packed);" not in header

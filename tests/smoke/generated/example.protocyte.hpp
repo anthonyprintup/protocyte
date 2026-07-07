@@ -190,15 +190,18 @@ namespace test::ultimate {
                                 return len.status();
                             }
                             if (*len % 4u == 0u) {
-                                if constexpr (requires(Reader &source, const ::protocyte::usize bytes) {
-                                                  source.can_read(bytes);
+                                if constexpr (::std::endian::native == ::std::endian::little &&
+                                              requires(Reader &source, const ::protocyte::usize bytes,
+                                                       decltype(values_) &target, const ::protocyte::usize values) {
+                                                  { source.can_read(bytes) } -> ::std::same_as<::protocyte::Status>;
+                                                  {
+                                                      target.append_trivial_from_reader(source, values)
+                                                  } -> ::std::same_as<::protocyte::Status>;
                                               }) {
                                     if (const auto st = reader.can_read(*len); !st) {
                                         return st;
                                     }
-                                    if (const auto st =
-                                            ::protocyte::read_fixed_width_packed_values(reader, *len, values_);
-                                        !st) {
+                                    if (const auto st = values_.append_trivial_from_reader(reader, *len / 4u); !st) {
                                         return st;
                                     }
                                     break;
@@ -3251,15 +3254,18 @@ namespace test::ultimate {
                                 return len.status();
                             }
                             if (*len % 8u == 0u) {
-                                if constexpr (requires(Reader &source, const ::protocyte::usize bytes) {
-                                                  source.can_read(bytes);
+                                if constexpr (::std::endian::native == ::std::endian::little &&
+                                              requires(Reader &source, const ::protocyte::usize bytes,
+                                                       decltype(r_double_) &target, const ::protocyte::usize values) {
+                                                  { source.can_read(bytes) } -> ::std::same_as<::protocyte::Status>;
+                                                  {
+                                                      target.append_trivial_from_reader(source, values)
+                                                  } -> ::std::same_as<::protocyte::Status>;
                                               }) {
                                     if (const auto st = reader.can_read(*len); !st) {
                                         return st;
                                     }
-                                    if (const auto st =
-                                            ::protocyte::read_fixed_width_packed_values(reader, *len, r_double_);
-                                        !st) {
+                                    if (const auto st = r_double_.append_trivial_from_reader(reader, *len / 8u); !st) {
                                         return st;
                                     }
                                     break;

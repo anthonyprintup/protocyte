@@ -2630,10 +2630,23 @@ namespace protocyte {
             if (*total > max_size()) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
+            bool aliased {};
+            usize alias_offset {};
+            if (data_ != nullptr) {
+                const auto source = reinterpret_cast<uptr>(values);
+                const auto begin = reinterpret_cast<uptr>(data_);
+                const auto end = begin + size_ * sizeof(T);
+                aliased = source >= begin && source < end;
+                alias_offset = aliased ? source - begin : 0u;
+            }
             if (const auto st = reserve(*total); !st) {
                 return st;
             }
-            return append_range_data(values, count);
+            const T *source = values;
+            if (aliased) {
+                source = reinterpret_cast<const T *>(reinterpret_cast<const u8 *>(data_) + alias_offset);
+            }
+            return append_range_data(source, count);
         }
 
         template<class Reader> Status append_trivial_from_reader(Reader &reader, const usize count) noexcept
@@ -2722,8 +2735,9 @@ namespace protocyte {
         template<class Source> Result<T> range_value_from(const Source &value) noexcept {
             if constexpr (::std::same_as<::std::remove_cvref_t<Source>, T>) {
                 return protocyte::copy_value(ctx_, value);
-            } else if constexpr (SpanSource<const Source> &&
-                                 requires(T &out, const Span<const u8> view) { out.assign(view); }) {
+            } else if constexpr (SpanSource<const Source> && requires(T &out, const Span<const u8> view) {
+                                     out.assign(view);
+                                 } && (requires(Context *value_ctx) { T {value_ctx}; } || requires { T {}; })) {
                 Context *copy_ctx {ctx_};
                 if constexpr (requires(Context *value_ctx) { T {value_ctx}; }) {
                     T copied {copy_ctx};
@@ -3052,8 +3066,9 @@ namespace protocyte {
         template<class Source> Result<T> range_value_from(const Source &value) noexcept {
             if constexpr (::std::same_as<::std::remove_cvref_t<Source>, T>) {
                 return protocyte::copy_value(context(), value);
-            } else if constexpr (SpanSource<const Source> &&
-                                 requires(T &out, const Span<const u8> view) { out.assign(view); }) {
+            } else if constexpr (SpanSource<const Source> && requires(T &out, const Span<const u8> view) {
+                                     out.assign(view);
+                                 } && (requires(Context *value_ctx) { T {value_ctx}; } || requires { T {}; })) {
                 const auto view = byte_span_of(value);
                 if (!view) {
                     return protocyte::unexpected(view.error());

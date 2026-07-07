@@ -266,6 +266,25 @@ namespace {
         const protocyte::i32 *end() const noexcept { return last; }
     };
 
+    struct ByteAssignableConstructOnlySource {
+        const protocyte::u8 *bytes;
+        protocyte::usize byte_count;
+
+        const protocyte::u8 *data() const noexcept { return bytes; }
+        protocyte::usize size() const noexcept { return byte_count; }
+    };
+
+    struct ByteAssignableConstructOnly {
+        explicit ByteAssignableConstructOnly(const ByteAssignableConstructOnlySource &source) noexcept:
+            first {source.bytes[0]} {}
+
+        ByteAssignableConstructOnly() = delete;
+
+        protocyte::Status assign(protocyte::Span<const protocyte::u8>) noexcept { return {}; }
+
+        protocyte::u8 first;
+    };
+
     struct FailingBulkReader {
         FailingBulkReader(const uint8_t *data, size_t size) noexcept: data {data}, size {size} {}
 
@@ -2083,6 +2102,14 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         require_failure(reserved_values.append_trivial_range(nullptr, 1u), protocyte::ErrorCode::invalid_argument);
         check_scalar_sequence(reserved_values, expected_bulk_values);
 
+        Config::Vector<protocyte::i32> aliased_values(&ctx);
+        const protocyte::i32 alias_seed_values[] = {1, 2, 3};
+        require_success(aliased_values.append_trivial_range(alias_seed_values, std::size(alias_seed_values)));
+        const auto *alias_source = aliased_values.data();
+        require_success(aliased_values.append_trivial_range(alias_source, aliased_values.size()));
+        const protocyte::i32 expected_aliased_values[] = {1, 2, 3, 1, 2, 3};
+        check_scalar_sequence(aliased_values, expected_aliased_values);
+
         protocyte::Array<protocyte::i32, 6u> bounded;
         require_success(bounded.assign(assigned_values));
         require_success(bounded.append(appended_values));
@@ -2109,6 +2136,24 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         require_success(converted_bounded.append(converted_appended));
         require_success(converted_bounded.prepend(converted_prepended));
         check_scalar_sequence(converted_bounded, expected_converted_values);
+
+        const protocyte::u8 construct_only_first[] = {0x10u, 0x11u};
+        const protocyte::u8 construct_only_second[] = {0x20u, 0x21u};
+        const std::array<ByteAssignableConstructOnlySource, 2u> construct_only_sources {{
+            {construct_only_first, std::size(construct_only_first)},
+            {construct_only_second, std::size(construct_only_second)},
+        }};
+        Config::Vector<ByteAssignableConstructOnly> construct_only_values(&ctx);
+        require_success(construct_only_values.assign(construct_only_sources));
+        REQUIRE(construct_only_values.size() == 2u);
+        CHECK(construct_only_values[0].first == 0x10u);
+        CHECK(construct_only_values[1].first == 0x20u);
+
+        protocyte::Array<ByteAssignableConstructOnly, 2u> construct_only_bounded;
+        require_success(construct_only_bounded.assign(construct_only_sources));
+        REQUIRE(construct_only_bounded.size() == 2u);
+        CHECK(construct_only_bounded[0].first == 0x10u);
+        CHECK(construct_only_bounded[1].first == 0x20u);
 
         const PointerOnlyIntRange invalid_range {nullptr, expected_values};
         Config::Vector<protocyte::i32> invalid_values(&ctx);
