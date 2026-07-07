@@ -340,12 +340,18 @@ If you are targeting a freestanding or kernel environment, do not define that
 macro. Instead, provide your own allocator callbacks through the runtime config
 you instantiate in your C++ code.
 
-If you provide a non-default runtime `Config`, protocyte now requires:
+If you provide a non-default runtime `Config`, generated messages use:
 
 - `Config::Context` with `allocator`, `limits`, and `recursion_depth`.
+- `Config::Vector<T>` with `reserve`, `push_back`, iteration, `size`, `data`,
+  and `value_type` for repeated fields.
+- `Config::Map<K, V>`, `Config::Box<T>`, `Config::Optional<T>`,
+  `Config::Bytes`, and `Config::String` storage types.
 
-That is a source-breaking change for custom configs; the default config already
-matches it.
+`Config::Vector<T>` may also provide `append_trivial_range(values, count)` and
+`append_trivial_from_reader(reader, count)` returning `::protocyte::Status` for
+fixed-width packed scalar fast paths. The generated code uses the ordinary
+`reserve`/`push_back` path when those hooks are not present.
 
 If protocyte was installed to a prefix instead of being consumed directly from a
 checkout, the manual `protoc`/custom-command pattern above can be replaced with
