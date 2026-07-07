@@ -125,11 +125,11 @@ namespace protocyte_smoke::test::compat {
                 const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::value: {
-                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { value_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_value = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded_value) {
+                            return decoded_value.status();
                         }
+                        value_ = *decoded_value;
                         break;
                     }
                     case FieldNumber::label: {
@@ -188,12 +188,12 @@ namespace protocyte_smoke::test::compat {
                 total = *st_size;
             }
             if (!label_.empty()) {
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::label), label_.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_label = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::label), label_.size());
+                if (!field_size_label) {
+                    return ::protocyte::unexpected(field_size_label.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_label);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -450,9 +450,11 @@ namespace protocyte_smoke::test::compat {
                 return st;
             }
             if (other.has_nested()) {
-                if (const auto st = ensure_nested().and_then(
-                        [&](auto &ensured) noexcept { return ensured.copy_from(*other.nested()); });
-                    !st) {
+                const auto ensured_nested = ensure_nested();
+                if (!ensured_nested) {
+                    return ensured_nested.status();
+                }
+                if (const auto st = ensured_nested->copy_from(*other.nested()); !st) {
                     return st;
                 }
             } else {
@@ -501,9 +503,11 @@ namespace protocyte_smoke::test::compat {
                     break;
                 }
                 case Special_oneofCase::oneof_nested: {
-                    if (const auto st = ensure_oneof_nested().and_then(
-                            [&](auto &ensured) noexcept { return ensured.copy_from(*other.oneof_nested()); });
-                        !st) {
+                    const auto ensured_oneof_nested = ensure_oneof_nested();
+                    if (!ensured_oneof_nested) {
+                        return ensured_oneof_nested.status();
+                    }
+                    if (const auto st = ensured_oneof_nested->copy_from(*other.oneof_nested()); !st) {
                         return st;
                     }
                     break;
@@ -722,10 +726,10 @@ namespace protocyte_smoke::test::compat {
             if (nested_.has_value()) {
                 return *nested_;
             }
-            return nested_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> & {
-                    return *nested_;
-                });
+            if (const auto st = nested_.emplace(*ctx_); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return *nested_;
         }
         void clear_nested() noexcept { nested_.reset(); }
 
@@ -820,10 +824,10 @@ namespace protocyte_smoke::test::compat {
             if (special_oneof_.oneof_nested_.has_value()) {
                 return *special_oneof_.oneof_nested_;
             }
-            return special_oneof_.oneof_nested_.emplace(*ctx_).transform(
-                [this]() noexcept -> ::protocyte_smoke::test::compat::EncodingMatrix_Inner<Config> & {
-                    return *special_oneof_.oneof_nested_;
-                });
+            if (const auto st = special_oneof_.oneof_nested_.emplace(*ctx_); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return *special_oneof_.oneof_nested_;
         }
 
         constexpr bool has_oneof_bytes() const noexcept {
@@ -946,115 +950,119 @@ namespace protocyte_smoke::test::compat {
                 const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::f_int32: {
-                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_int32_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_int32 = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded_f_int32) {
+                            return decoded_f_int32.status();
                         }
+                        f_int32_ = *decoded_f_int32;
                         break;
                     }
                     case FieldNumber::f_int64: {
-                        if (const auto st = ::protocyte::read_int64_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_int64_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_int64 = ::protocyte::read_int64_field(reader, wire_type, field_number);
+                        if (!decoded_f_int64) {
+                            return decoded_f_int64.status();
                         }
+                        f_int64_ = *decoded_f_int64;
                         break;
                     }
                     case FieldNumber::f_uint32: {
-                        if (const auto st = ::protocyte::read_uint32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_uint32_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_uint32 = ::protocyte::read_uint32_field(reader, wire_type, field_number);
+                        if (!decoded_f_uint32) {
+                            return decoded_f_uint32.status();
                         }
+                        f_uint32_ = *decoded_f_uint32;
                         break;
                     }
                     case FieldNumber::f_uint64: {
-                        if (const auto st = ::protocyte::read_uint64_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_uint64_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_uint64 = ::protocyte::read_uint64_field(reader, wire_type, field_number);
+                        if (!decoded_f_uint64) {
+                            return decoded_f_uint64.status();
                         }
+                        f_uint64_ = *decoded_f_uint64;
                         break;
                     }
                     case FieldNumber::f_sint32: {
-                        if (const auto st = ::protocyte::read_sint32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_sint32_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_sint32 = ::protocyte::read_sint32_field(reader, wire_type, field_number);
+                        if (!decoded_f_sint32) {
+                            return decoded_f_sint32.status();
                         }
+                        f_sint32_ = *decoded_f_sint32;
                         break;
                     }
                     case FieldNumber::f_sint64: {
-                        if (const auto st = ::protocyte::read_sint64_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_sint64_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_sint64 = ::protocyte::read_sint64_field(reader, wire_type, field_number);
+                        if (!decoded_f_sint64) {
+                            return decoded_f_sint64.status();
                         }
+                        f_sint64_ = *decoded_f_sint64;
                         break;
                     }
                     case FieldNumber::f_bool: {
-                        if (const auto st = ::protocyte::read_bool_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_bool_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_bool = ::protocyte::read_bool_field(reader, wire_type, field_number);
+                        if (!decoded_f_bool) {
+                            return decoded_f_bool.status();
                         }
+                        f_bool_ = *decoded_f_bool;
                         break;
                     }
                     case FieldNumber::mode: {
-                        if (const auto st = ::protocyte::read_enum_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { mode_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_mode = ::protocyte::read_enum_field(reader, wire_type, field_number);
+                        if (!decoded_mode) {
+                            return decoded_mode.status();
                         }
+                        mode_ = *decoded_mode;
                         break;
                     }
                     case FieldNumber::f_fixed32: {
-                        if (const auto st = ::protocyte::read_fixed32_value_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_fixed32_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_fixed32 =
+                            ::protocyte::read_fixed32_value_field(reader, wire_type, field_number);
+                        if (!decoded_f_fixed32) {
+                            return decoded_f_fixed32.status();
                         }
+                        f_fixed32_ = *decoded_f_fixed32;
                         break;
                     }
                     case FieldNumber::f_fixed64: {
-                        if (const auto st = ::protocyte::read_fixed64_value_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_fixed64_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_fixed64 =
+                            ::protocyte::read_fixed64_value_field(reader, wire_type, field_number);
+                        if (!decoded_f_fixed64) {
+                            return decoded_f_fixed64.status();
                         }
+                        f_fixed64_ = *decoded_f_fixed64;
                         break;
                     }
                     case FieldNumber::f_sfixed32: {
-                        if (const auto st = ::protocyte::read_sfixed32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_sfixed32_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_sfixed32 =
+                            ::protocyte::read_sfixed32_field(reader, wire_type, field_number);
+                        if (!decoded_f_sfixed32) {
+                            return decoded_f_sfixed32.status();
                         }
+                        f_sfixed32_ = *decoded_f_sfixed32;
                         break;
                     }
                     case FieldNumber::f_sfixed64: {
-                        if (const auto st = ::protocyte::read_sfixed64_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_sfixed64_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_sfixed64 =
+                            ::protocyte::read_sfixed64_field(reader, wire_type, field_number);
+                        if (!decoded_f_sfixed64) {
+                            return decoded_f_sfixed64.status();
                         }
+                        f_sfixed64_ = *decoded_f_sfixed64;
                         break;
                     }
                     case FieldNumber::f_float: {
-                        if (const auto st = ::protocyte::read_float_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_float_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_float = ::protocyte::read_float_field(reader, wire_type, field_number);
+                        if (!decoded_f_float) {
+                            return decoded_f_float.status();
                         }
+                        f_float_ = *decoded_f_float;
                         break;
                     }
                     case FieldNumber::f_double: {
-                        if (const auto st = ::protocyte::read_double_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { f_double_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_f_double = ::protocyte::read_double_field(reader, wire_type, field_number);
+                        if (!decoded_f_double) {
+                            return decoded_f_double.status();
                         }
+                        f_double_ = *decoded_f_double;
                         break;
                     }
                     case FieldNumber::f_string: {
@@ -1104,36 +1112,30 @@ namespace protocyte_smoke::test::compat {
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
-                                if (const auto st = ::protocyte::read_int32(packed).transform(
-                                        [&](const auto decoded) noexcept { value = decoded; });
-                                    !st) {
-                                    return st;
+                                const auto decoded_r_int32_unpacked = ::protocyte::read_int32(packed);
+                                if (!decoded_r_int32_unpacked) {
+                                    return decoded_r_int32_unpacked.status();
                                 }
+                                value = *decoded_r_int32_unpacked;
                                 if (const auto st = packed_r_int32_unpacked_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            const auto packed_r_int32_unpacked_values_commit_size = ::protocyte::checked_add(
-                                r_int32_unpacked_.size(), packed_r_int32_unpacked_values.size());
-                            if (!packed_r_int32_unpacked_values_commit_size) {
-                                return packed_r_int32_unpacked_values_commit_size.status();
-                            }
-                            if (const auto st = r_int32_unpacked_.reserve(*packed_r_int32_unpacked_values_commit_size);
+                            if (const auto st = r_int32_unpacked_.append_trivial_range(
+                                    packed_r_int32_unpacked_values.data(), packed_r_int32_unpacked_values.size());
                                 !st) {
                                 return st;
-                            }
-                            for (const auto &value : packed_r_int32_unpacked_values) {
-                                if (const auto st = r_int32_unpacked_.push_back(value); !st) {
-                                    return st;
-                                }
                             }
                             break;
                         }
                         ::protocyte::i32 value {};
-                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { value = decoded; });
-                            !st) {
-                            return st;
+                        {
+                            const auto decoded_r_int32_unpacked =
+                                ::protocyte::read_int32_field(reader, wire_type, field_number);
+                            if (!decoded_r_int32_unpacked) {
+                                return decoded_r_int32_unpacked.status();
+                            }
+                            value = *decoded_r_int32_unpacked;
                         }
                         if (const auto st = r_int32_unpacked_.push_back(value); !st) {
                             return st;
@@ -1150,36 +1152,30 @@ namespace protocyte_smoke::test::compat {
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
                                 ::protocyte::i32 value {};
-                                if (const auto st = ::protocyte::read_int32(packed).transform(
-                                        [&](const auto decoded) noexcept { value = decoded; });
-                                    !st) {
-                                    return st;
+                                const auto decoded_r_int32_packed = ::protocyte::read_int32(packed);
+                                if (!decoded_r_int32_packed) {
+                                    return decoded_r_int32_packed.status();
                                 }
+                                value = *decoded_r_int32_packed;
                                 if (const auto st = packed_r_int32_packed_values.push_back(value); !st) {
                                     return st;
                                 }
                             }
-                            const auto packed_r_int32_packed_values_commit_size =
-                                ::protocyte::checked_add(r_int32_packed_.size(), packed_r_int32_packed_values.size());
-                            if (!packed_r_int32_packed_values_commit_size) {
-                                return packed_r_int32_packed_values_commit_size.status();
-                            }
-                            if (const auto st = r_int32_packed_.reserve(*packed_r_int32_packed_values_commit_size);
+                            if (const auto st = r_int32_packed_.append_trivial_range(
+                                    packed_r_int32_packed_values.data(), packed_r_int32_packed_values.size());
                                 !st) {
                                 return st;
-                            }
-                            for (const auto &value : packed_r_int32_packed_values) {
-                                if (const auto st = r_int32_packed_.push_back(value); !st) {
-                                    return st;
-                                }
                             }
                             break;
                         }
                         ::protocyte::i32 value {};
-                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { value = decoded; });
-                            !st) {
-                            return st;
+                        {
+                            const auto decoded_r_int32_packed =
+                                ::protocyte::read_int32_field(reader, wire_type, field_number);
+                            if (!decoded_r_int32_packed) {
+                                return decoded_r_int32_packed.status();
+                            }
+                            value = *decoded_r_int32_packed;
                         }
                         if (const auto st = r_int32_packed_.push_back(value); !st) {
                             return st;
@@ -1192,48 +1188,44 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
+                            if (*len % 8u == 0u) {
+                                if constexpr (requires(Reader &source, const ::protocyte::usize bytes) {
+                                                  source.can_read(bytes);
+                                              }) {
+                                    if (const auto st = reader.can_read(*len); !st) {
+                                        return st;
+                                    }
+                                    if (const auto st =
+                                            ::protocyte::read_fixed_width_packed_values(reader, *len, r_double_);
+                                        !st) {
+                                        return st;
+                                    }
+                                    break;
+                                }
+                            }
                             typename Config::template Vector<::protocyte::f64> packed_r_double_values {ctx_};
-                            const auto packed_reserve_r_double =
-                                ::protocyte::checked_add(packed_r_double_values.size(), *len / 8u);
-                            if (!packed_reserve_r_double) {
-                                return packed_reserve_r_double.status();
-                            }
-                            if (const auto st = packed_r_double_values.reserve(*packed_reserve_r_double); !st) {
+                            const auto packed_reserve_r_double = *len / 8u;
+                            if (const auto st = packed_r_double_values.reserve(packed_reserve_r_double); !st) {
                                 return st;
                             }
-                            ::protocyte::LimitedReader<Reader> packed {reader, *len};
-                            while (!packed.eof()) {
-                                ::protocyte::f64 value {};
-                                if (const auto st = ::protocyte::read_double(packed).transform(
-                                        [&](const auto decoded) noexcept { value = decoded; });
-                                    !st) {
-                                    return st;
-                                }
-                                if (const auto st = packed_r_double_values.push_back(value); !st) {
-                                    return st;
-                                }
-                            }
-                            const auto packed_r_double_values_commit_size =
-                                ::protocyte::checked_add(r_double_.size(), packed_r_double_values.size());
-                            if (!packed_r_double_values_commit_size) {
-                                return packed_r_double_values_commit_size.status();
-                            }
-                            if (const auto st = r_double_.reserve(*packed_r_double_values_commit_size); !st) {
+                            if (const auto st =
+                                    ::protocyte::read_fixed_width_packed_values(reader, *len, packed_r_double_values);
+                                !st) {
                                 return st;
                             }
-                            for (const auto &value : packed_r_double_values) {
-                                if (const auto st = r_double_.push_back(value); !st) {
-                                    return st;
-                                }
+                            if (const auto st = r_double_.append_trivial_range(packed_r_double_values.data(),
+                                                                               packed_r_double_values.size());
+                                !st) {
+                                return st;
                             }
                             break;
                         }
                         ::protocyte::f64 value {};
-                        if (const auto st = ::protocyte::read_double_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { value = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_r_double = ::protocyte::read_double_field(reader, wire_type, field_number);
+                        if (!decoded_r_double) {
+                            return decoded_r_double.status();
                         }
+                        value = *decoded_r_double;
                         if (const auto st = r_double_.push_back(value); !st) {
                             return st;
                         }
@@ -1254,12 +1246,11 @@ namespace protocyte_smoke::test::compat {
                     }
                     case FieldNumber::oneof_int32: {
                         ::protocyte::i32 oneof_int32_value {};
-                        if (const auto st =
-                                ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                    .transform([&](const auto decoded) noexcept { oneof_int32_value = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_oneof_int32 = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded_oneof_int32) {
+                            return decoded_oneof_int32.status();
                         }
+                        oneof_int32_value = *decoded_oneof_int32;
                         clear_special_oneof();
                         new (&special_oneof_.oneof_int32_)::protocyte::i32 {::protocyte::move(oneof_int32_value)};
                         special_oneof_case_ = Special_oneofCase::oneof_int32;
@@ -1309,11 +1300,11 @@ namespace protocyte_smoke::test::compat {
                         break;
                     }
                     case FieldNumber::opt_int32: {
-                        if (const auto st = ::protocyte::read_int32_field(reader, wire_type, field_number)
-                                                .transform([&](const auto decoded) noexcept { opt_int32_ = decoded; });
-                            !st) {
-                            return st;
+                        const auto decoded_opt_int32 = ::protocyte::read_int32_field(reader, wire_type, field_number);
+                        if (!decoded_opt_int32) {
+                            return decoded_opt_int32.status();
                         }
+                        opt_int32_ = *decoded_opt_int32;
                         has_opt_int32_ = true;
                         break;
                     }
@@ -1336,10 +1327,6 @@ namespace protocyte_smoke::test::compat {
                             return entry.status();
                         }
                         auto &entry_reader = entry->reader();
-                        enum struct EntryFieldNumber : ::protocyte::u32 {
-                            key = 1u,
-                            value = 2u,
-                        };
                         typename Config::String key {ctx_};
                         ::protocyte::i32 value {};
                         while (!entry_reader.eof()) {
@@ -1348,12 +1335,11 @@ namespace protocyte_smoke::test::compat {
                                 return entry_tag.status();
                             }
                             const auto [entry_field, entry_wire] = *entry_tag;
-                            switch (static_cast<EntryFieldNumber>(entry_field)) {
-                                case EntryFieldNumber::key: {
+                            switch (entry_field) {
+                                case 1u: {
                                     if (entry_wire != ::protocyte::WireType::LEN) {
-                                        return ::protocyte::unexpected(
-                                            ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::key));
+                                        return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type,
+                                                                       entry_reader.position(), 1u);
                                     }
                                     if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, key);
                                         !st) {
@@ -1361,17 +1347,17 @@ namespace protocyte_smoke::test::compat {
                                     }
                                     break;
                                 }
-                                case EntryFieldNumber::value: {
+                                case 2u: {
                                     if (entry_wire != ::protocyte::WireType::VARINT) {
-                                        return ::protocyte::unexpected(
-                                            ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::value));
+                                        return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type,
+                                                                       entry_reader.position(), 2u);
                                     }
-                                    if (const auto st =
-                                            ::protocyte::read_int32(entry_reader)
-                                                .transform([&](const auto decoded) noexcept { value = decoded; });
-                                        !st) {
-                                        return st;
+                                    {
+                                        const auto decoded_value = ::protocyte::read_int32(entry_reader);
+                                        if (!decoded_value) {
+                                            return decoded_value.status();
+                                        }
+                                        value = *decoded_value;
                                     }
                                     break;
                                 }
@@ -1405,10 +1391,6 @@ namespace protocyte_smoke::test::compat {
                             return entry.status();
                         }
                         auto &entry_reader = entry->reader();
-                        enum struct EntryFieldNumber : ::protocyte::u32 {
-                            key = 1u,
-                            value = 2u,
-                        };
                         ::protocyte::i32 key {};
                         typename Config::String value {ctx_};
                         while (!entry_reader.eof()) {
@@ -1417,26 +1399,23 @@ namespace protocyte_smoke::test::compat {
                                 return entry_tag.status();
                             }
                             const auto [entry_field, entry_wire] = *entry_tag;
-                            switch (static_cast<EntryFieldNumber>(entry_field)) {
-                                case EntryFieldNumber::key: {
+                            switch (entry_field) {
+                                case 1u: {
                                     if (entry_wire != ::protocyte::WireType::VARINT) {
-                                        return ::protocyte::unexpected(
-                                            ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::key));
+                                        return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type,
+                                                                       entry_reader.position(), 1u);
                                     }
-                                    if (const auto st =
-                                            ::protocyte::read_int32(entry_reader)
-                                                .transform([&](const auto decoded) noexcept { key = decoded; });
-                                        !st) {
-                                        return st;
+                                    const auto decoded_key = ::protocyte::read_int32(entry_reader);
+                                    if (!decoded_key) {
+                                        return decoded_key.status();
                                     }
+                                    key = *decoded_key;
                                     break;
                                 }
-                                case EntryFieldNumber::value: {
+                                case 2u: {
                                     if (entry_wire != ::protocyte::WireType::LEN) {
-                                        return ::protocyte::unexpected(
-                                            ::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(),
-                                            static_cast<::protocyte::u32>(EntryFieldNumber::value));
+                                        return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type,
+                                                                       entry_reader.position(), 2u);
                                     }
                                     if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, value);
                                         !st) {
@@ -1650,10 +1629,10 @@ namespace protocyte_smoke::test::compat {
                     !st) {
                     return st;
                 }
-                for (const auto &packed_value_r_double : r_double_) {
-                    if (const auto st = ::protocyte::write_double(writer, packed_value_r_double); !st) {
-                        return st;
-                    }
+                if (const auto st =
+                        ::protocyte::write_fixed_width_packed_values(writer, r_double_.data(), r_double_.size());
+                    !st) {
+                    return st;
                 }
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_string) {
@@ -1702,18 +1681,13 @@ namespace protocyte_smoke::test::compat {
                 }
             }
             for (const auto &entry : map_str_int32_) {
-                enum struct EntryFieldNumber : ::protocyte::u32 {
-                    key = 1u,
-                    value = 2u,
-                };
                 ::protocyte::usize entry_payload {};
                 {
-                    const auto st_size = ::protocyte::length_delimited_field_size(
-                                             static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
-                                             .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                           -> ::protocyte::Result<::protocyte::usize> {
-                                                 return ::protocyte::add_size(entry_payload, field_size);
-                                             });
+                    const auto field_size_key = ::protocyte::length_delimited_field_size(1u, entry.key.size());
+                    if (!field_size_key) {
+                        return field_size_key.status();
+                    }
+                    const auto st_size = ::protocyte::add_size(entry_payload, *field_size_key);
                     if (!st_size) {
                         return st_size.status();
                     }
@@ -1721,7 +1695,7 @@ namespace protocyte_smoke::test::compat {
                 }
                 {
                     const auto st_size = ::protocyte::add_size(
-                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
+                        entry_payload, ::protocyte::tag_size(2u) +
                                            ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
                     if (!st_size) {
                         return st_size.status();
@@ -1737,39 +1711,30 @@ namespace protocyte_smoke::test::compat {
                     !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_string_field(
-                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.view());
-                    !st) {
+                if (const auto st = ::protocyte::write_string_field(writer, 1u, entry.key.view()); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_int32_field(
-                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value);
-                    !st) {
+                if (const auto st = ::protocyte::write_int32_field(writer, 2u, entry.value); !st) {
                     return st;
                 }
             }
             for (const auto &entry : map_int32_str_) {
-                enum struct EntryFieldNumber : ::protocyte::u32 {
-                    key = 1u,
-                    value = 2u,
-                };
                 ::protocyte::usize entry_payload {};
                 {
                     const auto st_size = ::protocyte::add_size(
-                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                        entry_payload,
+                        ::protocyte::tag_size(1u) + ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
                     if (!st_size) {
                         return st_size.status();
                     }
                     entry_payload = *st_size;
                 }
                 {
-                    const auto st_size = ::protocyte::length_delimited_field_size(
-                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                             .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                           -> ::protocyte::Result<::protocyte::usize> {
-                                                 return ::protocyte::add_size(entry_payload, field_size);
-                                             });
+                    const auto field_size_value = ::protocyte::length_delimited_field_size(2u, entry.value.size());
+                    if (!field_size_value) {
+                        return field_size_value.status();
+                    }
+                    const auto st_size = ::protocyte::add_size(entry_payload, *field_size_value);
                     if (!st_size) {
                         return st_size.status();
                     }
@@ -1784,14 +1749,10 @@ namespace protocyte_smoke::test::compat {
                     !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_int32_field(
-                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key);
-                    !st) {
+                if (const auto st = ::protocyte::write_int32_field(writer, 1u, entry.key); !st) {
                     return st;
                 }
-                if (const auto st = ::protocyte::write_string_field(
-                        writer, static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.view());
-                    !st) {
+                if (const auto st = ::protocyte::write_string_field(writer, 2u, entry.value.view()); !st) {
                     return st;
                 }
             }
@@ -1924,36 +1885,36 @@ namespace protocyte_smoke::test::compat {
                 total = *st_size;
             }
             if (!f_string_.empty()) {
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::f_string), f_string_.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_f_string = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::f_string), f_string_.size());
+                if (!field_size_f_string) {
+                    return ::protocyte::unexpected(field_size_f_string.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_f_string);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
                 total = *st_size;
             }
             if (!f_bytes_.empty()) {
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::f_bytes), f_bytes_.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_f_bytes = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::f_bytes), f_bytes_.size());
+                if (!field_size_f_bytes) {
+                    return ::protocyte::unexpected(field_size_f_bytes.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_f_bytes);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
                 total = *st_size;
             }
             if (nested_.has_value()) {
-                const auto st_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_)
-                        .and_then([&](const ::protocyte::usize nested_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(total, nested_size);
-                        });
+                const auto field_size_nested =
+                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::nested), *nested_);
+                if (!field_size_nested) {
+                    return ::protocyte::unexpected(field_size_nested.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_nested);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -1979,13 +1940,12 @@ namespace protocyte_smoke::test::compat {
                     }
                     packed_size_r_int32_packed = *st_size;
                 }
-                const auto st_size =
-                    ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::r_int32_packed),
-                                                             packed_size_r_int32_packed)
-                        .and_then([&](const ::protocyte::usize field_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(total, field_size);
-                        });
+                const auto field_size_r_int32_packed = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::r_int32_packed), packed_size_r_int32_packed);
+                if (!field_size_r_int32_packed) {
+                    return ::protocyte::unexpected(field_size_r_int32_packed.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_r_int32_packed);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -1998,25 +1958,24 @@ namespace protocyte_smoke::test::compat {
                     return ::protocyte::unexpected(packed_size_r_double_result.error());
                 }
                 packed_size_r_double = *packed_size_r_double_result;
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::r_double), packed_size_r_double)
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_r_double = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::r_double), packed_size_r_double);
+                if (!field_size_r_double) {
+                    return ::protocyte::unexpected(field_size_r_double.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_r_double);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
                 total = *st_size;
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_string) {
-                const auto st_size =
-                    ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::oneof_string),
-                                                             special_oneof_.oneof_string_.size())
-                        .and_then([&](const ::protocyte::usize field_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(total, field_size);
-                        });
+                const auto field_size_oneof_string = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::oneof_string), special_oneof_.oneof_string_.size());
+                if (!field_size_oneof_string) {
+                    return ::protocyte::unexpected(field_size_oneof_string.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_oneof_string);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -2032,26 +1991,24 @@ namespace protocyte_smoke::test::compat {
                 total = *st_size;
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_nested) {
-                const auto st_size =
-                    ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::oneof_nested),
-                                                    *special_oneof_.oneof_nested_)
-                        .and_then([&](const ::protocyte::usize nested_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(total, nested_size);
-                        });
+                const auto field_size_oneof_nested = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::oneof_nested), *special_oneof_.oneof_nested_);
+                if (!field_size_oneof_nested) {
+                    return ::protocyte::unexpected(field_size_oneof_nested.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_oneof_nested);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
                 total = *st_size;
             }
             if (special_oneof_case_ == Special_oneofCase::oneof_bytes) {
-                const auto st_size =
-                    ::protocyte::length_delimited_field_size(static_cast<::protocyte::u32>(FieldNumber::oneof_bytes),
-                                                             special_oneof_.oneof_bytes_.size())
-                        .and_then([&](const ::protocyte::usize field_size) noexcept
-                                      -> ::protocyte::Result<::protocyte::usize> {
-                            return ::protocyte::add_size(total, field_size);
-                        });
+                const auto field_size_oneof_bytes = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::oneof_bytes), special_oneof_.oneof_bytes_.size());
+                if (!field_size_oneof_bytes) {
+                    return ::protocyte::unexpected(field_size_oneof_bytes.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_oneof_bytes);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
@@ -2067,30 +2024,25 @@ namespace protocyte_smoke::test::compat {
                 total = *st_size;
             }
             if (has_opt_string_) {
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::opt_string), opt_string_.size())
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_opt_string = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::opt_string), opt_string_.size());
+                if (!field_size_opt_string) {
+                    return ::protocyte::unexpected(field_size_opt_string.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_opt_string);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
                 total = *st_size;
             }
             for (const auto &entry : map_str_int32_) {
-                enum struct EntryFieldNumber : ::protocyte::u32 {
-                    key = 1u,
-                    value = 2u,
-                };
                 ::protocyte::usize entry_payload {};
                 {
-                    const auto st_size = ::protocyte::length_delimited_field_size(
-                                             static_cast<::protocyte::u32>(EntryFieldNumber::key), entry.key.size())
-                                             .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                           -> ::protocyte::Result<::protocyte::usize> {
-                                                 return ::protocyte::add_size(entry_payload, field_size);
-                                             });
+                    const auto field_size_key = ::protocyte::length_delimited_field_size(1u, entry.key.size());
+                    if (!field_size_key) {
+                        return ::protocyte::unexpected(field_size_key.error());
+                    }
+                    const auto st_size = ::protocyte::add_size(entry_payload, *field_size_key);
                     if (!st_size) {
                         return ::protocyte::unexpected(st_size.error());
                     }
@@ -2098,57 +2050,52 @@ namespace protocyte_smoke::test::compat {
                 }
                 {
                     const auto st_size = ::protocyte::add_size(
-                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::value)) +
+                        entry_payload, ::protocyte::tag_size(2u) +
                                            ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
                     if (!st_size) {
                         return ::protocyte::unexpected(st_size.error());
                     }
                     entry_payload = *st_size;
                 }
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::map_str_int32), entry_payload)
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_map_str_int32 = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::map_str_int32), entry_payload);
+                if (!field_size_map_str_int32) {
+                    return ::protocyte::unexpected(field_size_map_str_int32.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_map_str_int32);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }
                 total = *st_size;
             }
             for (const auto &entry : map_int32_str_) {
-                enum struct EntryFieldNumber : ::protocyte::u32 {
-                    key = 1u,
-                    value = 2u,
-                };
                 ::protocyte::usize entry_payload {};
                 {
                     const auto st_size = ::protocyte::add_size(
-                        entry_payload, ::protocyte::tag_size(static_cast<::protocyte::u32>(EntryFieldNumber::key)) +
-                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
+                        entry_payload,
+                        ::protocyte::tag_size(1u) + ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.key)));
                     if (!st_size) {
                         return ::protocyte::unexpected(st_size.error());
                     }
                     entry_payload = *st_size;
                 }
                 {
-                    const auto st_size = ::protocyte::length_delimited_field_size(
-                                             static_cast<::protocyte::u32>(EntryFieldNumber::value), entry.value.size())
-                                             .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                           -> ::protocyte::Result<::protocyte::usize> {
-                                                 return ::protocyte::add_size(entry_payload, field_size);
-                                             });
+                    const auto field_size_value = ::protocyte::length_delimited_field_size(2u, entry.value.size());
+                    if (!field_size_value) {
+                        return ::protocyte::unexpected(field_size_value.error());
+                    }
+                    const auto st_size = ::protocyte::add_size(entry_payload, *field_size_value);
                     if (!st_size) {
                         return ::protocyte::unexpected(st_size.error());
                     }
                     entry_payload = *st_size;
                 }
-                const auto st_size = ::protocyte::length_delimited_field_size(
-                                         static_cast<::protocyte::u32>(FieldNumber::map_int32_str), entry_payload)
-                                         .and_then([&](const ::protocyte::usize field_size) noexcept
-                                                       -> ::protocyte::Result<::protocyte::usize> {
-                                             return ::protocyte::add_size(total, field_size);
-                                         });
+                const auto field_size_map_int32_str = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::map_int32_str), entry_payload);
+                if (!field_size_map_int32_str) {
+                    return ::protocyte::unexpected(field_size_map_int32_str.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_map_int32_str);
                 if (!st_size) {
                     return ::protocyte::unexpected(st_size.error());
                 }

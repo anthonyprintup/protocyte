@@ -71,6 +71,96 @@ def test_runtime_varint_read_helpers_use_direct_fast_paths() -> None:
     assert "return read_varint(reader).and_then" not in length_body
 
 
+def test_runtime_length_delimited_parse_helpers_use_direct_checks() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+
+    open_nested_sized_body = runtime_header.split(
+        "open_nested_message_sized(typename Config::Context &ctx, Reader &reader,",
+        maxsplit=1,
+    )[1].split(
+        "template<class Config, class Reader> Result<NestedMessageReader<Reader, Config>>",
+        maxsplit=1,
+    )[0]
+    open_nested_body = runtime_header.split(
+        "open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Message, class Reader> Status merge_message_fragment", maxsplit=1)[0]
+    read_message_partial_body = runtime_header.split(
+        "read_message_partial(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader, class Message>", maxsplit=1)[0]
+    read_message_staged_body = runtime_header.split(
+        "Status read_message_staged(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out,",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader, class Message>", maxsplit=1)[0]
+    skip_field_body = runtime_header.split(
+        "Status skip_field(Reader &reader, const WireType wire_type, const u32 field_number = {}) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader> Status skip_field", maxsplit=1)[0]
+    read_bytes_body = runtime_header.split(
+        "Status read_bytes(typename Config::Context &ctx, Reader &reader, typename Config::Bytes &out) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader> Status read_bytes_field", maxsplit=1)[0]
+    read_bytes_field_body = runtime_header.split(
+        "Status read_bytes_field(typename Config::Context &ctx, Reader &reader,",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader> Status read_string_sized", maxsplit=1)[0]
+    read_string_body = runtime_header.split(
+        "Status read_string(typename Config::Context &ctx, Reader &reader, typename Config::String &out) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Config, class Reader> Status read_string_field", maxsplit=1)[0]
+    read_string_field_body = runtime_header.split(
+        "Status read_string_field(typename Config::Context &ctx, Reader &reader,",
+        maxsplit=1,
+    )[1].split("template<class Writer> Status write_bytes", maxsplit=1)[0]
+
+    assert "const auto st = push_recursion<Config>(ctx, reader.position(), field_number);" in open_nested_sized_body
+    assert ".transform(" not in open_nested_sized_body
+
+    for body in (open_nested_body, skip_field_body, read_bytes_body, read_string_body):
+        assert "const auto size = read_length_delimited_size(reader);" in body
+        assert "read_length_delimited_size(reader).and_then" not in body
+
+    assert ".and_then" not in read_message_partial_body
+    assert ".and_then" not in read_message_staged_body
+
+    for body in (read_bytes_field_body, read_string_field_body):
+        assert "const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number);" in body
+        assert "expect_wire_type(reader, wire_type, WireType::LEN, field_number).and_then" not in body
+
+
+def test_runtime_scalar_copy_and_write_helpers_use_direct_checks() -> None:
+    runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
+
+    copy_helpers = runtime_header.split(
+        "template<class T, class Context> Result<T> copy_value(Context *ctx, const T &value) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class T, class Context>\n    concept PointerContextConstructible", maxsplit=1)[0]
+    range_value_body = runtime_header.split(
+        "template<class Source> Result<T> range_value_from(const Source &value) noexcept {",
+        maxsplit=1,
+    )[1].split("} else if constexpr (requires { T(value); })", maxsplit=1)[0]
+    scalar_read_fields = runtime_header.split(
+        "template<class Reader>\n    Result<i32> read_int32_field",
+        maxsplit=1,
+    )[1].split("template<class Writer> Status write_int32_field", maxsplit=1)[0]
+    message_write_helpers = runtime_header.split(
+        "template<class Writer, class Message>\n    Status write_message_field",
+        maxsplit=1,
+    )[1].split("template<class Reader> Status skip_group", maxsplit=1)[0]
+    bytes_write_helpers = runtime_header.split(
+        "template<class Writer> Status write_bytes(Writer &writer, const Span<const u8> view) noexcept {",
+        maxsplit=1,
+    )[1].split("template<class Writer>\n    Status write_string_field", maxsplit=1)[0]
+
+    assert ".transform([&copied]" not in copy_helpers
+    assert ".transform(\n                        [&copied]" not in range_value_body
+    assert "auto copied = [&]() noexcept" not in runtime_header
+    assert ".and_then([&reader]" not in scalar_read_fields
+    assert ".and_then(" not in message_write_helpers
+    assert ".and_then(" not in bytes_write_helpers
+
+
 def test_kernel_smoke_provides_debug_string_view_crt_shims() -> None:
     source = (
         Path(__file__).resolve().parents[1]
@@ -758,10 +848,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         or "return protocyte::unexpected(ErrorCode::integer_overflow, {});"
         in files["protocyte/runtime/runtime.hpp"]
     )
-    assert (
-        "return read_length_delimited_size(reader)"
-        in files["protocyte/runtime/runtime.hpp"]
-    )
+    assert "const auto size = read_length_delimited_size(reader);" in files["protocyte/runtime/runtime.hpp"]
     assert (
         "open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept"
         in files["protocyte/runtime/runtime.hpp"]
@@ -818,26 +905,14 @@ def test_generates_proto3_files_and_runtime() -> None:
         "inline Result<usize> length_delimited_field_size(const u32 field_number, const usize payload_size) noexcept"
         in files["protocyte/runtime/runtime.hpp"]
     )
+    assert "return checked_add(*prefix_size, payload_size);" in files["protocyte/runtime/runtime.hpp"]
+    assert "if (const auto st = copied.assign(value.view()); !st) {" in files["protocyte/runtime/runtime.hpp"]
     assert (
-        "return checked_add(prefix_size, payload_size);"
+        "if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {"
         in files["protocyte/runtime/runtime.hpp"]
     )
-    assert (
-        "return copied.assign(value.view()).transform([&copied]() noexcept -> T {"
-        in files["protocyte/runtime/runtime.hpp"]
-    )
-    assert (
-        "return expect_wire_type(reader, wire_type, WireType::VARINT, field_number)"
-        in files["protocyte/runtime/runtime.hpp"]
-    )
-    assert (
-        "return value.encoded_size().and_then([field_number](const usize size) noexcept -> Result<usize> {"
-        in files["protocyte/runtime/runtime.hpp"]
-    )
-    assert (
-        "return length_delimited_field_size(field_number, size);"
-        in files["protocyte/runtime/runtime.hpp"]
-    )
+    assert "const auto size = value.encoded_size();" in files["protocyte/runtime/runtime.hpp"]
+    assert "return length_delimited_field_size(field_number, *size);" in files["protocyte/runtime/runtime.hpp"]
     assert (
         "constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept"
         in files["protocyte/runtime/runtime.hpp"]
@@ -1483,7 +1558,13 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "::protocyte::Status merge_partial_from(Reader& reader) noexcept" in header
     assert "::protocyte::Status validate() const noexcept" in header
     assert "if (const auto st = validate(); !st) { return st; }" in header
-    assert "for (const auto &packed_value_samples : samples_) {" in header
+    assert (
+        "if (const auto st = ::protocyte::write_fixed_width_packed_values(writer, samples_.data(), samples_.size()); !st) { return st; }"
+        in header
+    )
+    assert "for (const auto &packed_value_samples : samples_) {" not in header
+    assert "write_fixed_width_packed_values(writer, signed_samples_.data(), signed_samples_.size())" not in header
+    assert "for (const auto &packed_value_signed_samples : signed_samples_) {" in header
     assert "if (const auto st = out->copy_from(*this); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
     assert "enum struct FieldNumber : ::protocyte::u32 {" in header
@@ -1492,14 +1573,19 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "case FieldNumber::id: {" in header
     assert "case FieldNumber::opt_name: {" in header
     assert (
-        "::protocyte::read_float(packed).transform([&](const auto decoded) noexcept { value = decoded; });"
+        "if (const auto st = ::protocyte::read_fixed_width_packed_values(reader, *len, samples_); !st) { return st; }"
         in header
     )
+    assert "read_fixed_width_packed_values(reader, *len, packed_signed_samples_values)" not in header
+    assert "const auto decoded_signed_samples = ::protocyte::read_sfixed32(packed);" in header
+    assert "const auto decoded_samples = ::protocyte::read_float(packed);" not in header
     assert "auto decoded = ::protocyte::read_fixed32(packed);" not in header
     assert (
-        "::protocyte::read_int32_field(reader, wire_type, field_number).transform("
+        "const auto decoded_id = ::protocyte::read_int32_field(reader, wire_type, field_number);"
         in header
     )
+    assert "if (!decoded_id) { return decoded_id.status(); }" in header
+    assert "id_ = *decoded_id;" in header
     assert (
         "::protocyte::write_int32_field(writer, static_cast<::protocyte::u32>(FieldNumber::id), id_);"
         in header
@@ -1509,11 +1595,12 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "::protocyte::write_message_field(" in header
     assert "::protocyte::message_field_size(" in header
     assert "FieldNumber::opt_name), opt_name_.view());" in header
-    assert ".transform([&](const auto decoded) noexcept {" in header
+    assert ".transform(" not in header
     assert (
-        "::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::self), *self_).and_then("
+        "const auto field_size_self = ::protocyte::message_field_size(static_cast<::protocyte::u32>(FieldNumber::self), *self_);"
         in header
     )
+    assert ".and_then(" not in header
     assert (
         "::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);"
         in header
@@ -1533,8 +1620,11 @@ def test_generated_header_contains_expected_field_api() -> None:
         in header
     )
     assert "return has_self() ? self_.operator->() : nullptr;" in header
+    assert "enum struct EntryFieldNumber" not in header
+    assert "switch (entry_field) {" in header
+    assert "case 2u: {" in header
     assert (
-        "*ctx_, entry_reader, static_cast<::protocyte::u32>(EntryFieldNumber::value),"
+        "*ctx_, entry_reader, 2u,"
         in header
     )
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
@@ -1542,10 +1632,13 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "mutable_samples().copy_from(other.samples())" in header
     assert "mutable_message_items().copy_from(other.message_items())" in header
     assert (
-        "const auto packed_reserve_samples = ::protocyte::checked_add(packed_samples_values.size(), *len / 4u);"
+        "const auto packed_reserve_samples = *len / 4u;"
         in header
     )
-    assert "packed_samples_values.reserve(*packed_reserve_samples)" in header
+    assert "packed_samples_values.reserve(packed_reserve_samples)" in header
+    assert "checked_add(packed_samples_values.size(), *len / 4u)" not in header
+    assert "samples_.append_trivial_range(packed_samples_values.data(), packed_samples_values.size())" in header
+    assert "packed_samples_values_commit_size" not in header
     assert (
         "const auto packed_size_samples_result = ::protocyte::checked_mul(samples_.size(), 4u);"
         in header
@@ -1615,7 +1708,13 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
         weird_map_serialize.count(
             "                {\n                    const auto st_size ="
         )
-        == 2
+        == 1
+    )
+    assert "const auto field_size_value" in weird_map_serialize
+    assert "::protocyte::add_length_delimited_field_size(" not in weird_map_serialize
+    assert (
+        "const auto st_size = ::protocyte::add_size(entry_payload, *field_size_value);"
+        in weird_map_serialize
     )
     assert "const auto key_size" not in header
     assert "const auto value_size" not in header
@@ -2173,10 +2272,9 @@ def test_generated_header_copies_oneof_state() -> None:
     assert "case ChoiceCase::text: {" in header
     assert "if (const auto st = set_text(other.text()); !st) {" in header
     assert "return st;" in header
-    assert (
-        "ensure_inner().and_then([&](auto& ensured) noexcept { return ensured.copy_from(*other.inner()); });"
-        in header
-    )
+    assert "const auto ensured_inner = ensure_inner();" in header
+    assert "if (!ensured_inner) { return ensured_inner.status(); }" in header
+    assert "if (const auto st = ensured_inner->copy_from(*other.inner()); !st) {" in header
     assert "clear_choice();" in header
 
 
@@ -2453,7 +2551,9 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "return *choice_.inner_;" in header
     assert "new (&choice_.none_)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none_;" not in header
-    assert "return choice_.inner_.emplace(*ctx_).transform(" in header
+    assert "if (const auto st = choice_.inner_.emplace(*ctx_); !st) {" in header
+    assert "return ::protocyte::unexpected(st.error());" in header
+    assert "return *choice_.inner_;" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
     assert "choice_case_ == ChoiceCase::inner" in header
@@ -2842,6 +2942,13 @@ def _simple_file() -> descriptor_pb2.FileDescriptorProto:
     field.number = 5
     field.label = F.LABEL_REPEATED
     field.type = F.TYPE_FLOAT
+    field.options.packed = True
+
+    field = message.field.add()
+    field.name = "signed_samples"
+    field.number = 7
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_SFIXED32
     field.options.packed = True
 
     field = message.field.add()

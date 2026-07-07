@@ -2076,6 +2076,13 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         const protocyte::i32 expected_reserved_values[] = {0, 10, 40};
         check_scalar_sequence(reserved_values, expected_reserved_values);
 
+        const protocyte::i32 bulk_values[] = {50, 60, 70};
+        require_success(reserved_values.append_trivial_range(bulk_values, std::size(bulk_values)));
+        const protocyte::i32 expected_bulk_values[] = {0, 10, 40, 50, 60, 70};
+        check_scalar_sequence(reserved_values, expected_bulk_values);
+        require_failure(reserved_values.append_trivial_range(nullptr, 1u), protocyte::ErrorCode::invalid_argument);
+        check_scalar_sequence(reserved_values, expected_bulk_values);
+
         protocyte::Array<protocyte::i32, 6u> bounded;
         require_success(bounded.assign(assigned_values));
         require_success(bounded.append(appended_values));
@@ -2951,6 +2958,32 @@ TEST_CASE("tag_size matches protobuf group sizing", "[smoke][runtime]") {
     CHECK(protocyte::tag_size(large_field_number, protocyte::WireType::SGROUP) == single_tag_size * 2u);
 }
 
+TEST_CASE("varint_size matches encoded uint64 boundaries", "[smoke][runtime]") {
+    struct VarintSizeCase {
+        protocyte::u64 value;
+        protocyte::usize expected_size;
+    };
+
+    constexpr std::array<VarintSizeCase, 14u> cases {{
+        {0u, 1u},
+        {0x7fu, 1u},
+        {0x80u, 2u},
+        {0x3fffu, 2u},
+        {0x4000u, 3u},
+        {0x1fffffu, 3u},
+        {0x200000u, 4u},
+        {0xfffffffu, 4u},
+        {0x10000000u, 5u},
+        {0x7ffffffffull, 5u},
+        {0x800000000ull, 6u},
+        {(1ull << 56u) - 1u, 8u},
+        {1ull << 56u, 9u},
+        {std::numeric_limits<protocyte::u64>::max(), 10u},
+    }};
+
+    for (const auto &item : cases) { CHECK(protocyte::varint_size(item.value) == item.expected_size); }
+}
+
 TEST_CASE("write_uint64 emits canonical varint bytes", "[smoke][runtime]") {
     std::array<protocyte::u8, 10u> encoded {};
     protocyte::SliceWriter writer(encoded.data(), encoded.size());
@@ -2961,6 +2994,24 @@ TEST_CASE("write_uint64 emits canonical varint bytes", "[smoke][runtime]") {
                                                    0x80u, 0x80u, 0x80u, 0x80u, 0x01u};
     REQUIRE(writer.position() == expected.size());
     for (protocyte::usize index {}; index < expected.size(); ++index) { CHECK(encoded[index] == expected[index]); }
+}
+
+TEST_CASE("write_fixed_width_packed_values emits contiguous little endian payloads", "[smoke][runtime]") {
+    const std::array<protocyte::u32, 2u> values {0x01020304u, 0xa0b0c0d0u};
+    std::array<protocyte::u8, 8u> encoded {};
+    protocyte::SliceWriter writer(encoded.data(), encoded.size());
+
+    require_success(protocyte::write_fixed_width_packed_values(writer, values.data(), values.size()));
+
+    const std::array<protocyte::u8, 8u> expected {0x04u, 0x03u, 0x02u, 0x01u, 0xd0u, 0xc0u, 0xb0u, 0xa0u};
+    REQUIRE(writer.position() == expected.size());
+    for (protocyte::usize index {}; index < expected.size(); ++index) { CHECK(encoded[index] == expected[index]); }
+
+    std::array<protocyte::u8, 6u> short_encoded {};
+    protocyte::SliceWriter short_writer(short_encoded.data(), short_encoded.size());
+    require_failure(protocyte::write_fixed_width_packed_values(short_writer, values.data(), values.size()),
+                    protocyte::ErrorCode::size_limit);
+    CHECK(short_writer.position() == 4u);
 }
 
 TEST_CASE("read_varint decodes canonical varint byte sequences", "[smoke][runtime]") {
@@ -2994,6 +3045,19 @@ TEST_CASE("read_varint decodes canonical varint byte sequences", "[smoke][runtim
         CHECK(reader.position() == item.size);
         CHECK(reader.eof());
     }
+}
+
+TEST_CASE("read_fixed_width_packed_values reads contiguous little endian payloads", "[smoke][runtime]") {
+    auto ctx = make_context();
+    constexpr std::array<protocyte::u8, 8u> encoded {0x04u, 0x03u, 0x02u, 0x01u, 0xd0u, 0xc0u, 0xb0u, 0xa0u};
+    protocyte::SliceReader reader(encoded.data(), encoded.size());
+    Config::Vector<protocyte::u32> values(&ctx);
+
+    require_success(protocyte::read_fixed_width_packed_values(reader, encoded.size(), values));
+
+    const protocyte::u32 expected[] = {0x01020304u, 0xa0b0c0d0u};
+    check_scalar_sequence(values, expected);
+    CHECK(reader.eof());
 }
 
 TEST_CASE("read_varint rejects truncated and overflowing byte sequences", "[smoke][runtime]") {
