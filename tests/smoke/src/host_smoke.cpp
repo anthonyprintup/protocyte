@@ -73,6 +73,100 @@ namespace {
         }
     };
 
+    struct PushOnlyConfig {
+        struct Context {
+            protocyte::Allocator allocator;
+            protocyte::Limits limits;
+            protocyte::usize recursion_depth {};
+        };
+
+        template<class T> struct Vector {
+            using Inner = protocyte::Vector<T, PushOnlyConfig>;
+            using value_type = T;
+            using iterator = typename Inner::iterator;
+            using const_iterator = typename Inner::const_iterator;
+            using reverse_iterator = typename Inner::reverse_iterator;
+            using const_reverse_iterator = typename Inner::const_reverse_iterator;
+
+            explicit Vector(Context *ctx = nullptr) noexcept: inner_ {ctx} {}
+            Vector(Vector &&) noexcept = default;
+            Vector &operator=(Vector &&) noexcept = default;
+            Vector(const Vector &) = delete;
+            Vector &operator=(const Vector &) = delete;
+
+            void bind(Context *ctx) noexcept { inner_.bind(ctx); }
+            protocyte::usize size() const noexcept { return inner_.size(); }
+            protocyte::usize capacity() const noexcept { return inner_.capacity(); }
+            bool empty() const noexcept { return inner_.empty(); }
+            T *data() noexcept { return inner_.data(); }
+            const T *data() const noexcept { return inner_.data(); }
+            T &operator[](const protocyte::usize index) noexcept { return inner_[index]; }
+            const T &operator[](const protocyte::usize index) const noexcept { return inner_[index]; }
+            iterator begin() noexcept { return inner_.begin(); }
+            const_iterator begin() const noexcept { return inner_.begin(); }
+            iterator end() noexcept { return inner_.end(); }
+            const_iterator end() const noexcept { return inner_.end(); }
+            const_iterator cbegin() const noexcept { return inner_.cbegin(); }
+            const_iterator cend() const noexcept { return inner_.cend(); }
+            reverse_iterator rbegin() noexcept { return inner_.rbegin(); }
+            const_reverse_iterator rbegin() const noexcept { return inner_.rbegin(); }
+            reverse_iterator rend() noexcept { return inner_.rend(); }
+            const_reverse_iterator rend() const noexcept { return inner_.rend(); }
+            const_reverse_iterator crbegin() const noexcept { return inner_.crbegin(); }
+            const_reverse_iterator crend() const noexcept { return inner_.crend(); }
+            void clear() noexcept { inner_.clear(); }
+            protocyte::Status reserve(const protocyte::usize count) noexcept { return inner_.reserve(count); }
+            protocyte::Status push_back(const T &value) noexcept { return inner_.push_back(value); }
+            protocyte::Status push_back(T &&value) noexcept { return inner_.push_back(protocyte::move(value)); }
+            protocyte::Status resize_default(const protocyte::usize count) noexcept {
+                return inner_.resize_default(count);
+            }
+            protocyte::Status resize_for_overwrite(const protocyte::usize count) noexcept {
+                return inner_.resize_for_overwrite(count);
+            }
+            protocyte::Status copy_from(const Vector &other) noexcept { return inner_.copy_from(other.inner_); }
+
+        private:
+            Inner inner_;
+        };
+
+        template<class K, class V> using Map = protocyte::HashMap<K, V, PushOnlyConfig>;
+        template<class T> using Box = protocyte::Box<T, PushOnlyConfig>;
+        template<class T> using Optional = protocyte::Optional<T>;
+        using Bytes = protocyte::Bytes<PushOnlyConfig>;
+        using String = protocyte::String<PushOnlyConfig>;
+
+        static void *allocate(Context &ctx, const protocyte::usize size, const protocyte::usize alignment) noexcept {
+            if (!size || ctx.allocator.allocate == nullptr) {
+                return nullptr;
+            }
+            return ctx.allocator.allocate(ctx.allocator.state, size, alignment);
+        }
+
+        static void deallocate(Context &ctx, void *ptr, const protocyte::usize size,
+                               const protocyte::usize alignment) noexcept {
+            if (ptr != nullptr && ctx.allocator.deallocate != nullptr) {
+                ctx.allocator.deallocate(ctx.allocator.state, ptr, size, alignment);
+            }
+        }
+
+        template<class T> static protocyte::u64 hash(const T &value) noexcept {
+            return protocyte::fnv1a(
+                protocyte::Span<const protocyte::u8> {reinterpret_cast<const protocyte::u8 *>(&value), sizeof(T)});
+        }
+
+        template<class T> static bool equal(const T &lhs, const T &rhs) noexcept { return lhs == rhs; }
+
+        static protocyte::u64 hash(const Bytes &value) noexcept { return protocyte::fnv1a(value.view()); }
+        static protocyte::u64 hash(const String &value) noexcept { return protocyte::fnv1a(value.view()); }
+        static bool equal(const Bytes &lhs, const Bytes &rhs) noexcept {
+            return protocyte::bytes_equal(lhs.view(), rhs.view());
+        }
+        static bool equal(const String &lhs, const String &rhs) noexcept {
+            return protocyte::bytes_equal(lhs.view(), rhs.view());
+        }
+    };
+
     template<class T, protocyte::usize Count>
     concept HasStaticFirst = requires(T span) { span.template first<Count>(); };
 
@@ -108,6 +202,7 @@ namespace {
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
+    using PushOnlyNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<PushOnlyConfig>;
 
     static_assert(test::ultimate::BASE_COUNT == 5);
     static_assert(Message::SHIFTED_COUNT == 5000000000ll);
@@ -225,6 +320,13 @@ namespace {
 
     CustomConfig::Context make_custom_context() noexcept {
         return CustomConfig::Context {
+            protocyte::Allocator {nullptr, smoke_allocate, smoke_deallocate},
+            protocyte::Limits {},
+        };
+    }
+
+    PushOnlyConfig::Context make_push_only_context() noexcept {
+        return PushOnlyConfig::Context {
             protocyte::Allocator {nullptr, smoke_allocate, smoke_deallocate},
             protocyte::Limits {},
         };
@@ -3105,6 +3207,35 @@ TEST_CASE("read_fixed_width_packed_values reads contiguous little endian payload
     CHECK(reader.eof());
 }
 
+TEST_CASE("read_fixed_width_packed_values preserves output on malformed payloads", "[smoke][runtime]") {
+    auto ctx = make_context();
+    Config::Vector<protocyte::u32> values(&ctx);
+    require_success(values.push_back(0x11223344u));
+    const protocyte::u32 expected[] = {0x11223344u};
+
+    SECTION("truncated reader input fails before appending a prefix") {
+        constexpr std::array<protocyte::u8, 4u> encoded {0x04u, 0x03u, 0x02u, 0x01u};
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+        require_failure(protocyte::read_fixed_width_packed_values(reader, 8u, values),
+                        protocyte::ErrorCode::unexpected_eof);
+
+        CHECK(reader.position() == 0u);
+        check_scalar_sequence(values, expected);
+    }
+
+    SECTION("misaligned fixed-width payload fails before appending a prefix") {
+        constexpr std::array<protocyte::u8, 6u> encoded {0x04u, 0x03u, 0x02u, 0x01u, 0x00u, 0x00u};
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+        require_failure(protocyte::read_fixed_width_packed_values(reader, encoded.size(), values),
+                        protocyte::ErrorCode::unexpected_eof);
+
+        CHECK(reader.position() == 0u);
+        check_scalar_sequence(values, expected);
+    }
+}
+
 TEST_CASE("read_varint rejects truncated and overflowing byte sequences", "[smoke][runtime]") {
     SECTION("truncated continuation input") {
         constexpr std::array<protocyte::u8, 1u> truncated {0x80u};
@@ -4307,4 +4438,20 @@ TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[s
     CHECK(parsed_inner.values()[0] == 4.5f);
     CHECK(parsed_inner.values()[1] == 5.5f);
     CHECK(parsed_inner.mode() == InnerMode::C);
+}
+
+TEST_CASE("Generated packed parsing falls back for push-only vectors", "[smoke][runtime][custom-config]") {
+    auto ctx = make_push_only_context();
+    constexpr std::array<protocyte::u8, 10u> encoded {
+        0x12u, 0x08u, 0x00u, 0x00u, 0x80u, 0x3fu, 0x00u, 0x00u, 0x00u, 0x40u,
+    };
+    protocyte::SliceReader reader(encoded.data(), encoded.size());
+    PushOnlyNested2 parsed(ctx);
+
+    require_success(parsed.merge_from(reader));
+
+    REQUIRE(reader.eof());
+    REQUIRE(parsed.values().size() == 2u);
+    CHECK(parsed.values()[0] == 1.0f);
+    CHECK(parsed.values()[1] == 2.0f);
 }

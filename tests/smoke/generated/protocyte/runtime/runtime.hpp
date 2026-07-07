@@ -4298,6 +4298,16 @@ namespace protocyte {
     Status read_fixed_width_packed_values_fallback(Reader &reader, const usize byte_count, Output &out) noexcept
         requires(BulkFixedWidthPackedScalar<T>)
     {
+        if (byte_count % sizeof(T) != 0u) {
+            return protocyte::unexpected(ErrorCode::unexpected_eof, {});
+        }
+        if constexpr (requires(Reader &source, const usize bytes) {
+                          { source.can_read(bytes) } -> ::std::same_as<Status>;
+                      }) {
+            if (const auto st = reader.can_read(byte_count); !st) {
+                return st;
+            }
+        }
         LimitedReader<Reader> packed {reader, byte_count};
         while (!packed.eof()) {
             auto value = read_fixed_width_packed_value<T>(packed);
@@ -4326,14 +4336,16 @@ namespace protocyte {
         const usize count {byte_count / sizeof(Scalar)};
         if constexpr (::std::endian::native == ::std::endian::little &&
                       requires(Reader &source, const usize bytes, Output &target, const usize values) {
-                          source.can_read(bytes);
-                          target.append_trivial_from_reader(source, values);
+                          { source.can_read(bytes) } -> ::std::same_as<Status>;
+                          { target.append_trivial_from_reader(source, values) } -> ::std::same_as<Status>;
                       }) {
-            if (const auto st = reader.can_read(byte_count); st) {
-                return out.append_trivial_from_reader(reader, count);
+            if (const auto st = reader.can_read(byte_count); !st) {
+                return st;
             }
+            return out.append_trivial_from_reader(reader, count);
+        } else {
+            return read_fixed_width_packed_values_fallback<Scalar>(reader, byte_count, out);
         }
-        return read_fixed_width_packed_values_fallback<Scalar>(reader, byte_count, out);
     }
 
     template<class Writer, class T>

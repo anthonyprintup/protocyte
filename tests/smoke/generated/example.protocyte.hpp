@@ -217,10 +217,32 @@ namespace test::ultimate {
                                 !st) {
                                 return st;
                             }
-                            if (const auto st = values_.append_trivial_range(packed_values_values.data(),
-                                                                             packed_values_values.size());
-                                !st) {
-                                return st;
+                            if constexpr (requires(decltype(values_) &target, decltype(packed_values_values) &values,
+                                                   const ::protocyte::usize count) {
+                                              { values.data() } -> ::std::convertible_to<const ::protocyte::f32 *>;
+                                              {
+                                                  target.append_trivial_range(values.data(), count)
+                                              } -> ::std::same_as<::protocyte::Status>;
+                                          }) {
+                                if (const auto st = values_.append_trivial_range(packed_values_values.data(),
+                                                                                 packed_values_values.size());
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                const auto packed_values_values_commit_size =
+                                    ::protocyte::checked_add(values_.size(), packed_values_values.size());
+                                if (!packed_values_values_commit_size) {
+                                    return packed_values_values_commit_size.status();
+                                }
+                                if (const auto st = values_.reserve(*packed_values_values_commit_size); !st) {
+                                    return st;
+                                }
+                                for (const auto &value : packed_values_values) {
+                                    if (const auto st = values_.push_back(value); !st) {
+                                        return st;
+                                    }
+                                }
                             }
                             break;
                         }
@@ -3186,10 +3208,35 @@ namespace test::ultimate {
                                     return st;
                                 }
                             }
-                            if (const auto st = r_int32_unpacked_.append_trivial_range(
-                                    packed_r_int32_unpacked_values.data(), packed_r_int32_unpacked_values.size());
-                                !st) {
-                                return st;
+                            if constexpr (requires(decltype(r_int32_unpacked_) &target,
+                                                   decltype(packed_r_int32_unpacked_values) &values,
+                                                   const ::protocyte::usize count) {
+                                              { values.data() } -> ::std::convertible_to<const ::protocyte::i32 *>;
+                                              {
+                                                  target.append_trivial_range(values.data(), count)
+                                              } -> ::std::same_as<::protocyte::Status>;
+                                          }) {
+                                if (const auto st = r_int32_unpacked_.append_trivial_range(
+                                        packed_r_int32_unpacked_values.data(), packed_r_int32_unpacked_values.size());
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                const auto packed_r_int32_unpacked_values_commit_size = ::protocyte::checked_add(
+                                    r_int32_unpacked_.size(), packed_r_int32_unpacked_values.size());
+                                if (!packed_r_int32_unpacked_values_commit_size) {
+                                    return packed_r_int32_unpacked_values_commit_size.status();
+                                }
+                                if (const auto st =
+                                        r_int32_unpacked_.reserve(*packed_r_int32_unpacked_values_commit_size);
+                                    !st) {
+                                    return st;
+                                }
+                                for (const auto &value : packed_r_int32_unpacked_values) {
+                                    if (const auto st = r_int32_unpacked_.push_back(value); !st) {
+                                        return st;
+                                    }
+                                }
                             }
                             break;
                         }
@@ -3226,10 +3273,34 @@ namespace test::ultimate {
                                     return st;
                                 }
                             }
-                            if (const auto st = r_int32_packed_.append_trivial_range(
-                                    packed_r_int32_packed_values.data(), packed_r_int32_packed_values.size());
-                                !st) {
-                                return st;
+                            if constexpr (requires(decltype(r_int32_packed_) &target,
+                                                   decltype(packed_r_int32_packed_values) &values,
+                                                   const ::protocyte::usize count) {
+                                              { values.data() } -> ::std::convertible_to<const ::protocyte::i32 *>;
+                                              {
+                                                  target.append_trivial_range(values.data(), count)
+                                              } -> ::std::same_as<::protocyte::Status>;
+                                          }) {
+                                if (const auto st = r_int32_packed_.append_trivial_range(
+                                        packed_r_int32_packed_values.data(), packed_r_int32_packed_values.size());
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                const auto packed_r_int32_packed_values_commit_size = ::protocyte::checked_add(
+                                    r_int32_packed_.size(), packed_r_int32_packed_values.size());
+                                if (!packed_r_int32_packed_values_commit_size) {
+                                    return packed_r_int32_packed_values_commit_size.status();
+                                }
+                                if (const auto st = r_int32_packed_.reserve(*packed_r_int32_packed_values_commit_size);
+                                    !st) {
+                                    return st;
+                                }
+                                for (const auto &value : packed_r_int32_packed_values) {
+                                    if (const auto st = r_int32_packed_.push_back(value); !st) {
+                                        return st;
+                                    }
+                                }
                             }
                             break;
                         }
@@ -3281,10 +3352,33 @@ namespace test::ultimate {
                                 !st) {
                                 return st;
                             }
-                            if (const auto st = r_double_.append_trivial_range(packed_r_double_values.data(),
-                                                                               packed_r_double_values.size());
-                                !st) {
-                                return st;
+                            if constexpr (requires(decltype(r_double_) &target,
+                                                   decltype(packed_r_double_values) &values,
+                                                   const ::protocyte::usize count) {
+                                              { values.data() } -> ::std::convertible_to<const ::protocyte::f64 *>;
+                                              {
+                                                  target.append_trivial_range(values.data(), count)
+                                              } -> ::std::same_as<::protocyte::Status>;
+                                          }) {
+                                if (const auto st = r_double_.append_trivial_range(packed_r_double_values.data(),
+                                                                                   packed_r_double_values.size());
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                const auto packed_r_double_values_commit_size =
+                                    ::protocyte::checked_add(r_double_.size(), packed_r_double_values.size());
+                                if (!packed_r_double_values_commit_size) {
+                                    return packed_r_double_values_commit_size.status();
+                                }
+                                if (const auto st = r_double_.reserve(*packed_r_double_values_commit_size); !st) {
+                                    return st;
+                                }
+                                for (const auto &value : packed_r_double_values) {
+                                    if (const auto st = r_double_.push_back(value); !st) {
+                                        return st;
+                                    }
+                                }
                             }
                             break;
                         }
@@ -3789,10 +3883,32 @@ namespace test::ultimate {
                                     return st;
                                 }
                             }
-                            if (const auto st = colors_.append_trivial_range(packed_colors_values.data(),
-                                                                             packed_colors_values.size());
-                                !st) {
-                                return st;
+                            if constexpr (requires(decltype(colors_) &target, decltype(packed_colors_values) &values,
+                                                   const ::protocyte::usize count) {
+                                              { values.data() } -> ::std::convertible_to<const ::protocyte::i32 *>;
+                                              {
+                                                  target.append_trivial_range(values.data(), count)
+                                              } -> ::std::same_as<::protocyte::Status>;
+                                          }) {
+                                if (const auto st = colors_.append_trivial_range(packed_colors_values.data(),
+                                                                                 packed_colors_values.size());
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                const auto packed_colors_values_commit_size =
+                                    ::protocyte::checked_add(colors_.size(), packed_colors_values.size());
+                                if (!packed_colors_values_commit_size) {
+                                    return packed_colors_values_commit_size.status();
+                                }
+                                if (const auto st = colors_.reserve(*packed_colors_values_commit_size); !st) {
+                                    return st;
+                                }
+                                for (const auto &value : packed_colors_values) {
+                                    if (const auto st = colors_.push_back(value); !st) {
+                                        return st;
+                                    }
+                                }
                             }
                             break;
                         }

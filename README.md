@@ -480,13 +480,20 @@ protocyte::DefaultConfig::Context ctx{/* allocator */, /* limits */};
 auto msg = demo::Sample<>::create(ctx);
 ```
 
-If you provide a non-default `Config`, protocyte now treats that as a stricter
-public contract:
+If you provide a non-default `Config`, generated messages use these runtime
+hooks:
 
-- `Config::Context` must expose `allocator`, `limits`, and `recursion_depth`.
+- `Config::Context` exposes `allocator`, `limits`, and `recursion_depth`.
+- `Config::Vector<T>` supports `reserve`, `push_back`, iteration, `size`,
+  `data`, and `value_type` for repeated fields.
+- `Config::Map<K, V>`, `Config::Box<T>`, `Config::Optional<T>`,
+  `Config::Bytes`, and `Config::String` provide the storage operations used by
+  the generated field APIs.
 
-This is a source-breaking change for custom configs. Default-config users are
-unaffected.
+`Config::Vector<T>` can also expose `append_trivial_range(values, count)` and
+`append_trivial_from_reader(reader, count)` returning `::protocyte::Status`.
+Generated code uses those hooks for fixed-width packed scalar fast paths when
+they are available and otherwise falls back to `reserve` plus `push_back`.
 
 Generated messages are move-only. Ordinary C++ copying is deleted because it
 cannot report allocation failure.

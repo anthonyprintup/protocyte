@@ -1644,8 +1644,19 @@ def test_generated_header_contains_expected_field_api() -> None:
     )
     assert "packed_samples_values.reserve(packed_reserve_samples)" in header
     assert "checked_add(packed_samples_values.size(), *len / 4u)" not in header
+    assert (
+        "if constexpr (requires(decltype(samples_) &target, decltype(packed_samples_values) &values,"
+        in header
+    )
+    assert "{ values.data() } -> ::std::convertible_to<const ::protocyte::f32 *>;" in header
     assert "samples_.append_trivial_range(packed_samples_values.data(), packed_samples_values.size())" in header
-    assert "packed_samples_values_commit_size" not in header
+    assert (
+        "const auto packed_samples_values_commit_size = ::protocyte::checked_add(samples_.size(), packed_samples_values.size());"
+        in header
+    )
+    assert "samples_.reserve(*packed_samples_values_commit_size)" in header
+    assert "for (const auto &value : packed_samples_values)" in header
+    assert "samples_.push_back(value)" in header
     assert (
         "const auto packed_size_samples_result = ::protocyte::checked_mul(samples_.size(), 4u);"
         in header

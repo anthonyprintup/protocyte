@@ -1999,9 +1999,40 @@ def _emit_repeated_storage_decl(
 
 def _emit_commit_repeated_values(w: CppWriter, item: FieldModel, source: str) -> None:
     if not item.repeated_array and _is_scalar_field(item):
-        w.line(
-            f"if (const auto st = {_member(item)}.append_trivial_range({source}.data(), {source}.size()); !st) {{ return st; }}"
+        element_type = (
+            "::protocyte::i32"
+            if item.kind == "enum"
+            else _runtime_scalar_type(SCALAR_CPP_TYPES[item.proto_type])
         )
+        append_range_requires = (
+            f"requires(decltype({_member(item)}) &target, decltype({source}) &values, "
+            "const ::protocyte::usize count) "
+            f"{{ {{ values.data() }} -> ::std::convertible_to<const {element_type} *>; "
+            "{ target.append_trivial_range(values.data(), count) } "
+            "-> ::std::same_as<::protocyte::Status>; }"
+        )
+        w.line(f"if constexpr ({append_range_requires}) {{")
+        with w.indent():
+            w.line(
+                f"if (const auto st = {_member(item)}.append_trivial_range({source}.data(), {source}.size()); !st) {{ return st; }}"
+            )
+        w.line("} else {")
+        with w.indent():
+            commit_size_name = f"{source}_commit_size"
+            w.line(
+                f"const auto {commit_size_name} = ::protocyte::checked_add({_member(item)}.size(), {source}.size());"
+            )
+            w.line(f"if (!{commit_size_name}) {{ return {commit_size_name}.status(); }}")
+            w.line(
+                f"if (const auto st = {_member(item)}.reserve(*{commit_size_name}); !st) {{ return st; }}"
+            )
+            w.line(f"for (const auto &value : {source}) {{")
+            with w.indent():
+                w.line(
+                    f"if (const auto st = {_member(item)}.push_back(value); !st) {{ return st; }}"
+                )
+            w.line("}")
+        w.line("}")
         return
 
     commit_size_name = f"{source}_commit_size"
