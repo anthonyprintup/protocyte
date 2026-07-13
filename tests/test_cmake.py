@@ -353,6 +353,45 @@ def test_cmake_rejects_runtime_state_forwarded_through_options(
     assert "use EMIT_RUNTIME and RUNTIME_PREFIX" in output
 
 
+def test_cmake_rejects_encoded_transport_forwarded_through_options(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    encoded_runtime = "runtime=emit:vendor/protocyte".encode().hex()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(reject_encoded_transport LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS simple.proto",
+                f"    OPTIONS _protocyte_options_hex={encoded_runtime}",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "OPTIONS must not use reserved _protocyte_ transport parameters" in output
+
+
 def test_real_protoc_rejects_runtime_prefix_escape_and_keeps_valid_response_names(
     tmp_path: Path,
 ) -> None:

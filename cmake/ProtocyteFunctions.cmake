@@ -79,7 +79,12 @@ function(_protocyte_validate_forwarded_generator_options)
             math(EXPR option_value_start "${option_separator} + 1")
             string(SUBSTRING "${generator_option_part}" ${option_value_start} -1 generator_option_value)
 
-            if(generator_option_name STREQUAL "runtime" OR generator_option_name STREQUAL "runtime_prefix")
+            if(generator_option_name MATCHES "^_protocyte_")
+                message(
+                    FATAL_ERROR
+                    "protocyte_generate OPTIONS must not use reserved _protocyte_ transport parameters"
+                )
+            elseif(generator_option_name STREQUAL "runtime" OR generator_option_name STREQUAL "runtime_prefix")
                 message(
                     FATAL_ERROR
                     "protocyte_generate OPTIONS must not set runtime or runtime_prefix; "

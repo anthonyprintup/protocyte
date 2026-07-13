@@ -32,6 +32,13 @@ class GeneratorOptions:
 
     def __post_init__(self) -> None:
         _validate_namespace_prefix(self.namespace_prefix)
+        validate_virtual_directory_prefix(
+            self.runtime_prefix, parameter="runtime prefix"
+        )
+        if self.include_prefix:
+            validate_virtual_directory_prefix(
+                self.include_prefix, parameter="include prefix"
+            )
 
 
 def validate_virtual_directory_prefix(value: str, *, parameter: str) -> str:

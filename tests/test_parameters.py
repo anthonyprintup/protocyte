@@ -106,6 +106,24 @@ def test_generator_options_rejects_noncanonical_namespace_prefix() -> None:
         GeneratorOptions(namespace_prefix="drv::::wire")
 
 
+@pytest.mark.parametrize(
+    ("field", "prefix", "error"),
+    [
+        ("runtime_prefix", "../runtime", "runtime prefix"),
+        ("runtime_prefix", "C:/runtime", "runtime prefix"),
+        ("runtime_prefix", "runtime\ninjected", "runtime prefix"),
+        ("include_prefix", "../generated", "include prefix"),
+        ("include_prefix", r"generated\wire", "include prefix"),
+        ("include_prefix", "generated\ninjected", "include prefix"),
+    ],
+)
+def test_generator_options_rejects_unsafe_virtual_directory_prefixes(
+    field: str, prefix: str, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        GeneratorOptions(**{field: prefix})
+
+
 @pytest.mark.parametrize("parameter", ["runtime=none", "runtime="])
 def test_rejects_runtime_omit_aliases(parameter: str) -> None:
     with pytest.raises(

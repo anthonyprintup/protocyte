@@ -354,6 +354,8 @@ declared.
 
 Parameter names are exact and case-sensitive. Unknown names, duplicate names,
 and bare tokens without `=` are errors; aliases are not accepted.
+Names beginning with `_protocyte_` are reserved for CMake's parameter transport
+and must not be supplied through CMake `OPTIONS`.
 `namespace_prefix` must be a normalized `::`-separated namespace with no empty
 components, extra colons, surrounding component whitespace, or control
 characters.
