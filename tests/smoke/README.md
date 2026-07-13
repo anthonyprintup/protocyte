@@ -348,10 +348,37 @@ If you provide a non-default runtime `Config`, generated messages use:
 - `Config::Map<K, V>`, `Config::Box<T>`, `Config::Optional<T>`,
   `Config::Bytes`, and `Config::String` storage types.
 
-`Config::Vector<T>` may also provide `append_trivial_range(values, count)` and
-`append_trivial_from_reader(reader, count)` returning `::protocyte::Status` for
-fixed-width packed scalar fast paths. The generated code uses the ordinary
-`reserve`/`push_back` path when those hooks are not present.
+For untrusted input, set the resource policy on `ctx.limits` before parsing.
+`max_total_bytes` and `max_recursion_depth` default to protobuf C++'s
+`INT_MAX` and `100` behavior. `max_repeated_elements` and `max_map_entries`
+are additional application-policy budgets shared across packed chunks, nested
+messages, and duplicate map occurrences in one top-level parse. Lowering those
+count budgets can intentionally reject otherwise valid protobuf messages.
+`DefaultConfig` also supports a finite `max_total_allocation_bytes` budget
+against live allocator-requested bytes for the whole context. It is unbounded by
+default so normal parsing remains wire-compatible; custom configs should apply
+an equivalent policy in their allocation hooks when they need the same
+guarantee. Allocators without a deallocation callback retain their charged bytes.
+
+Scalar `Config::Vector<T>` implementations must provide
+`append_trivial_range(values, count)` and `resize_for_overwrite(count)` returning
+`::protocyte::Status`. The runtime uses these primitives for packed scalar
+commit and transactional fixed-width reads; vectors do not read from readers
+directly.
+
+Custom readers passed to generated parsing must provide `eof()`, `position()`,
+`can_read(count)`, `read_byte()`, `read(out, count)`, and `skip(count)`.
+`can_read(count)` returns `::protocyte::Status` without consuming input; it is a
+required reader operation, not an optional packed-field optimization.
+Parse readers passed between nested generated messages also provide
+`consume_repeated_elements(count, field_number)` and
+`consume_map_entries(count, field_number)`. `ParseBudgetReader` implements the
+budgets and the nested reader adapters forward them directly.
+
+Custom writers passed to generated serialization must provide
+`can_write(count)`, `write_byte(value)`, and `write(data, count)`.
+`can_write(count)` returns `bool` without consuming output capacity; it is a
+required writer operation, not an optional packed-field optimization.
 
 If protocyte was installed to a prefix instead of being consumed directly from a
 checkout, the manual `protoc`/custom-command pattern above can be replaced with

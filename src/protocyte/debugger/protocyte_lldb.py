@@ -310,11 +310,7 @@ def _string_context(value):
 
 
 def _span_storage(value):
-    data = _child(value, "data_")
-    size = _child(value, "size_")
-    if data.IsValid() or size.IsValid():
-        return data, size
-    return _child(value, "data"), _child(value, "size")
+    return _child(value, "data_"), _child(value, "size_")
 
 
 def _optional_payload(value, name="value"):
@@ -337,15 +333,8 @@ def _value_label(value):
     typename = value.GetTypeName() or ""
     if typename.startswith("protocyte::String<"):
         return string_summary(value, None)
-    if typename.startswith("protocyte::Bytes<") or typename in (
-        "protocyte::ByteView",
-        "protocyte::MutableByteView",
-    ):
-        return (
-            bytes_summary(value, None)
-            if typename.startswith("protocyte::Bytes<")
-            else byte_view_summary(value, None)
-        )
+    if typename.startswith("protocyte::Bytes<"):
+        return bytes_summary(value, None)
     summary = value.GetSummary()
     if summary:
         return summary
@@ -382,9 +371,6 @@ def _case_field_names(value):
 def _oneof_payload(value, prefix, case_name):
     if case_name == "none":
         return lldb.SBValue()
-    payload = _child(value, f"{case_name}_")
-    if payload.IsValid():
-        return payload
     union_value = _child(value, f"{prefix}_")
     if not union_value.IsValid():
         return lldb.SBValue()
@@ -594,16 +580,6 @@ def string_summary(value, _internal_dict):
     )
 
 
-def byte_view_summary(value, _internal_dict):
-    if _is_raw_tree_value(value):
-        return None
-    return _bytes_summary_from_span(value, _child(value, "data"), _child(value, "size"))
-
-
-def mutable_byte_view_summary(value, _internal_dict):
-    return byte_view_summary(value, _internal_dict)
-
-
 def span_summary(value, _internal_dict):
     if _is_raw_tree_value(value):
         return None
@@ -731,9 +707,6 @@ class ByteSpanSyntheticProvider:
                 ("context", context),
                 ("capacity", _capacity),
             )
-        elif typename.startswith("protocyte::Span<"):
-            self.data, self.size_value = _span_storage(self.value)
-            metadata_sources = ()
         else:
             self.data, self.size_value = _span_storage(self.value)
             metadata_sources = ()
@@ -1359,10 +1332,6 @@ def __lldb_init_module(debugger, _internal_dict):
         f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '{_STRING_TYPE_REGEX}'",
         f"type summary add -w {category} -p -x -F protocyte_lldb.span_summary '{_SPAN_TYPE_REGEX}'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.ByteSpanSyntheticProvider '{_SPAN_TYPE_REGEX}'",
-        f"type summary add -w {category} -p -F protocyte_lldb.byte_view_summary protocyte::ByteView",
-        f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider protocyte::ByteView",
-        f"type summary add -w {category} -p -F protocyte_lldb.mutable_byte_view_summary protocyte::MutableByteView",
-        f"type synthetic add -w {category} -l protocyte_lldb.ByteSpanSyntheticProvider protocyte::MutableByteView",
         f"type summary add -w {category} -p -x -F protocyte_lldb.hash_map_summary '{_HASH_MAP_TYPE_REGEX}'",
         f"type synthetic add -w {category} -x -l protocyte_lldb.HashMapSyntheticProvider '{_HASH_MAP_TYPE_REGEX}'",
         f"type summary add -w {category} -p -F protocyte_lldb.slice_reader_summary protocyte::SliceReader",

@@ -5,7 +5,13 @@ import math
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
-from google.protobuf import descriptor_pb2, descriptor_pool, message_factory, text_encoding
+from google.protobuf import (
+    descriptor_pb2,
+    descriptor_pool,
+    message_factory,
+    text_encoding,
+)
+from google.protobuf.message import DecodeError
 
 from protocyte.descriptor_set import validate_virtual_file_name
 from protocyte.errors import ProtocyteError
@@ -151,6 +157,10 @@ PACKABLE_TYPES = set(SCALAR_CPP_TYPES) | {FieldDescriptorProto.TYPE_ENUM}
 ARRAY_OPTION_NAME = "protocyte.array"
 CONSTANT_OPTION_NAME = "protocyte.constant"
 PACKAGE_CONSTANT_OPTION_NAME = "protocyte.package_constant"
+PROTOCYTE_OPTIONS_FILE_NAME = "protocyte/options.proto"
+_PROTOCYTE_OPTION_NAMES = frozenset(
+    {ARRAY_OPTION_NAME, CONSTANT_OPTION_NAME, PACKAGE_CONSTANT_OPTION_NAME}
+)
 _CUSTOM_OPTION_EXTENDEES = CUSTOM_OPTION_EXTENDEES
 CONSTANT_KIND_BOOL = "bool"
 CONSTANT_KIND_INT32 = "int32"
@@ -193,6 +203,208 @@ _CONSTANT_OPTION_VALUE_FIELDS = {
     "str_expr": (CONSTANT_KIND_STRING, True),
 }
 
+_PROTOCYTE_OPTION_MESSAGE_SCHEMA = (
+    (
+        "Constant",
+        ("value",),
+        (
+            (
+                "name",
+                1,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                None,
+            ),
+            (
+                "boolean",
+                2,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_BOOL,
+                "",
+                0,
+            ),
+            (
+                "boolean_expr",
+                3,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "i32",
+                4,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_INT32,
+                "",
+                0,
+            ),
+            (
+                "i32_expr",
+                5,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "u32",
+                6,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_UINT32,
+                "",
+                0,
+            ),
+            (
+                "u32_expr",
+                7,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "i64",
+                8,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_INT64,
+                "",
+                0,
+            ),
+            (
+                "i64_expr",
+                9,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "u64",
+                10,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_UINT64,
+                "",
+                0,
+            ),
+            (
+                "u64_expr",
+                11,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "f32",
+                12,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_FLOAT,
+                "",
+                0,
+            ),
+            (
+                "f32_expr",
+                13,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "f64",
+                14,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_DOUBLE,
+                "",
+                0,
+            ),
+            (
+                "f64_expr",
+                15,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "str",
+                16,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "str_expr",
+                17,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+        ),
+    ),
+    (
+        "ArrayOptions",
+        ("bound",),
+        (
+            (
+                "max",
+                1,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_UINT32,
+                "",
+                0,
+            ),
+            (
+                "expr",
+                2,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_STRING,
+                "",
+                0,
+            ),
+            (
+                "fixed",
+                3,
+                FieldDescriptorProto.LABEL_OPTIONAL,
+                FieldDescriptorProto.TYPE_BOOL,
+                "",
+                None,
+            ),
+        ),
+    ),
+)
+
+_PROTOCYTE_OPTION_EXTENSION_SCHEMA = (
+    (
+        "constant",
+        50000,
+        FieldDescriptorProto.LABEL_REPEATED,
+        FieldDescriptorProto.TYPE_MESSAGE,
+        ".protocyte.Constant",
+        ".google.protobuf.MessageOptions",
+    ),
+    (
+        "package_constant",
+        50002,
+        FieldDescriptorProto.LABEL_REPEATED,
+        FieldDescriptorProto.TYPE_MESSAGE,
+        ".protocyte.Constant",
+        ".google.protobuf.FileOptions",
+    ),
+    (
+        "array",
+        50000,
+        FieldDescriptorProto.LABEL_OPTIONAL,
+        FieldDescriptorProto.TYPE_MESSAGE,
+        ".protocyte.ArrayOptions",
+        ".google.protobuf.FieldOptions",
+    ),
+)
+
 
 @dataclass(slots=True)
 class _RawConstantOption:
@@ -214,11 +426,18 @@ class _CustomOptions:
     def field_array(
         self,
         options: descriptor_pb2.FieldOptions,
+        *,
+        label: str,
     ) -> tuple[int | None, str | None, bool]:
         if self.field_options_cls is None or self.array_extension is None:
             return None, None, False
         parsed = self.field_options_cls()
-        parsed.ParseFromString(options.SerializeToString())
+        try:
+            parsed.ParseFromString(options.SerializeToString())
+        except DecodeError as exc:
+            raise ProtocyteError(
+                f"{label}: malformed {ARRAY_OPTION_NAME} option payload: {exc}"
+            ) from exc
         max_value: int | None = None
         max_expr: str | None = None
         fixed = False
@@ -229,34 +448,59 @@ class _CustomOptions:
                     max_value = int(array_options.max)
                 if array_options.HasField("expr"):
                     max_expr = str(array_options.expr)
-                if hasattr(array_options, "fixed"):
-                    fixed = bool(array_options.fixed)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            return None, None, False
+                fixed = bool(array_options.fixed)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProtocyteError(
+                f"{label}: invalid {ARRAY_OPTION_NAME} option: {exc}"
+            ) from exc
         return max_value, max_expr, fixed
 
     def message_constants(
         self,
         options: descriptor_pb2.MessageOptions,
+        *,
+        label: str,
     ) -> list[_RawConstantOption]:
-        return self._constant_options(options, self.message_options_cls, self.constant_extension)
+        return self._constant_options(
+            options,
+            self.message_options_cls,
+            self.constant_extension,
+            label=label,
+            option_name=CONSTANT_OPTION_NAME,
+        )
 
     def file_constants(
         self,
         options: descriptor_pb2.FileOptions,
+        *,
+        label: str,
     ) -> list[_RawConstantOption]:
-        return self._constant_options(options, self.file_options_cls, self.package_constant_extension)
+        return self._constant_options(
+            options,
+            self.file_options_cls,
+            self.package_constant_extension,
+            label=label,
+            option_name=PACKAGE_CONSTANT_OPTION_NAME,
+        )
 
     def _constant_options(
         self,
         options: object,
         options_cls: type[object] | None,
         extension: object | None,
+        *,
+        label: str,
+        option_name: str,
     ) -> list[_RawConstantOption]:
         if options_cls is None or extension is None:
             return []
         parsed = options_cls()
-        parsed.ParseFromString(options.SerializeToString())
+        try:
+            parsed.ParseFromString(options.SerializeToString())
+        except DecodeError as exc:
+            raise ProtocyteError(
+                f"{label}: malformed {option_name} option payload: {exc}"
+            ) from exc
         out: list[_RawConstantOption] = []
         try:
             for item in parsed.Extensions[extension]:
@@ -267,7 +511,9 @@ class _CustomOptions:
                 if value_field is not None:
                     kind_info = _CONSTANT_OPTION_VALUE_FIELDS.get(value_field)
                     if kind_info is None:
-                        raise ProtocyteError(f"unsupported typed constant value field {value_field!r}")
+                        raise ProtocyteError(
+                            f"unsupported typed constant value field {value_field!r}"
+                        )
                     kind, is_expr = kind_info
                     value = getattr(item, value_field)
                     if is_expr:
@@ -282,8 +528,10 @@ class _CustomOptions:
                         expr=expr,
                     )
                 )
-        except (AttributeError, KeyError, TypeError, ValueError):
-            return []
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise ProtocyteError(
+                f"{label}: invalid {option_name} option: {exc}"
+            ) from exc
         return out
 
 
@@ -360,7 +608,11 @@ class FieldModel:
 
     @property
     def has_explicit_presence(self) -> bool:
-        return self.explicit_presence or self.oneof_name is not None or self.kind == "message"
+        return (
+            self.explicit_presence
+            or self.oneof_name is not None
+            or self.kind == "message"
+        )
 
     @property
     def array_enabled(self) -> bool:
@@ -368,11 +620,21 @@ class FieldModel:
 
     @property
     def fixed_bytes(self) -> bool:
-        return self.kind == "bytes" and not self.repeated and self.array_enabled and self.array_fixed
+        return (
+            self.kind == "bytes"
+            and not self.repeated
+            and self.array_enabled
+            and self.array_fixed
+        )
 
     @property
     def dynamic_bytes(self) -> bool:
-        return self.kind == "bytes" and not self.repeated and self.array_enabled and not self.array_fixed
+        return (
+            self.kind == "bytes"
+            and not self.repeated
+            and self.array_enabled
+            and not self.array_fixed
+        )
 
     @property
     def repeated_array(self) -> bool:
@@ -506,7 +768,9 @@ class _ExprParser:
             if self._match("<"):
                 rhs = self._parse_add()
                 value = _bool_value(
-                    _numeric_compare(value, rhs, self._label, lambda lhs, rhs: lhs < rhs),
+                    _numeric_compare(
+                        value, rhs, self._label, lambda lhs, rhs: lhs < rhs
+                    ),
                     cpp_expr=_binary_cpp(value, rhs, "<", 40),
                     cpp_precedence=40,
                 )
@@ -514,7 +778,9 @@ class _ExprParser:
             if self._match("<="):
                 rhs = self._parse_add()
                 value = _bool_value(
-                    _numeric_compare(value, rhs, self._label, lambda lhs, rhs: lhs <= rhs),
+                    _numeric_compare(
+                        value, rhs, self._label, lambda lhs, rhs: lhs <= rhs
+                    ),
                     cpp_expr=_binary_cpp(value, rhs, "<=", 40),
                     cpp_precedence=40,
                 )
@@ -522,7 +788,9 @@ class _ExprParser:
             if self._match(">"):
                 rhs = self._parse_add()
                 value = _bool_value(
-                    _numeric_compare(value, rhs, self._label, lambda lhs, rhs: lhs > rhs),
+                    _numeric_compare(
+                        value, rhs, self._label, lambda lhs, rhs: lhs > rhs
+                    ),
                     cpp_expr=_binary_cpp(value, rhs, ">", 40),
                     cpp_precedence=40,
                 )
@@ -530,7 +798,9 @@ class _ExprParser:
             if self._match(">="):
                 rhs = self._parse_add()
                 value = _bool_value(
-                    _numeric_compare(value, rhs, self._label, lambda lhs, rhs: lhs >= rhs),
+                    _numeric_compare(
+                        value, rhs, self._label, lambda lhs, rhs: lhs >= rhs
+                    ),
                     cpp_expr=_binary_cpp(value, rhs, ">=", 40),
                     cpp_precedence=40,
                 )
@@ -542,20 +812,42 @@ class _ExprParser:
         while True:
             if self._match("+"):
                 rhs = self._parse_mul()
-                if value.family == CONSTANT_KIND_STRING or rhs.family == CONSTANT_KIND_STRING:
-                    if value.family != CONSTANT_KIND_STRING or rhs.family != CONSTANT_KIND_STRING:
-                        raise ProtocyteError(f"{self._label}: '+' requires both operands to be numeric or string")
+                if (
+                    value.family == CONSTANT_KIND_STRING
+                    or rhs.family == CONSTANT_KIND_STRING
+                ):
+                    if (
+                        value.family != CONSTANT_KIND_STRING
+                        or rhs.family != CONSTANT_KIND_STRING
+                    ):
+                        raise ProtocyteError(
+                            f"{self._label}: '+' requires both operands to be numeric or string"
+                        )
                     value = _string_value(
                         str(value.value) + str(rhs.value),
                         cpp_expr=_binary_cpp(value, rhs, "+", 50),
                         cpp_precedence=50,
                     )
                 else:
-                    value = _numeric_binary(value, rhs, self._label, lambda lhs, rhs: lhs + rhs, symbol="+", precedence=50)
+                    value = _numeric_binary(
+                        value,
+                        rhs,
+                        self._label,
+                        lambda lhs, rhs: lhs + rhs,
+                        symbol="+",
+                        precedence=50,
+                    )
                 continue
             if self._match("-"):
                 rhs = self._parse_mul()
-                value = _numeric_binary(value, rhs, self._label, lambda lhs, rhs: lhs - rhs, symbol="-", precedence=50)
+                value = _numeric_binary(
+                    value,
+                    rhs,
+                    self._label,
+                    lambda lhs, rhs: lhs - rhs,
+                    symbol="-",
+                    precedence=50,
+                )
                 continue
             return value
 
@@ -564,11 +856,20 @@ class _ExprParser:
         while True:
             if self._match("*"):
                 rhs = self._parse_unary()
-                value = _numeric_binary(value, rhs, self._label, lambda lhs, rhs: lhs * rhs, symbol="*", precedence=60)
+                value = _numeric_binary(
+                    value,
+                    rhs,
+                    self._label,
+                    lambda lhs, rhs: lhs * rhs,
+                    symbol="*",
+                    precedence=60,
+                )
                 continue
             if self._match("/"):
                 rhs = self._parse_unary()
-                lhs_value, rhs_value, result_family = _numeric_operands(value, rhs, self._label)
+                lhs_value, rhs_value, result_family = _numeric_operands(
+                    value, rhs, self._label
+                )
                 if rhs_value == 0:
                     raise ProtocyteError(f"{self._label}: division by zero")
                 if result_family == "float":
@@ -586,11 +887,15 @@ class _ExprParser:
                 continue
             if self._match("%"):
                 rhs = self._parse_unary()
-                lhs_value, rhs_value, result_family = _numeric_operands(value, rhs, self._label)
+                lhs_value, rhs_value, result_family = _numeric_operands(
+                    value, rhs, self._label
+                )
                 if rhs_value == 0:
                     raise ProtocyteError(f"{self._label}: modulo by zero")
                 if result_family == "float":
-                    raise ProtocyteError(f"{self._label}: '%' only supports integer operands")
+                    raise ProtocyteError(
+                        f"{self._label}: '%' only supports integer operands"
+                    )
                 value = _numeric_value(
                     lhs_value % rhs_value,
                     cpp_expr=_binary_cpp(value, rhs, "%", 60),
@@ -610,7 +915,11 @@ class _ExprParser:
         if self._match("+"):
             value = self._parse_unary()
             _expect_numeric(value, self._label)
-            return _numeric_value(_expect_numeric(value, self._label), cpp_expr="+" + _wrap_cpp(value, 90), cpp_precedence=90)
+            return _numeric_value(
+                _expect_numeric(value, self._label),
+                cpp_expr="+" + _wrap_cpp(value, 90),
+                cpp_precedence=90,
+            )
         if self._match("-"):
             value = self._parse_unary()
             return _numeric_value(
@@ -626,7 +935,9 @@ class _ExprParser:
             self._index += 1
             return _numeric_value(
                 _parse_number_token(token_value, self._label),
-                cpp_expr=_cpp_number_token(token_value, unsigned_integer=self._unsigned_integer_literals),
+                cpp_expr=_cpp_number_token(
+                    token_value, unsigned_integer=self._unsigned_integer_literals
+                ),
             )
         if token_type == "STRING":
             self._index += 1
@@ -664,7 +975,9 @@ class _ExprParser:
 
     def _expect(self, token: str) -> None:
         if not self._match(token):
-            raise ProtocyteError(f"{self._label}: expected {token!r}, got {self._peek()[1]!r}")
+            raise ProtocyteError(
+                f"{self._label}: expected {token!r}, got {self._peek()[1]!r}"
+            )
 
 
 def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> DescriptorModel:
@@ -675,7 +988,9 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     missing = [name for name in file_to_generate if name not in files_by_name]
     if missing:
-        raise ProtocyteError(f"protoc request is missing file descriptors for: {', '.join(missing)}")
+        raise ProtocyteError(
+            f"protoc request is missing file descriptors for: {', '.join(missing)}"
+        )
 
     for name in file_to_generate:
         validate_virtual_file_name(name)
@@ -685,7 +1000,9 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     selected_files = set(file_to_generate)
     reachable_files = _validate_import_graph(files_by_name, file_to_generate)
     for name in reachable_files:
-        _validate_extension_declarations(files_by_name[name], selected_for_generation=name in selected_files)
+        _validate_extension_declarations(
+            files_by_name[name], selected_for_generation=name in selected_files
+        )
 
     files: dict[str, FileModel] = {}
     messages: dict[str, MessageModel] = {}
@@ -766,14 +1083,29 @@ def _validate_import_graph(
     return seen
 
 
-def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -> _CustomOptions:
+def _custom_options(
+    proto_files: Iterable[descriptor_pb2.FileDescriptorProto],
+) -> _CustomOptions:
+    proto_files = list(proto_files)
+    _validate_protocyte_option_extension_sources(proto_files)
+    protocyte_options_file = next(
+        (file for file in proto_files if file.name == PROTOCYTE_OPTIONS_FILE_NAME),
+        None,
+    )
+    if protocyte_options_file is not None:
+        _validate_protocyte_options_schema(protocyte_options_file)
+
     pool = descriptor_pool.DescriptorPool()
     try:
         pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
     except Exception:
+        if protocyte_options_file is not None:
+            _raise_obsolete_protocyte_options_schema()
         return _CustomOptions()
 
-    pending = [file for file in proto_files if file.name != descriptor_pb2.DESCRIPTOR.name]
+    pending = [
+        file for file in proto_files if file.name != descriptor_pb2.DESCRIPTOR.name
+    ]
     while pending:
         next_pending: list[descriptor_pb2.FileDescriptorProto] = []
         progressed = False
@@ -790,20 +1122,137 @@ def _custom_options(proto_files: Iterable[descriptor_pb2.FileDescriptorProto]) -
     try:
         file_options_desc = pool.FindMessageTypeByName("google.protobuf.FileOptions")
         field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
-        message_options_desc = pool.FindMessageTypeByName("google.protobuf.MessageOptions")
+        message_options_desc = pool.FindMessageTypeByName(
+            "google.protobuf.MessageOptions"
+        )
         file_options_cls = message_factory.GetMessageClass(file_options_desc)
         field_options_cls = message_factory.GetMessageClass(field_options_desc)
         message_options_cls = message_factory.GetMessageClass(message_options_desc)
     except Exception:
+        if protocyte_options_file is not None:
+            _raise_obsolete_protocyte_options_schema()
         return _CustomOptions()
 
-    return _CustomOptions(
+    custom_options = _CustomOptions(
         file_options_cls=file_options_cls,
         field_options_cls=field_options_cls,
         message_options_cls=message_options_cls,
         array_extension=_find_extension(pool, ARRAY_OPTION_NAME),
         constant_extension=_find_extension(pool, CONSTANT_OPTION_NAME),
         package_constant_extension=_find_extension(pool, PACKAGE_CONSTANT_OPTION_NAME),
+    )
+    if protocyte_options_file is not None and (
+        custom_options.array_extension is None
+        or custom_options.constant_extension is None
+        or custom_options.package_constant_extension is None
+    ):
+        _raise_obsolete_protocyte_options_schema()
+    _validate_loaded_protocyte_option_extensions(custom_options)
+    return custom_options
+
+
+def _validate_protocyte_option_extension_sources(
+    proto_files: Iterable[descriptor_pb2.FileDescriptorProto],
+) -> None:
+    for file in proto_files:
+        for extension in file.extension:
+            extension_name = _extension_full_name(file, None, extension)
+            if (
+                extension_name in _PROTOCYTE_OPTION_NAMES
+                and file.name != PROTOCYTE_OPTIONS_FILE_NAME
+            ):
+                raise ProtocyteError(
+                    f"{file.name}: Protocyte option extension {extension_name} must be declared "
+                    f"by {PROTOCYTE_OPTIONS_FILE_NAME}"
+                )
+
+
+def _validate_loaded_protocyte_option_extensions(
+    custom_options: _CustomOptions,
+) -> None:
+    for extension_name, extension in (
+        (ARRAY_OPTION_NAME, custom_options.array_extension),
+        (CONSTANT_OPTION_NAME, custom_options.constant_extension),
+        (PACKAGE_CONSTANT_OPTION_NAME, custom_options.package_constant_extension),
+    ):
+        if extension is None:
+            continue
+        source_name = extension.file.name
+        if source_name != PROTOCYTE_OPTIONS_FILE_NAME:
+            raise ProtocyteError(
+                f"{source_name}: Protocyte option extension {extension_name} must be declared "
+                f"by {PROTOCYTE_OPTIONS_FILE_NAME}"
+            )
+
+
+def _validate_protocyte_options_schema(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> None:
+    message_schema = tuple(
+        (
+            message.name,
+            tuple(oneof.name for oneof in message.oneof_decl),
+            tuple(_option_field_schema(field) for field in message.field),
+        )
+        for message in file.message_type
+    )
+    extension_schema = tuple(
+        _option_extension_schema(extension) for extension in file.extension
+    )
+    if (
+        file.package != "protocyte"
+        or file.syntax != "proto3"
+        or tuple(file.dependency) != (descriptor_pb2.DESCRIPTOR.name,)
+        or file.public_dependency
+        or file.weak_dependency
+        or message_schema != _PROTOCYTE_OPTION_MESSAGE_SCHEMA
+        or extension_schema != _PROTOCYTE_OPTION_EXTENSION_SCHEMA
+        or file.enum_type
+        or file.service
+        or any(
+            message.nested_type
+            or message.enum_type
+            or message.extension
+            or message.extension_range
+            or message.reserved_range
+            or message.reserved_name
+            for message in file.message_type
+        )
+    ):
+        _raise_obsolete_protocyte_options_schema()
+
+
+def _option_field_schema(
+    field: descriptor_pb2.FieldDescriptorProto,
+) -> tuple[object, ...]:
+    oneof_index = field.oneof_index if field.HasField("oneof_index") else None
+    return (
+        field.name,
+        field.number,
+        field.label,
+        field.type,
+        field.type_name,
+        oneof_index,
+    )
+
+
+def _option_extension_schema(
+    extension: descriptor_pb2.FieldDescriptorProto,
+) -> tuple[object, ...]:
+    return (
+        extension.name,
+        extension.number,
+        extension.label,
+        extension.type,
+        extension.type_name,
+        extension.extendee,
+    )
+
+
+def _raise_obsolete_protocyte_options_schema() -> None:
+    raise ProtocyteError(
+        "protocyte/options.proto uses an obsolete or unsupported Protocyte options schema; "
+        "regenerate descriptors with the current Protocyte options.proto"
     )
 
 
@@ -846,8 +1295,10 @@ def _file_syntax(file: descriptor_pb2.FileDescriptorProto) -> str:
     return file.syntax or "proto2"
 
 
-def _reject_unsupported_file_features(file: descriptor_pb2.FileDescriptorProto, label: str) -> None:
-    if hasattr(file, "edition") and getattr(file, "edition"):
+def _reject_unsupported_file_features(
+    file: descriptor_pb2.FileDescriptorProto, label: str
+) -> None:
+    if file.edition:
         raise ProtocyteError(f"{label}: protobuf Editions are not supported in v1")
 
 
@@ -878,7 +1329,9 @@ def _validate_extension_declarations(
                 f"{file.name}: message {proto_full_name(file, path)}: extension declarations are not supported"
             )
 
-    def validate_message_extensions(message: descriptor_pb2.DescriptorProto, path: str) -> None:
+    def validate_message_extensions(
+        message: descriptor_pb2.DescriptorProto, path: str
+    ) -> None:
         for extension in message.extension:
             validate_extension(extension, path)
         for nested in message.nested_type:
@@ -907,7 +1360,9 @@ def _build_enum(
 ) -> EnumModel:
     cpp_prefix = f"{parent.cpp_name}_" if parent else ""
     values = [
-        EnumValueModel(name=value.name, cpp_name=cpp_identifier(value.name), number=value.number)
+        EnumValueModel(
+            name=value.name, cpp_name=cpp_identifier(value.name), number=value.number
+        )
         for value in enum.value
     ]
     return EnumModel(
@@ -981,34 +1436,59 @@ def _fill_message_details(
         )
 
     for field_proto in message.descriptor.field:
-        field_model = _build_field(message, files[message.file_name], field_proto, messages, enums, custom_options)
+        field_model = _build_field(
+            message,
+            files[message.file_name],
+            field_proto,
+            messages,
+            enums,
+            custom_options,
+        )
         message.fields.append(field_model)
         if field_model.oneof_index is not None and field_model.oneof_name is not None:
             oneof_fields[field_model.oneof_index].fields.append(field_model)
 
-    message.oneofs = [oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields]
+    message.oneofs = [
+        oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields
+    ]
     _validate_oneof_collisions(message)
     _validate_nested_alias_collisions(message)
     _validate_constant_collisions(message)
     _validate_field_collisions(message)
 
 
-def _build_file_constants(file_model: FileModel, custom_options: _CustomOptions) -> list[ConstantModel]:
+def _build_file_constants(
+    file_model: FileModel, custom_options: _CustomOptions
+) -> list[ConstantModel]:
     owner = file_model.package or file_model.name
-    return _build_raw_constants(owner, custom_options.file_constants(file_model.descriptor.options))
+    return _build_raw_constants(
+        owner,
+        custom_options.file_constants(file_model.descriptor.options, label=owner),
+    )
 
 
-def _build_constants(message: MessageModel, custom_options: _CustomOptions) -> list[ConstantModel]:
-    return _build_raw_constants(message.full_name, custom_options.message_constants(message.descriptor.options))
+def _build_constants(
+    message: MessageModel, custom_options: _CustomOptions
+) -> list[ConstantModel]:
+    return _build_raw_constants(
+        message.full_name,
+        custom_options.message_constants(
+            message.descriptor.options, label=message.full_name
+        ),
+    )
 
 
-def _build_raw_constants(owner: str, raw_constants: list[_RawConstantOption]) -> list[ConstantModel]:
+def _build_raw_constants(
+    owner: str, raw_constants: list[_RawConstantOption]
+) -> list[ConstantModel]:
     constants: list[ConstantModel] = []
     for raw in raw_constants:
         if not raw.name:
             raise ProtocyteError(f"{owner}: constant name must not be empty")
         if raw.kind is None or (raw.literal is None) == (raw.expr is None):
-            raise ProtocyteError(f"{owner}.{raw.name}: exactly one typed constant value must be set")
+            raise ProtocyteError(
+                f"{owner}.{raw.name}: exactly one typed constant value must be set"
+            )
         constants.append(
             ConstantModel(
                 name=raw.name,
@@ -1028,10 +1508,14 @@ def _validate_constant_collisions(message: MessageModel) -> None:
 
     for constant in message.constants:
         if constant.name in seen_names:
-            raise ProtocyteError(f"{message.full_name}.{constant.name}: constant cannot be redefined")
+            raise ProtocyteError(
+                f"{message.full_name}.{constant.name}: constant cannot be redefined"
+            )
         seen_names.add(constant.name)
         if not constant.cpp_name or constant.cpp_name == "_":
-            raise ProtocyteError(f"{message.full_name}.{constant.name}: constant name is not a valid C++ identifier")
+            raise ProtocyteError(
+                f"{message.full_name}.{constant.name}: constant name is not a valid C++ identifier"
+            )
         if constant.cpp_name in seen_cpp_names:
             raise ProtocyteError(
                 f"{message.full_name}.{constant.name}: constant collides after C++ identifier normalization"
@@ -1047,9 +1531,13 @@ def _validate_package_constant_collisions(file_model: FileModel) -> None:
             raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
         seen_names.add(constant.name)
         if not constant.cpp_name or constant.cpp_name == "_":
-            raise ProtocyteError(f"{constant.full_name}: constant name is not a valid C++ identifier")
+            raise ProtocyteError(
+                f"{constant.full_name}: constant name is not a valid C++ identifier"
+            )
         if constant.cpp_name in seen_cpp_names:
-            raise ProtocyteError(f"{constant.full_name}: constant collides after C++ identifier normalization")
+            raise ProtocyteError(
+                f"{constant.full_name}: constant collides after C++ identifier normalization"
+            )
         seen_cpp_names.add(constant.cpp_name)
 
 
@@ -1069,12 +1557,18 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
         reserved = top_level_cpp_names[package_key]
         for constant in file_model.constants:
             if constant.name in names:
-                raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
+                raise ProtocyteError(
+                    f"{constant.full_name}: constant cannot be redefined"
+                )
             names.add(constant.name)
             if constant.cpp_name in cpp_names:
-                raise ProtocyteError(f"{constant.full_name}: constant collides after C++ identifier normalization")
+                raise ProtocyteError(
+                    f"{constant.full_name}: constant collides after C++ identifier normalization"
+                )
             if constant.cpp_name in reserved:
-                raise ProtocyteError(f"{constant.full_name}: constant collides with generated API")
+                raise ProtocyteError(
+                    f"{constant.full_name}: constant collides with generated API"
+                )
             cpp_names.add(constant.cpp_name)
 
 
@@ -1083,7 +1577,9 @@ def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
         seen_cpp_names: dict[str, str] = {}
         for value in enum.values:
             if not value.cpp_name or value.cpp_name == "_":
-                raise ProtocyteError(f"{enum.full_name}.{value.name}: enum value name is not a valid C++ identifier")
+                raise ProtocyteError(
+                    f"{enum.full_name}.{value.name}: enum value name is not a valid C++ identifier"
+                )
             if value.cpp_name in seen_cpp_names:
                 first = seen_cpp_names[value.cpp_name]
                 raise ProtocyteError(
@@ -1095,7 +1591,9 @@ def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
 def _validate_type_cpp_name_collisions(files: dict[str, FileModel]) -> None:
     seen_cpp_names: dict[tuple[str, ...], dict[str, str]] = {}
     for file_model in files.values():
-        package_names = seen_cpp_names.setdefault(_cpp_package_key(file_model.package), {})
+        package_names = seen_cpp_names.setdefault(
+            _cpp_package_key(file_model.package), {}
+        )
         for full_name, cpp_name in _file_type_cpp_items(file_model):
             _reserve_type_cpp_name(package_names, full_name, cpp_name)
 
@@ -1114,12 +1612,16 @@ def _file_type_cpp_items(file_model: FileModel) -> Iterable[tuple[str, str]]:
             yield enum.full_name, enum.cpp_name
 
 
-def _reserve_type_cpp_name(seen_cpp_names: dict[str, str], full_name: str, cpp_name: str) -> None:
+def _reserve_type_cpp_name(
+    seen_cpp_names: dict[str, str], full_name: str, cpp_name: str
+) -> None:
     if not cpp_name or cpp_name == "_":
         raise ProtocyteError(f"{full_name}: type name is not a valid C++ identifier")
     if cpp_name in seen_cpp_names:
         first = seen_cpp_names[cpp_name]
-        raise ProtocyteError(f"{full_name}: type collides with {first!r} after C++ identifier normalization")
+        raise ProtocyteError(
+            f"{full_name}: type collides with {first!r} after C++ identifier normalization"
+        )
     seen_cpp_names[cpp_name] = full_name
 
 
@@ -1127,7 +1629,9 @@ def _validate_nested_alias_collisions(message: MessageModel) -> None:
     seen_cpp_names: dict[str, str] = {}
     for name, cpp_name in _nested_alias_cpp_items(message):
         if not cpp_name or cpp_name == "_":
-            raise ProtocyteError(f"{message.full_name}.{name}: nested type alias is not a valid C++ identifier")
+            raise ProtocyteError(
+                f"{message.full_name}.{name}: nested type alias is not a valid C++ identifier"
+            )
         if cpp_name in seen_cpp_names:
             first = seen_cpp_names[cpp_name]
             raise ProtocyteError(
@@ -1144,7 +1648,9 @@ def _validate_oneof_collisions(message: MessageModel) -> None:
     for oneof in message.oneofs:
         lower = cpp_identifier(oneof.name)
         if not lower or lower == "_":
-            raise ProtocyteError(f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier")
+            raise ProtocyteError(
+                f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier"
+            )
         if lower in seen_cpp_names:
             first = seen_cpp_names[lower]
             raise ProtocyteError(
@@ -1168,7 +1674,9 @@ def _validate_field_collisions(message: MessageModel) -> None:
 
     for field_model in message.fields:
         if not field_model.cpp_name or field_model.cpp_name == "_":
-            raise ProtocyteError(f"{message.full_name}.{field_model.name}: field name is not a valid C++ identifier")
+            raise ProtocyteError(
+                f"{message.full_name}.{field_model.name}: field name is not a valid C++ identifier"
+            )
         if field_model.cpp_name in seen_cpp_names:
             first = seen_cpp_names[field_model.cpp_name]
             raise ProtocyteError(
@@ -1192,21 +1700,36 @@ def _build_field(
     custom_options: _CustomOptions,
 ) -> FieldModel:
     if proto.extendee:
-        raise ProtocyteError(f"{owner.full_name}.{proto.name}: extension fields are not supported for codec generation")
+        raise ProtocyteError(
+            f"{owner.full_name}.{proto.name}: extension fields are not supported for codec generation"
+        )
     if proto.type == FieldDescriptorProto.TYPE_GROUP:
-        raise ProtocyteError(f"{owner.full_name}.{proto.name}: groups are not supported")
+        raise ProtocyteError(
+            f"{owner.full_name}.{proto.name}: groups are not supported"
+        )
 
     oneof_index = proto.oneof_index if proto.HasField("oneof_index") else None
     oneof_name = None
-    if oneof_index is not None and not proto.proto3_optional:
-        oneof_name = owner.descriptor.oneof_decl[oneof_index].name
+    if oneof_index is not None:
+        oneof_count = len(owner.descriptor.oneof_decl)
+        if oneof_index < 0 or oneof_index >= oneof_count:
+            raise ProtocyteError(
+                f"{owner.full_name}.{proto.name}: oneof_index {oneof_index} is outside "
+                f"the message's {oneof_count} oneof declaration(s)"
+            )
+        if not proto.proto3_optional:
+            oneof_name = owner.descriptor.oneof_decl[oneof_index].name
 
     repeated = proto.label == FieldDescriptorProto.LABEL_REPEATED
     required = proto.label == FieldDescriptorProto.LABEL_REQUIRED
     explicit_presence = (
         proto.proto3_optional
         or required
-        or (file_model.syntax == "proto2" and proto.label == FieldDescriptorProto.LABEL_OPTIONAL and oneof_index is None)
+        or (
+            file_model.syntax == "proto2"
+            and proto.label == FieldDescriptorProto.LABEL_OPTIONAL
+            and oneof_index is None
+        )
     )
     packed = _is_packed(proto, file_model.syntax)
     kind = "scalar"
@@ -1216,7 +1739,9 @@ def _build_field(
     map_key = None
     map_value = None
     type_name = strip_type_name(proto.type_name)
-    array_max, array_expr, array_fixed = custom_options.field_array(proto.options)
+    array_max, array_expr, array_fixed = custom_options.field_array(
+        proto.options, label=f"{owner.full_name}.{proto.name}"
+    )
 
     if proto.type == FieldDescriptorProto.TYPE_STRING:
         kind = "string"
@@ -1234,16 +1759,24 @@ def _build_field(
             kind = "map"
             key_proto = message_type.descriptor.field[0]
             value_proto = message_type.descriptor.field[1]
-            map_key = _build_field(message_type, file_model, key_proto, messages, enums, custom_options)
-            map_value = _build_field(message_type, file_model, value_proto, messages, enums, custom_options)
+            map_key = _build_field(
+                message_type, file_model, key_proto, messages, enums, custom_options
+            )
+            map_value = _build_field(
+                message_type, file_model, value_proto, messages, enums, custom_options
+            )
             cpp_type = f"typename Config::template Map<{map_key.cpp_type}, {map_value.cpp_type}>"
         else:
             kind = "message"
             cpp_type = ""
     elif proto.type not in SCALAR_CPP_TYPES:
-        raise ProtocyteError(f"{owner.full_name}.{proto.name}: unsupported field type {proto.type}")
+        raise ProtocyteError(
+            f"{owner.full_name}.{proto.name}: unsupported field type {proto.type}"
+        )
 
-    default_cpp = _field_default_cpp(file_model.syntax, owner.full_name, proto, kind, enum_type)
+    default_cpp = _field_default_cpp(
+        file_model.syntax, owner.full_name, proto, kind, enum_type
+    )
     default_byte_size = _field_default_byte_size(owner.full_name, proto, kind)
 
     if array_fixed and array_max is None and array_expr is None:
@@ -1251,18 +1784,30 @@ def _build_field(
             f"{owner.full_name}.{proto.name}: protocyte.array.fixed requires protocyte.array.max or protocyte.array.expr"
         )
     if array_max is not None and array_expr is not None:
-        raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array requires exactly one of max or expr")
+        raise ProtocyteError(
+            f"{owner.full_name}.{proto.name}: protocyte.array requires exactly one of max or expr"
+        )
     if array_max is not None or array_expr is not None:
         if kind == "map":
-            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array is not supported on map fields")
+            raise ProtocyteError(
+                f"{owner.full_name}.{proto.name}: protocyte.array is not supported on map fields"
+            )
         if kind != "bytes" and not repeated:
-            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array is only supported on bytes or repeated fields")
+            raise ProtocyteError(
+                f"{owner.full_name}.{proto.name}: protocyte.array is only supported on bytes or repeated fields"
+            )
         if array_max is not None and array_max <= 0:
-            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array.max must be greater than zero")
+            raise ProtocyteError(
+                f"{owner.full_name}.{proto.name}: protocyte.array.max must be greater than zero"
+            )
         if array_expr is not None and not array_expr.strip():
-            raise ProtocyteError(f"{owner.full_name}.{proto.name}: protocyte.array.expr must not be empty")
+            raise ProtocyteError(
+                f"{owner.full_name}.{proto.name}: protocyte.array.expr must not be empty"
+            )
         if array_max is not None and default_byte_size is not None:
-            _validate_array_default_byte_size(owner.full_name, proto.name, default_byte_size, array_max, array_fixed)
+            _validate_array_default_byte_size(
+                owner.full_name, proto.name, default_byte_size, array_max, array_fixed
+            )
 
     return FieldModel(
         name=proto.name,
@@ -1329,11 +1874,17 @@ def _field_default_cpp(
             return str(enum_type.values[0].number)
         return None
     if file_syntax == "proto3":
-        raise ProtocyteError(f"{owner_full_name}.{proto.name}: explicit default values are not allowed in proto3")
+        raise ProtocyteError(
+            f"{owner_full_name}.{proto.name}: explicit default values are not allowed in proto3"
+        )
     if proto.label == FieldDescriptorProto.LABEL_REPEATED:
-        raise ProtocyteError(f"{owner_full_name}.{proto.name}: repeated fields cannot have default values")
+        raise ProtocyteError(
+            f"{owner_full_name}.{proto.name}: repeated fields cannot have default values"
+        )
     if kind in {"message", "map"}:
-        raise ProtocyteError(f"{owner_full_name}.{proto.name}: message fields cannot have default values")
+        raise ProtocyteError(
+            f"{owner_full_name}.{proto.name}: message fields cannot have default values"
+        )
     value = proto.default_value
     if kind == "enum":
         if enum_type is None:
@@ -1341,7 +1892,9 @@ def _field_default_cpp(
         for enum_value in enum_type.values:
             if enum_value.name == value:
                 return str(enum_value.number)
-        raise ProtocyteError(f"{owner_full_name}.{proto.name}: unknown enum default value {value!r}")
+        raise ProtocyteError(
+            f"{owner_full_name}.{proto.name}: unknown enum default value {value!r}"
+        )
     if kind == "string":
         return f"::protocyte::StringView {{{_cpp_constant_value(CONSTANT_KIND_STRING, value)}}}"
     if kind == "bytes":
@@ -1349,14 +1902,22 @@ def _field_default_cpp(
         return f"::protocyte::Span<const ::protocyte::u8> {{reinterpret_cast<const ::protocyte::u8*>({_cpp_string_literal(encoded)}), {len(encoded)}u}}"
     if proto.type == FieldDescriptorProto.TYPE_BOOL:
         if value not in {"true", "false"}:
-            raise ProtocyteError(f"{owner_full_name}.{proto.name}: invalid bool default value {value!r}")
+            raise ProtocyteError(
+                f"{owner_full_name}.{proto.name}: invalid bool default value {value!r}"
+            )
         return value
     if proto.type == FieldDescriptorProto.TYPE_FLOAT:
-        return _floating_default_cpp(value, "::protocyte::f32", f"{owner_full_name}.{proto.name}")
+        return _floating_default_cpp(
+            value, "::protocyte::f32", f"{owner_full_name}.{proto.name}"
+        )
     if proto.type == FieldDescriptorProto.TYPE_DOUBLE:
-        return _floating_default_cpp(value, "::protocyte::f64", f"{owner_full_name}.{proto.name}")
+        return _floating_default_cpp(
+            value, "::protocyte::f64", f"{owner_full_name}.{proto.name}"
+        )
     if proto.type in INTEGER_CONSTANT_KINDS:
-        return _integer_default_cpp(value, INTEGER_CONSTANT_KINDS[proto.type], f"{owner_full_name}.{proto.name}")
+        return _integer_default_cpp(
+            value, INTEGER_CONSTANT_KINDS[proto.type], f"{owner_full_name}.{proto.name}"
+        )
     if proto.type in SCALAR_CPP_TYPES:
         return value
     return None
@@ -1372,7 +1933,9 @@ def _field_default_byte_size(
     return len(_decode_bytes_default(owner_full_name, proto))
 
 
-def _decode_bytes_default(owner_full_name: str, proto: descriptor_pb2.FieldDescriptorProto) -> bytes:
+def _decode_bytes_default(
+    owner_full_name: str, proto: descriptor_pb2.FieldDescriptorProto
+) -> bytes:
     try:
         return text_encoding.CUnescape(proto.default_value)
     except ValueError as exc:
@@ -1390,7 +1953,9 @@ def _validate_array_default_byte_size(
 ) -> None:
     label = f"{owner_full_name}.{field_name}"
     if array_fixed and default_size != array_max:
-        raise ProtocyteError(f"{label}: default value size must match fixed protocyte.array max")
+        raise ProtocyteError(
+            f"{label}: default value size must match fixed protocyte.array max"
+        )
     if not array_fixed and default_size > array_max:
         raise ProtocyteError(f"{label}: default value size exceeds protocyte.array max")
 
@@ -1399,7 +1964,9 @@ def _integer_default_cpp(value: str, kind: str, label: str) -> str:
     try:
         numeric = int(value, 10)
     except ValueError as exc:
-        raise ProtocyteError(f"{label}: invalid integer default value {value!r}") from exc
+        raise ProtocyteError(
+            f"{label}: invalid integer default value {value!r}"
+        ) from exc
     return _cpp_constant_value(kind, _coerce_integer(kind, numeric, label))
 
 
@@ -1413,7 +1980,9 @@ def _floating_default_cpp(value: str, cpp_type: str, label: str) -> str:
     try:
         numeric = float(value)
     except ValueError as exc:
-        raise ProtocyteError(f"{label}: invalid floating-point default value {value!r}") from exc
+        raise ProtocyteError(
+            f"{label}: invalid floating-point default value {value!r}"
+        ) from exc
     if cpp_type == "::protocyte::f32":
         return _cpp_constant_value(CONSTANT_KIND_FLOAT, numeric)
     return _cpp_constant_value(CONSTANT_KIND_DOUBLE, numeric)
@@ -1424,15 +1993,14 @@ def _is_packed(proto: descriptor_pb2.FieldDescriptorProto, file_syntax: str) -> 
         return False
     if proto.type not in PACKABLE_TYPES:
         return False
-    try:
-        if proto.options.HasField("packed"):
-            return proto.options.packed
-    except ValueError:
-        pass
+    if proto.options.HasField("packed"):
+        return proto.options.packed
     return file_syntax == "proto3"
 
 
-def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[str, MessageModel]) -> None:
+def _resolve_constants_and_arrays(
+    files: dict[str, FileModel], messages: dict[str, MessageModel]
+) -> None:
     constants_by_message = {
         message.full_name: {constant.name: constant for constant in message.constants}
         for message in messages.values()
@@ -1444,30 +2012,44 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
             package_constants[constant.name] = constant
     states: dict[str, str] = {}
 
-    def find_message_constant(owner: MessageModel, scope: str, constant_name: str) -> tuple[MessageModel | None, ConstantModel | None]:
+    def find_message_constant(
+        owner: MessageModel, scope: str, constant_name: str
+    ) -> tuple[MessageModel | None, ConstantModel | None]:
         target_message = messages.get(scope)
         if target_message is not None:
-            return target_message, constants_by_message.get(target_message.full_name, {}).get(constant_name)
+            return target_message, constants_by_message.get(
+                target_message.full_name, {}
+            ).get(constant_name)
         relative_scope = f"{owner.package}.{scope}" if owner.package else scope
         if relative_scope != scope:
             target_message = messages.get(relative_scope)
             if target_message is not None:
-                return target_message, constants_by_message.get(target_message.full_name, {}).get(constant_name)
+                return target_message, constants_by_message.get(
+                    target_message.full_name, {}
+                ).get(constant_name)
         return None, None
 
-    def find_constant(owner: MessageModel, name: str) -> tuple[MessageModel | None, ConstantModel]:
+    def find_constant(
+        owner: MessageModel, name: str
+    ) -> tuple[MessageModel | None, ConstantModel]:
         if "." in name:
             parts = name.split(".")
             if len(parts) < 2:
-                raise ProtocyteError(f"{owner.full_name}: invalid constant reference {name!r}")
+                raise ProtocyteError(
+                    f"{owner.full_name}: invalid constant reference {name!r}"
+                )
             package_name = ".".join(parts[:-1])
             target_constant = constants_by_package.get(package_name, {}).get(parts[-1])
             if target_constant is not None:
                 return None, target_constant
             message_path = ".".join(parts[:-1])
-            target_message, target_constant = find_message_constant(owner, message_path, parts[-1])
+            target_message, target_constant = find_message_constant(
+                owner, message_path, parts[-1]
+            )
             if target_message is None:
-                raise ProtocyteError(f"{owner.full_name}: unknown constant scope {message_path!r}")
+                raise ProtocyteError(
+                    f"{owner.full_name}: unknown constant scope {message_path!r}"
+                )
             if target_constant is None:
                 raise ProtocyteError(f"{owner.full_name}: unknown constant {name!r}")
             return target_message, target_constant
@@ -1483,13 +2065,21 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
             return None, target_constant
         raise ProtocyteError(f"{owner.full_name}: unknown constant {name!r}")
 
-    def resolve_constant(target: MessageModel, constant: ConstantModel, owner: MessageModel) -> _TypedValue:
+    def resolve_constant(
+        target: MessageModel, constant: ConstantModel, owner: MessageModel
+    ) -> _TypedValue:
         key = constant.full_name
         state = states.get(key)
         if state == "visiting":
-            raise ProtocyteError(f"{constant.full_name}: constant expression cycle detected")
+            raise ProtocyteError(
+                f"{constant.full_name}: constant expression cycle detected"
+            )
         if state == "done":
-            return _TypedValue(constant.family, constant.value, cpp_expr=_reference_cpp_expr(owner, target, constant))
+            return _TypedValue(
+                constant.family,
+                constant.value,
+                cpp_expr=_reference_cpp_expr(owner, target, constant),
+            )
         states[key] = "visiting"
         if constant.literal is not None:
             value = _coerce_literal(constant.kind, constant.literal, constant.full_name)
@@ -1506,7 +2096,11 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
         constant.cpp_type = _cpp_constant_type(constant.kind)
         constant.cpp_value = _cpp_constant_value(constant.kind, value)
         states[key] = "done"
-        return _TypedValue(constant.family, constant.value, cpp_expr=_reference_cpp_expr(owner, target, constant))
+        return _TypedValue(
+            constant.family,
+            constant.value,
+            cpp_expr=_reference_cpp_expr(owner, target, constant),
+        )
 
     def lookup_constant(owner: MessageModel, name: str) -> _TypedValue:
         target_message, target_constant = find_constant(owner, name)
@@ -1521,7 +2115,9 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
         key = constant.full_name
         state = states.get(key)
         if state == "visiting":
-            raise ProtocyteError(f"{constant.full_name}: constant expression cycle detected")
+            raise ProtocyteError(
+                f"{constant.full_name}: constant expression cycle detected"
+            )
         if state == "done":
             return
         states[key] = "visiting"
@@ -1545,14 +2141,22 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
         if "." in name:
             parts = name.split(".")
             target_package = ".".join(parts[:-1])
-            target_constant = constants_by_package.get(target_package, {}).get(parts[-1])
+            target_constant = constants_by_package.get(target_package, {}).get(
+                parts[-1]
+            )
         else:
             target_package = package
             target_constant = constants_by_package.get(package, {}).get(name)
         if target_constant is None:
-            raise ProtocyteError(f"{package or '<root>'}: unknown package constant {name!r}")
+            raise ProtocyteError(
+                f"{package or '<root>'}: unknown package constant {name!r}"
+            )
         resolve_package_constant(target_package, target_constant)
-        return _TypedValue(target_constant.family, target_constant.value, cpp_expr=_constant_cpp_expr(package, target_constant))
+        return _TypedValue(
+            target_constant.family,
+            target_constant.value,
+            cpp_expr=_constant_cpp_expr(package, target_constant),
+        )
 
     for package, package_constants in constants_by_package.items():
         for constant in package_constants.values():
@@ -1582,7 +2186,9 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
                     f"{message.full_name}.{field_model.name}: protocyte.array.expr must resolve to a positive integer"
                 )
             field_model.array_max = numeric
-            field_model.array_cpp_max = _cpp_constant_value(CONSTANT_KIND_UINT32, numeric)
+            field_model.array_cpp_max = _cpp_constant_value(
+                CONSTANT_KIND_UINT32, numeric
+            )
             if field_model.default_byte_size is not None:
                 _validate_array_default_byte_size(
                     message.full_name,
@@ -1593,7 +2199,9 @@ def _resolve_constants_and_arrays(files: dict[str, FileModel], messages: dict[st
                 )
 
 
-def _compute_file_dependencies(file_to_generate: list[str], files: dict[str, FileModel]) -> None:
+def _compute_file_dependencies(
+    file_to_generate: list[str], files: dict[str, FileModel]
+) -> None:
     for file_name in file_to_generate:
         file_model = files[file_name]
         for message in _walk_messages(file_model.messages):
@@ -1604,7 +2212,10 @@ def _compute_file_dependencies(file_to_generate: list[str], files: dict[str, Fil
 
 
 def _field_dependencies(field_model: FieldModel) -> Iterable[str]:
-    if field_model.message_type is not None and not field_model.message_type.is_map_entry:
+    if (
+        field_model.message_type is not None
+        and not field_model.message_type.is_map_entry
+    ):
         yield field_model.message_type.file_name
     if field_model.enum_type is not None:
         yield field_model.enum_type.file_name
@@ -1622,7 +2233,11 @@ def _mark_recursive_boxes(messages: dict[str, MessageModel]) -> None:
         if message.is_map_entry:
             continue
         for field_model in message.fields:
-            if field_model.kind == "message" and not field_model.repeated and field_model.message_type:
+            if (
+                field_model.kind == "message"
+                and not field_model.repeated
+                and field_model.message_type
+            ):
                 graph[message.full_name].add(field_model.message_type.full_name)
                 direct_fields.append((message, field_model, field_model.message_type))
 
@@ -1686,10 +2301,15 @@ def _tokenize(text: str, label: str) -> list[tuple[str, str]]:
             if char == "0" and end + 1 < len(text) and text[end + 1] in {"x", "X"}:
                 end += 2
                 hex_start = end
-                while end < len(text) and (text[end].isdigit() or text[end].lower() in {"a", "b", "c", "d", "e", "f"}):
+                while end < len(text) and (
+                    text[end].isdigit()
+                    or text[end].lower() in {"a", "b", "c", "d", "e", "f"}
+                ):
                     end += 1
                 if end == hex_start:
-                    raise ProtocyteError(f"{label}: invalid numeric literal {text[index:end]!r}")
+                    raise ProtocyteError(
+                        f"{label}: invalid numeric literal {text[index:end]!r}"
+                    )
             else:
                 while end < len(text) and text[end].isdigit():
                     end += 1
@@ -1747,7 +2367,9 @@ def _wrap_cpp(value: _TypedValue, precedence: int) -> str:
     return value.cpp_expr
 
 
-def _binary_cpp(lhs: _TypedValue, rhs: _TypedValue, symbol: str, precedence: int) -> str:
+def _binary_cpp(
+    lhs: _TypedValue, rhs: _TypedValue, symbol: str, precedence: int
+) -> str:
     return f"{_wrap_cpp(lhs, precedence)} {symbol} {_wrap_cpp(rhs, precedence + 1)}"
 
 
@@ -1757,11 +2379,20 @@ def _cpp_number_token(token: str, *, unsigned_integer: bool) -> str:
     return token
 
 
-def _bool_value(value: bool, *, cpp_expr: str | None = None, cpp_precedence: int = 100) -> _TypedValue:
-    return _TypedValue(CONSTANT_KIND_BOOL, value, cpp_expr or ("true" if value else "false"), cpp_precedence)
+def _bool_value(
+    value: bool, *, cpp_expr: str | None = None, cpp_precedence: int = 100
+) -> _TypedValue:
+    return _TypedValue(
+        CONSTANT_KIND_BOOL,
+        value,
+        cpp_expr or ("true" if value else "false"),
+        cpp_precedence,
+    )
 
 
-def _string_value(value: str, *, cpp_expr: str | None = None, cpp_precedence: int = 100) -> _TypedValue:
+def _string_value(
+    value: str, *, cpp_expr: str | None = None, cpp_precedence: int = 100
+) -> _TypedValue:
     if cpp_expr is None:
         cpp_expr = f'"{_cpp_escape_string(value)}"'
     return _TypedValue(CONSTANT_KIND_STRING, value, cpp_expr, cpp_precedence)
@@ -1801,10 +2432,14 @@ def _truncating_integer_divide(lhs: int, rhs: int) -> int:
     return -quotient if (lhs < 0) != (rhs < 0) else quotient
 
 
-def _numeric_operands(lhs: _TypedValue, rhs: _TypedValue, label: str) -> tuple[int | float, int | float, str]:
+def _numeric_operands(
+    lhs: _TypedValue, rhs: _TypedValue, label: str
+) -> tuple[int | float, int | float, str]:
     left = _expect_numeric(lhs, label)
     right = _expect_numeric(rhs, label)
-    result_family = "float" if isinstance(left, float) or isinstance(right, float) else "int"
+    result_family = (
+        "float" if isinstance(left, float) or isinstance(right, float) else "int"
+    )
     return left, right, result_family
 
 
@@ -1818,7 +2453,11 @@ def _numeric_binary(
     precedence: int,
 ) -> _TypedValue:
     left, right, _ = _numeric_operands(lhs, rhs, label)
-    return _numeric_value(op(left, right), cpp_expr=_binary_cpp(lhs, rhs, symbol, precedence), cpp_precedence=precedence)
+    return _numeric_value(
+        op(left, right),
+        cpp_expr=_binary_cpp(lhs, rhs, symbol, precedence),
+        cpp_precedence=precedence,
+    )
 
 
 def _numeric_compare(
@@ -1842,7 +2481,9 @@ def _evaluate_function(name: str, args: list[_TypedValue], label: str) -> _Typed
         if len(args) != 1 or args[0].family != CONSTANT_KIND_STRING:
             raise ProtocyteError(f"{label}: len() expects one string argument")
         size = len(str(args[0].value))
-        return _numeric_value(size, cpp_expr=_cpp_constant_value(CONSTANT_KIND_UINT32, size))
+        return _numeric_value(
+            size, cpp_expr=_cpp_constant_value(CONSTANT_KIND_UINT32, size)
+        )
     if name == "substr":
         if len(args) != 3 or args[0].family != CONSTANT_KIND_STRING:
             raise ProtocyteError(f"{label}: substr() expects string, start, count")
@@ -1854,7 +2495,11 @@ def _evaluate_function(name: str, args: list[_TypedValue], label: str) -> _Typed
             cpp_expr=f"{_wrap_cpp(args[0], 100)}.substr({_wrap_cpp(args[1], 0)}, {_wrap_cpp(args[2], 0)})",
         )
     if name == "starts_with":
-        if len(args) != 2 or args[0].family != CONSTANT_KIND_STRING or args[1].family != CONSTANT_KIND_STRING:
+        if (
+            len(args) != 2
+            or args[0].family != CONSTANT_KIND_STRING
+            or args[1].family != CONSTANT_KIND_STRING
+        ):
             raise ProtocyteError(f"{label}: starts_with() expects two string arguments")
         return _bool_value(
             str(args[0].value).startswith(str(args[1].value)),
@@ -1879,7 +2524,9 @@ def _coerce_literal(kind: str, literal: object, label: str) -> object:
         try:
             value = float(literal)
         except (TypeError, ValueError) as exc:
-            raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}") from exc
+            raise ProtocyteError(
+                f"{label}: invalid numeric literal {literal!r}"
+            ) from exc
         if not math.isfinite(value):
             raise ProtocyteError(f"{label}: numeric literal must be finite")
         return value
@@ -1912,15 +2559,17 @@ def _coerce_expression_value(kind: str, value: _TypedValue, label: str) -> objec
         return out
     if isinstance(numeric_value, float):
         if not numeric_value.is_integer():
-            raise ProtocyteError(f"{label}: integer expression must evaluate to an integral value")
+            raise ProtocyteError(
+                f"{label}: integer expression must evaluate to an integral value"
+            )
         numeric_value = int(numeric_value)
     return _coerce_integer(kind, int(numeric_value), label)
 
 
 def _coerce_integer(kind: str, value: int, label: str) -> int:
     ranges = {
-        CONSTANT_KIND_INT32: (-2**31, 2**31 - 1),
-        CONSTANT_KIND_INT64: (-2**63, 2**63 - 1),
+        CONSTANT_KIND_INT32: (-(2**31), 2**31 - 1),
+        CONSTANT_KIND_INT64: (-(2**63), 2**63 - 1),
         CONSTANT_KIND_UINT32: (0, 2**32 - 1),
         CONSTANT_KIND_UINT64: (0, 2**64 - 1),
     }
@@ -1939,7 +2588,7 @@ def _cpp_constant_type(kind: str) -> str:
         CONSTANT_KIND_UINT64: "::protocyte::u64",
         CONSTANT_KIND_FLOAT: "::protocyte::f32",
         CONSTANT_KIND_DOUBLE: "::protocyte::f64",
-        CONSTANT_KIND_STRING: "::std::string_view",
+        CONSTANT_KIND_STRING: "::protocyte::StringView",
     }[kind]
 
 
@@ -1973,7 +2622,7 @@ def _cpp_constant_value(kind: str, value: object) -> str:
 
 def _inline_constant_cpp_expr(constant: ConstantModel) -> str:
     if constant.kind == CONSTANT_KIND_STRING:
-        return f"::std::string_view {{{constant.cpp_value}}}"
+        return f"::protocyte::StringView {{{constant.cpp_value}}}"
     return constant.cpp_value
 
 
@@ -1984,7 +2633,9 @@ def _constant_cpp_expr(owner_package: str, constant: ConstantModel) -> str:
     return _inline_constant_cpp_expr(constant)
 
 
-def _reference_cpp_expr(owner: MessageModel, target: MessageModel, constant: ConstantModel) -> str:
+def _reference_cpp_expr(
+    owner: MessageModel, target: MessageModel, constant: ConstantModel
+) -> str:
     if target.full_name == owner.full_name:
         return constant.cpp_name
     return _inline_constant_cpp_expr(constant)

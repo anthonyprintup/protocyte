@@ -49,6 +49,13 @@ set(
     CACHE STRING
     "protobuf release version used by CI prebuilt protoc installs."
 )
+# SHA-256 reported by GitHub for the v34.1 protoc-34.1-linux-x86_64.zip release asset.
+set(
+    PROTOCYTE_PROTOBUF_LINUX_X86_64_SHA256
+    "af27ea66cd26938fe48587804ca7d4817457a08350021a1c6e23a27ccc8c6904"
+    CACHE STRING
+    "SHA-256 for the protobuf Linux x86-64 release archive used by CI."
+)
 # protobuf release v34.1
 set(
     PROTOCYTE_PROTOBUF_GIT_TAG
@@ -114,10 +121,11 @@ if(PROTOCYTE_VERSION_IS_PRERELEASE)
         @ONLY
     )
 else()
+    # Pre-1.0 releases intentionally make no compatibility guarantees. Revisit for 1.0.0.
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
         VERSION "${PROJECT_VERSION}"
-        COMPATIBILITY SameMajorVersion
+        COMPATIBILITY ExactVersion
     )
 endif()
 

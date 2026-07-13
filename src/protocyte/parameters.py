@@ -1,10 +1,24 @@
 from __future__ import annotations
 
-import base64
-import binascii
 from dataclasses import dataclass
 
 from protocyte.errors import ProtocyteError
+
+
+def _validate_namespace_prefix(value: str) -> str:
+    if not value:
+        return value
+    components = value.split("::")
+    if any(
+        not component or component != component.strip() or ":" in component
+        for component in components
+    ):
+        raise ProtocyteError(
+            "namespace prefix must be a normalized '::'-separated namespace"
+        )
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ProtocyteError("namespace prefix must not contain control characters")
+    return value
 
 
 @dataclass(frozen=True)
@@ -15,6 +29,35 @@ class GeneratorOptions:
     namespace_prefix: str = ""
     clang_format: str | None = None
     clang_format_config: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_namespace_prefix(self.namespace_prefix)
+
+
+def validate_virtual_directory_prefix(value: str, *, parameter: str) -> str:
+    """Validate a portable relative directory used in generated file names."""
+    if not value:
+        raise ProtocyteError(f"{parameter} must not be empty")
+    if value.startswith("/") or ":" in value:
+        raise ProtocyteError(
+            f"{parameter} must be a relative virtual directory using '/'"
+        )
+    if "\\" in value:
+        raise ProtocyteError(
+            f"{parameter} must be a relative virtual directory using '/'"
+        )
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ProtocyteError(f"{parameter} must not contain control characters")
+    segments = value.split("/")
+    if any(segment in {"", ".", ".."} for segment in segments):
+        raise ProtocyteError(
+            f"{parameter} contains an unsafe or non-normalized path segment"
+        )
+    if any(segment != segment.strip() for segment in segments):
+        raise ProtocyteError(
+            f"{parameter} must not have leading or trailing segment whitespace"
+        )
+    return value
 
 
 def parse_parameter(parameter: str) -> GeneratorOptions:
@@ -28,13 +71,34 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
             if not part:
                 continue
             if "=" in part:
-                key, value = part.split("=", 1)
-                key = key.strip().replace("-", "_")
-                value = value.strip()
+                raw_key, raw_value = raw_part.split("=", 1)
+                key = raw_key.strip()
+                value = raw_value.strip()
                 if not key:
                     raise ProtocyteError(f"invalid empty parameter name in {parameter!r}")
                 if key in values:
                     raise ProtocyteError(f"duplicate protocyte parameter: {key}")
+                prefix_parameter = None
+                if key == "runtime" and value.startswith("emit:"):
+                    prefix_parameter = "runtime prefix"
+                elif key == "runtime_prefix":
+                    prefix_parameter = "runtime prefix"
+                elif key == "include_prefix":
+                    prefix_parameter = "include prefix"
+                elif key == "namespace_prefix":
+                    prefix_parameter = "namespace prefix"
+                if prefix_parameter is not None:
+                    if any(
+                        ord(char) < 0x20 or ord(char) == 0x7F
+                        for char in raw_value
+                    ):
+                        raise ProtocyteError(
+                            f"{prefix_parameter} must not contain control characters"
+                        )
+                    if raw_value != value:
+                        raise ProtocyteError(
+                            f"{prefix_parameter} must not have leading or trailing whitespace"
+                        )
                 values[key] = value
             else:
                 raise ProtocyteError(f"invalid protocyte parameter {part!r}; expected key=value")
@@ -43,7 +107,6 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "runtime",
         "runtime_prefix",
         "include_prefix",
-        "namespace",
         "namespace_prefix",
         "clang_format",
         "clang_format_config",
@@ -53,30 +116,35 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         raise ProtocyteError(f"unknown protocyte parameter(s): {joined}")
 
     runtime = values.get("runtime", "omit")
-    runtime_prefix = values.get("runtime_prefix", "protocyte/runtime").strip("/")
+    runtime_prefix = values.get("runtime_prefix", "protocyte/runtime")
     if runtime.startswith("emit:"):
         emit_runtime = True
-        suffix = runtime.split(":", 1)[1].strip("/")
-        if suffix:
-            runtime_prefix = suffix
+        suffix = runtime.split(":", 1)[1]
+        if not suffix:
+            raise ProtocyteError("runtime prefix must not be empty")
+        runtime_prefix = suffix
     elif runtime == "emit":
         emit_runtime = True
-    elif runtime in {"omit", "none", ""}:
+    elif runtime == "omit":
         emit_runtime = False
     else:
         raise ProtocyteError("runtime must be one of: emit, omit, emit:<prefix>")
 
-    if "namespace" in values and "namespace_prefix" in values:
-        raise ProtocyteError("namespace and namespace_prefix are aliases; specify only one")
-
-    namespace_prefix = values.get("namespace_prefix", values.get("namespace", "")).strip(":")
-    include_prefix = values.get("include_prefix", "").strip("/")
+    namespace_prefix = values.get("namespace_prefix", "")
+    runtime_prefix = validate_virtual_directory_prefix(
+        runtime_prefix, parameter="runtime prefix"
+    )
+    include_prefix = values.get("include_prefix", "")
+    if "include_prefix" in values:
+        include_prefix = validate_virtual_directory_prefix(
+            include_prefix, parameter="include prefix"
+        )
     clang_format = values.get("clang_format")
     clang_format_config = values.get("clang_format_config")
 
     return GeneratorOptions(
         emit_runtime=emit_runtime,
-        runtime_prefix=runtime_prefix or "protocyte/runtime",
+        runtime_prefix=runtime_prefix,
         include_prefix=include_prefix,
         namespace_prefix=namespace_prefix,
         clang_format=clang_format,
@@ -91,7 +159,6 @@ def _decode_transport_parameter(parameter: str) -> str:
 
     transport_decoders = {
         "_protocyte_options_hex": _decode_hex_transport_parameter,
-        "_protocyte_options_b64": _decode_base64_transport_parameter,
     }
     transport_parts = [part for part in parts if part.split("=", 1)[0] in transport_decoders]
     if not transport_parts:
@@ -114,25 +181,8 @@ def _decode_hex_transport_parameter(encoded: str) -> str:
     return _decode_transport_bytes("_protocyte_options_hex", decoded)
 
 
-def _decode_base64_transport_parameter(encoded: str) -> str:
-    try:
-        decoded = base64.b64decode(encoded, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise ProtocyteError("invalid _protocyte_options_b64 payload") from exc
-    return _decode_transport_bytes("_protocyte_options_b64", decoded)
-
-
 def _decode_transport_bytes(name: str, decoded: bytes) -> str:
     try:
         return decoded.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ProtocyteError(f"{name} payload must decode as UTF-8") from exc
-
-
-def _parse_bool(value: str, name: str) -> bool:
-    lowered = value.lower()
-    if lowered in {"1", "true", "yes", "on"}:
-        return True
-    if lowered in {"0", "false", "no", "off"}:
-        return False
-    raise ProtocyteError(f"{name} must be a boolean value")

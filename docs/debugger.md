@@ -3,7 +3,7 @@
 This document describes LLDB visualizers for the generated Protocyte runtime:
 
 - `protocyte::String<Config>`: shows `size=<N>, value="<text>", hex=[<bytes>]`.
-- `protocyte::Bytes<Config>`, `ByteView`, and `MutableByteView`: show `size=<N>, hex=[<bytes>], ascii="<preview>"` and expandable byte children.
+- `protocyte::Bytes<Config>`: shows `size=<N>, hex=[<bytes>], ascii="<preview>"` and expandable byte children.
 - `protocyte::Vector<T, Config>`: shows size/capacity and expandable indexed elements.
 - `HashMap<K, V, Config>`: shows `key => value` entries when expanded.
 - Generated message oneofs: optional tagged-union view for generated message types.

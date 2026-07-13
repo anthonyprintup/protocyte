@@ -698,6 +698,30 @@ def test_oneof_provider_does_not_read_legacy_unsuffixed_union_storage(
     assert provider.get_child_at_index(2).GetValue() == "demo::Carrier::ChoiceCase::text"
 
 
+def test_oneof_provider_does_not_read_legacy_top_level_payload(
+    protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(protocyte_lldb_module, "_raw_children", lambda value: [])
+    message = _FakeLLDBValue(
+        "message",
+        children={
+            "choice_case_": _FakeLLDBValue(
+                "choice_case_",
+                address=-1,
+                value="demo::Carrier::ChoiceCase::text",
+            ),
+            "text_": _FakeLLDBValue("text_", address=-1, value='"hello"'),
+        },
+    )
+
+    provider = protocyte_lldb_module.GeneratedMessageOneofSyntheticProvider(message, {})
+
+    assert _child_names(provider) == ["choice_case_", "text_", "choice: text"]
+    assert (
+        provider.get_child_at_index(2).GetValue() == "demo::Carrier::ChoiceCase::text"
+    )
+
+
 def test_lldb_init_module_registers_span_formatter(protocyte_lldb_module) -> None:
     debugger = _FakeDebugger()
 
@@ -738,6 +762,18 @@ def test_lldb_init_module_registers_broad_bytes_formatter(
     )
     assert any("protocyte-formatters" in command for command in commands)
     assert any("protocyte-register-type" in command for command in commands)
+
+
+def test_lldb_init_module_does_not_register_removed_byte_views(
+    protocyte_lldb_module,
+) -> None:
+    debugger = _FakeDebugger()
+
+    protocyte_lldb_module.__lldb_init_module(debugger, {})
+
+    assert all("ByteView" not in command for command in debugger.interpreter.commands)
+    assert not hasattr(protocyte_lldb_module, "byte_view_summary")
+    assert not hasattr(protocyte_lldb_module, "mutable_byte_view_summary")
 
 
 def test_register_type_command_adds_exact_bytes_formatter(
