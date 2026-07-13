@@ -27,10 +27,44 @@ def _find_real_protoc(repo_root: Path) -> Path:
     pytest.skip("real protoc executable is not available")
 
 
+def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'set "PYTHONPATH={repo_root / "src"};%PYTHONPATH%"',
+                    f'"{sys.executable}" -m protocyte.main',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'PYTHONPATH="{repo_root / "src"}:$PYTHONPATH" exec "{sys.executable}" -m protocyte.main',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
 def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    source_config = (repo_root / "cmake" / "Protocyte.cmake").read_text(encoding="utf-8")
-    installed_config = (repo_root / "cmake" / "protocyteConfig.cmake.in").read_text(encoding="utf-8")
+    source_config = (repo_root / "cmake" / "Protocyte.cmake").read_text(
+        encoding="utf-8"
+    )
+    installed_config = (repo_root / "cmake" / "protocyteConfig.cmake.in").read_text(
+        encoding="utf-8"
+    )
 
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in source_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
@@ -61,12 +95,42 @@ def test_posix_wrapper_shell_quotes_single_quotes(tmp_path: Path) -> None:
     assert quoted_output.read_text(encoding="utf-8") == "'alpha'\"'\"'beta'"
 
 
+def test_internal_cmake_settings_do_not_fall_back_to_variables(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "internal_settings.cmake"
+
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                'set(PROTOCYTE_PYTHON_SOURCE_ROOT "legacy-variable")',
+                "_protocyte_get_internal(value PYTHON_SOURCE_ROOT)",
+                'if(NOT value STREQUAL "")',
+                '    message(FATAL_ERROR "legacy variable unexpectedly populated internal setting")',
+                "endif()",
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_SOURCE_ROOT "internal-property")',
+                "_protocyte_get_internal(value PYTHON_SOURCE_ROOT)",
+                'if(NOT value STREQUAL "internal-property")',
+                '    message(FATAL_ERROR "internal property was not returned")',
+                "endif()",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
+
+
 def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cmake_script = tmp_path / "resolve_protoc_import_dir.cmake"
     resolved_output = tmp_path / "resolved.txt"
     protoc = tmp_path / "toolchain" / "bin" / "protoc"
-    descriptor = tmp_path / "toolchain" / "include" / "google" / "protobuf" / "descriptor.proto"
+    descriptor = (
+        tmp_path / "toolchain" / "include" / "google" / "protobuf" / "descriptor.proto"
+    )
 
     protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
@@ -89,14 +153,17 @@ def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
 
     subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
 
-    assert resolved_output.read_text(encoding="utf-8") == (tmp_path / "toolchain" / "include").as_posix()
+    assert (
+        resolved_output.read_text(encoding="utf-8")
+        == (tmp_path / "toolchain" / "include").as_posix()
+    )
 
 
 def test_generator_parameter_encoding_uses_hex_transport(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cmake_script = tmp_path / "encode_test.cmake"
     encoded_output = tmp_path / "encoded.txt"
-    raw = "runtime=emit:C:/toolchain/runtime,clang_format=C:/Program Files/LLVM/bin/clang-format.exe"
+    raw = "runtime=emit:toolchain/runtime,clang_format=C:/Program Files/LLVM/bin/clang-format.exe"
     expected = "_protocyte_options_hex=" + raw.encode("utf-8").hex()
 
     cmake_script.write_text(
@@ -128,7 +195,7 @@ def test_cmake_discovery_split_normalizes_crlf_descriptor_names(tmp_path: Path) 
                 "cmake_minimum_required(VERSION 3.24)",
                 f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
                 '_protocyte_split_discovered_descriptor_names(names "api/one.proto\r\napi/two.proto")',
-                'foreach(name IN LISTS names)',
+                "foreach(name IN LISTS names)",
                 '    string(APPEND encoded "${name}|")',
                 "endforeach()",
                 f'file(WRITE "{output.as_posix()}" "${{encoded}}")',
@@ -143,7 +210,9 @@ def test_cmake_discovery_split_normalizes_crlf_descriptor_names(tmp_path: Path) 
     assert output.read_text(encoding="utf-8") == "api/one.proto|api/two.proto|"
 
 
-def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(tmp_path: Path) -> None:
+def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cmake_script = tmp_path / "descriptor_name_validator.cmake"
     output = tmp_path / "unsafe.txt"
@@ -166,6 +235,217 @@ def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(tmp_path: 
     assert output.read_text(encoding="utf-8") == "TRUE"
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "",
+        "../escaped",
+        "nested/../escaped",
+        "nested/./runtime",
+        "/absolute/runtime",
+        "C:/absolute/runtime",
+        "C:drive-relative/runtime",
+        "nested/runtime:stream",
+        " nested/runtime",
+        "nested /runtime",
+        r"nested\runtime",
+        "nested//runtime",
+        "nested/runtime/",
+    ],
+)
+def test_cmake_virtual_directory_prefix_validator_rejects_unsafe_paths(
+    tmp_path: Path, prefix: str
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "prefix_validator.cmake"
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                f'_protocyte_validate_virtual_directory_prefix("runtime prefix" [==[{prefix}]==])',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-P", str(cmake_script)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "runtime prefix" in (result.stdout + result.stderr)
+
+
+def test_cmake_virtual_directory_prefix_validator_accepts_nested_path(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "prefix_validator.cmake"
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                '_protocyte_validate_virtual_directory_prefix("runtime prefix" "vendor/protocyte/runtime")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
+
+
+@pytest.mark.parametrize(
+    "forwarded_option",
+    [
+        "runtime=emit",
+        "runtime=omit",
+        "runtime=emit:vendor/protocyte",
+        "runtime_prefix=vendor/protocyte",
+        "clang_format=tool,runtime=emit:vendor/protocyte",
+        " runtime=emit",
+        "runtime =emit",
+        "runtime_prefix =vendor/protocyte",
+    ],
+)
+def test_cmake_rejects_runtime_state_forwarded_through_options(
+    tmp_path: Path, forwarded_option: str
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(reject_forwarded_runtime LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS simple.proto",
+                f"    OPTIONS [==[{forwarded_option}]==]",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "OPTIONS must not set runtime or runtime_prefix" in output
+    assert "use EMIT_RUNTIME and RUNTIME_PREFIX" in output
+
+
+def test_cmake_rejects_encoded_transport_forwarded_through_options(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    encoded_runtime = "runtime=emit:vendor/protocyte".encode().hex()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(reject_encoded_transport LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS simple.proto",
+                f"    OPTIONS _protocyte_options_hex={encoded_runtime}",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "OPTIONS must not use reserved _protocyte_ transport parameters" in output
+
+
+def test_real_protoc_rejects_runtime_prefix_escape_and_keeps_valid_response_names(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    proto_dir = tmp_path / "proto"
+    proto_dir.mkdir()
+    (proto_dir / "simple.proto").write_text(
+        'syntax = "proto3"; package demo; message Simple { int32 value = 1; }\n',
+        encoding="utf-8",
+    )
+    plugin = _write_python_plugin_wrapper(tmp_path / "protoc-gen-protocyte", repo_root)
+
+    escaped_out = tmp_path / "unsafe-out"
+    escaped_out.mkdir()
+    escaped_parameter = "runtime=emit:../escaped".encode("utf-8").hex()
+    escaped = subprocess.run(
+        [
+            str(protoc),
+            f"--proto_path={proto_dir}",
+            f"--plugin=protoc-gen-protocyte={plugin}",
+            f"--protocyte_out=_protocyte_options_hex={escaped_parameter}:unsafe-out",
+            "simple.proto",
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert escaped.returncode != 0
+    assert "runtime prefix" in (escaped.stdout + escaped.stderr)
+    assert not (tmp_path / "escaped" / "runtime.hpp").exists()
+
+    valid_out = tmp_path / "valid-out"
+    valid_out.mkdir()
+    valid_parameter = "runtime=emit:vendor/protocyte".encode("utf-8").hex()
+    subprocess.run(
+        [
+            str(protoc),
+            f"--proto_path={proto_dir}",
+            f"--plugin=protoc-gen-protocyte={plugin}",
+            f"--protocyte_out=_protocyte_options_hex={valid_parameter}:valid-out",
+            "simple.proto",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    assert (valid_out / "simple.protocyte.hpp").is_file()
+    assert (valid_out / "simple.protocyte.cpp").is_file()
+    assert (valid_out / "vendor" / "protocyte" / "runtime.hpp").is_file()
+
+
 def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
@@ -176,7 +456,9 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     plugin = source_dir / "tools" / "protoc-gen-protocyte"
 
     proto_dir.mkdir(parents=True)
-    (proto_dir / "demo.proto").write_text('syntax = "proto3"; message Demo {}\n', encoding="utf-8")
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+    )
     descriptor.parent.mkdir(parents=True)
     descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
     protoc.parent.mkdir(parents=True)
@@ -206,7 +488,9 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
 
-def test_generate_accepts_descriptor_set_protos_without_proto_root(tmp_path: Path) -> None:
+def test_generate_accepts_descriptor_set_protos_without_proto_root(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -245,15 +529,21 @@ def test_generate_accepts_descriptor_set_protos_without_proto_root(tmp_path: Pat
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
-    assert (build_dir / "headers.txt").read_text(encoding="utf-8").endswith(
-        "generated/nested/demo.protocyte.hpp"
+    assert (
+        (build_dir / "headers.txt")
+        .read_text(encoding="utf-8")
+        .endswith("generated/nested/demo.protocyte.hpp")
     )
-    assert (build_dir / "sources.txt").read_text(encoding="utf-8").endswith(
-        "generated/nested/demo.protocyte.cpp"
+    assert (
+        (build_dir / "sources.txt")
+        .read_text(encoding="utf-8")
+        .endswith("generated/nested/demo.protocyte.cpp")
     )
 
 
-def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: Path) -> None:
+def test_generate_descriptor_set_discover_skips_google_protobuf_files(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -327,7 +617,9 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(tmp_path: 
     assert "generated/google/protobuf/timestamp.protocyte.hpp" in headers
 
 
-def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(tmp_path: Path) -> None:
+def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -431,12 +723,16 @@ def test_descriptor_set_discover_preserves_existing_pythonpath(tmp_path: Path) -
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(pythonpath_dir)
-    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True, env=env)
+    subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True, env=env
+    )
 
     assert marker.read_text(encoding="utf-8") == "seen"
 
 
-def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(tmp_path: Path) -> None:
+def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -477,12 +773,15 @@ def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(tmp_pat
     )
 
     assert result.returncode != 0
-    assert "descriptor file name contains an unsafe path segment: nested/./demo.proto" in (
-        result.stdout + result.stderr
+    assert (
+        "descriptor file name contains an unsafe path segment: nested/./demo.proto"
+        in (result.stdout + result.stderr)
     )
 
 
-def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_paths(tmp_path: Path) -> None:
+def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_paths(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -520,10 +819,16 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
     )
     if os.name == "nt":
         protoc = tools_dir / "protoc.cmd"
-        protoc.write_text(f'@echo off\r\n"{Path(sys.executable)}" "{fake_protoc_py}" %*\r\n', encoding="utf-8")
+        protoc.write_text(
+            f'@echo off\r\n"{Path(sys.executable)}" "{fake_protoc_py}" %*\r\n',
+            encoding="utf-8",
+        )
     else:
         protoc = tools_dir / "protoc"
-        protoc.write_text(f'#!/usr/bin/env sh\nexec "{Path(sys.executable)}" "{fake_protoc_py}" "$@"\n', encoding="utf-8")
+        protoc.write_text(
+            f'#!/usr/bin/env sh\nexec "{Path(sys.executable)}" "{fake_protoc_py}" "$@"\n',
+            encoding="utf-8",
+        )
         protoc.chmod(0o755)
     plugin = tools_dir / "protoc-gen-protocyte"
     plugin.write_text("", encoding="utf-8")
@@ -549,7 +854,9 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
-    subprocess.run(["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True
+    )
 
     args = args_path.read_text(encoding="utf-8").splitlines()
     assert f"--descriptor_set_in={descriptor_set.as_posix()}" in args
@@ -557,7 +864,9 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
     assert "nested/demo.proto" in args
 
 
-def test_descriptor_set_codegen_builds_with_real_protoc_descriptor_set_in(tmp_path: Path) -> None:
+def test_descriptor_set_codegen_builds_with_real_protoc_descriptor_set_in(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     protoc = _find_real_protoc(repo_root)
     source_dir = tmp_path / "project"
@@ -605,7 +914,9 @@ def test_descriptor_set_codegen_builds_with_real_protoc_descriptor_set_in(tmp_pa
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
-    subprocess.run(["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True
+    )
 
     header = build_dir / "generated" / "api" / "demo.protocyte.hpp"
     source = build_dir / "generated" / "api" / "demo.protocyte.cpp"
@@ -666,9 +977,9 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
 
 
 def test_cmake_requires_python_314_for_codegen_wrapper() -> None:
-    functions = (Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake").read_text(
-        encoding="utf-8"
-    )
+    functions = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake"
+    ).read_text(encoding="utf-8")
 
     assert "find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)" in functions
 
@@ -686,19 +997,36 @@ def test_smoke_cmake_gates_std_format_opt_in_on_compile_probe() -> None:
     assert "#include <format>" in smoke_cmake
     assert "#include <string_view>" in smoke_cmake
     assert "::std::formatter<::std::string_view, char>" in smoke_cmake
-    assert "::std::format(\"{}\", ::std::string_view {\"ok\"})" in smoke_cmake
+    assert '::std::format("{}", ::std::string_view {"ok"})' in smoke_cmake
     assert "PROTOCYTE_SMOKE_HAS_STD_FORMAT" in smoke_cmake
     assert "if(PROTOCYTE_SMOKE_HAS_STD_FORMAT)" in smoke_cmake
-    assert "target_compile_definitions(\"${target_name}\" PRIVATE PROTOCYTE_ENABLE_STD_FORMAT=1)" in smoke_cmake
+    assert (
+        'target_compile_definitions("${target_name}" PRIVATE PROTOCYTE_ENABLE_STD_FORMAT=1)'
+        in smoke_cmake
+    )
     assert "\n        PROTOCYTE_ENABLE_STD_FORMAT=1" not in smoke_cmake
     assert "\n            PROTOCYTE_ENABLE_STD_FORMAT=1" not in smoke_cmake
 
 
 def test_prerelease_cmake_version_file_marks_versioned_requests_unsuitable() -> None:
     template = (
-        Path(__file__).resolve().parents[1] / "cmake" / "protocyteConfigVersionPrerelease.cmake.in"
+        Path(__file__).resolve().parents[1]
+        / "cmake"
+        / "protocyteConfigVersionPrerelease.cmake.in"
     ).read_text(encoding="utf-8")
 
     assert 'set(PACKAGE_VERSION "@PROTOCYTE_VERSION@")' in template
     assert "if(PACKAGE_FIND_VERSION)" in template
     assert "set(PACKAGE_VERSION_UNSUITABLE TRUE)" in template
+
+
+def test_release_cmake_version_file_requires_exact_version() -> None:
+    cmake_lists = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+    version_block = cmake_lists.split("write_basic_package_version_file(", maxsplit=1)[
+        1
+    ].split("\n    )", maxsplit=1)[0]
+
+    assert "COMPATIBILITY ExactVersion" in version_block
+    assert "COMPATIBILITY SameMajorVersion" not in version_block

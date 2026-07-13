@@ -73,7 +73,7 @@ namespace {
         }
     };
 
-    struct PushOnlyConfig {
+    struct RequiredVectorConfig {
         struct Context {
             protocyte::Allocator allocator;
             protocyte::Limits limits;
@@ -81,7 +81,7 @@ namespace {
         };
 
         template<class T> struct Vector {
-            using Inner = protocyte::Vector<T, PushOnlyConfig>;
+            using Inner = protocyte::Vector<T, RequiredVectorConfig>;
             using value_type = T;
             using iterator = typename Inner::iterator;
             using const_iterator = typename Inner::const_iterator;
@@ -118,6 +118,9 @@ namespace {
             protocyte::Status reserve(const protocyte::usize count) noexcept { return inner_.reserve(count); }
             protocyte::Status push_back(const T &value) noexcept { return inner_.push_back(value); }
             protocyte::Status push_back(T &&value) noexcept { return inner_.push_back(protocyte::move(value)); }
+            protocyte::Status append_trivial_range(const T *values, const protocyte::usize count) noexcept {
+                return inner_.append_trivial_range(values, count);
+            }
             protocyte::Status resize_default(const protocyte::usize count) noexcept {
                 return inner_.resize_default(count);
             }
@@ -130,11 +133,11 @@ namespace {
             Inner inner_;
         };
 
-        template<class K, class V> using Map = protocyte::HashMap<K, V, PushOnlyConfig>;
-        template<class T> using Box = protocyte::Box<T, PushOnlyConfig>;
+        template<class K, class V> using Map = protocyte::HashMap<K, V, RequiredVectorConfig>;
+        template<class T> using Box = protocyte::Box<T, RequiredVectorConfig>;
         template<class T> using Optional = protocyte::Optional<T>;
-        using Bytes = protocyte::Bytes<PushOnlyConfig>;
-        using String = protocyte::String<PushOnlyConfig>;
+        using Bytes = protocyte::Bytes<RequiredVectorConfig>;
+        using String = protocyte::String<RequiredVectorConfig>;
 
         static void *allocate(Context &ctx, const protocyte::usize size, const protocyte::usize alignment) noexcept {
             if (!size || ctx.allocator.allocate == nullptr) {
@@ -202,7 +205,8 @@ namespace {
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
     using CustomNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<CustomConfig>;
-    using PushOnlyNested2 = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<PushOnlyConfig>;
+    using RequiredVectorNested2 =
+        test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<RequiredVectorConfig>;
 
     static_assert(test::ultimate::BASE_COUNT == 5);
     static_assert(Message::SHIFTED_COUNT == 5000000000ll);
@@ -311,6 +315,39 @@ namespace {
 
     void smoke_deallocate(void *, void *ptr, size_t, size_t) noexcept { free(ptr); }
 
+    struct AllocationProbe {
+        size_t calls {};
+        size_t largest {};
+    };
+
+    void *reject_allocation(void *state, const size_t size, size_t) noexcept {
+        auto &probe = *static_cast<AllocationProbe *>(state);
+        ++probe.calls;
+        if (size > probe.largest) {
+            probe.largest = size;
+        }
+        return nullptr;
+    }
+
+    void ignore_deallocation(void *, void *, size_t, size_t) noexcept {}
+
+    struct RetainedAllocationProbe {
+        void *pointers[4] {};
+        size_t count {};
+    };
+
+    void *retain_allocation(void *state, const size_t size, size_t) noexcept {
+        auto &probe = *static_cast<RetainedAllocationProbe *>(state);
+        if (probe.count == std::size(probe.pointers)) {
+            return nullptr;
+        }
+        auto *ptr = malloc(size);
+        if (ptr != nullptr) {
+            probe.pointers[probe.count++] = ptr;
+        }
+        return ptr;
+    }
+
     Config::Context make_context() noexcept {
         return Config::Context {
             protocyte::Allocator {nullptr, smoke_allocate, smoke_deallocate},
@@ -325,21 +362,12 @@ namespace {
         };
     }
 
-    PushOnlyConfig::Context make_push_only_context() noexcept {
-        return PushOnlyConfig::Context {
+    RequiredVectorConfig::Context make_required_vector_context() noexcept {
+        return RequiredVectorConfig::Context {
             protocyte::Allocator {nullptr, smoke_allocate, smoke_deallocate},
             protocyte::Limits {},
         };
     }
-
-    struct MergeFromOnlyMessage {
-        bool merged {};
-
-        template<class Reader> protocyte::Status merge_from(Reader &reader) noexcept {
-            merged = reader.eof();
-            return {};
-        }
-    };
 
     template<class L, protocyte::usize LExtent, class R, protocyte::usize RExtent>
     bool view_equal(protocyte::Span<L, LExtent> lhs, protocyte::Span<R, RExtent> rhs) noexcept {
@@ -3198,9 +3226,12 @@ TEST_CASE("read_fixed_width_packed_values reads contiguous little endian payload
     auto ctx = make_context();
     constexpr std::array<protocyte::u8, 8u> encoded {0x04u, 0x03u, 0x02u, 0x01u, 0xd0u, 0xc0u, 0xb0u, 0xa0u};
     protocyte::SliceReader reader(encoded.data(), encoded.size());
+    protocyte::ParseBudgetReader budget_reader {reader, encoded.size(),
+                                                protocyte::Limits::default_max_repeated_elements,
+                                                protocyte::Limits::default_max_map_entries};
     Config::Vector<protocyte::u32> values(&ctx);
 
-    require_success(protocyte::read_fixed_width_packed_values(reader, encoded.size(), values));
+    require_success(protocyte::read_fixed_width_packed_values(budget_reader, encoded.size(), 1u, values));
 
     const protocyte::u32 expected[] = {0x01020304u, 0xa0b0c0d0u};
     check_scalar_sequence(values, expected);
@@ -3216,8 +3247,10 @@ TEST_CASE("read_fixed_width_packed_values preserves output on malformed payloads
     SECTION("truncated reader input fails before appending a prefix") {
         constexpr std::array<protocyte::u8, 4u> encoded {0x04u, 0x03u, 0x02u, 0x01u};
         protocyte::SliceReader reader(encoded.data(), encoded.size());
+        protocyte::ParseBudgetReader budget_reader {reader, 8u, protocyte::Limits::default_max_repeated_elements,
+                                                    protocyte::Limits::default_max_map_entries};
 
-        require_failure(protocyte::read_fixed_width_packed_values(reader, 8u, values),
+        require_failure(protocyte::read_fixed_width_packed_values(budget_reader, 8u, 1u, values),
                         protocyte::ErrorCode::unexpected_eof);
 
         CHECK(reader.position() == 0u);
@@ -3227,8 +3260,11 @@ TEST_CASE("read_fixed_width_packed_values preserves output on malformed payloads
     SECTION("misaligned fixed-width payload fails before appending a prefix") {
         constexpr std::array<protocyte::u8, 6u> encoded {0x04u, 0x03u, 0x02u, 0x01u, 0x00u, 0x00u};
         protocyte::SliceReader reader(encoded.data(), encoded.size());
+        protocyte::ParseBudgetReader budget_reader {reader, encoded.size(),
+                                                    protocyte::Limits::default_max_repeated_elements,
+                                                    protocyte::Limits::default_max_map_entries};
 
-        require_failure(protocyte::read_fixed_width_packed_values(reader, encoded.size(), values),
+        require_failure(protocyte::read_fixed_width_packed_values(budget_reader, encoded.size(), 1u, values),
                         protocyte::ErrorCode::unexpected_eof);
 
         CHECK(reader.position() == 0u);
@@ -3270,15 +3306,17 @@ TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke]
         auto size = protocyte::read_length_delimited_size(size_reader);
         require_failure(size, protocyte::ErrorCode::integer_overflow);
 
+        auto ctx = make_context();
         protocyte::SliceReader skip_reader(overflow_length, sizeof(overflow_length));
-        require_failure(protocyte::skip_field(skip_reader, protocyte::WireType::LEN),
+        require_failure(protocyte::skip_field<Config>(ctx, skip_reader, protocyte::WireType::LEN),
                         protocyte::ErrorCode::integer_overflow);
     }
 }
 
-TEST_CASE("read_message accepts merge_from-only message adapters", "[smoke][runtime][compat]") {
+TEST_CASE("read_message merges and validates through the generated message contract", "[smoke][runtime][proto2]") {
     auto ctx = make_context();
-    constexpr std::array<protocyte::u8, 2u> encoded {0x0au, 0x00u};
+    constexpr std::array<protocyte::u8, 4u> encoded {0x0au, 0x02u, 0x08u, 0x2au};
+    constexpr uint8_t existing_note[] = {'k', 'e', 'p', 't'};
     protocyte::SliceReader reader(encoded.data(), encoded.size());
 
     auto tag = protocyte::read_tag(reader);
@@ -3286,10 +3324,14 @@ TEST_CASE("read_message accepts merge_from-only message adapters", "[smoke][runt
     CHECK(tag->field_number == 1u);
     CHECK(tag->wire_type == protocyte::WireType::LEN);
 
-    MergeFromOnlyMessage parsed {};
-    require_success(protocyte::read_message<Config>(ctx, reader, tag->field_number, parsed));
+    RequiredChild parsed(ctx);
+    require_success(parsed.set_note(view_of(existing_note)));
+    protocyte::ParseBudgetReader parse_reader {reader, ctx.limits.max_message_bytes, ctx.limits.max_repeated_elements,
+                                               ctx.limits.max_map_entries};
+    require_success(protocyte::read_message<Config>(ctx, parse_reader, tag->field_number, parsed));
 
-    CHECK(parsed.merged);
+    CHECK(parsed.id() == 42);
+    CHECK(view_equal(parsed.note(), view_of(existing_note)));
     CHECK(reader.eof());
 }
 
@@ -3306,7 +3348,9 @@ TEST_CASE("read_message validates standalone generated message payloads", "[smok
     CHECK(tag->wire_type == protocyte::WireType::LEN);
 
     RequiredChild parsed(ctx);
-    require_failure(protocyte::read_message<Config>(ctx, reader, tag->field_number, parsed),
+    protocyte::ParseBudgetReader parse_reader {reader, ctx.limits.max_message_bytes, ctx.limits.max_repeated_elements,
+                                               ctx.limits.max_map_entries};
+    require_failure(protocyte::read_message<Config>(ctx, parse_reader, tag->field_number, parsed),
                     protocyte::ErrorCode::invalid_argument);
 
     CHECK(reader.eof());
@@ -4283,6 +4327,259 @@ TEST_CASE("Result special members and payload propagation stay correct", "[smoke
 }
 
 TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runtime][limits]") {
+    SECTION("total wire bytes match protobuf CodedInputStream limit semantics") {
+        uint8_t encoded[32] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_int32_field(writer, 99u, 1234));
+
+        auto exact_ctx = make_context();
+        exact_ctx.limits.max_total_bytes = writer.position();
+        Message exact(exact_ctx);
+        protocyte::SliceReader exact_reader(encoded, writer.position());
+        require_success(exact.merge_partial_from(exact_reader));
+        CHECK(exact_reader.eof());
+
+        auto limited_ctx = make_context();
+        limited_ctx.limits.max_total_bytes = writer.position() - 1u;
+        Message limited(limited_ctx);
+        protocyte::SliceReader limited_reader(encoded, writer.position());
+        require_failure(limited.merge_partial_from(limited_reader), protocyte::ErrorCode::size_limit);
+        CHECK(limited_ctx.recursion_depth == 0u);
+    }
+
+    SECTION("type-erased top-level readers still receive the configured wire budget") {
+        uint8_t encoded[32] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_int32_field(writer, 99u, 1234));
+
+        auto ctx = make_context();
+        ctx.limits.max_total_bytes = writer.position() - 1u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        protocyte::ParseBudgetReader prebudgeted {
+            reader,
+            writer.position(),
+            protocyte::Limits::default_max_repeated_elements,
+            protocyte::Limits::default_max_map_entries,
+        };
+        protocyte::ReaderRef erased {prebudgeted};
+
+        require_failure(parsed.merge_partial_from(erased), protocyte::ErrorCode::size_limit);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("exhausted repeated budget rejects bytes before allocation") {
+        uint8_t encoded[32] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_bytes_field(
+            writer, static_cast<uint32_t>(RepeatedBytesHolder::FieldNumber::values), view_of(bytes_data)));
+
+        AllocationProbe probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        ctx.limits.max_repeated_elements = 0u;
+        RepeatedBytesHolder parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+
+        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        CHECK(probe.calls == 0u);
+        CHECK(probe.largest == 0u);
+    }
+
+    SECTION("exhausted map budget rejects entries before allocation") {
+        uint8_t entry[32] = {};
+        protocyte::SliceWriter entry_writer(entry, sizeof(entry));
+        require_success(protocyte::write_bytes_field(entry_writer, 1u, view_of(map_key)));
+        require_success(protocyte::write_int32_field(entry_writer, 2u, 1));
+
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_str_int32),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, entry_writer.position()));
+        require_success(writer.write(entry, entry_writer.position()));
+
+        AllocationProbe probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        ctx.limits.max_map_entries = 0u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+
+        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        CHECK(probe.calls == 0u);
+        CHECK(probe.largest == 0u);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("repeated element budget is shared with nested messages") {
+        uint8_t inner_encoded[32] = {};
+        protocyte::SliceWriter inner_writer(inner_encoded, sizeof(inner_encoded));
+        require_success(protocyte::write_float_field(inner_writer, 2u, 1.0f));
+
+        uint8_t nested_encoded[64] = {};
+        protocyte::SliceWriter nested_writer(nested_encoded, sizeof(nested_encoded));
+        require_success(protocyte::write_tag(nested_writer, 3u, protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(nested_writer, inner_writer.position()));
+        require_success(nested_writer.write(inner_encoded, inner_writer.position()));
+
+        uint8_t encoded[128] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(
+            protocyte::write_int32_field(writer, static_cast<uint32_t>(Message::FieldNumber::r_int32_unpacked), 7));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::nested1),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, nested_writer.position()));
+        require_success(writer.write(nested_encoded, nested_writer.position()));
+
+        auto ctx = make_context();
+        ctx.limits.max_repeated_elements = 1u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
+        REQUIRE(parsed.r_int32_unpacked().size() == 1u);
+        CHECK(parsed.r_int32_unpacked()[0] == 7);
+        CHECK_FALSE(parsed.has_nested1());
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("repeated element budget spans expanded values and packed chunks") {
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        const auto field_number = static_cast<uint32_t>(Message::FieldNumber::r_int32_packed);
+        require_success(protocyte::write_int32_field(writer, field_number, 1));
+
+        require_success(protocyte::write_tag(writer, field_number, protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, 2u));
+        require_success(protocyte::write_varint(writer, 2u));
+        require_success(protocyte::write_varint(writer, 3u));
+
+        require_success(protocyte::write_tag(writer, field_number, protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, 1u));
+        require_success(protocyte::write_varint(writer, 4u));
+
+        auto ctx = make_context();
+        ctx.limits.max_repeated_elements = 3u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
+        const int32_t expected[] = {1, 2, 3};
+        check_scalar_sequence(parsed.r_int32_packed(), expected);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("map entry budget counts duplicate key occurrences") {
+        uint8_t entry[64] = {};
+        protocyte::SliceWriter entry_writer(entry, sizeof(entry));
+        require_success(protocyte::write_bytes_field(entry_writer, 1u, view_of(map_key)));
+        require_success(protocyte::write_int32_field(entry_writer, 2u, 1));
+
+        uint8_t encoded[160] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        for (size_t index {}; index < 2u; ++index) {
+            require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_str_int32),
+                                                 protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, entry_writer.position()));
+            require_success(writer.write(entry, entry_writer.position()));
+        }
+
+        auto ctx = make_context();
+        ctx.limits.max_map_entries = 1u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
+        CHECK(parsed.map_str_int32().size() == 1u);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("live allocation budget is enforced and released") {
+        auto ctx = make_context();
+        ctx.limits.max_total_allocation_bytes = sizeof(bytes_data);
+        {
+            Config::Bytes bytes(&ctx);
+            require_success(bytes.assign(view_of(bytes_data)));
+            CHECK(ctx.total_allocated_bytes == sizeof(bytes_data));
+        }
+        CHECK(ctx.total_allocated_bytes == 0u);
+
+        ctx.limits.max_total_allocation_bytes = sizeof(bytes_data) - 1u;
+        Config::Bytes rejected(&ctx);
+        require_failure(rejected.assign(view_of(bytes_data)), protocyte::ErrorCode::no_memory);
+        CHECK(ctx.total_allocated_bytes == 0u);
+    }
+
+    SECTION("allocation reallocation peaks keep the original value on failure") {
+        auto ctx = make_context();
+        Config::Vector<int32_t> values(&ctx);
+        require_success(values.reserve(4u));
+        require_success(values.push_back(41));
+        REQUIRE(values.capacity() == 4u);
+        REQUIRE(ctx.total_allocated_bytes == 4u * sizeof(int32_t));
+
+        ctx.limits.max_total_allocation_bytes = 5u * sizeof(int32_t);
+        require_failure(values.reserve(5u), protocyte::ErrorCode::no_memory);
+        CHECK(values.capacity() == 4u);
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0] == 41);
+        CHECK(ctx.total_allocated_bytes == 4u * sizeof(int32_t));
+    }
+
+    SECTION("allocators without deallocation retain charged bytes") {
+        RetainedAllocationProbe probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&probe, retain_allocation, nullptr};
+        ctx.limits.max_total_allocation_bytes = sizeof(bytes_data);
+        {
+            Config::Bytes first(&ctx);
+            require_success(first.assign(view_of(bytes_data)));
+        }
+        CHECK(ctx.total_allocated_bytes == sizeof(bytes_data));
+
+        Config::Bytes second(&ctx);
+        require_failure(second.assign(view_of(bytes_data)), protocyte::ErrorCode::no_memory);
+        CHECK(ctx.total_allocated_bytes == sizeof(bytes_data));
+        CHECK(probe.count == 1u);
+        for (size_t index {}; index < probe.count; ++index) { free(probe.pointers[index]); }
+    }
+
+    SECTION("packed payload availability is checked before overwrite allocation") {
+        constexpr uint8_t encoded[] = {0x12u, 0x80u, 0x80u, 0x80u, 0x80u, 0x04u};
+        AllocationProbe probe {};
+        auto ctx = make_required_vector_context();
+        ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+
+        RequiredVectorNested2 parsed(ctx);
+        protocyte::SliceReader reader(encoded, sizeof(encoded));
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+        CHECK(probe.calls == 0u);
+        CHECK(probe.largest == 0u);
+    }
+
+    SECTION("truncated string and bytes payloads are checked before allocation") {
+        const auto require_no_allocation = [](const uint32_t field_number) {
+            uint8_t encoded[16] {};
+            protocyte::SliceWriter writer(encoded, sizeof(encoded));
+            require_success(protocyte::write_tag(writer, field_number, protocyte::WireType::LEN));
+            require_success(protocyte::write_varint(writer, protocyte::Limits::default_max_string_bytes));
+
+            AllocationProbe probe {};
+            auto ctx = make_context();
+            ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+            ctx.limits.max_total_bytes = ~protocyte::usize {0u};
+
+            CompatMessage parsed(ctx);
+            protocyte::SliceReader reader(encoded, writer.position());
+            require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::unexpected_eof);
+            CHECK(reader.position() == writer.position());
+            CHECK(probe.calls == 0u);
+            CHECK(probe.largest == 0u);
+        };
+
+        SECTION("string") { require_no_allocation(static_cast<uint32_t>(CompatMessage::FieldNumber::f_string)); }
+
+        SECTION("bytes") { require_no_allocation(static_cast<uint32_t>(CompatMessage::FieldNumber::f_bytes)); }
+    }
+
     SECTION("string assignment respects max_string_bytes") {
         auto ctx = make_context();
         ctx.limits.max_string_bytes = 3u;
@@ -4386,6 +4683,26 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
                         protocyte::ErrorCode::recursion_limit);
         CHECK(ctx.recursion_depth == 0u);
     }
+
+    SECTION("group skipping restores recursion depth after success") {
+        auto ctx = make_context();
+        constexpr uint8_t group_contents[] = {0x10u, 0x2au, 0x0cu};
+        protocyte::SliceReader reader(group_contents, sizeof(group_contents));
+
+        require_success(protocyte::skip_field<Config>(ctx, reader, protocyte::WireType::SGROUP, 1u));
+        CHECK(reader.eof());
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("group skipping rejects mismatched end groups and restores recursion depth") {
+        auto ctx = make_context();
+        constexpr uint8_t mismatched_end_group[] = {0x14u};
+        protocyte::SliceReader reader(mismatched_end_group, sizeof(mismatched_end_group));
+
+        require_failure(protocyte::skip_field<Config>(ctx, reader, protocyte::WireType::SGROUP, 1u),
+                        protocyte::ErrorCode::invalid_wire_type);
+        CHECK(ctx.recursion_depth == 0u);
+    }
 }
 
 TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[smoke][runtime][custom-config]") {
@@ -4440,13 +4757,13 @@ TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[s
     CHECK(parsed_inner.mode() == InnerMode::C);
 }
 
-TEST_CASE("Generated packed parsing falls back for push-only vectors", "[smoke][runtime][custom-config]") {
-    auto ctx = make_push_only_context();
+TEST_CASE("Generated packed parsing uses required scalar vector primitives", "[smoke][runtime][custom-config]") {
+    auto ctx = make_required_vector_context();
     constexpr std::array<protocyte::u8, 10u> encoded {
         0x12u, 0x08u, 0x00u, 0x00u, 0x80u, 0x3fu, 0x00u, 0x00u, 0x00u, 0x40u,
     };
     protocyte::SliceReader reader(encoded.data(), encoded.size());
-    PushOnlyNested2 parsed(ctx);
+    RequiredVectorNested2 parsed(ctx);
 
     require_success(parsed.merge_from(reader));
 

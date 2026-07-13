@@ -5,14 +5,10 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
-#if !PROTOCYTE_ENABLE_STD_STRING_VIEW
-#include <string_view>
-#endif
-
 namespace test::crosspkg {
 
     inline constexpr ::protocyte::u32 FOREIGN_BASE {7u};
-    inline constexpr ::std::string_view FOREIGN_LABEL {"proto-xpkg", 10u};
+    inline constexpr ::protocyte::StringView FOREIGN_LABEL {"proto-xpkg", 10u};
 
     template<typename Config = ::protocyte::DefaultConfig> struct CrossPackageConstants_Nested;
     template<typename Config = ::protocyte::DefaultConfig> struct CrossPackageConstants;
@@ -118,7 +114,22 @@ namespace test::crosspkg {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -169,6 +180,7 @@ namespace test::crosspkg {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
@@ -214,7 +226,7 @@ namespace test::crosspkg {
         template<typename NestedConfig = Config> using Nested = CrossPackageConstants_Nested<NestedConfig>;
 
         static constexpr ::protocyte::u32 REMOTE_COUNT {16u};
-        static constexpr ::std::string_view REMOTE_LABEL {"proto-demo-external", 19u};
+        static constexpr ::protocyte::StringView REMOTE_LABEL {"proto-demo-external", 19u};
         static constexpr bool REMOTE_READY {true};
         static constexpr ::protocyte::u32 NESTED_COUNT {9u};
 
@@ -350,7 +362,22 @@ namespace test::crosspkg {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -395,9 +422,15 @@ namespace test::crosspkg {
                             if (!len) {
                                 return len.status();
                             }
+                            if (const auto st = reader.can_read(*len); !st) {
+                                return st;
+                            }
                             ::protocyte::Array<::protocyte::i32, 9u> packed_remote_values_values {};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
                                 ::protocyte::i32 value {};
                                 const auto decoded_remote_values = ::protocyte::read_int32(packed);
                                 if (!decoded_remote_values) {
@@ -423,6 +456,9 @@ namespace test::crosspkg {
                                 }
                             }
                             break;
+                        }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
                         }
                         ::protocyte::i32 value {};
                         {
@@ -471,6 +507,7 @@ namespace test::crosspkg {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;

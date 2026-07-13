@@ -116,7 +116,22 @@ namespace protocyte_smoke::test::compat {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -152,6 +167,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
@@ -941,7 +957,22 @@ namespace protocyte_smoke::test::compat {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -1108,9 +1139,15 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
+                            if (const auto st = reader.can_read(*len); !st) {
+                                return st;
+                            }
                             typename Config::template Vector<::protocyte::i32> packed_r_int32_unpacked_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
                                 ::protocyte::i32 value {};
                                 const auto decoded_r_int32_unpacked = ::protocyte::read_int32(packed);
                                 if (!decoded_r_int32_unpacked) {
@@ -1121,37 +1158,15 @@ namespace protocyte_smoke::test::compat {
                                     return st;
                                 }
                             }
-                            if constexpr (requires(decltype(r_int32_unpacked_) &target,
-                                                   decltype(packed_r_int32_unpacked_values) &values,
-                                                   const ::protocyte::usize count) {
-                                              { values.data() } -> ::std::convertible_to<const ::protocyte::i32 *>;
-                                              {
-                                                  target.append_trivial_range(values.data(), count)
-                                              } -> ::std::same_as<::protocyte::Status>;
-                                          }) {
-                                if (const auto st = r_int32_unpacked_.append_trivial_range(
-                                        packed_r_int32_unpacked_values.data(), packed_r_int32_unpacked_values.size());
-                                    !st) {
-                                    return st;
-                                }
-                            } else {
-                                const auto packed_r_int32_unpacked_values_commit_size = ::protocyte::checked_add(
-                                    r_int32_unpacked_.size(), packed_r_int32_unpacked_values.size());
-                                if (!packed_r_int32_unpacked_values_commit_size) {
-                                    return packed_r_int32_unpacked_values_commit_size.status();
-                                }
-                                if (const auto st =
-                                        r_int32_unpacked_.reserve(*packed_r_int32_unpacked_values_commit_size);
-                                    !st) {
-                                    return st;
-                                }
-                                for (const auto &value : packed_r_int32_unpacked_values) {
-                                    if (const auto st = r_int32_unpacked_.push_back(value); !st) {
-                                        return st;
-                                    }
-                                }
+                            if (const auto st = r_int32_unpacked_.append_trivial_range(
+                                    packed_r_int32_unpacked_values.data(), packed_r_int32_unpacked_values.size());
+                                !st) {
+                                return st;
                             }
                             break;
+                        }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
                         }
                         ::protocyte::i32 value {};
                         {
@@ -1173,9 +1188,15 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
+                            if (const auto st = reader.can_read(*len); !st) {
+                                return st;
+                            }
                             typename Config::template Vector<::protocyte::i32> packed_r_int32_packed_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
                                 ::protocyte::i32 value {};
                                 const auto decoded_r_int32_packed = ::protocyte::read_int32(packed);
                                 if (!decoded_r_int32_packed) {
@@ -1186,36 +1207,15 @@ namespace protocyte_smoke::test::compat {
                                     return st;
                                 }
                             }
-                            if constexpr (requires(decltype(r_int32_packed_) &target,
-                                                   decltype(packed_r_int32_packed_values) &values,
-                                                   const ::protocyte::usize count) {
-                                              { values.data() } -> ::std::convertible_to<const ::protocyte::i32 *>;
-                                              {
-                                                  target.append_trivial_range(values.data(), count)
-                                              } -> ::std::same_as<::protocyte::Status>;
-                                          }) {
-                                if (const auto st = r_int32_packed_.append_trivial_range(
-                                        packed_r_int32_packed_values.data(), packed_r_int32_packed_values.size());
-                                    !st) {
-                                    return st;
-                                }
-                            } else {
-                                const auto packed_r_int32_packed_values_commit_size = ::protocyte::checked_add(
-                                    r_int32_packed_.size(), packed_r_int32_packed_values.size());
-                                if (!packed_r_int32_packed_values_commit_size) {
-                                    return packed_r_int32_packed_values_commit_size.status();
-                                }
-                                if (const auto st = r_int32_packed_.reserve(*packed_r_int32_packed_values_commit_size);
-                                    !st) {
-                                    return st;
-                                }
-                                for (const auto &value : packed_r_int32_packed_values) {
-                                    if (const auto st = r_int32_packed_.push_back(value); !st) {
-                                        return st;
-                                    }
-                                }
+                            if (const auto st = r_int32_packed_.append_trivial_range(
+                                    packed_r_int32_packed_values.data(), packed_r_int32_packed_values.size());
+                                !st) {
+                                return st;
                             }
                             break;
+                        }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
                         }
                         ::protocyte::i32 value {};
                         {
@@ -1237,63 +1237,15 @@ namespace protocyte_smoke::test::compat {
                             if (!len) {
                                 return len.status();
                             }
-                            if (*len % 8u == 0u) {
-                                if constexpr (::std::endian::native == ::std::endian::little &&
-                                              requires(Reader &source, const ::protocyte::usize bytes,
-                                                       decltype(r_double_) &target, const ::protocyte::usize values) {
-                                                  { source.can_read(bytes) } -> ::std::same_as<::protocyte::Status>;
-                                                  {
-                                                      target.append_trivial_from_reader(source, values)
-                                                  } -> ::std::same_as<::protocyte::Status>;
-                                              }) {
-                                    if (const auto st = reader.can_read(*len); !st) {
-                                        return st;
-                                    }
-                                    if (const auto st = r_double_.append_trivial_from_reader(reader, *len / 8u); !st) {
-                                        return st;
-                                    }
-                                    break;
-                                }
-                            }
-                            typename Config::template Vector<::protocyte::f64> packed_r_double_values {ctx_};
-                            const auto packed_reserve_r_double = *len / 8u;
-                            if (const auto st = packed_r_double_values.reserve(packed_reserve_r_double); !st) {
-                                return st;
-                            }
                             if (const auto st =
-                                    ::protocyte::read_fixed_width_packed_values(reader, *len, packed_r_double_values);
+                                    ::protocyte::read_fixed_width_packed_values(reader, *len, field_number, r_double_);
                                 !st) {
                                 return st;
                             }
-                            if constexpr (requires(decltype(r_double_) &target,
-                                                   decltype(packed_r_double_values) &values,
-                                                   const ::protocyte::usize count) {
-                                              { values.data() } -> ::std::convertible_to<const ::protocyte::f64 *>;
-                                              {
-                                                  target.append_trivial_range(values.data(), count)
-                                              } -> ::std::same_as<::protocyte::Status>;
-                                          }) {
-                                if (const auto st = r_double_.append_trivial_range(packed_r_double_values.data(),
-                                                                                   packed_r_double_values.size());
-                                    !st) {
-                                    return st;
-                                }
-                            } else {
-                                const auto packed_r_double_values_commit_size =
-                                    ::protocyte::checked_add(r_double_.size(), packed_r_double_values.size());
-                                if (!packed_r_double_values_commit_size) {
-                                    return packed_r_double_values_commit_size.status();
-                                }
-                                if (const auto st = r_double_.reserve(*packed_r_double_values_commit_size); !st) {
-                                    return st;
-                                }
-                                for (const auto &value : packed_r_double_values) {
-                                    if (const auto st = r_double_.push_back(value); !st) {
-                                        return st;
-                                    }
-                                }
-                            }
                             break;
+                        }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
                         }
                         ::protocyte::f64 value {};
                         const auto decoded_r_double = ::protocyte::read_double_field(reader, wire_type, field_number);
@@ -1397,6 +1349,9 @@ namespace protocyte_smoke::test::compat {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
+                            return st;
+                        }
                         auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
                         if (!entry) {
                             return entry.status();
@@ -1460,6 +1415,9 @@ namespace protocyte_smoke::test::compat {
                         if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
+                        }
+                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
+                            return st;
                         }
                         auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
                         if (!entry) {
@@ -1530,6 +1488,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;

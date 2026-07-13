@@ -7,10 +7,10 @@ import hashlib
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 
 from protocyte.errors import ProtocyteError
 from protocyte.model import (
-    CONSTANT_KIND_STRING,
     SCALAR_CPP_TYPES,
     SCALAR_DEFAULTS,
     DescriptorModel,
@@ -72,13 +72,140 @@ _SCALAR_WRITE_HELPERS = {
 
 
 @dataclass
+class _OutputBudget:
+    max_bytes: int | None
+    used_bytes: int = 0
+
+    def consume(self, content: str) -> None:
+        content_bytes = len(content.encode("utf-8"))
+        next_total = self.used_bytes + content_bytes
+        if self.max_bytes is not None and next_total > self.max_bytes:
+            raise ProtocyteError(
+                "generator policy limit exceeded for generated output bytes: "
+                f"{next_total} > {self.max_bytes}"
+            )
+        self.used_bytes = next_total
+
+    def remaining(self) -> int | None:
+        if self.max_bytes is None:
+            return None
+        return self.max_bytes - self.used_bytes
+
+
+@dataclass
+class _FormatterResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class _FormatterOutputLimit(Exception):
+    pass
+
+
+def _run_formatter_bounded(
+    command: list[str],
+    content: str,
+    *,
+    timeout_seconds: float | None,
+    max_output_bytes: int,
+) -> _FormatterResult:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    output_lock = threading.Lock()
+    output_size = 0
+    output_limit_reached = threading.Event()
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    io_errors: list[OSError] = []
+
+    def read_stream(stream, chunks: list[bytes]) -> None:
+        nonlocal output_size
+        try:
+            while chunk := stream.read(64 * 1024):
+                with output_lock:
+                    if output_size + len(chunk) > max_output_bytes:
+                        output_limit_reached.set()
+                    else:
+                        output_size += len(chunk)
+                        chunks.append(chunk)
+                if output_limit_reached.is_set():
+                    process.kill()
+                    return
+        except OSError as exc:
+            if not output_limit_reached.is_set():
+                io_errors.append(exc)
+        finally:
+            stream.close()
+
+    def write_input() -> None:
+        try:
+            process.stdin.write(content.encode("utf-8"))
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            process.stdin.close()
+
+    stdout_reader = threading.Thread(
+        target=read_stream,
+        args=(process.stdout, stdout_chunks),
+        name="protocyte-formatter-stdout",
+    )
+    stderr_reader = threading.Thread(
+        target=read_stream,
+        args=(process.stderr, stderr_chunks),
+        name="protocyte-formatter-stderr",
+    )
+    stdin_writer = threading.Thread(
+        target=write_input,
+        name="protocyte-formatter-stdin",
+    )
+    stdout_reader.start()
+    stderr_reader.start()
+    stdin_writer.start()
+
+    try:
+        returncode = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        stdin_writer.join()
+        stdout_reader.join()
+        stderr_reader.join()
+
+    if output_limit_reached.is_set():
+        raise _FormatterOutputLimit
+    if io_errors:
+        raise io_errors[0]
+    return _FormatterResult(
+        returncode=returncode,
+        stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+        stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+    )
+
+
+@dataclass
 class CppWriter:
     indent_level: int = 0
     lines: list[str] = field(default_factory=list)
     declared_names: list[set[str]] = field(default_factory=lambda: [set()])
+    output_budget: _OutputBudget | None = None
 
     def line(self, text: str = "") -> None:
-        self.lines.append(("  " * self.indent_level + text) if text else "")
+        rendered = ("  " * self.indent_level + text) if text else ""
+        if self.output_budget is not None:
+            self.output_budget.consume(rendered + "\n")
+        self.lines.append(rendered)
 
     def push(self, level: int = 1) -> None:
         if level < 0:
@@ -181,20 +308,43 @@ class _CppFunctionScope:
 
 
 def generate_outputs(
-    model: DescriptorModel, options: GeneratorOptions
+    model: DescriptorModel,
+    options: GeneratorOptions,
+    *,
+    format_outputs: bool = True,
+    formatter_timeout_seconds: float | None = None,
+    max_output_bytes: int | None = None,
 ) -> dict[str, str]:
     _validate_generated_cpp_names(model, options)
+    output_budget = _OutputBudget(max_output_bytes)
     outputs: dict[str, str] = {}
     if options.emit_runtime:
-        outputs.update(runtime_files(options.runtime_prefix))
+        for name, content in runtime_files(options.runtime_prefix).items():
+            output_budget.consume(content)
+            outputs[name] = content
     for file_model in model.generated_files():
-        outputs[_header_name(file_model.name)] = generate_header(file_model, options)
-        outputs[_source_name(file_model.name)] = generate_source(file_model, options)
-    return _format_cpp_outputs(outputs, options)
+        outputs[_header_name(file_model.name)] = generate_header(
+            file_model, options, output_budget=output_budget
+        )
+        outputs[_source_name(file_model.name)] = generate_source(
+            file_model, options, output_budget=output_budget
+        )
+    if not format_outputs:
+        return outputs
+    return _format_cpp_outputs(
+        outputs,
+        options,
+        timeout_seconds=formatter_timeout_seconds,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def _format_cpp_outputs(
-    outputs: dict[str, str], options: GeneratorOptions
+    outputs: dict[str, str],
+    options: GeneratorOptions,
+    *,
+    timeout_seconds: float | None = None,
+    max_output_bytes: int | None = None,
 ) -> dict[str, str]:
     clang_format = _resolve_clang_format_executable(options)
     if clang_format is None:
@@ -202,18 +352,40 @@ def _format_cpp_outputs(
 
     style_args = _clang_format_style_args(options)
     formatted: dict[str, str] = {}
+    formatted_budget = _OutputBudget(max_output_bytes)
     for name, content in outputs.items():
         if not name.endswith((".h", ".hh", ".hpp", ".c", ".cc", ".cpp", ".cxx")):
+            formatted_budget.consume(content)
             formatted[name] = content
             continue
         try:
-            result = subprocess.run(
-                [clang_format, *style_args, f"--assume-filename={name}"],
-                input=content,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            command = [clang_format, *style_args, f"--assume-filename={name}"]
+            remaining = formatted_budget.remaining()
+            if remaining is None:
+                result = subprocess.run(
+                    command,
+                    input=content,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=timeout_seconds,
+                )
+            else:
+                result = _run_formatter_bounded(
+                    command,
+                    content,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=remaining,
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise ProtocyteError(
+                f"clang-format timed out for {name} after {timeout_seconds} seconds"
+            ) from exc
+        except _FormatterOutputLimit as exc:
+            raise ProtocyteError(
+                "generator policy limit exceeded for generated output bytes while "
+                f"formatting {name}: more than {max_output_bytes} bytes"
+            ) from exc
         except OSError as exc:
             raise ProtocyteError(f"failed to run clang-format: {exc}") from exc
         if result.returncode != 0:
@@ -223,6 +395,7 @@ def _format_cpp_outputs(
                 or f"exit code {result.returncode}"
             )
             raise ProtocyteError(f"clang-format failed for {name}: {detail}")
+        formatted_budget.consume(result.stdout)
         formatted[name] = result.stdout
     return formatted
 
@@ -594,8 +767,13 @@ def _message_visible_storage_names(message: MessageModel) -> set[str]:
     return names
 
 
-def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
-    w = CppWriter()
+def generate_header(
+    file_model: FileModel,
+    options: GeneratorOptions,
+    *,
+    output_budget: _OutputBudget | None = None,
+) -> str:
+    w = CppWriter(output_budget=output_budget)
     guard = _include_guard(file_model.name)
     w.line("#pragma once")
     w.line()
@@ -606,14 +784,6 @@ def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
     extra_includes: list[str] = []
     if _file_uses_numeric_limits(file_model):
         extra_includes.append("#include <limits>")
-    if _file_uses_string_view(file_model):
-        extra_includes.extend(
-            [
-                "#if !PROTOCYTE_ENABLE_STD_STRING_VIEW",
-                "#include <string_view>",
-                "#endif",
-            ]
-        )
     for dependency in sorted(file_model.dependencies):
         extra_includes.append(f'#include "{_include_path(dependency, options)}"')
     if extra_includes:
@@ -639,8 +809,13 @@ def generate_header(file_model: FileModel, options: GeneratorOptions) -> str:
     return w.render()
 
 
-def generate_source(file_model: FileModel, options: GeneratorOptions) -> str:
-    w = CppWriter()
+def generate_source(
+    file_model: FileModel,
+    options: GeneratorOptions,
+    *,
+    output_budget: _OutputBudget | None = None,
+) -> str:
+    w = CppWriter(output_budget=output_budget)
     w.line(f'#include "{_header_name(file_model.name)}"')
     w.line()
     w.line("#ifdef PROTOCYTE_ENABLE_REFLECTION")
@@ -1654,39 +1829,29 @@ def _emit_wire_api(
         w.line("return validate();")
     w.line("}")
     w.line()
-    w.line("template <typename Reader>")
-    w.line("::protocyte::Status merge_partial_from(Reader& reader) noexcept {")
+    w.line("template <typename InputReader>")
+    w.line("::protocyte::Status merge_partial_from(InputReader& reader) noexcept {")
     with w.indent():
-        w.line("while (!reader.eof()) {")
-        with w.indent():
-            w.line("const auto tag = ::protocyte::read_tag(reader);")
-            w.line("if (!tag) { return tag.status(); }")
-            w.line("const auto [field_number, wire_type] = *tag;")
-            if message.fields:
-                w.line("switch (static_cast<FieldNumber>(field_number)) {")
-                with w.indent():
-                    for item in sorted(message.fields, key=lambda f: f.number):
-                        w.line(f"case FieldNumber::{_field_number_name(item)}: {{")
-                        with w.indent():
-                            _emit_parse_case(w, item, options)
-                            w.line("break;")
-                        w.line("}")
-                    w.line("default: {")
-                    with w.indent():
-                        w.line(
-                            "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
-                        )
-                        w.line("break;")
-                    w.line("}")
-                w.line("}")
-            else:
-                w.line(
-                    "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
-                )
-        w.line("}")
+        w.line(
+            "::protocyte::ParseBudgetReader<InputReader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
+        )
+        w.line("if (const auto st = merge_fields_from(budget_reader); !st) { return st; }")
+        w.line(
+            "if (budget_reader.limit_reached()) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position()); }"
+        )
         w.line("return {};")
     w.line("}")
     w.line()
+    w.line("friend class ::protocyte::MessageParseAccess;")
+    w.line()
+    w.line("protected:")
+    w.line("template <typename Reader>")
+    w.line("::protocyte::Status merge_fields_from(Reader& reader) noexcept {")
+    with w.indent():
+        _emit_merge_fields_body(w, message, options)
+    w.line("}")
+    w.line()
+    w.line("public:")
     writer_name = "writer" if message.fields else "/* writer */"
     w.line("template <typename Writer>")
     w.line(f"::protocyte::Status serialize(Writer& {writer_name}) const noexcept {{")
@@ -1719,6 +1884,39 @@ def _emit_wire_api(
         _emit_nested_validation(w, message)
         w.line("return {};")
     w.line("}")
+
+
+def _emit_merge_fields_body(
+    w: CppWriter, message: MessageModel, options: GeneratorOptions
+) -> None:
+    w.line("while (!reader.eof()) {")
+    with w.indent():
+        w.line("const auto tag = ::protocyte::read_tag(reader);")
+        w.line("if (!tag) { return tag.status(); }")
+        w.line("const auto [field_number, wire_type] = *tag;")
+        if message.fields:
+            w.line("switch (static_cast<FieldNumber>(field_number)) {")
+            with w.indent():
+                for item in sorted(message.fields, key=lambda f: f.number):
+                    w.line(f"case FieldNumber::{_field_number_name(item)}: {{")
+                    with w.indent():
+                        _emit_parse_case(w, item, options)
+                        w.line("break;")
+                    w.line("}")
+                w.line("default: {")
+                with w.indent():
+                    w.line(
+                        "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
+                    )
+                    w.line("break;")
+                w.line("}")
+            w.line("}")
+        else:
+            w.line(
+                "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
+            )
+    w.line("}")
+    w.line("return {};")
 
 
 def _emit_fixed_array_validation(
@@ -1881,50 +2079,43 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                 width = _packed_fixed_width_size(item)
                 bulk_width = _packed_bulk_fixed_width_size(item)
                 if not item.repeated_array and bulk_width is not None:
-                    w.line(f"if (*len % {bulk_width} == 0u) {{")
-                    with w.indent():
-                        direct_bulk_requires = (
-                            "::std::endian::native == ::std::endian::little && "
-                            "requires(Reader &source, const ::protocyte::usize bytes, "
-                            f"decltype({_member(item)}) &target, const ::protocyte::usize values) "
-                            "{ { source.can_read(bytes) } -> ::std::same_as<::protocyte::Status>; "
-                            "{ target.append_trivial_from_reader(source, values) } "
-                            "-> ::std::same_as<::protocyte::Status>; }"
-                        )
-                        w.line(
-                            f"if constexpr ({direct_bulk_requires}) {{"
-                        )
+                    w.line(
+                        f"if (const auto st = ::protocyte::read_fixed_width_packed_values(reader, *len, field_number, {_member(item)}); !st) {{ return st; }}"
+                    )
+                    w.line("break;")
+                else:
+                    w.line("if (const auto st = reader.can_read(*len); !st) { return st; }")
+                    if width is not None:
+                        w.line(f"if (*len % {width} != 0u) {{")
                         with w.indent():
                             w.line(
-                                "if (const auto st = reader.can_read(*len); !st) { return st; }"
+                                "return ::protocyte::unexpected(::protocyte::ErrorCode::unexpected_eof, reader.position(), field_number);"
                             )
-                            w.line(
-                                f"if (const auto st = {_member(item)}.append_trivial_from_reader(reader, *len / {bulk_width}); !st) {{ return st; }}"
-                            )
-                            w.line("break;")
                         w.line("}")
-                    w.line("}")
-                _emit_repeated_storage_decl(w, item, packed_values_name, options)
-                if not item.repeated_array and width is not None:
-                    reserve_name = f"packed_reserve_{item.cpp_name}"
-                    w.line(f"const auto {reserve_name} = *len / {width};")
-                    w.line(
-                        f"if (const auto st = {packed_values_name}.reserve({reserve_name}); !st) {{ return st; }}"
-                    )
-                if not item.repeated_array and bulk_width is not None:
-                    w.line(
-                        f"if (const auto st = ::protocyte::read_fixed_width_packed_values(reader, *len, {packed_values_name}); !st) {{ return st; }}"
-                    )
-                else:
+                        w.line(
+                            f"if (const auto st = reader.consume_repeated_elements(*len / {width}, field_number); !st) {{ return st; }}"
+                        )
+                    _emit_repeated_storage_decl(w, item, packed_values_name, options)
+                    if not item.repeated_array and width is not None:
+                        reserve_name = f"packed_reserve_{item.cpp_name}"
+                        w.line(f"const auto {reserve_name} = *len / {width};")
+                        w.line(
+                            f"if (const auto st = {packed_values_name}.reserve({reserve_name}); !st) {{ return st; }}"
+                        )
                     w.line("::protocyte::LimitedReader<Reader> packed{reader, *len};")
                     w.line("while (!packed.eof()) {")
                     with w.indent():
                         _emit_read_repeated_value(
-                            w, item, "packed", options, target=packed_values_name
+                            w,
+                            item,
+                            "packed",
+                            options,
+                            target=packed_values_name,
+                            consume_budget=width is None,
                         )
                     w.line("}")
-                _emit_commit_repeated_values(w, item, packed_values_name)
-                w.line("break;")
+                    _emit_commit_repeated_values(w, item, packed_values_name)
+                    w.line("break;")
             w.line("}")
         if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
             _emit_read_repeated_value(w, item, "reader", options, checked=True)
@@ -1954,8 +2145,13 @@ def _emit_read_repeated_value(
     *,
     checked: bool = False,
     target: str | None = None,
+    consume_budget: bool = True,
 ) -> None:
     target = _member(item) if target is None else target
+    if consume_budget:
+        w.line(
+            f"if (const auto st = {reader}.consume_repeated_elements(1u, field_number); !st) {{ return st; }}"
+        )
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
         w.line(f"{typ} value{{ctx_}};")
@@ -1999,40 +2195,9 @@ def _emit_repeated_storage_decl(
 
 def _emit_commit_repeated_values(w: CppWriter, item: FieldModel, source: str) -> None:
     if not item.repeated_array and _is_scalar_field(item):
-        element_type = (
-            "::protocyte::i32"
-            if item.kind == "enum"
-            else _runtime_scalar_type(SCALAR_CPP_TYPES[item.proto_type])
+        w.line(
+            f"if (const auto st = {_member(item)}.append_trivial_range({source}.data(), {source}.size()); !st) {{ return st; }}"
         )
-        append_range_requires = (
-            f"requires(decltype({_member(item)}) &target, decltype({source}) &values, "
-            "const ::protocyte::usize count) "
-            f"{{ {{ values.data() }} -> ::std::convertible_to<const {element_type} *>; "
-            "{ target.append_trivial_range(values.data(), count) } "
-            "-> ::std::same_as<::protocyte::Status>; }"
-        )
-        w.line(f"if constexpr ({append_range_requires}) {{")
-        with w.indent():
-            w.line(
-                f"if (const auto st = {_member(item)}.append_trivial_range({source}.data(), {source}.size()); !st) {{ return st; }}"
-            )
-        w.line("} else {")
-        with w.indent():
-            commit_size_name = f"{source}_commit_size"
-            w.line(
-                f"const auto {commit_size_name} = ::protocyte::checked_add({_member(item)}.size(), {source}.size());"
-            )
-            w.line(f"if (!{commit_size_name}) {{ return {commit_size_name}.status(); }}")
-            w.line(
-                f"if (const auto st = {_member(item)}.reserve(*{commit_size_name}); !st) {{ return st; }}"
-            )
-            w.line(f"for (const auto &value : {source}) {{")
-            with w.indent():
-                w.line(
-                    f"if (const auto st = {_member(item)}.push_back(value); !st) {{ return st; }}"
-                )
-            w.line("}")
-        w.line("}")
         return
 
     commit_size_name = f"{source}_commit_size"
@@ -2215,6 +2380,9 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
     value = item.map_value
     w.line(
         "if (wire_type != ::protocyte::WireType::LEN) { return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }"
+    )
+    w.line(
+        "if (const auto st = reader.consume_map_entries(1u, field_number); !st) { return st; }"
     )
     w.line(
         "auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);"
@@ -2750,17 +2918,6 @@ def _emit_member(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> N
         w.line(f"bool has_{item.cpp_name}_ {{}};")
 
 
-def _emit_clear_statement(w: CppWriter, item: FieldModel) -> None:
-    if item.kind == "message":
-        w.line(f"{_member(item)}.reset();")
-    elif item.kind in {"string", "bytes"}:
-        w.line(f"{_member(item)}.clear();")
-        if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = false;")
-    else:
-        w.line(f"{_member(item)} = {{}};")
-
-
 def _emit_oneof_member(
     w: CppWriter, item: FieldModel, options: GeneratorOptions
 ) -> None:
@@ -3056,15 +3213,6 @@ def _emit_string_view_accessor(
     w.line(f"::protocyte::StringView {name}() const noexcept {{ return {expr}; }}")
 
 
-def _file_uses_string_view(file_model: FileModel) -> bool:
-    if any(constant.kind == CONSTANT_KIND_STRING for constant in file_model.constants):
-        return True
-    for message in _walk_messages(file_model.messages):
-        if any(constant.kind == CONSTANT_KIND_STRING for constant in message.constants):
-            return True
-    return False
-
-
 def _file_uses_numeric_limits(file_model: FileModel) -> bool:
     for message in _walk_messages(file_model.messages):
         if any(
@@ -3138,7 +3286,7 @@ def _include_guard(proto_name: str) -> str:
 def _namespace_parts(file_model: FileModel, options: GeneratorOptions) -> list[str]:
     parts: list[str] = []
     if options.namespace_prefix:
-        parts.extend(part for part in options.namespace_prefix.split("::") if part)
+        parts.extend(options.namespace_prefix.split("::"))
     if file_model.package:
         parts.extend(cpp_identifier(part) for part in file_model.package.split("."))
     return parts
@@ -3147,7 +3295,7 @@ def _namespace_parts(file_model: FileModel, options: GeneratorOptions) -> list[s
 def _qualified_name(package: str, cpp_name: str, options: GeneratorOptions) -> str:
     parts: list[str] = []
     if options.namespace_prefix:
-        parts.extend(part for part in options.namespace_prefix.split("::") if part)
+        parts.extend(options.namespace_prefix.split("::"))
     if package:
         parts.extend(cpp_identifier(part) for part in package.split("."))
     parts.append(cpp_name)

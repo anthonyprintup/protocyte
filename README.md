@@ -51,6 +51,11 @@ smaller while preserving protobuf wire behavior.
 - Services and methods are accepted in descriptor graphs but do not generate
   RPC stubs.
 
+Protocyte is pre-1.0. Generated C++ APIs, runtime config requirements, plugin
+parameters, and CMake interfaces may change between releases without
+compatibility aliases or migration shims. Pin the intended Protocyte version
+and regenerate checked outputs when updating.
+
 ## Usage
 
 Protocyte's Python package requires Python 3.14 or newer. That applies to
@@ -163,7 +168,7 @@ add_executable(demo main.cpp)
 target_link_libraries(demo PRIVATE demo::proto)
 ```
 
-Generator options can be forwarded through `OPTIONS`:
+Non-runtime generator options can be forwarded through `OPTIONS`:
 
 ```cmake
 protocyte_add_proto_library(
@@ -215,7 +220,9 @@ option/type resolution; unreferenced runtime descriptors stay dependency-only,
 while referenced runtime message/enum descriptors are generated when selected
 files need their generated types.
 
-Absolute Windows and POSIX paths are safe to use in `OPTIONS`.
+Formatter executable and config values in `OPTIONS` may use absolute Windows
+or POSIX paths. Generated include and runtime prefixes are not filesystem paths;
+they must use the normalized relative virtual-directory form documented below.
 
 By default, the protocyte CMake project fetches protobuf when protobuf CMake
 targets are not already available, then exposes:
@@ -223,6 +230,9 @@ targets are not already available, then exposes:
 - `protocyte_add_proto_library(...)` for the common target-oriented workflow
 - `protocyte_generate(...)` as the lower-level codegen primitive
 - `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
+
+The fallback protobuf revision is the exact commit recorded in
+`PROTOCYTE_PROTOBUF_GIT_TAG`, rather than a mutable branch or release tag.
 
 `TARGET` must be a real CMake target name without `::`. `ALIAS` can use any
 valid alias target name; namespaced aliases like `demo::proto` are recommended
@@ -267,6 +277,11 @@ target_link_libraries(demo PRIVATE demo::proto)
 
 Configure the consumer with `-DCMAKE_PREFIX_PATH=<prefix>` so CMake can find
 `protocyteConfig.cmake`.
+
+Final-release CMake package versions accept only exact version requests.
+Prerelease package versions intentionally reject versioned `find_package`
+requests; pin the prerelease prefix itself and use the unversioned
+`find_package(protocyte CONFIG REQUIRED)` form shown above.
 
 The installed CMake package installs:
 
@@ -318,28 +333,45 @@ Supported `--protocyte_out=` parameters:
 - `runtime=emit`: emit `runtime.hpp` under `protocyte/runtime`.
 - `runtime=emit:<prefix>`: emit `runtime.hpp` under a custom prefix.
 - `runtime=omit`: do not emit runtime files.
-- `runtime_prefix=<path>`: override the runtime include/output prefix when
-  runtime emission is enabled.
+- `runtime_prefix=<path>`: set the runtime header include prefix and, when
+  runtime emission is enabled, its output directory.
 - `namespace_prefix=<a::b>`: prepend additional C++ namespaces around the file
   package namespace.
-- `namespace=<a::b>`: accepted as an alias for `namespace_prefix`; specify only
-  one of the two names.
 - `include_prefix=<path>`: prefix includes for imported generated headers.
-- `clang_format=<command-or-path>`: run an explicit `clang-format` executable
-  after generation. When specified, launch and formatting failures are reported
-  as plugin errors.
+- `clang_format=<executable-or-path>`: run an explicit `clang-format`
+  executable after generation. The value is passed as one executable argument,
+  not interpreted by a shell; do not append command-line options. When
+  specified, launch and formatting failures are reported as plugin errors.
 - `clang_format_config=<path>`: use an explicit clang-format config file when
   formatting runs.
+
+Runtime and include prefixes are portable protobuf virtual directories, not
+filesystem paths. They must be normalized relative paths using `/`; absolute or
+drive-rooted paths, backslashes, control characters, empty segments, `.` and
+`..` segments, and leading or trailing segment whitespace are rejected. The
+same validation is applied by the CMake helpers before generated outputs are
+declared.
+
+Parameter names are exact and case-sensitive. Unknown names, duplicate names,
+and bare tokens without `=` are errors; aliases are not accepted.
+Names beginning with `_protocyte_` are reserved for CMake's parameter transport
+and must not be supplied through CMake `OPTIONS`.
+`namespace_prefix` must be a normalized `::`-separated namespace with no empty
+components, extra colons, surrounding component whitespace, or control
+characters.
 
 Formatting is best-effort by default. If `clang-format` is on `PATH`, protocyte
 uses it for generated C++ output. If it is not available and no explicit
 `clang_format=...` override is supplied, protocyte still emits generated files
 without failing.
 
-CMake users can forward these through the existing `OPTIONS` argument on
-`protocyte_generate(...)` or `protocyte_add_proto_library(...)`; no dedicated
-CMake option is required. Absolute Windows and POSIX paths are safe in
-`OPTIONS`.
+CMake users can forward non-runtime parameters through the existing `OPTIONS`
+argument on `protocyte_generate(...)` or `protocyte_add_proto_library(...)`.
+Absolute Windows and POSIX formatter paths are safe in `OPTIONS`; include
+prefixes remain relative virtual directories. Runtime state is the exception:
+use the dedicated `EMIT_RUNTIME` and `RUNTIME_PREFIX` arguments so CMake can
+declare the emitted runtime header and runtime linkage consistently. Forwarded
+`runtime` and `runtime_prefix` parameters are rejected.
 
 Example:
 
@@ -350,6 +382,50 @@ protoc `
   --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out `
   tests/example.proto
 ```
+
+### Generator trust boundary
+
+The `protoc-gen-protocyte` command-line plugin is designed for trusted local
+build configuration. In particular, `clang_format` and `clang_format_config`
+select developer-controlled executable and configuration paths. Do not forward
+tenant-controlled plugin parameters to that entry point unchanged.
+
+Services that embed the Python API can supply an operator-owned
+`GeneratorPolicy` without changing normal local generation:
+
+```python
+from protocyte.plugin import GeneratorPolicy, generate_response
+
+policy = GeneratorPolicy(
+    allow_formatter_parameters=False,
+    format_outputs=False,
+    max_request_bytes=4 * 1024 * 1024,
+    max_files_to_generate=256,
+    max_proto_files=1_024,
+    max_descriptor_nodes=50_000,
+    max_nesting_depth=64,
+    max_generated_bytes=64 * 1024 * 1024,
+)
+response = generate_response(request, policy=policy)
+```
+
+`GeneratorPolicy()` preserves normal local plugin behavior: its resource
+budgets are unset, formatter parameters are allowed, and output formatting is
+enabled. An embedding service must pass its own explicit policy; merely calling
+`generate_response()` does not opt into the example limits above.
+
+The values above are an example deployment profile, not protobuf format
+limits. Choose budgets for the service workload. `max_request_bytes` is checked
+on the parsed request, so the transport must also cap bytes before parsing.
+`max_generated_bytes` is enforced cumulatively while generated source lines are
+appended and while formatter stdout and stderr are streamed. Formatter capture
+uses the remaining cumulative byte budget and terminates the process before
+retaining output beyond it. A single descriptor operation, rendered file, or
+formatter input encoding can still require additional transient memory. Run
+untrusted generation in a constrained worker with overall time and memory
+limits. If formatting is enabled, `formatter_timeout_seconds` applies to each
+generated file; keep `allow_formatter_parameters=False` so the executable
+remains operator-selected from the worker environment.
 
 ## Protocyte Extensions
 
@@ -485,15 +561,35 @@ hooks:
 
 - `Config::Context` exposes `allocator`, `limits`, and `recursion_depth`.
 - `Config::Vector<T>` supports `reserve`, `push_back`, iteration, `size`,
-  `data`, and `value_type` for repeated fields.
+  `data`, and `value_type` for repeated fields. Scalar vectors additionally
+  provide `append_trivial_range(values, count)` and
+  `resize_for_overwrite(count)`, both returning `::protocyte::Status`.
 - `Config::Map<K, V>`, `Config::Box<T>`, `Config::Optional<T>`,
   `Config::Bytes`, and `Config::String` provide the storage operations used by
   the generated field APIs.
 
-`Config::Vector<T>` can also expose `append_trivial_range(values, count)` and
-`append_trivial_from_reader(reader, count)` returning `::protocyte::Status`.
-Generated code uses those hooks for fixed-width packed scalar fast paths when
-they are available and otherwise falls back to `reserve` plus `push_back`.
+`append_trivial_range` is the required bulk-commit primitive for staged packed
+scalar values. `resize_for_overwrite` must support infallible shrinking to a
+previous size so fixed-width packed reads can roll back the logical vector size
+after an input failure. Reader interaction stays in the runtime rather than in
+the vector contract.
+
+Readers passed to generated `parse()` or `merge_from()` are required to expose
+`eof()`, `position()`, `can_read(count)`, `read_byte()`, `read(out, count)`, and
+`skip(count)`. `can_read(count)` returns `::protocyte::Status`, does not consume
+input, and is part of the reader contract rather than an optional fast-path
+hook. `SliceReader`, `ReaderRef`, `ParseBudgetReader`, and `LimitedReader` all
+implement this transport contract. Parse readers passed between generated
+nested messages additionally expose `consume_repeated_elements(count,
+field_number)` and `consume_map_entries(count, field_number)`, both returning
+`::protocyte::Status`. `ParseBudgetReader` owns those counters; `ReaderRef` and
+`LimitedReader` forward them unconditionally.
+
+Writers passed to generated `serialize()` are required to expose
+`can_write(count)`, `write_byte(value)`, and `write(data, count)`.
+`can_write(count)` returns `bool`, does not consume output capacity, and is part
+of the writer contract rather than an optional bulk-write optimization.
+`SliceWriter` implements this contract.
 
 Generated messages are move-only. Ordinary C++ copying is deleted because it
 cannot report allocation failure.
@@ -508,6 +604,39 @@ Common generated operations include:
 - `copy_from(other)`
 - `clone()`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
+
+### Parse Resource Limits
+
+`protocyte::Limits` separates protobuf-compatible wire limits from optional
+application resource policy:
+
+- `max_total_bytes` defaults to `0x7fffffff` and bounds all wire bytes read or
+  skipped by one top-level `parse`, `merge_from`, or `merge_partial_from` call,
+  including nested and unknown fields. This matches protobuf C++
+  `CodedInputStream`'s default `INT_MAX` total-byte limit.
+- `max_recursion_depth` defaults to `100`, matching protobuf C++.
+- `max_message_bytes` and `max_string_bytes` bound individual
+  length-delimited values.
+- `max_repeated_elements` and `max_map_entries` default to `0x7fffffff` and
+  count decoded occurrences across the complete top-level call. Packed chunks,
+  expanded values, nested messages, and duplicate map keys share their
+  respective budgets. Lower values are application security policy and may
+  intentionally reject otherwise valid protobuf payloads; protobuf's wire
+  format does not define collection-count limits.
+- `max_total_allocation_bytes` is unbounded by default for `DefaultConfig` so
+  the default does not reject a wire-valid message solely because its in-memory
+  representation exceeds its wire size. Setting a finite value caps live
+  allocator-requested bytes for the lifetime of its `Context`.
+  Reallocation peaks count the new block before the old block is released.
+  Allocators without a deallocation callback retain charged bytes because the
+  runtime cannot know when an arena or bump allocator reclaims storage.
+  Custom configs can implement equivalent allocator policy in `Config::allocate`
+  and `Config::deallocate`.
+
+Limit failures return `size_limit` or `count_limit`; allocation-budget
+exhaustion returns `no_memory`. The default wire limits preserve protobuf's
+sub-2-GiB envelope. Finite collection and allocation budgets are application
+policy for attacker-controlled messages and can reject otherwise valid input.
 
 ### String Views
 
@@ -532,6 +661,17 @@ Generated immutable `string` field accessors also return `std::string_view` unde
 this opt-in, so hosted code can pass string fields directly to
 standard-library APIs such as `std::format`. Code that does not enable the
 option keeps the smaller no-exception `Span<const char>` accessor surface.
+
+Generated package and message string constants use the
+`::protocyte::StringView` alias. The alias is `::protocyte::Span<const char>`
+when `PROTOCYTE_ENABLE_STD_STRING_VIEW` is zero and `std::string_view` when it
+is nonzero. Both alternatives support constant-expression construction and
+basic view operations used by generated constants, including `data()`,
+`size()`, `empty()`, and indexing. The `Span<const char>` alternative is not a
+drop-in replacement for the complete `std::string_view` API: it intentionally
+does not provide string-specific operations such as `find()`, `substr()`, or
+the comparison operators. Code that requires those APIs should enable
+`PROTOCYTE_ENABLE_STD_STRING_VIEW` or handle the returned span explicitly.
 
 In a Windows kernel driver, one technically possible MSVC/STL-specific escape
 hatch is to provide the STL's internal out-of-range throw helper yourself so

@@ -138,7 +138,22 @@ namespace test::required {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -176,6 +191,7 @@ namespace test::required {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
@@ -331,7 +347,22 @@ namespace test::required {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -365,6 +396,9 @@ namespace test::required {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
+                        }
                         ::test::required::RequiredChild<Config> value {*ctx_};
                         if (const auto st =
                                 ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, value);
@@ -388,6 +422,7 @@ namespace test::required {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
@@ -647,7 +682,22 @@ namespace test::required {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -730,6 +780,7 @@ namespace test::required {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
@@ -1270,7 +1321,22 @@ namespace test::required {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -1461,6 +1527,7 @@ namespace test::required {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
@@ -1931,7 +1998,22 @@ namespace test::required {
             return validate();
         }
 
-        template<typename Reader>::protocyte::Status merge_partial_from(Reader &reader) noexcept {
+        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return {};
+        }
+
+        friend class ::protocyte::MessageParseAccess;
+
+    protected:
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -1966,6 +2048,7 @@ namespace test::required {
             return {};
         }
 
+    public:
         template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
