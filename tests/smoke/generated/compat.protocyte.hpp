@@ -128,9 +128,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -971,9 +969,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -1149,15 +1145,15 @@ namespace protocyte_smoke::test::compat {
                             typename Config::template Vector<::protocyte::i32> packed_r_int32_unpacked_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
                                 ::protocyte::i32 value {};
                                 const auto decoded_r_int32_unpacked = ::protocyte::read_int32(packed);
                                 if (!decoded_r_int32_unpacked) {
                                     return decoded_r_int32_unpacked.status();
                                 }
                                 value = *decoded_r_int32_unpacked;
-                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
-                                    return st;
-                                }
                                 if (const auto st = packed_r_int32_unpacked_values.push_back(value); !st) {
                                     return st;
                                 }
@@ -1169,6 +1165,9 @@ namespace protocyte_smoke::test::compat {
                             }
                             break;
                         }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
+                        }
                         ::protocyte::i32 value {};
                         {
                             const auto decoded_r_int32_unpacked =
@@ -1177,9 +1176,6 @@ namespace protocyte_smoke::test::compat {
                                 return decoded_r_int32_unpacked.status();
                             }
                             value = *decoded_r_int32_unpacked;
-                        }
-                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
-                            return st;
                         }
                         if (const auto st = r_int32_unpacked_.push_back(value); !st) {
                             return st;
@@ -1198,15 +1194,15 @@ namespace protocyte_smoke::test::compat {
                             typename Config::template Vector<::protocyte::i32> packed_r_int32_packed_values {ctx_};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
                                 ::protocyte::i32 value {};
                                 const auto decoded_r_int32_packed = ::protocyte::read_int32(packed);
                                 if (!decoded_r_int32_packed) {
                                     return decoded_r_int32_packed.status();
                                 }
                                 value = *decoded_r_int32_packed;
-                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
-                                    return st;
-                                }
                                 if (const auto st = packed_r_int32_packed_values.push_back(value); !st) {
                                     return st;
                                 }
@@ -1218,6 +1214,9 @@ namespace protocyte_smoke::test::compat {
                             }
                             break;
                         }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
+                        }
                         ::protocyte::i32 value {};
                         {
                             const auto decoded_r_int32_packed =
@@ -1226,9 +1225,6 @@ namespace protocyte_smoke::test::compat {
                                 return decoded_r_int32_packed.status();
                             }
                             value = *decoded_r_int32_packed;
-                        }
-                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
-                            return st;
                         }
                         if (const auto st = r_int32_packed_.push_back(value); !st) {
                             return st;
@@ -1248,15 +1244,15 @@ namespace protocyte_smoke::test::compat {
                             }
                             break;
                         }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
+                        }
                         ::protocyte::f64 value {};
                         const auto decoded_r_double = ::protocyte::read_double_field(reader, wire_type, field_number);
                         if (!decoded_r_double) {
                             return decoded_r_double.status();
                         }
                         value = *decoded_r_double;
-                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
-                            return st;
-                        }
                         if (const auto st = r_double_.push_back(value); !st) {
                             return st;
                         }
@@ -1353,6 +1349,9 @@ namespace protocyte_smoke::test::compat {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
+                            return st;
+                        }
                         auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
                         if (!entry) {
                             return entry.status();
@@ -1405,9 +1404,6 @@ namespace protocyte_smoke::test::compat {
                         if (const auto st = entry->finish(); !st) {
                             return st;
                         }
-                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
-                            return st;
-                        }
                         if (const auto insert =
                                 map_str_int32_.insert_or_assign(::protocyte::move(key), ::protocyte::move(value));
                             !insert) {
@@ -1419,6 +1415,9 @@ namespace protocyte_smoke::test::compat {
                         if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
+                        }
+                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
+                            return st;
                         }
                         auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
                         if (!entry) {
@@ -1468,9 +1467,6 @@ namespace protocyte_smoke::test::compat {
                             }
                         }
                         if (const auto st = entry->finish(); !st) {
-                            return st;
-                        }
-                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
                             return st;
                         }
                         if (const auto insert =

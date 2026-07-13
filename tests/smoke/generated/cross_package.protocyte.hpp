@@ -126,9 +126,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -376,9 +374,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -432,15 +428,15 @@ namespace test::crosspkg {
                             ::protocyte::Array<::protocyte::i32, 9u> packed_remote_values_values {};
                             ::protocyte::LimitedReader<Reader> packed {reader, *len};
                             while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
                                 ::protocyte::i32 value {};
                                 const auto decoded_remote_values = ::protocyte::read_int32(packed);
                                 if (!decoded_remote_values) {
                                     return decoded_remote_values.status();
                                 }
                                 value = *decoded_remote_values;
-                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
-                                    return st;
-                                }
                                 if (const auto st = packed_remote_values_values.push_back(value); !st) {
                                     return st;
                                 }
@@ -461,6 +457,9 @@ namespace test::crosspkg {
                             }
                             break;
                         }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
+                        }
                         ::protocyte::i32 value {};
                         {
                             const auto decoded_remote_values =
@@ -469,9 +468,6 @@ namespace test::crosspkg {
                                 return decoded_remote_values.status();
                             }
                             value = *decoded_remote_values;
-                        }
-                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
-                            return st;
                         }
                         if (const auto st = remote_values_.push_back(value); !st) {
                             return st;

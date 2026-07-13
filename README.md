@@ -418,13 +418,14 @@ The values above are an example deployment profile, not protobuf format
 limits. Choose budgets for the service workload. `max_request_bytes` is checked
 on the parsed request, so the transport must also cap bytes before parsing.
 `max_generated_bytes` is enforced cumulatively while generated source lines are
-appended and again as each formatter result is accepted. It bounds retained
-output content, but a single descriptor operation, rendered file, or formatter
-subprocess buffer can still require additional transient memory. Run untrusted
-generation in a constrained worker with overall time and memory limits. If
-formatting is enabled, `formatter_timeout_seconds` applies to each generated
-file; keep `allow_formatter_parameters=False` so the executable remains
-operator-selected from the worker environment.
+appended and while formatter stdout and stderr are streamed. Formatter capture
+uses the remaining cumulative byte budget and terminates the process before
+retaining output beyond it. A single descriptor operation, rendered file, or
+formatter input encoding can still require additional transient memory. Run
+untrusted generation in a constrained worker with overall time and memory
+limits. If formatting is enabled, `formatter_timeout_seconds` applies to each
+generated file; keep `allow_formatter_parameters=False` so the executable
+remains operator-selected from the worker environment.
 
 ## Protocyte Extensions
 

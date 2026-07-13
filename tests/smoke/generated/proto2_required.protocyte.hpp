@@ -150,9 +150,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -361,9 +359,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -400,13 +396,13 @@ namespace test::required {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
+                            return st;
+                        }
                         ::test::required::RequiredChild<Config> value {*ctx_};
                         if (const auto st =
                                 ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number, value);
                             !st) {
-                            return st;
-                        }
-                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
                             return st;
                         }
                         if (const auto st = children_.push_back(::protocyte::move(value)); !st) {
@@ -698,9 +694,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -1339,9 +1333,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
@@ -2018,9 +2010,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Status merge_partial_from(::protocyte::ReaderRef &reader) noexcept {
-            return merge_fields_from(reader);
-        }
+        friend class ::protocyte::MessageParseAccess;
 
     protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {

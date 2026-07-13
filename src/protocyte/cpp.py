@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 
 from protocyte.errors import ProtocyteError
 from protocyte.model import (
@@ -84,6 +85,113 @@ class _OutputBudget:
                 f"{next_total} > {self.max_bytes}"
             )
         self.used_bytes = next_total
+
+    def remaining(self) -> int | None:
+        if self.max_bytes is None:
+            return None
+        return self.max_bytes - self.used_bytes
+
+
+@dataclass
+class _FormatterResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class _FormatterOutputLimit(Exception):
+    pass
+
+
+def _run_formatter_bounded(
+    command: list[str],
+    content: str,
+    *,
+    timeout_seconds: float | None,
+    max_output_bytes: int,
+) -> _FormatterResult:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+
+    output_lock = threading.Lock()
+    output_size = 0
+    output_limit_reached = threading.Event()
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    io_errors: list[OSError] = []
+
+    def read_stream(stream, chunks: list[bytes]) -> None:
+        nonlocal output_size
+        try:
+            while chunk := stream.read(64 * 1024):
+                with output_lock:
+                    if output_size + len(chunk) > max_output_bytes:
+                        output_limit_reached.set()
+                    else:
+                        output_size += len(chunk)
+                        chunks.append(chunk)
+                if output_limit_reached.is_set():
+                    process.kill()
+                    return
+        except OSError as exc:
+            if not output_limit_reached.is_set():
+                io_errors.append(exc)
+        finally:
+            stream.close()
+
+    def write_input() -> None:
+        try:
+            process.stdin.write(content.encode("utf-8"))
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            process.stdin.close()
+
+    stdout_reader = threading.Thread(
+        target=read_stream,
+        args=(process.stdout, stdout_chunks),
+        name="protocyte-formatter-stdout",
+    )
+    stderr_reader = threading.Thread(
+        target=read_stream,
+        args=(process.stderr, stderr_chunks),
+        name="protocyte-formatter-stderr",
+    )
+    stdin_writer = threading.Thread(
+        target=write_input,
+        name="protocyte-formatter-stdin",
+    )
+    stdout_reader.start()
+    stderr_reader.start()
+    stdin_writer.start()
+
+    try:
+        returncode = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        raise
+    finally:
+        stdin_writer.join()
+        stdout_reader.join()
+        stderr_reader.join()
+
+    if output_limit_reached.is_set():
+        raise _FormatterOutputLimit
+    if io_errors:
+        raise io_errors[0]
+    return _FormatterResult(
+        returncode=returncode,
+        stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
+        stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+    )
 
 
 @dataclass
@@ -251,17 +359,32 @@ def _format_cpp_outputs(
             formatted[name] = content
             continue
         try:
-            result = subprocess.run(
-                [clang_format, *style_args, f"--assume-filename={name}"],
-                input=content,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=timeout_seconds,
-            )
+            command = [clang_format, *style_args, f"--assume-filename={name}"]
+            remaining = formatted_budget.remaining()
+            if remaining is None:
+                result = subprocess.run(
+                    command,
+                    input=content,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=timeout_seconds,
+                )
+            else:
+                result = _run_formatter_bounded(
+                    command,
+                    content,
+                    timeout_seconds=timeout_seconds,
+                    max_output_bytes=remaining,
+                )
         except subprocess.TimeoutExpired as exc:
             raise ProtocyteError(
                 f"clang-format timed out for {name} after {timeout_seconds} seconds"
+            ) from exc
+        except _FormatterOutputLimit as exc:
+            raise ProtocyteError(
+                "generator policy limit exceeded for generated output bytes while "
+                f"formatting {name}: more than {max_output_bytes} bytes"
             ) from exc
         except OSError as exc:
             raise ProtocyteError(f"failed to run clang-format: {exc}") from exc
@@ -1719,10 +1842,7 @@ def _emit_wire_api(
         w.line("return {};")
     w.line("}")
     w.line()
-    w.line("::protocyte::Status merge_partial_from(::protocyte::ReaderRef& reader) noexcept {")
-    with w.indent():
-        w.line("return merge_fields_from(reader);")
-    w.line("}")
+    w.line("friend class ::protocyte::MessageParseAccess;")
     w.line()
     w.line("protected:")
     w.line("template <typename Reader>")
@@ -1972,6 +2092,9 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                                 "return ::protocyte::unexpected(::protocyte::ErrorCode::unexpected_eof, reader.position(), field_number);"
                             )
                         w.line("}")
+                        w.line(
+                            f"if (const auto st = reader.consume_repeated_elements(*len / {width}, field_number); !st) {{ return st; }}"
+                        )
                     _emit_repeated_storage_decl(w, item, packed_values_name, options)
                     if not item.repeated_array and width is not None:
                         reserve_name = f"packed_reserve_{item.cpp_name}"
@@ -1983,7 +2106,12 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                     w.line("while (!packed.eof()) {")
                     with w.indent():
                         _emit_read_repeated_value(
-                            w, item, "packed", options, target=packed_values_name
+                            w,
+                            item,
+                            "packed",
+                            options,
+                            target=packed_values_name,
+                            consume_budget=width is None,
                         )
                     w.line("}")
                     _emit_commit_repeated_values(w, item, packed_values_name)
@@ -2017,8 +2145,13 @@ def _emit_read_repeated_value(
     *,
     checked: bool = False,
     target: str | None = None,
+    consume_budget: bool = True,
 ) -> None:
     target = _member(item) if target is None else target
+    if consume_budget:
+        w.line(
+            f"if (const auto st = {reader}.consume_repeated_elements(1u, field_number); !st) {{ return st; }}"
+        )
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
         w.line(f"{typ} value{{ctx_}};")
@@ -2032,9 +2165,6 @@ def _emit_read_repeated_value(
             f"if (const auto st = ::protocyte::{helper}<Config>({args}); !st) {{ return st; }}"
         )
         w.line(
-            f"if (const auto st = {reader}.consume_repeated_elements(1u, field_number); !st) {{ return st; }}"
-        )
-        w.line(
             f"if (const auto st = {target}.push_back(::protocyte::move(value)); !st) {{ return st; }}"
         )
         return
@@ -2045,17 +2175,11 @@ def _emit_read_repeated_value(
             f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, field_number, value); !st) {{ return st; }}"
         )
         w.line(
-            f"if (const auto st = {reader}.consume_repeated_elements(1u, field_number); !st) {{ return st; }}"
-        )
-        w.line(
             f"if (const auto st = {target}.push_back(::protocyte::move(value)); !st) {{ return st; }}"
         )
         return
     w.line(f"{_element_type(item, options)} value{{}};")
     _emit_read_scalar(w, item, reader, "value", options, checked=checked)
-    w.line(
-        f"if (const auto st = {reader}.consume_repeated_elements(1u, field_number); !st) {{ return st; }}"
-    )
     w.line(f"if (const auto st = {target}.push_back(value); !st) {{ return st; }}")
 
 
@@ -2258,6 +2382,9 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
         "if (wire_type != ::protocyte::WireType::LEN) { return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(), field_number); }"
     )
     w.line(
+        "if (const auto st = reader.consume_map_entries(1u, field_number); !st) { return st; }"
+    )
+    w.line(
         "auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);"
     )
     w.line("if (!entry) { return entry.status(); }")
@@ -2311,9 +2438,6 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
         w.line("}")
     w.line("}")
     w.line("if (const auto st = entry->finish(); !st) { return st; }")
-    w.line(
-        "if (const auto st = reader.consume_map_entries(1u, field_number); !st) { return st; }"
-    )
     w.line(
         f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
     )

@@ -4347,6 +4347,71 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         CHECK(limited_ctx.recursion_depth == 0u);
     }
 
+    SECTION("type-erased top-level readers still receive the configured wire budget") {
+        uint8_t encoded[32] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_int32_field(writer, 99u, 1234));
+
+        auto ctx = make_context();
+        ctx.limits.max_total_bytes = writer.position() - 1u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        protocyte::ParseBudgetReader prebudgeted {
+            reader,
+            writer.position(),
+            protocyte::Limits::default_max_repeated_elements,
+            protocyte::Limits::default_max_map_entries,
+        };
+        protocyte::ReaderRef erased {prebudgeted};
+
+        require_failure(parsed.merge_partial_from(erased), protocyte::ErrorCode::size_limit);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
+    SECTION("exhausted repeated budget rejects bytes before allocation") {
+        uint8_t encoded[32] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_bytes_field(
+            writer, static_cast<uint32_t>(RepeatedBytesHolder::FieldNumber::values), view_of(bytes_data)));
+
+        AllocationProbe probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        ctx.limits.max_repeated_elements = 0u;
+        RepeatedBytesHolder parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+
+        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        CHECK(probe.calls == 0u);
+        CHECK(probe.largest == 0u);
+    }
+
+    SECTION("exhausted map budget rejects entries before allocation") {
+        uint8_t entry[32] = {};
+        protocyte::SliceWriter entry_writer(entry, sizeof(entry));
+        require_success(protocyte::write_bytes_field(entry_writer, 1u, view_of(map_key)));
+        require_success(protocyte::write_int32_field(entry_writer, 2u, 1));
+
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_str_int32),
+                                             protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, entry_writer.position()));
+        require_success(writer.write(entry, entry_writer.position()));
+
+        AllocationProbe probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        ctx.limits.max_map_entries = 0u;
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+
+        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        CHECK(probe.calls == 0u);
+        CHECK(probe.largest == 0u);
+        CHECK(ctx.recursion_depth == 0u);
+    }
+
     SECTION("repeated element budget is shared with nested messages") {
         uint8_t inner_encoded[32] = {};
         protocyte::SliceWriter inner_writer(inner_encoded, sizeof(inner_encoded));

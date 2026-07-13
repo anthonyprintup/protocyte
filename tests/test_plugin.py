@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -296,7 +297,10 @@ def test_runtime_length_delimited_parse_helpers_use_direct_checks() -> None:
 
     assert ".and_then" not in read_message_partial_body
     assert ".and_then" not in read_message_body
-    assert "out.merge_partial_from(nested_reader)" in read_message_partial_body
+    assert (
+        "MessageParseAccess::merge_fields_from(out, nested_reader)"
+        in read_message_partial_body
+    )
     assert "Message parsed {ctx};" in read_message_body
     assert "parsed.copy_from(out)" in read_message_body
     assert (
@@ -1105,7 +1109,7 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "commit_read_message" not in files["protocyte/runtime/runtime.hpp"]
     assert "read_message_staged" not in files["protocyte/runtime/runtime.hpp"]
     assert (
-        "out.merge_partial_from(nested_reader)"
+        "MessageParseAccess::merge_fields_from(out, nested_reader)"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert "parsed.validate()" in files["protocyte/runtime/runtime.hpp"]
@@ -1733,6 +1737,61 @@ def test_generator_policy_applies_formatter_timeout(
     assert not response.file
 
 
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_bounded_formatter_stops_oversized_process_output(stream: str) -> None:
+    script = (
+        "import sys; "
+        f"sys.{stream}.buffer.write(b'x' * (1024 * 1024)); "
+        f"sys.{stream}.buffer.flush()"
+    )
+
+    with pytest.raises(protocyte_cpp._FormatterOutputLimit):
+        protocyte_cpp._run_formatter_bounded(
+            [sys.executable, "-c", script],
+            "",
+            timeout_seconds=5.0,
+            max_output_bytes=64,
+        )
+
+
+def test_formatter_policy_uses_live_output_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], int]] = []
+
+    def fake_bounded(
+        command: list[str],
+        content: str,
+        *,
+        timeout_seconds: float | None,
+        max_output_bytes: int,
+    ) -> protocyte_cpp._FormatterResult:
+        del content, timeout_seconds
+        calls.append((command, max_output_bytes))
+        return protocyte_cpp._FormatterResult(0, "formatted\n", "")
+
+    monkeypatch.setattr(protocyte_cpp, "_run_formatter_bounded", fake_bounded)
+    monkeypatch.setattr(
+        protocyte_cpp, "_clang_format_style_args", lambda options: ["--style=file"]
+    )
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("bounded formatting must not use run()"),
+    )
+
+    formatted = protocyte_cpp._format_cpp_outputs(
+        {"sample.cpp": "int x;\n"},
+        protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+        max_output_bytes=64,
+    )
+
+    assert formatted == {"sample.cpp": "formatted\n"}
+    assert calls == [
+        (["my-format", "--style=file", "--assume-filename=sample.cpp"], 64)
+    ]
+
+
 @pytest.mark.parametrize(
     ("policy", "label"),
     [
@@ -2001,8 +2060,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     )
     assert (
         "::protocyte::Status merge_partial_from(::protocyte::ReaderRef& reader) noexcept"
-        in header
+        not in header
     )
+    assert "friend class ::protocyte::MessageParseAccess;" in header
     assert "ctx_->recursion_depth != 0u" not in header
     assert "::protocyte::Status merge_fields_from(Reader& reader) noexcept" in header
     assert (
@@ -2034,10 +2094,19 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "requires(Reader &source, const ::protocyte::usize bytes)" not in header
     assert "append_trivial_from_reader" not in header
     assert "::protocyte::consume_repeated_elements" not in header
+    assert header.index(
+        "if (const auto st = reader.consume_repeated_elements(1u, field_number); !st)"
+    ) < header.index("const auto decoded_samples")
+    assert header.index(
+        "if (const auto st = reader.consume_repeated_elements(*len / 4u, field_number); !st)"
+    ) < header.index("packed_signed_samples_values{ctx_}")
     assert (
         "if (const auto st = reader.consume_map_entries(1u, field_number); !st) { return st; }"
         in header
     )
+    assert header.index(
+        "if (const auto st = reader.consume_map_entries(1u, field_number); !st)"
+    ) < header.index("open_nested_message<Config>(*ctx_, reader, field_number)")
     assert (
         "read_fixed_width_packed_values(reader, *len, field_number, samples_)"
         in header

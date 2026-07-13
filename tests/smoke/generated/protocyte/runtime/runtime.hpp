@@ -4694,6 +4694,15 @@ namespace protocyte {
         return open_nested_message_sized<Config>(ctx, reader, *size, field_number);
     }
 
+    class MessageParseAccess {
+        template<class Message, class Reader> static Status merge_fields_from(Message &out, Reader &reader) noexcept {
+            return out.merge_fields_from(reader);
+        }
+
+        template<class Config, class Reader, class Message> friend Status
+        read_message_partial(typename Config::Context &ctx, Reader &reader, u32 field_number, Message &out) noexcept;
+    };
+
     template<class Config, class Reader, class Message> Status
     read_message_partial(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
         auto nested = open_nested_message<Config>(ctx, reader, field_number);
@@ -4702,7 +4711,7 @@ namespace protocyte {
         }
         auto &open = *nested;
         auto nested_reader = open.reader_ref();
-        if (const auto st = out.merge_partial_from(nested_reader); !st) {
+        if (const auto st = MessageParseAccess::merge_fields_from(out, nested_reader); !st) {
             return st;
         }
         return open.finish();
