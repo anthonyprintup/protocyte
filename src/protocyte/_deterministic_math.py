@@ -15,6 +15,7 @@ from decimal import (
 _DECIMAL_PRECISION = 160
 _DECIMAL_EXPONENT_LIMIT = Decimal(10_000)
 _NEGATIVE_DECIMAL_EXPONENT_LIMIT = Decimal(-10_000)
+_MAX_EXACT_POWER_BITS = 4096
 _DECIMAL_CONTEXT = Context(
     prec=_DECIMAL_PRECISION,
     rounding=ROUND_HALF_EVEN,
@@ -57,18 +58,17 @@ def _round_scaled_ratio(numerator: int, denominator: int, shift: int) -> int:
     return quotient
 
 
-def _decimal_to_binary_bits(value: Decimal, width: int) -> int:
+def _ratio_to_binary_bits(
+    numerator: int,
+    denominator: int,
+    *,
+    negative: bool,
+    width: int,
+) -> int:
     precision, min_exponent, max_exponent, bias, exponent_bits, fraction_bits = (
         _BINARY_FORMATS[width]
     )
-    sign = int(value.is_signed())
-    sign_bits = sign << (width - 1)
-    if value.is_infinite():
-        return sign_bits | (((1 << exponent_bits) - 1) << fraction_bits)
-    if not value.is_finite():
-        raise DeterministicMathDomainError
-
-    numerator, denominator = value.copy_abs().as_integer_ratio()
+    sign_bits = int(negative) << (width - 1)
     if numerator == 0:
         return sign_bits
 
@@ -110,19 +110,136 @@ def _decimal_to_binary_bits(value: Decimal, width: int) -> int:
     return sign_bits | (exponent_field << fraction_bits) | fraction
 
 
+def _decimal_to_binary_bits(value: Decimal, width: int) -> int:
+    _, _, _, _, exponent_bits, fraction_bits = _BINARY_FORMATS[width]
+    negative = bool(value.is_signed())
+    sign_bits = int(negative) << (width - 1)
+    if value.is_infinite():
+        return sign_bits | (((1 << exponent_bits) - 1) << fraction_bits)
+    if not value.is_finite():
+        raise DeterministicMathDomainError
+
+    numerator, denominator = value.copy_abs().as_integer_ratio()
+    return _ratio_to_binary_bits(
+        numerator,
+        denominator,
+        negative=negative,
+        width=width,
+    )
+
+
 def _binary_float_from_bits(bits: int, width: int) -> float:
     if width == 32:
         return struct.unpack("<f", bits.to_bytes(4, "little"))[0]
     return struct.unpack("<d", bits.to_bytes(8, "little"))[0]
 
 
-def _round_decimal(value: Decimal, width: int) -> float:
-    bits = _decimal_to_binary_bits(value, width)
+def _finite_binary_float_from_bits(bits: int, width: int) -> float:
     _, _, _, _, exponent_bits, fraction_bits = _BINARY_FORMATS[width]
     exponent_mask = ((1 << exponent_bits) - 1) << fraction_bits
     if bits & exponent_mask == exponent_mask:
         raise DeterministicMathNonFiniteError
     return _binary_float_from_bits(bits, width)
+
+
+def _round_decimal(value: Decimal, width: int) -> float:
+    return _finite_binary_float_from_bits(_decimal_to_binary_bits(value, width), width)
+
+
+def _round_ratio(
+    numerator: int,
+    denominator: int,
+    *,
+    negative: bool,
+    width: int,
+) -> float:
+    bits = _ratio_to_binary_bits(
+        numerator,
+        denominator,
+        negative=negative,
+        width=width,
+    )
+    return _finite_binary_float_from_bits(bits, width)
+
+
+def _is_power_of_two(value: int) -> bool:
+    return value > 0 and value & (value - 1) == 0
+
+
+def _binary_power_of_two(
+    exponent: int, *, negative: bool, width: int
+) -> float:
+    precision, min_exponent, max_exponent, bias, _, fraction_bits = (
+        _BINARY_FORMATS[width]
+    )
+    if exponent > max_exponent:
+        raise DeterministicMathNonFiniteError
+
+    sign_bits = int(negative) << (width - 1)
+    if exponent >= min_exponent:
+        bits = sign_bits | ((exponent + bias) << fraction_bits)
+    else:
+        min_subnormal_exponent = min_exponent - (precision - 1)
+        bits = (
+            sign_bits | (1 << (exponent - min_subnormal_exponent))
+            if exponent >= min_subnormal_exponent
+            else sign_bits
+        )
+    return _binary_float_from_bits(bits, width)
+
+
+def _exact_power_of_two_result(
+    base: Decimal,
+    exponent: Decimal,
+    *,
+    negative: bool,
+    width: int,
+) -> float | None:
+    base_numerator, base_denominator = base.as_integer_ratio()
+    if not (
+        _is_power_of_two(base_numerator) and _is_power_of_two(base_denominator)
+    ):
+        return None
+
+    base_exponent = (
+        base_numerator.bit_length() - base_denominator.bit_length()
+    )
+    exponent_numerator, exponent_denominator = exponent.as_integer_ratio()
+    result_numerator = base_exponent * exponent_numerator
+    result_exponent, remainder = divmod(result_numerator, exponent_denominator)
+    if remainder:
+        return None
+    return _binary_power_of_two(result_exponent, negative=negative, width=width)
+
+
+def _exact_power_operand_fits(value: int, exponent: int) -> bool:
+    if value == 1:
+        return True
+    return exponent <= _MAX_EXACT_POWER_BITS // value.bit_length()
+
+
+def _exact_integral_power_result(
+    base: Decimal,
+    exponent: int,
+    *,
+    negative: bool,
+    width: int,
+) -> float | None:
+    numerator, denominator = base.as_integer_ratio()
+    magnitude = abs(exponent)
+    if exponent < 0:
+        numerator, denominator = denominator, numerator
+    if not (
+        _exact_power_operand_fits(numerator, magnitude)
+        and _exact_power_operand_fits(denominator, magnitude)
+    ):
+        return None
+    return _round_ratio(
+        pow(numerator, magnitude),
+        pow(denominator, magnitude),
+        negative=negative,
+        width=width,
+    )
 
 
 def evaluate_unary(name: str, value: int | float, width: int) -> float:
@@ -158,25 +275,45 @@ def evaluate_pow(base: float, exponent: float) -> float:
 
     _, exponent_denominator = decimal_exponent.as_integer_ratio()
     exponent_is_integral = exponent_denominator == 1
+    integral_exponent = int(decimal_exponent) if exponent_is_integral else None
     if decimal_base.is_zero():
         if decimal_exponent < 0:
             raise DeterministicMathDomainError
         negative_zero = (
             decimal_base.is_signed()
-            and exponent_is_integral
-            and int(decimal_exponent) & 1
+            and integral_exponent is not None
+            and integral_exponent & 1
         )
         return -0.0 if negative_zero else 0.0
 
     negative_result = False
     if decimal_base < 0:
-        if not exponent_is_integral:
+        if integral_exponent is None:
             raise DeterministicMathDomainError
-        negative_result = bool(int(decimal_exponent) & 1)
+        negative_result = bool(integral_exponent & 1)
         decimal_base = decimal_base.copy_abs()
 
     if decimal_base == 1:
         return -1.0 if negative_result else 1.0
+
+    exact_power_of_two = _exact_power_of_two_result(
+        decimal_base,
+        decimal_exponent,
+        negative=negative_result,
+        width=64,
+    )
+    if exact_power_of_two is not None:
+        return exact_power_of_two
+
+    if integral_exponent is not None:
+        exact_integral_power = _exact_integral_power_result(
+            decimal_base,
+            integral_exponent,
+            negative=negative_result,
+            width=64,
+        )
+        if exact_integral_power is not None:
+            return exact_integral_power
 
     try:
         with localcontext(_DECIMAL_CONTEXT):

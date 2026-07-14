@@ -3541,6 +3541,41 @@ def test_pow_has_deterministic_binary64_results(
     assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
 
 
+@pytest.mark.parametrize(
+    ("expression", "expected_bits"),
+    [
+        ("pow(2, -1074)", 0x0000000000000001),
+        ("pow(2, -1075)", 0x0000000000000000),
+        ("pow(32, -215)", 0x0000000000000000),
+        ("pow(0.5, 1075)", 0x0000000000000000),
+        ("pow(16, -268.75)", 0x0000000000000000),
+        ("pow(-2, -1075)", 0x8000000000000000),
+        ("pow(-32, -215)", 0x8000000000000000),
+        ("pow(1.3293794844063718e-64, 5)", 0x00000000000020D4),
+        ("pow(3, 34)", 0x434D9FE779881944),
+        ("pow(7, 19)", 0x43443F9E0D2D93EC),
+        ("pow(3, -35)", 0x3C770B3C7BC7EE0D),
+    ],
+)
+def test_pow_rounds_exact_results_directly(
+    expression: str, expected_bits: int
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert struct.unpack("<Q", struct.pack("<d", parsed.value))[0] == expected_bits
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
+
+
+def test_pow_exact_path_falls_back_for_huge_finite_integral_exponent() -> None:
+    expression = "pow(1.0000000000000002, 4503599627370496)"
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert struct.unpack("<Q", struct.pack("<d", parsed.value))[0] == (
+        0x4005BF0A8B145769
+    )
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
+
+
 def test_pow_deterministic_backend_handles_a_hard_to_round_result() -> None:
     parsed = _ExprParser(
         "pow(1018.0504188855817, -7.317311856064986)",

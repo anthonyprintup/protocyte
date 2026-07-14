@@ -630,15 +630,20 @@ After the function's type promotion, the backend converts each resulting
 binary32 or binary64 input exactly to a decimal value. It evaluates the
 operation in a 160-digit decimal context using round-to-nearest, ties-to-even.
 `sqrt`, `exp`, `log`, and `log10` use the corresponding decimal primitive;
-`log2(x)` is `ln(x) / ln(2)`, and `pow(x, y)` is
-`exp(y * ln(abs(x)))` with the real-domain checks and result sign applied
-separately. Each decimal primitive and arithmetic step rounds in that context.
-The backend then converts the decimal result directly to IEEE-754 binary32 or
-binary64 with round-to-nearest, ties-to-even. This defines stable generator
-behavior but does not promise bit-for-bit agreement with a target C++ CRT;
-edge cases may differ from the MSVC, clang, or platform `<cmath>`
-implementation. Domain and non-finite checks still apply before a literal is
-emitted.
+`log2(x)` is `ln(x) / ln(2)`. Before using decimal transcendental operations,
+`pow` evaluates integral exponents as an exact rational whenever a conservative
+bound keeps both powered operands within 4096 bits. Exact power-of-two bases
+also use a constant-space direct binary path whenever multiplying the base's
+binary exponent by the supplied exponent produces an integer. These exact
+paths round the resulting ratio or power of two directly to binary64, including
+subnormal halfway cases. Other powers use `exp(y * ln(abs(x)))` with the
+real-domain checks and result sign applied separately. Each decimal primitive
+and arithmetic step rounds in the 160-digit context. The backend then converts
+the decimal result directly to IEEE-754 binary32 or binary64 with
+round-to-nearest, ties-to-even. This defines stable generator behavior but does
+not promise bit-for-bit agreement with a target C++ CRT; edge cases may differ
+from the MSVC, clang, or platform `<cmath>` implementation. Domain and
+non-finite checks still apply before a literal is emitted.
 
 All numeric expressions must remain finite. Floating signed zero is preserved
 except where a function specifies otherwise: `abs(-0.0)` returns positive
