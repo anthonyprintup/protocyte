@@ -1,7 +1,9 @@
 import math
 from pathlib import Path
 import struct
+import subprocess
 import sys
+from decimal import ROUND_UP, localcontext
 from types import SimpleNamespace
 
 import pytest
@@ -2522,7 +2524,9 @@ def test_array_expression_emits_validated_numeric_bound_for_cpp_semantics() -> N
     request.proto_file.extend(
         [
             _options_file(),
-            _array_bound_expr_file("negative_mod_bound.proto", "(-5 % 3) + 1"),
+            _array_bound_expr_file(
+                "negative_mod_bound.proto", "(u32(-5) % 3) + 1"
+            ),
         ]
     )
 
@@ -2623,14 +2627,29 @@ def test_mixed_integer_arithmetic_uses_cpp_common_conversions(
     assert parsed.numeric_kind == expected_kind
 
 
+def test_destination_conversion_happens_after_cpp_expression_evaluation() -> None:
+    divided = _ExprParser("-1 / 2", lambda name: None, "u32 division").parse()
+    complemented = _ExprParser("~0", lambda name: None, "u32 complement").parse()
+
+    assert divided.value == 0
+    assert divided.numeric_kind == CONSTANT_KIND_INT32
+    assert (
+        _coerce_expression_value(CONSTANT_KIND_UINT32, divided, "u32 division") == 0
+    )
+    with pytest.raises(ProtocyteError, match="value -1 is out of range for uint32"):
+        _coerce_expression_value(
+            CONSTANT_KIND_UINT32, complemented, "u32 complement"
+        )
+
+
 @pytest.mark.parametrize(
     ("expression", "expected", "expected_kind"),
     [
-        ("-1 + I64_ZERO", 2**32 - 1, CONSTANT_KIND_INT64),
-        ("-1 + F64_ZERO", float(2**32 - 1), CONSTANT_KIND_DOUBLE),
+        ("u32(-1) + I64_ZERO", 2**32 - 1, CONSTANT_KIND_INT64),
+        ("u32(-1) + F64_ZERO", float(2**32 - 1), CONSTANT_KIND_DOUBLE),
     ],
 )
-def test_contextual_unsigned_values_are_normalized_before_widening(
+def test_explicit_unsigned_values_are_normalized_before_widening(
     expression: str, expected: int | float, expected_kind: str
 ) -> None:
     values = {
@@ -2638,54 +2657,40 @@ def test_contextual_unsigned_values_are_normalized_before_widening(
         "F64_ZERO": _TypedValue("numeric", 0.0, numeric_kind=CONSTANT_KIND_DOUBLE),
     }
 
-    parsed = _ExprParser(
-        expression,
-        values.__getitem__,
-        expression,
-        integer_context=CONSTANT_KIND_UINT32,
-    ).parse()
+    parsed = _ExprParser(expression, values.__getitem__, expression).parse()
 
     assert parsed.value == expected
     assert parsed.numeric_kind == expected_kind
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "kind"),
+    ("expression", "kind"),
     [
-        ("2147483647 + 1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("-2147483648 - 1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("2147483647 * 2", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("-2147483648 / -1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("-2147483648 % -1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("-(-2147483648)", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("+2147483648", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("2147483647 + 1", CONSTANT_KIND_INT32),
+        ("i32(-2147483648) - 1", CONSTANT_KIND_INT32),
+        ("i32(2147483647) * 2", CONSTANT_KIND_INT32),
+        ("i32(-2147483648) / -1", CONSTANT_KIND_INT32),
+        ("i32(-2147483648) % -1", CONSTANT_KIND_INT32),
+        ("-i32(-2147483648)", CONSTANT_KIND_INT32),
         (
-            "9223372036854775807 + 1",
-            CONSTANT_KIND_INT64,
+            "i64(9223372036854775807) + 1",
             CONSTANT_KIND_INT64,
         ),
         (
-            "-9223372036854775808 / -1",
-            CONSTANT_KIND_INT64,
+            "i64(0x8000000000000000) / -1",
             CONSTANT_KIND_INT64,
         ),
         (
-            "-9223372036854775808 % -1",
-            CONSTANT_KIND_INT64,
+            "i64(0x8000000000000000) % -1",
             CONSTANT_KIND_INT64,
         ),
     ],
 )
 def test_signed_integer_operations_reject_out_of_range_results(
-    expression: str, integer_context: str, kind: str
+    expression: str, kind: str
 ) -> None:
     with pytest.raises(ProtocyteError, match=f"out of range for {kind}"):
-        _ExprParser(
-            expression,
-            lambda name: None,
-            expression,
-            integer_context=integer_context,
-        ).parse()
+        _ExprParser(expression, lambda name: None, expression).parse()
 
 
 def test_integer_truth_and_destination_conversion_validate_source_kind() -> None:
@@ -2773,42 +2778,38 @@ def test_numeric_comparisons_and_equality_use_common_kind(
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "expected", "expected_kind"),
+    ("expression", "expected", "expected_kind"),
     [
-        ("~0", CONSTANT_KIND_INT32, -1, CONSTANT_KIND_INT32),
-        ("~0", CONSTANT_KIND_UINT32, 2**32 - 1, CONSTANT_KIND_UINT32),
-        ("~0", CONSTANT_KIND_INT64, -1, CONSTANT_KIND_INT64),
-        ("~0", CONSTANT_KIND_UINT64, 2**64 - 1, CONSTANT_KIND_UINT64),
-        ("true & false", None, 0, CONSTANT_KIND_INT32),
-        ("true | false", None, 1, CONSTANT_KIND_INT32),
-        ("true ^ true", None, 0, CONSTANT_KIND_INT32),
-        ("~true", None, -2, CONSTANT_KIND_INT32),
-        ("true << 2", None, 4, CONSTANT_KIND_INT32),
-        ("8 >> true", None, 4, CONSTANT_KIND_INT32),
-        ("-8 >> 2", CONSTANT_KIND_INT32, -2, CONSTANT_KIND_INT32),
+        ("~0", -1, CONSTANT_KIND_INT32),
+        ("~u32(0)", 2**32 - 1, CONSTANT_KIND_UINT32),
+        ("~i64(0)", -1, CONSTANT_KIND_INT64),
+        ("~u64(0)", 2**64 - 1, CONSTANT_KIND_UINT64),
+        ("true & false", 0, CONSTANT_KIND_INT32),
+        ("true | false", 1, CONSTANT_KIND_INT32),
+        ("true ^ true", 0, CONSTANT_KIND_INT32),
+        ("~true", -2, CONSTANT_KIND_INT32),
+        ("true << 2", 4, CONSTANT_KIND_INT32),
+        ("8 >> true", 4, CONSTANT_KIND_INT32),
+        ("-8 >> 2", -2, CONSTANT_KIND_INT32),
         (
             "1 << 31",
-            CONSTANT_KIND_INT32,
             -(2**31),
             CONSTANT_KIND_INT32,
         ),
-        ("-1 << 1", CONSTANT_KIND_INT32, -2, CONSTANT_KIND_INT32),
-        ("1073741824 << 2", CONSTANT_KIND_INT32, 0, CONSTANT_KIND_INT32),
+        ("-1 << 1", -2, CONSTANT_KIND_INT32),
+        ("1073741824 << 2", 0, CONSTANT_KIND_INT32),
         (
-            "1 << 63",
-            CONSTANT_KIND_INT64,
+            "i64(1) << 63",
             -(2**63),
             CONSTANT_KIND_INT64,
         ),
         (
-            "-9223372036854775808 << 1",
-            CONSTANT_KIND_INT64,
+            "i64(0x8000000000000000) << 1",
             0,
             CONSTANT_KIND_INT64,
         ),
         (
             "0xffffffff << 4",
-            CONSTANT_KIND_UINT32,
             0xFFFFFFF0,
             CONSTANT_KIND_UINT32,
         ),
@@ -2816,16 +2817,10 @@ def test_numeric_comparisons_and_equality_use_common_kind(
 )
 def test_bitwise_expression_values_follow_fixed_width_integer_semantics(
     expression: str,
-    integer_context: str | None,
     expected: int,
     expected_kind: str,
 ) -> None:
-    parsed = _ExprParser(
-        expression,
-        lambda name: None,
-        expression,
-        integer_context=integer_context,
-    ).parse()
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
 
     assert parsed.value == expected
     assert parsed.numeric_kind == expected_kind
@@ -2841,6 +2836,10 @@ def test_bitwise_expression_values_follow_fixed_width_integer_semantics(
         ("1 | 0 && 0", False),
         ("(4 & 1) || 2", True),
         ("!(4 & 1)", True),
+        ("!0.0", True),
+        ("!0.5", False),
+        ("0.5 && -2.0", True),
+        ("0.0 || -0.25", True),
     ],
 )
 def test_bitwise_expression_precedence_and_integer_logical_conversion(
@@ -2849,6 +2848,31 @@ def test_bitwise_expression_precedence_and_integer_logical_conversion(
     assert (
         _ExprParser(expression, lambda name: None, expression).parse().value == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
+        ("true + true", 2, CONSTANT_KIND_INT32),
+        ("true - false", 1, CONSTANT_KIND_INT32),
+        ("true * 3", 3, CONSTANT_KIND_INT32),
+        ("true / 2", 0, CONSTANT_KIND_INT32),
+        ("true % 2", 1, CONSTANT_KIND_INT32),
+        ("+false", 0, CONSTANT_KIND_INT32),
+        ("-true", -1, CONSTANT_KIND_INT32),
+        ("true == 1", True, None),
+        ("false != 0", False, None),
+        ("false < 1", True, None),
+        ("true >= 1.0", True, None),
+    ],
+)
+def test_bool_uses_cpp_integral_promotion_in_numeric_expressions(
+    expression: str, expected: int | bool, expected_kind: str | None
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
 
 
 @pytest.mark.parametrize(
@@ -2877,7 +2901,7 @@ def test_bitwise_expression_uses_usual_mixed_integer_conversions(
     assert parsed.numeric_kind == expected_kind
 
 
-def test_bitwise_operands_are_normalized_in_their_source_kinds() -> None:
+def test_explicit_bitwise_operands_are_normalized_in_their_source_kinds() -> None:
     values = {
         "I64_HIGH_BIT": _TypedValue(
             "numeric", 1 << 32, numeric_kind=CONSTANT_KIND_INT64
@@ -2887,11 +2911,10 @@ def test_bitwise_operands_are_normalized_in_their_source_kinds() -> None:
         ),
     }
 
-    contextual = _ExprParser(
-        "-1 & I64_HIGH_BIT",
+    explicit = _ExprParser(
+        "u32(-1) & I64_HIGH_BIT",
         values.__getitem__,
-        "contextual u32 bitwise",
-        integer_context=CONSTANT_KIND_UINT32,
+        "explicit u32 bitwise",
     ).parse()
     referenced = _ExprParser(
         "RAW_U32_NEGATIVE & I64_HIGH_BIT",
@@ -2899,8 +2922,8 @@ def test_bitwise_operands_are_normalized_in_their_source_kinds() -> None:
         "referenced u32 bitwise",
     ).parse()
 
-    assert contextual.value == 0
-    assert contextual.numeric_kind == CONSTANT_KIND_INT64
+    assert explicit.value == 0
+    assert explicit.numeric_kind == CONSTANT_KIND_INT64
     assert referenced.value == 0
     assert referenced.numeric_kind == CONSTANT_KIND_INT64
 
@@ -2947,25 +2970,19 @@ def test_shift_operands_are_normalized_in_their_source_kinds() -> None:
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "error"),
+    ("expression", "error"),
     [
-        ("1.0 & 1", None, "require integer or bool operands"),
-        ('"text" | 1', None, "require integer or bool operands"),
-        ("1 << -1", None, "shift count must not be negative"),
-        ("1 << 32", None, "shift count 32 must be less than 32"),
-        ("1.0 && true", None, "expected bool or integer expression"),
+        ("1.0 & 1", "require integer or bool operands"),
+        ('"text" | 1', "require integer or bool operands"),
+        ("1 << -1", "shift count must not be negative"),
+        ("1 << 32", "shift count 32 must be less than 32"),
     ],
 )
 def test_bitwise_expression_rejects_invalid_operands_and_shifts(
-    expression: str, integer_context: str | None, error: str
+    expression: str, error: str
 ) -> None:
     with pytest.raises(ProtocyteError, match=error):
-        _ExprParser(
-            expression,
-            lambda name: None,
-            expression,
-            integer_context=integer_context,
-        ).parse()
+        _ExprParser(expression, lambda name: None, expression).parse()
 
 
 @pytest.mark.parametrize(
@@ -2976,6 +2993,8 @@ def test_bitwise_expression_rejects_invalid_operands_and_shifts(
         ("true || (sqrt(-1) == 0)", True),
         ("false && (pow(2, -1) == 0)", False),
         ("true || (false && (1 / 0 == 0))", True),
+        ("true || 1.0", True),
+        ("false && 1.0", False),
     ],
 )
 def test_logical_operators_do_not_evaluate_dead_rhs_values(
@@ -3003,8 +3022,6 @@ def test_logical_operators_propagate_live_rhs_errors(
 @pytest.mark.parametrize(
     ("expression", "error"),
     [
-        ("true || 1.0", "expected bool or integer expression"),
-        ("false && 1.0", "expected bool or integer expression"),
         ("true || unsupported()", "unsupported function unsupported\\(\\)"),
         ("false && sqrt(1, 2)", "sqrt\\(\\) expects one numeric argument"),
         ("true || (1.0 % 1 == 0)", "only supports integer operands"),
@@ -3046,11 +3063,45 @@ def test_hexadecimal_literals_containing_e_are_not_floats(
 @pytest.mark.parametrize(
     ("expression", "expected", "expected_kind"),
     [
+        ("2147483647", 2**31 - 1, CONSTANT_KIND_INT32),
+        ("2147483648", 2**31, CONSTANT_KIND_INT64),
+        ("-2147483648", -(2**31), CONSTANT_KIND_INT64),
+        ("4294967295", 2**32 - 1, CONSTANT_KIND_INT64),
+        ("9223372036854775807", 2**63 - 1, CONSTANT_KIND_INT64),
+    ],
+)
+def test_decimal_literals_use_standard_cpp_signed_integer_kinds(
+    expression: str, expected: int, expected_kind: str
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "9223372036854775808",
+        "-9223372036854775808",
+        "18446744073709551615",
+    ],
+)
+def test_decimal_literals_above_int64_max_are_rejected(expression: str) -> None:
+    with pytest.raises(
+        ProtocyteError, match="outside the standard C\\+\\+ 64-bit range"
+    ):
+        _ExprParser(expression, lambda name: None, expression).parse()
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
         ("-1 == 0xffffffff", True, None),
         ("-1 < 0xffffffff", False, None),
         ("0xffffffff + 1", 0, CONSTANT_KIND_UINT32),
         ("~0xffffffff", 0, CONSTANT_KIND_UINT32),
-        ("pow(2, -0xffffffff)", 2, CONSTANT_KIND_UINT32),
+        ("pow(2, -0xffffffff)", 2.0, CONSTANT_KIND_DOUBLE),
     ],
 )
 def test_hexadecimal_literals_use_cpp_unsuffixed_integer_kinds(
@@ -3212,7 +3263,7 @@ def test_bitwise_operators_work_in_every_expression_destination() -> None:
         ("u32(-0.5)", 0, "numeric", CONSTANT_KIND_UINT32),
         ("i64(false)", 0, "numeric", CONSTANT_KIND_INT64),
         (
-            "i64(18446744073709551615)",
+            "i64(0xffffffffffffffff)",
             -1,
             "numeric",
             CONSTANT_KIND_INT64,
@@ -3248,52 +3299,33 @@ def test_scalar_casts_convert_supported_values(
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "expected", "expected_kind"),
+    ("expression", "expected", "expected_kind"),
     [
+        ("f64(-3)", -3.0, CONSTANT_KIND_DOUBLE),
+        ("i32(4294967295)", -1, CONSTANT_KIND_INT32),
         (
-            "f64(-3)",
-            CONSTANT_KIND_UINT32,
-            -3.0,
-            CONSTANT_KIND_DOUBLE,
-        ),
-        (
-            "i32(4294967295)",
-            CONSTANT_KIND_INT32,
-            -1,
-            CONSTANT_KIND_INT32,
-        ),
-        (
-            "u32(-1) + 1",
-            CONSTANT_KIND_INT64,
+            "u32(-1) + i64(1)",
             2**32,
             CONSTANT_KIND_INT64,
         ),
         (
             "i32(u32(-1))",
-            CONSTANT_KIND_UINT64,
             -1,
             CONSTANT_KIND_INT32,
         ),
         (
             "u32(i32(-1))",
-            CONSTANT_KIND_INT64,
             2**32 - 1,
             CONSTANT_KIND_UINT32,
         ),
     ],
 )
-def test_scalar_cast_arguments_have_an_independent_literal_context(
+def test_scalar_casts_explicitly_control_numeric_kinds(
     expression: str,
-    integer_context: str,
     expected: int | float,
     expected_kind: str,
 ) -> None:
-    parsed = _ExprParser(
-        expression,
-        lambda name: None,
-        expression,
-        integer_context=integer_context,
-    ).parse()
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
 
     assert parsed.value == expected
     assert parsed.numeric_kind == expected_kind
@@ -3423,7 +3455,9 @@ def test_math_functions_accept_every_numeric_kind_and_bool(
 ) -> None:
     parsed = _ExprParser(expression, {"X": source}.__getitem__, expression).parse()
 
-    if name in {
+    if name == "pow":
+        expected_kind = CONSTANT_KIND_DOUBLE
+    elif name in {
         "sqrt",
         "exp",
         "log",
@@ -3449,64 +3483,36 @@ def test_math_functions_accept_every_numeric_kind_and_bool(
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "expected", "expected_kind"),
+    ("expression", "expected"),
     [
-        ("pow(0, 0)", None, 1, CONSTANT_KIND_INT32),
-        ("pow(2, -3.0)", None, 0.125, CONSTANT_KIND_DOUBLE),
-        ("pow(-1, -3.0)", None, -1.0, CONSTANT_KIND_DOUBLE),
-        ("pow(2.0, -3.0)", None, 0.125, CONSTANT_KIND_DOUBLE),
-        ("pow(2, f64(-3))", CONSTANT_KIND_UINT32, 0.125, CONSTANT_KIND_DOUBLE),
-        ("pow(2, f32(-3))", CONSTANT_KIND_UINT32, 0.125, CONSTANT_KIND_FLOAT),
-        ("pow(2, -3)", CONSTANT_KIND_UINT32, 0, CONSTANT_KIND_UINT32),
-        ("pow(2, -3)", CONSTANT_KIND_UINT64, 0, CONSTANT_KIND_UINT64),
-        ("pow(0, -1)", CONSTANT_KIND_UINT32, 0, CONSTANT_KIND_UINT32),
-        ("pow(0.0, -1)", CONSTANT_KIND_UINT32, 0.0, CONSTANT_KIND_DOUBLE),
-        ("pow(-1, -3)", CONSTANT_KIND_UINT32, 2**32 - 1, CONSTANT_KIND_UINT32),
-        ("pow(65536, 2)", CONSTANT_KIND_UINT32, 0, CONSTANT_KIND_UINT32),
-        (
-            "pow(2, 18446744073709551615)",
-            CONSTANT_KIND_UINT64,
-            0,
-            CONSTANT_KIND_UINT64,
-        ),
-        ("pow(2.0, 3)", None, 8.0, CONSTANT_KIND_DOUBLE),
+        ("pow(0, 0)", 1.0),
+        ("pow(2, -3)", 0.125),
+        ("pow(2, -3.0)", 0.125),
+        ("pow(-1, -3)", -1.0),
+        ("pow(-1, -3.0)", -1.0),
+        ("pow(2.0, -3.0)", 0.125),
+        ("pow(2, f64(-3))", 0.125),
+        ("pow(2, f32(-3))", 0.125),
+        ("pow(u32(2), u64(3))", 8.0),
+        ("pow(f32(2), 3)", 8.0),
     ],
 )
-def test_pow_semantics(
-    expression: str,
-    integer_context: str | None,
-    expected: int | float,
-    expected_kind: str,
-) -> None:
-    parsed = _ExprParser(
-        expression,
-        lambda name: None,
-        expression,
-        integer_context=integer_context,
-    ).parse()
+def test_pow_always_returns_f64(expression: str, expected: float) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
 
     assert parsed.value == expected
-    assert parsed.numeric_kind == expected_kind
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
 
 
-def test_pow_rounds_f32_before_nested_operations() -> None:
+def test_pow_promotes_f32_before_nested_operations() -> None:
     source = _TypedValue(
         "numeric",
         struct.unpack("<f", struct.pack("<f", 1.1))[0],
         numeric_kind=CONSTANT_KIND_FLOAT,
     )
     parsed = _ExprParser("pow(F, 2) + F", {"F": source}.__getitem__, "f32 pow").parse()
-    expected = struct.unpack(
-        "<f",
-        struct.pack(
-            "<f",
-            struct.unpack("<f", struct.pack("<f", source.value * source.value))[0]
-            + source.value,
-        ),
-    )[0]
-
-    assert parsed.value == expected
-    assert parsed.numeric_kind == CONSTANT_KIND_FLOAT
+    assert struct.unpack("<Q", struct.pack("<d", parsed.value))[0] == 0x40027AE151EB8520
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
 
 
 def test_pow_rounds_explicit_f32_exponent_before_evaluation() -> None:
@@ -3515,66 +3521,176 @@ def test_pow_rounds_explicit_f32_exponent_before_evaluation() -> None:
         "pow(F, f32(-16777217))",
         {"F": source}.__getitem__,
         "f32 negative exponent",
-        integer_context=CONSTANT_KIND_UINT32,
     ).parse()
 
     assert parsed.value == 1.0
-    assert parsed.numeric_kind == CONSTANT_KIND_FLOAT
-
-
-@pytest.mark.parametrize("exponent", [-23, -305])
-def test_pow_with_an_explicit_f64_exponent_is_accurately_rounded(
-    exponent: int,
-) -> None:
-    expression = f"pow(10, f64({exponent}))"
-    parsed = _ExprParser(expression, lambda name: None, expression).parse()
-
-    assert parsed.value == math.pow(10.0, float(exponent))
     assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "error"),
+    ("exponent", "expected_bits"),
+    [(-23, 0x3B282DB34012B251), (-305, 0x009C16C5C5253575)],
+)
+def test_pow_has_deterministic_binary64_results(
+    exponent: int, expected_bits: int
+) -> None:
+    expression = f"pow(10, f64({exponent}))"
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert struct.unpack("<Q", struct.pack("<d", parsed.value))[0] == expected_bits
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
+
+
+def test_pow_deterministic_backend_handles_a_hard_to_round_result() -> None:
+    parsed = _ExprParser(
+        "pow(1018.0504188855817, -7.317311856064986)",
+        lambda name: None,
+        "hard pow rounding",
+    ).parse()
+
+    assert struct.unpack("<Q", struct.pack("<d", parsed.value))[0] == (
+        0x3B5D9E2C9E81F697
+    )
+
+
+def test_deterministic_backend_ignores_the_ambient_decimal_context() -> None:
+    with localcontext() as context:
+        context.prec = 5
+        context.rounding = ROUND_UP
+        context.Emin = -3
+        context.Emax = 3
+        square_root = _ExprParser(
+            "sqrt(2.0)", lambda name: None, "ambient sqrt context"
+        ).parse()
+        exponential = _ExprParser(
+            "exp(1.0)", lambda name: None, "ambient exp context"
+        ).parse()
+        negative_power = _ExprParser(
+            "pow(-1.0000000000000002, 3)",
+            lambda name: None,
+            "ambient pow context",
+        ).parse()
+
+    assert struct.unpack("<Q", struct.pack("<d", square_root.value))[0] == (
+        0x3FF6A09E667F3BCD
+    )
+    assert struct.unpack("<Q", struct.pack("<d", exponential.value))[0] == (
+        0x4005BF0A8B145769
+    )
+    assert struct.unpack("<Q", struct.pack("<d", negative_power.value))[0] == (
+        0xBFF0000000000003
+    )
+
+
+def test_deterministic_backend_does_not_inherit_default_decimal_traps() -> None:
+    script = """
+from decimal import DefaultContext, Inexact, Rounded
+DefaultContext.traps[Inexact] = True
+DefaultContext.traps[Rounded] = True
+from protocyte._deterministic_math import evaluate_unary
+print(evaluate_unary("sqrt", 2.0, 64).hex())
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.strip() == "0x1.6a09e667f3bcdp+0"
+
+
+@pytest.mark.parametrize(
+    ("expression", "format_code", "expected_bits", "expected_kind"),
     [
-        ("pow(0, -1)", None, "pow\\(\\) domain error"),
-        ("pow(0.0, -1)", None, "pow\\(\\) domain error"),
-        ("pow(2, -3)", None, "pow\\(\\) domain error"),
-        ("pow(2.0, -3)", None, "pow\\(\\) domain error"),
-        ("pow(-2, 0.5)", None, "pow\\(\\) domain error"),
+        ("sqrt(2.0)", "<Q", 0x3FF6A09E667F3BCD, CONSTANT_KIND_DOUBLE),
+        ("sqrt(f32(2.0))", "<I", 0x3FB504F3, CONSTANT_KIND_FLOAT),
+        ("exp(1.0)", "<Q", 0x4005BF0A8B145769, CONSTANT_KIND_DOUBLE),
+        ("exp(f32(1.0))", "<I", 0x402DF854, CONSTANT_KIND_FLOAT),
+        ("log(2.0)", "<Q", 0x3FE62E42FEFA39EF, CONSTANT_KIND_DOUBLE),
+        ("log(f32(2.0))", "<I", 0x3F317218, CONSTANT_KIND_FLOAT),
+        ("log2(10.0)", "<Q", 0x400A934F0979A371, CONSTANT_KIND_DOUBLE),
+        ("log2(f32(10.0))", "<I", 0x40549A78, CONSTANT_KIND_FLOAT),
+        ("log10(2.0)", "<Q", 0x3FD34413509F79FF, CONSTANT_KIND_DOUBLE),
+        ("log10(f32(2.0))", "<I", 0x3E9A209B, CONSTANT_KIND_FLOAT),
         (
-            "pow(2, 31)",
-            CONSTANT_KIND_INT32,
-            "pow\\(\\) result is out of range for int32",
+            "exp(594.5547957590293)",
+            "<Q",
+            0x758B1E937DB1C3FD,
+            CONSTANT_KIND_DOUBLE,
         ),
-        ("pow(2.0, 1024)", None, "pow\\(\\) result is not finite"),
+        (
+            "exp(-557.5330268224784)",
+            "<Q",
+            0x0DA91AB8831B0001,
+            CONSTANT_KIND_DOUBLE,
+        ),
+        (
+            "log(0.48497475256725814)",
+            "<Q",
+            0xBFE72835C1DC30DD,
+            CONSTANT_KIND_DOUBLE,
+        ),
+        (
+            "log(1.047633814901847)",
+            "<Q",
+            0x3FA7D351AEC0F333,
+            CONSTANT_KIND_DOUBLE,
+        ),
+        (
+            "log2(1.1540448971883162)",
+            "<Q",
+            0x3FCA751FD665B978,
+            CONSTANT_KIND_DOUBLE,
+        ),
+        (
+            "log10(1.1118714191771315)",
+            "<Q",
+            0x3FA79476D4352001,
+            CONSTANT_KIND_DOUBLE,
+        ),
+    ],
+)
+def test_transcendental_functions_have_deterministic_bit_results(
+    expression: str, format_code: str, expected_bits: int, expected_kind: str
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+    value_format = "<f" if format_code == "<I" else "<d"
+
+    assert struct.unpack(format_code, struct.pack(value_format, parsed.value))[0] == (
+        expected_bits
+    )
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("expression", "error"),
+    [
+        ("pow(0, -1)", "pow\\(\\) domain error"),
+        ("pow(0.0, -1)", "pow\\(\\) domain error"),
+        ("pow(-2, 0.5)", "pow\\(\\) domain error"),
+        ("pow(2.0, 1024)", "pow\\(\\) result is not finite"),
         (
             'pow("bad", 2)',
-            None,
             "pow\\(\\) expects numeric arguments",
         ),
-        ("pow(2)", None, "pow\\(\\) expects two numeric arguments"),
+        ("pow(2)", "pow\\(\\) expects two numeric arguments"),
         (
             "pow(2, 100000000000000000000000000)",
-            None,
-            "pow\\(\\) argument is outside the supported numeric range",
+            "integer literal .* outside the standard C\\+\\+ 64-bit range",
         ),
         (
             "pow(2, 4294967296)",
-            CONSTANT_KIND_UINT32,
-            "value 4294967296 is out of range for uint32",
+            "pow\\(\\) result is not finite",
         ),
     ],
 )
 def test_pow_rejects_invalid_or_unrepresentable_results(
-    expression: str, integer_context: str | None, error: str
+    expression: str, error: str
 ) -> None:
     with pytest.raises(ProtocyteError, match=error):
-        _ExprParser(
-            expression,
-            lambda name: None,
-            expression,
-            integer_context=integer_context,
-        ).parse()
+        _ExprParser(expression, lambda name: None, expression).parse()
 
 
 def test_abs_preserves_kind_and_normalizes_floating_negative_zero() -> None:
@@ -3587,24 +3703,17 @@ def test_abs_preserves_kind_and_normalizes_floating_negative_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("expression", "integer_context", "kind"),
+    ("expression", "kind"),
     [
-        ("abs(-2147483648)", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
-        ("abs(-9223372036854775808)", CONSTANT_KIND_INT64, CONSTANT_KIND_INT64),
+        ("abs(i32(0x80000000))", CONSTANT_KIND_INT32),
+        ("abs(i64(0x8000000000000000))", CONSTANT_KIND_INT64),
     ],
 )
-def test_abs_rejects_signed_minimum(
-    expression: str, integer_context: str, kind: str
-) -> None:
+def test_abs_rejects_signed_minimum(expression: str, kind: str) -> None:
     with pytest.raises(
         ProtocyteError, match=f"abs\\(\\) result is out of range for {kind}"
     ):
-        _ExprParser(
-            expression,
-            lambda name: None,
-            expression,
-            integer_context=integer_context,
-        ).parse()
+        _ExprParser(expression, lambda name: None, expression).parse()
 
 
 def test_min_max_use_common_kind_and_keep_first_equal_value() -> None:
@@ -3705,9 +3814,8 @@ def test_math_functions_work_in_every_expression_destination() -> None:
     assert constants["U32_NEGATIVE_POWER"] == 1
     assert constants["I64_POWER"] == 1 << 40
     assert constants["U64_POWER"] == 1 << 63
-    assert (
-        constants["F32_ROOT"]
-        == struct.unpack("<f", struct.pack("<f", math.sqrt(2.0)))[0]
+    assert struct.unpack("<I", struct.pack("<f", constants["F32_ROOT"]))[0] == (
+        0x3FB504F3
     )
     assert constants["F64_NESTED"] == pytest.approx(2.0)
     assert constants["BOOL_MATH"] is True
@@ -5356,9 +5464,9 @@ def _bitwise_expression_file() -> descriptor_pb2.FileDescriptorProto:
         _constant_options_bytes(
             [
                 ("I32_MASK", "i32_expr", "~0"),
-                ("U32_MASK", "u32_expr", "~0"),
-                ("I64_SHIFT", "i64_expr", "1 << 40"),
-                ("U64_MASK", "u64_expr", "(~0) ^ 0xf"),
+                ("U32_MASK", "u32_expr", "~u32(0)"),
+                ("I64_SHIFT", "i64_expr", "i64(1) << 40"),
+                ("U64_MASK", "u64_expr", "(~u64(0)) ^ 0xf"),
                 ("F32_BITS", "f32_expr", "(1 << 3) | 1"),
                 ("F64_BITS", "f64_expr", "true << 4"),
                 ("BOOL_BITS", "boolean_expr", "BASE_BITS & 0x8"),
@@ -5414,7 +5522,7 @@ def _math_expression_file() -> descriptor_pb2.FileDescriptorProto:
                 ("F64_NESTED", "f64_expr", "log(exp(2.0))"),
                 ("BOOL_MATH", "boolean_expr", "min(1, 2)"),
                 ("I32_NEGATIVE_ONE", "i32_expr", "-1"),
-                ("U32_ALL_ONES", "u32_expr", "~0"),
+                ("U32_ALL_ONES", "u32_expr", "~u32(0)"),
                 (
                     "BOOL_MIXED_EQUAL",
                     "boolean_expr",
@@ -5441,7 +5549,7 @@ def _math_expression_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_OPTIONAL
     field.type = F.TYPE_BYTES
     field.options.ParseFromString(
-        _array_option_bytes(expr="pow(2, f64(-1)) * 8 + PACKAGE_ROOT")
+        _array_option_bytes(expr="pow(2, -1) * 8 + PACKAGE_ROOT")
     )
     return file
 

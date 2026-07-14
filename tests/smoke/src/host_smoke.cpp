@@ -238,6 +238,8 @@ namespace {
     static_assert(Message::BOOL_BITWISE);
     static_assert(Message::BOOL_BITWISE_LOGIC);
     static_assert(Message::BOOL_INTEGER);
+    static_assert(Message::BOOL_ARITHMETIC == 2);
+    static_assert(Message::FLOAT_LOGIC);
     static_assert(!Message::SHORT_CIRCUIT_AND);
     static_assert(Message::SHORT_CIRCUIT_OR);
     static_assert(Message::MIXED_UNSIGNED == 4294967291u);
@@ -272,7 +274,7 @@ namespace {
     static_assert(Message::MATH_ROUND == -3.0);
     static_assert(Message::MATH_ROUND_BELOW == 0.0);
     static_assert(Message::MATH_NEGATIVE_POW == 1u);
-    static_assert(Message::MATH_UNSIGNED_POW == 0u);
+    static_assert(Message::MATH_INTEGRAL_NEGATIVE_POW == 0.125);
     static_assert(Message::MATH_ACCURATE_NEGATIVE_POW == 1e-23);
     static_assert(Message::MATH_TRUNC_INT == -2);
     static_assert(Message::MATH_BOOL);

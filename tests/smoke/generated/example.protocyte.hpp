@@ -1690,6 +1690,8 @@ namespace test::ultimate {
         static constexpr bool BOOL_BITWISE {true};
         static constexpr bool BOOL_BITWISE_LOGIC {true};
         static constexpr bool BOOL_INTEGER {true};
+        static constexpr ::protocyte::i32 BOOL_ARITHMETIC {2};
+        static constexpr bool FLOAT_LOGIC {true};
         static constexpr bool SHORT_CIRCUIT_AND {false};
         static constexpr bool SHORT_CIRCUIT_OR {true};
         static constexpr ::protocyte::u32 MIXED_UNSIGNED {4294967291u};
@@ -1723,7 +1725,7 @@ namespace test::ultimate {
         static constexpr ::protocyte::f64 MATH_ROUND {-3.0};
         static constexpr ::protocyte::f64 MATH_ROUND_BELOW {0.0};
         static constexpr ::protocyte::u32 MATH_NEGATIVE_POW {1u};
-        static constexpr ::protocyte::u32 MATH_UNSIGNED_POW {0u};
+        static constexpr ::protocyte::f64 MATH_INTEGRAL_NEGATIVE_POW {0.125};
         static constexpr ::protocyte::f64 MATH_ACCURATE_NEGATIVE_POW {9.9999999999999996e-24};
         static constexpr ::protocyte::i32 MATH_TRUNC_INT {-2};
         static constexpr bool MATH_BOOL {true};

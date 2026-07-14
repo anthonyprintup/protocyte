@@ -20,7 +20,7 @@ message UltimateComplexMessage {
   // -------------------------------------------------------------------------
   // Message constants
   // -------------------------------------------------------------------------
-  option (protocyte.constant) = { name: "SHIFTED_COUNT" i64_expr: "BASE_COUNT * 1000000000" };
+  option (protocyte.constant) = { name: "SHIFTED_COUNT" i64_expr: "i64(BASE_COUNT) * 1000000000" };
   option (protocyte.constant) = { name: "MASK_BITS" u64: 1234567890123456789 };
   option (protocyte.constant) = { name: "FLOAT_SCALE" f32: 1.25 };
   option (protocyte.constant) = { name: "DOUBLE_SCALE" f64_expr: "FLOAT_SCALE + 2.5" };
@@ -44,9 +44,9 @@ message UltimateComplexMessage {
   option (protocyte.constant) = { name: "MOD_CHECK" i32_expr: "BASE_COUNT % 2" };
   option (protocyte.constant) = { name: "OR_CHECK" boolean_expr: "HAS_PREFIX || false" };
   option (protocyte.constant) = { name: "I32_BITWISE" i32_expr: "~0" };
-  option (protocyte.constant) = { name: "U32_BITWISE" u32_expr: "~0" };
-  option (protocyte.constant) = { name: "I64_BITWISE" i64_expr: "1 << 40" };
-  option (protocyte.constant) = { name: "U64_BITWISE" u64_expr: "(~0) ^ 0xf" };
+  option (protocyte.constant) = { name: "U32_BITWISE" u32_expr: "~u32(0)" };
+  option (protocyte.constant) = { name: "I64_BITWISE" i64_expr: "i64(1) << 40" };
+  option (protocyte.constant) = { name: "U64_BITWISE" u64_expr: "(~u64(0)) ^ 0xf" };
   option (protocyte.constant) = { name: "F32_BITWISE" f32_expr: "(1 << 3) | 1" };
   option (protocyte.constant) = { name: "F64_BITWISE" f64_expr: "true << 4" };
   option (protocyte.constant) = { name: "BOOL_BITWISE" boolean_expr: "BITWISE_BASE & 0x8" };
@@ -55,6 +55,8 @@ message UltimateComplexMessage {
     boolean_expr: "(BITWISE_BASE & 0x8) && FLAG_LITERAL"
   };
   option (protocyte.constant) = { name: "BOOL_INTEGER" boolean_expr: "1 + 1" };
+  option (protocyte.constant) = { name: "BOOL_ARITHMETIC" i32_expr: "true + true" };
+  option (protocyte.constant) = { name: "FLOAT_LOGIC" boolean_expr: "0.5 && !0.0" };
   option (protocyte.constant) = { name: "SHORT_CIRCUIT_AND" boolean_expr: "false && (1 / 0)" };
   option (protocyte.constant) = { name: "SHORT_CIRCUIT_OR" boolean_expr: "true || (1 / 0)" };
   option (protocyte.constant) = { name: "MIXED_UNSIGNED" u32_expr: "BASE_COUNT - BITWISE_BASE" };
@@ -90,8 +92,8 @@ message UltimateComplexMessage {
   option (protocyte.constant) = { name: "MATH_TRUNC" f64_expr: "trunc(-2.9)" };
   option (protocyte.constant) = { name: "MATH_ROUND" f64_expr: "round(-2.5)" };
   option (protocyte.constant) = { name: "MATH_ROUND_BELOW" f64_expr: "round(0.49999999999999994)" };
-  option (protocyte.constant) = { name: "MATH_NEGATIVE_POW" u32_expr: "pow(2, f64(-3)) * 8" };
-  option (protocyte.constant) = { name: "MATH_UNSIGNED_POW" u32_expr: "pow(2, -3)" };
+  option (protocyte.constant) = { name: "MATH_NEGATIVE_POW" u32_expr: "pow(2, -3) * 8" };
+  option (protocyte.constant) = { name: "MATH_INTEGRAL_NEGATIVE_POW" f64_expr: "pow(2, -3)" };
   option (protocyte.constant) = { name: "MATH_ACCURATE_NEGATIVE_POW" f64_expr: "pow(10, f64(-23))" };
   option (protocyte.constant) = { name: "MATH_TRUNC_INT" i32_expr: "-2.9" };
   option (protocyte.constant) = { name: "MATH_BOOL" boolean_expr: "max(false, true)" };

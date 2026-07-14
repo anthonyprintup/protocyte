@@ -211,7 +211,7 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     msg.options.ParseFromString(
         constant_options_bytes(
             [
-                ("SHIFTED_COUNT", "i64_expr", "BASE_COUNT * 1000000000"),
+                ("SHIFTED_COUNT", "i64_expr", "i64(BASE_COUNT) * 1000000000"),
                 ("MASK_BITS", "u64", 1234567890123456789),
                 ("FLOAT_SCALE", "f32", 1.25),
                 ("DOUBLE_SCALE", "f64_expr", "FLOAT_SCALE + 2.5"),
@@ -232,9 +232,9 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
                 ("MOD_CHECK", "i32_expr", "BASE_COUNT % 2"),
                 ("OR_CHECK", "boolean_expr", "HAS_PREFIX || false"),
                 ("I32_BITWISE", "i32_expr", "~0"),
-                ("U32_BITWISE", "u32_expr", "~0"),
-                ("I64_BITWISE", "i64_expr", "1 << 40"),
-                ("U64_BITWISE", "u64_expr", "(~0) ^ 0xf"),
+                ("U32_BITWISE", "u32_expr", "~u32(0)"),
+                ("I64_BITWISE", "i64_expr", "i64(1) << 40"),
+                ("U64_BITWISE", "u64_expr", "(~u64(0)) ^ 0xf"),
                 ("F32_BITWISE", "f32_expr", "(1 << 3) | 1"),
                 ("F64_BITWISE", "f64_expr", "true << 4"),
                 ("BOOL_BITWISE", "boolean_expr", "BITWISE_BASE & 0x8"),
@@ -244,6 +244,8 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
                     "(BITWISE_BASE & 0x8) && FLAG_LITERAL",
                 ),
                 ("BOOL_INTEGER", "boolean_expr", "1 + 1"),
+                ("BOOL_ARITHMETIC", "i32_expr", "true + true"),
+                ("FLOAT_LOGIC", "boolean_expr", "0.5 && !0.0"),
                 (
                     "SHORT_CIRCUIT_AND",
                     "boolean_expr",
@@ -315,9 +317,9 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
                 (
                     "MATH_NEGATIVE_POW",
                     "u32_expr",
-                    "pow(2, f64(-3)) * 8",
+                    "pow(2, -3) * 8",
                 ),
-                ("MATH_UNSIGNED_POW", "u32_expr", "pow(2, -3)"),
+                ("MATH_INTEGRAL_NEGATIVE_POW", "f64_expr", "pow(2, -3)"),
                 (
                     "MATH_ACCURATE_NEGATIVE_POW",
                     "f64_expr",
