@@ -1,4 +1,6 @@
+import math
 from pathlib import Path
+import struct
 import sys
 from types import SimpleNamespace
 
@@ -10,11 +12,22 @@ import protocyte.cpp as protocyte_cpp
 import protocyte.plugin as protocyte_plugin
 from protocyte.cpp import CppWriter
 from protocyte.model import (
+    CONSTANT_KIND_BOOL,
+    CONSTANT_KIND_DOUBLE,
+    CONSTANT_KIND_FLOAT,
+    CONSTANT_KIND_INT32,
+    CONSTANT_KIND_INT64,
+    CONSTANT_KIND_STRING,
     CONSTANT_KIND_UINT32,
+    CONSTANT_KIND_UINT64,
     ProtocyteError,
     _ExprParser,
+    _MAX_CONSTANT_DEPENDENCY_DEPTH,
+    _MAX_EXPRESSION_NESTING,
+    _TypedValue,
     _build_constants,
     _build_field,
+    _coerce_expression_value,
     _coerce_literal,
     _is_packed,
     build_model,
@@ -2518,11 +2531,11 @@ def test_array_expression_emits_validated_numeric_bound_for_cpp_semantics() -> N
     response = generate_response(request)
     files = {item.name: item.content for item in response.file}
 
-    assert field.array_max == 2
-    assert field.array_cpp_max == "2u"
+    assert field.array_max == 3
+    assert field.array_cpp_max == "3u"
     assert not response.error
     assert (
-        "::protocyte::ByteArray<2u> data_;" in files["negative_mod_bound.protocyte.hpp"]
+        "::protocyte::ByteArray<3u> data_;" in files["negative_mod_bound.protocyte.hpp"]
     )
     assert "-5u" not in files["negative_mod_bound.protocyte.hpp"]
 
@@ -2554,6 +2567,1171 @@ def test_large_integer_division_preserves_precision() -> None:
         == 9007199254740993
     )
     assert _ExprParser("-5 / 2", lambda name: None, "negative").parse().value == -2
+
+
+def test_f32_integer_literal_rounding_does_not_double_round() -> None:
+    literal = 2**63 + 2**39 + 1
+
+    coerced = _coerce_literal(CONSTANT_KIND_FLOAT, literal, "f32 literal")
+
+    assert coerced == float(2**63 + 2**40)
+    assert struct.unpack("<I", struct.pack("<f", coerced))[0] == 0x5F000001
+
+
+@pytest.mark.parametrize("kind", [CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE])
+def test_floating_literal_integer_overflow_has_labeled_error(kind: str) -> None:
+    with pytest.raises(
+        ProtocyteError, match="huge literal: numeric literal must be finite"
+    ):
+        _coerce_literal(kind, 10**1000, "huge literal")
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
+        ("I32_NEG + U32_ONE", 0, CONSTANT_KIND_UINT32),
+        ("U32_ZERO - I32_ONE", 2**32 - 1, CONSTANT_KIND_UINT32),
+        ("I32_NEG_TWO * U32_TWO", 2**32 - 4, CONSTANT_KIND_UINT32),
+        ("I32_NEG_TWO / U32_TWO", 2**31 - 1, CONSTANT_KIND_UINT32),
+        ("I32_NEG % U32_MAX", 0, CONSTANT_KIND_UINT32),
+        ("I64_NEG + U32_ZERO", -1, CONSTANT_KIND_INT64),
+        ("I64_NEG + U64_ZERO", 2**64 - 1, CONSTANT_KIND_UINT64),
+        ("U64_MAX + I32_ONE", 0, CONSTANT_KIND_UINT64),
+        ("I64_NEG_FIVE % U32_TWO", -1, CONSTANT_KIND_INT64),
+    ],
+)
+def test_mixed_integer_arithmetic_uses_cpp_common_conversions(
+    expression: str, expected: int, expected_kind: str
+) -> None:
+    values = {
+        "I32_NEG": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT32),
+        "I32_NEG_TWO": _TypedValue("numeric", -2, numeric_kind=CONSTANT_KIND_INT32),
+        "I32_ONE": _TypedValue("numeric", 1, numeric_kind=CONSTANT_KIND_INT32),
+        "U32_ZERO": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT32),
+        "U32_ONE": _TypedValue("numeric", 1, numeric_kind=CONSTANT_KIND_UINT32),
+        "U32_TWO": _TypedValue("numeric", 2, numeric_kind=CONSTANT_KIND_UINT32),
+        "U32_MAX": _TypedValue("numeric", 2**32 - 1, numeric_kind=CONSTANT_KIND_UINT32),
+        "I64_NEG": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT64),
+        "I64_NEG_FIVE": _TypedValue("numeric", -5, numeric_kind=CONSTANT_KIND_INT64),
+        "U64_ZERO": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT64),
+        "U64_MAX": _TypedValue("numeric", 2**64 - 1, numeric_kind=CONSTANT_KIND_UINT64),
+    }
+
+    parsed = _ExprParser(expression, values.__getitem__, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
+        ("-1 + I64_ZERO", 2**32 - 1, CONSTANT_KIND_INT64),
+        ("-1 + F64_ZERO", float(2**32 - 1), CONSTANT_KIND_DOUBLE),
+    ],
+)
+def test_contextual_unsigned_values_are_normalized_before_widening(
+    expression: str, expected: int | float, expected_kind: str
+) -> None:
+    values = {
+        "I64_ZERO": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_INT64),
+        "F64_ZERO": _TypedValue("numeric", 0.0, numeric_kind=CONSTANT_KIND_DOUBLE),
+    }
+
+    parsed = _ExprParser(
+        expression,
+        values.__getitem__,
+        expression,
+        integer_context=CONSTANT_KIND_UINT32,
+    ).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "kind"),
+    [
+        ("2147483647 + 1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("-2147483648 - 1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("2147483647 * 2", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("-2147483648 / -1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("-2147483648 % -1", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("-(-2147483648)", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("+2147483648", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        (
+            "9223372036854775807 + 1",
+            CONSTANT_KIND_INT64,
+            CONSTANT_KIND_INT64,
+        ),
+        (
+            "-9223372036854775808 / -1",
+            CONSTANT_KIND_INT64,
+            CONSTANT_KIND_INT64,
+        ),
+        (
+            "-9223372036854775808 % -1",
+            CONSTANT_KIND_INT64,
+            CONSTANT_KIND_INT64,
+        ),
+    ],
+)
+def test_signed_integer_operations_reject_out_of_range_results(
+    expression: str, integer_context: str, kind: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=f"out of range for {kind}"):
+        _ExprParser(
+            expression,
+            lambda name: None,
+            expression,
+            integer_context=integer_context,
+        ).parse()
+
+
+def test_integer_truth_and_destination_conversion_validate_source_kind() -> None:
+    invalid_i32 = _TypedValue("numeric", 2**31, numeric_kind=CONSTANT_KIND_INT32)
+    too_large = _TypedValue("numeric", 2**64)
+    raw_u32 = _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_UINT32)
+
+    for destination in (
+        "bool",
+        CONSTANT_KIND_DOUBLE,
+        CONSTANT_KIND_UINT64,
+    ):
+        with pytest.raises(ProtocyteError, match="out of range for int32"):
+            _coerce_expression_value(destination, invalid_i32, "invalid i32")
+        with pytest.raises(ProtocyteError, match="supported range"):
+            _coerce_expression_value(destination, too_large, "too large")
+
+    assert _coerce_expression_value("bool", raw_u32, "raw u32") is True
+    assert _coerce_expression_value(CONSTANT_KIND_DOUBLE, raw_u32, "raw u32") == float(
+        2**32 - 1
+    )
+    assert (
+        _coerce_expression_value(CONSTANT_KIND_UINT64, raw_u32, "raw u32") == 2**32 - 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("I32_NEG < U32_ZERO", False),
+        ("I32_NEG > U32_ZERO", True),
+        ("I64_NEG < U32_ZERO", True),
+        ("I32_NEG < U64_ZERO", False),
+        ("I64_NEG < U64_ZERO", False),
+        ("I32_NEG == U32_MAX", True),
+        ("I32_NEG != U32_MAX", False),
+        ("I64_NEG == U32_MAX", False),
+        ("I64_NEG == U64_MAX", True),
+        ("F32_ROUNDED == I32_UNROUNDED", True),
+        ("F32_DISTINCT == I32_UNROUNDED", False),
+        ("F32_INTEGER_EDGE == U64_F32_EDGE", True),
+        ("F64_ROUNDED == I64_UNROUNDED", True),
+    ],
+)
+def test_numeric_comparisons_and_equality_use_common_kind(
+    expression: str, expected: bool
+) -> None:
+    values = {
+        "I32_NEG": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT32),
+        "I32_UNROUNDED": _TypedValue(
+            "numeric", 16777217, numeric_kind=CONSTANT_KIND_INT32
+        ),
+        "U32_ZERO": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT32),
+        "U32_MAX": _TypedValue("numeric", 2**32 - 1, numeric_kind=CONSTANT_KIND_UINT32),
+        "I64_NEG": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT64),
+        "I64_UNROUNDED": _TypedValue(
+            "numeric", 9007199254740993, numeric_kind=CONSTANT_KIND_INT64
+        ),
+        "U64_F32_EDGE": _TypedValue(
+            "numeric",
+            2**63 + 2**39 + 1,
+            numeric_kind=CONSTANT_KIND_UINT64,
+        ),
+        "U64_ZERO": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT64),
+        "U64_MAX": _TypedValue("numeric", 2**64 - 1, numeric_kind=CONSTANT_KIND_UINT64),
+        "F32_ROUNDED": _TypedValue(
+            "numeric", 16777216.0, numeric_kind=CONSTANT_KIND_FLOAT
+        ),
+        "F32_DISTINCT": _TypedValue(
+            "numeric", 16777218.0, numeric_kind=CONSTANT_KIND_FLOAT
+        ),
+        "F32_INTEGER_EDGE": _TypedValue(
+            "numeric",
+            float(2**63 + 2**40),
+            numeric_kind=CONSTANT_KIND_FLOAT,
+        ),
+        "F64_ROUNDED": _TypedValue(
+            "numeric", 9007199254740992.0, numeric_kind=CONSTANT_KIND_DOUBLE
+        ),
+    }
+
+    parsed = _ExprParser(expression, values.__getitem__, expression).parse()
+
+    assert parsed.value is expected
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "expected", "expected_kind"),
+    [
+        ("~0", CONSTANT_KIND_INT32, -1, CONSTANT_KIND_INT32),
+        ("~0", CONSTANT_KIND_UINT32, 2**32 - 1, CONSTANT_KIND_UINT32),
+        ("~0", CONSTANT_KIND_INT64, -1, CONSTANT_KIND_INT64),
+        ("~0", CONSTANT_KIND_UINT64, 2**64 - 1, CONSTANT_KIND_UINT64),
+        ("true & false", None, 0, CONSTANT_KIND_INT32),
+        ("true | false", None, 1, CONSTANT_KIND_INT32),
+        ("true ^ true", None, 0, CONSTANT_KIND_INT32),
+        ("~true", None, -2, CONSTANT_KIND_INT32),
+        ("true << 2", None, 4, CONSTANT_KIND_INT32),
+        ("8 >> true", None, 4, CONSTANT_KIND_INT32),
+        ("-8 >> 2", CONSTANT_KIND_INT32, -2, CONSTANT_KIND_INT32),
+        (
+            "1 << 31",
+            CONSTANT_KIND_INT32,
+            -(2**31),
+            CONSTANT_KIND_INT32,
+        ),
+        ("-1 << 1", CONSTANT_KIND_INT32, -2, CONSTANT_KIND_INT32),
+        ("1073741824 << 2", CONSTANT_KIND_INT32, 0, CONSTANT_KIND_INT32),
+        (
+            "1 << 63",
+            CONSTANT_KIND_INT64,
+            -(2**63),
+            CONSTANT_KIND_INT64,
+        ),
+        (
+            "-9223372036854775808 << 1",
+            CONSTANT_KIND_INT64,
+            0,
+            CONSTANT_KIND_INT64,
+        ),
+        (
+            "0xffffffff << 4",
+            CONSTANT_KIND_UINT32,
+            0xFFFFFFF0,
+            CONSTANT_KIND_UINT32,
+        ),
+    ],
+)
+def test_bitwise_expression_values_follow_fixed_width_integer_semantics(
+    expression: str,
+    integer_context: str | None,
+    expected: int,
+    expected_kind: str,
+) -> None:
+    parsed = _ExprParser(
+        expression,
+        lambda name: None,
+        expression,
+        integer_context=integer_context,
+    ).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("1 | 2 ^ 3 & 4", 3),
+        ("1 << 2 + 1", 8),
+        ("1 + 1 << 1", 4),
+        ("1 & 3 == 1", 0),
+        ("1 | 0 && 0", False),
+        ("(4 & 1) || 2", True),
+        ("!(4 & 1)", True),
+    ],
+)
+def test_bitwise_expression_precedence_and_integer_logical_conversion(
+    expression: str, expected: int | bool
+) -> None:
+    assert (
+        _ExprParser(expression, lambda name: None, expression).parse().value == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
+        ("U32 & I64", 0xFFFFFFFF, CONSTANT_KIND_INT64),
+        ("I32 | U64", 2**64 - 1, CONSTANT_KIND_UINT64),
+        ("I32 ^ U32", 0xFFFFFF0F, CONSTANT_KIND_UINT32),
+    ],
+)
+def test_bitwise_expression_uses_usual_mixed_integer_conversions(
+    expression: str, expected: int, expected_kind: str
+) -> None:
+    values = {
+        "I32": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT32),
+        "U32": _TypedValue("numeric", 0xF0, numeric_kind=CONSTANT_KIND_UINT32),
+        "I64": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT64),
+        "U64": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT64),
+    }
+    if expression == "U32 & I64":
+        values["U32"].value = 0xFFFFFFFF
+
+    parsed = _ExprParser(expression, values.__getitem__, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+def test_bitwise_operands_are_normalized_in_their_source_kinds() -> None:
+    values = {
+        "I64_HIGH_BIT": _TypedValue(
+            "numeric", 1 << 32, numeric_kind=CONSTANT_KIND_INT64
+        ),
+        "RAW_U32_NEGATIVE": _TypedValue(
+            "numeric", -1, numeric_kind=CONSTANT_KIND_UINT32
+        ),
+    }
+
+    contextual = _ExprParser(
+        "-1 & I64_HIGH_BIT",
+        values.__getitem__,
+        "contextual u32 bitwise",
+        integer_context=CONSTANT_KIND_UINT32,
+    ).parse()
+    referenced = _ExprParser(
+        "RAW_U32_NEGATIVE & I64_HIGH_BIT",
+        values.__getitem__,
+        "referenced u32 bitwise",
+    ).parse()
+
+    assert contextual.value == 0
+    assert contextual.numeric_kind == CONSTANT_KIND_INT64
+    assert referenced.value == 0
+    assert referenced.numeric_kind == CONSTANT_KIND_INT64
+
+
+def test_bitwise_conversion_rejects_an_invalid_signed_source_value() -> None:
+    values = {
+        "INVALID_I32": _TypedValue(
+            "numeric", 1 << 32, numeric_kind=CONSTANT_KIND_INT32
+        ),
+        "U64_ZERO": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT64),
+    }
+
+    with pytest.raises(ProtocyteError, match="out of range for int32"):
+        _ExprParser(
+            "INVALID_I32 & U64_ZERO",
+            values.__getitem__,
+            "invalid signed source",
+        ).parse()
+
+
+def test_shift_operands_are_normalized_in_their_source_kinds() -> None:
+    values = {
+        "U32_MAX": _TypedValue("numeric", 2**32 - 1, numeric_kind=CONSTANT_KIND_UINT32),
+        "RAW_U32_NEGATIVE": _TypedValue(
+            "numeric", -1, numeric_kind=CONSTANT_KIND_UINT32
+        ),
+    }
+
+    shifted_by_wrapped_count = _ExprParser(
+        "1 << -U32_MAX",
+        values.__getitem__,
+        "wrapped shift count",
+    ).parse()
+    shifted_wrapped_value = _ExprParser(
+        "RAW_U32_NEGATIVE << 1",
+        values.__getitem__,
+        "wrapped shift value",
+    ).parse()
+
+    assert shifted_by_wrapped_count.value == 2
+    assert shifted_by_wrapped_count.numeric_kind == CONSTANT_KIND_INT32
+    assert shifted_wrapped_value.value == 2**32 - 2
+    assert shifted_wrapped_value.numeric_kind == CONSTANT_KIND_UINT32
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "error"),
+    [
+        ("1.0 & 1", None, "require integer or bool operands"),
+        ('"text" | 1', None, "require integer or bool operands"),
+        ("1 << -1", None, "shift count must not be negative"),
+        ("1 << 32", None, "shift count 32 must be less than 32"),
+        ("1.0 && true", None, "expected bool or integer expression"),
+    ],
+)
+def test_bitwise_expression_rejects_invalid_operands_and_shifts(
+    expression: str, integer_context: str | None, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        _ExprParser(
+            expression,
+            lambda name: None,
+            expression,
+            integer_context=integer_context,
+        ).parse()
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("true || (1 / 0 == 0)", True),
+        ("false && (1 / 0 == 0)", False),
+        ("true || (sqrt(-1) == 0)", True),
+        ("false && (pow(2, -1) == 0)", False),
+        ("true || (false && (1 / 0 == 0))", True),
+    ],
+)
+def test_logical_operators_do_not_evaluate_dead_rhs_values(
+    expression: str, expected: bool
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value is expected
+
+
+@pytest.mark.parametrize(
+    ("expression", "error"),
+    [
+        ("false || (1 / 0 == 0)", "division by zero"),
+        ("true && (sqrt(-1) == 0)", "sqrt\\(\\) domain error"),
+    ],
+)
+def test_logical_operators_propagate_live_rhs_errors(
+    expression: str, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        _ExprParser(expression, lambda name: None, expression).parse()
+
+
+@pytest.mark.parametrize(
+    ("expression", "error"),
+    [
+        ("true || 1.0", "expected bool or integer expression"),
+        ("false && 1.0", "expected bool or integer expression"),
+        ("true || unsupported()", "unsupported function unsupported\\(\\)"),
+        ("false && sqrt(1, 2)", "sqrt\\(\\) expects one numeric argument"),
+        ("true || (1.0 % 1 == 0)", "only supports integer operands"),
+    ],
+)
+def test_logical_operators_still_type_check_dead_rhs(
+    expression: str, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        _ExprParser(expression, lambda name: None, expression).parse()
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
+        ("0xdeadbeef", 0xDEADBEEF, CONSTANT_KIND_UINT32),
+        ("0xFE", 0xFE, CONSTANT_KIND_INT32),
+        ("0XDEAD", 0xDEAD, CONSTANT_KIND_INT32),
+        ("0x1e2", 0x1E2, CONSTANT_KIND_INT32),
+        ("0xBEEF & 0xffff", 0xBEEF, CONSTANT_KIND_INT32),
+        ("0x1E + 1", 0x1F, CONSTANT_KIND_INT32),
+        ("0x7fffffff", 0x7FFFFFFF, CONSTANT_KIND_INT32),
+        ("0x80000000", 0x80000000, CONSTANT_KIND_UINT32),
+        ("0x100000000", 0x100000000, CONSTANT_KIND_INT64),
+        ("0x7fffffffffffffff", 0x7FFFFFFFFFFFFFFF, CONSTANT_KIND_INT64),
+        ("0x8000000000000000", 0x8000000000000000, CONSTANT_KIND_UINT64),
+        ("1e2", 100.0, CONSTANT_KIND_DOUBLE),
+    ],
+)
+def test_hexadecimal_literals_containing_e_are_not_floats(
+    expression: str, expected: int | float, expected_kind: str
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_kind"),
+    [
+        ("-1 == 0xffffffff", True, None),
+        ("-1 < 0xffffffff", False, None),
+        ("0xffffffff + 1", 0, CONSTANT_KIND_UINT32),
+        ("~0xffffffff", 0, CONSTANT_KIND_UINT32),
+        ("pow(2, -0xffffffff)", 2, CONSTANT_KIND_UINT32),
+    ],
+)
+def test_hexadecimal_literals_use_cpp_unsuffixed_integer_kinds(
+    expression: str, expected: int | bool, expected_kind: str | None
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        r'"\x"',
+        r'"\u12"',
+        r'"\q"',
+        r'"\8"',
+        r'"\400"',
+        '"line\nbreak"',
+        '"null\0byte"',
+    ],
+)
+def test_expression_string_literals_reject_malformed_python_syntax(
+    expression: str,
+) -> None:
+    with pytest.raises(ProtocyteError, match="invalid string literal"):
+        _ExprParser(expression, lambda name: None, "malformed string").parse()
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        r'true || ("\q" == "")',
+        r'false && ("\400" == "")',
+    ],
+)
+def test_logical_operators_reject_invalid_string_escapes_on_dead_rhs(
+    expression: str,
+) -> None:
+    with pytest.raises(ProtocyteError, match="invalid string literal"):
+        _ExprParser(expression, lambda name: None, "dead RHS string").parse()
+
+
+@pytest.mark.parametrize("expression", [r'"\ud800"', r'"\ud83d\ude00"'])
+def test_expression_string_literals_reject_non_utf8_surrogates(
+    expression: str,
+) -> None:
+    with pytest.raises(ProtocyteError, match="string value must be valid UTF-8"):
+        _ExprParser(expression, lambda name: None, "non-UTF-8 string").parse()
+
+
+def test_string_destinations_reject_non_utf8_values_before_emission() -> None:
+    with pytest.raises(ProtocyteError, match="string value must be valid UTF-8"):
+        _coerce_literal(CONSTANT_KIND_STRING, "\ud800", "string literal")
+    with pytest.raises(ProtocyteError, match="string value must be valid UTF-8"):
+        _coerce_expression_value(
+            CONSTANT_KIND_STRING,
+            _TypedValue(CONSTANT_KIND_STRING, "\ud800"),
+            "string expression",
+        )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "(" * (_MAX_EXPRESSION_NESTING + 1)
+        + "1"
+        + ")" * (_MAX_EXPRESSION_NESTING + 1),
+        "i32(" * (_MAX_EXPRESSION_NESTING + 1)
+        + "1"
+        + ")" * (_MAX_EXPRESSION_NESTING + 1),
+        "-" * (_MAX_EXPRESSION_NESTING + 1) + "1",
+    ],
+)
+def test_expression_nesting_limit_returns_a_stable_error(expression: str) -> None:
+    with pytest.raises(
+        ProtocyteError,
+        match=rf"expression nesting exceeds maximum depth of {_MAX_EXPRESSION_NESTING}",
+    ):
+        _ExprParser(expression, lambda name: None, "deep expression").parse()
+
+
+def test_expression_nesting_limit_accepts_the_boundary() -> None:
+    expression = (
+        "(" * _MAX_EXPRESSION_NESTING
+        + "1"
+        + ")" * _MAX_EXPRESSION_NESTING
+    )
+
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == 1
+
+
+def test_expression_parser_translates_residual_recursion_errors() -> None:
+    def recurse(_name: str) -> _TypedValue:
+        raise RecursionError
+
+    with pytest.raises(
+        ProtocyteError,
+        match="expression evaluation exceeds safe recursion depth",
+    ):
+        _ExprParser("RECURSE", recurse, "recursive expression").parse()
+
+
+def test_bitwise_operators_work_in_every_expression_destination() -> None:
+    request = _bitwise_expression_request()
+    model = build_model(request)
+    message = model.messages["demo.BitwiseExpressions"]
+    constants = {constant.name: constant.value for constant in message.constants}
+
+    assert model.files["bitwise_expressions.proto"].constants[0].value == 10
+    assert constants == {
+        "I32_MASK": -1,
+        "U32_MASK": 2**32 - 1,
+        "I64_SHIFT": 1 << 40,
+        "U64_MASK": 2**64 - 16,
+        "F32_BITS": 9.0,
+        "F64_BITS": 16.0,
+        "BOOL_BITS": True,
+        "BOOL_LOGIC": True,
+        "BOOL_ARITH": True,
+        "STR_BITS": "b",
+    }
+    assert message.fields[0].array_max == 9
+
+    response = generate_response(request)
+    assert not response.error
+    header = next(
+        item.content
+        for item in response.file
+        if item.name == "bitwise_expressions.protocyte.hpp"
+    )
+    assert "inline constexpr ::protocyte::u32 BASE_BITS {10u};" in header
+    assert "static constexpr ::protocyte::i32 I32_MASK {-1};" in header
+    assert "static constexpr ::protocyte::u32 U32_MASK {4294967295u};" in header
+    assert "static constexpr ::protocyte::i64 I64_SHIFT {1099511627776ll};" in header
+    assert (
+        "static constexpr ::protocyte::u64 U64_MASK {18446744073709551600ull};"
+        in header
+    )
+    assert "static constexpr bool BOOL_BITS {true};" in header
+    assert "::protocyte::ByteArray<9u> data_;" in header
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected", "expected_family", "expected_kind"),
+    [
+        ("bool(false)", False, CONSTANT_KIND_BOOL, None),
+        ("bool(0)", False, CONSTANT_KIND_BOOL, None),
+        ("bool(-0.0)", False, CONSTANT_KIND_BOOL, None),
+        ("bool(0.5)", True, CONSTANT_KIND_BOOL, None),
+        ("i32(true)", 1, "numeric", CONSTANT_KIND_INT32),
+        ("i32(4294967295)", -1, "numeric", CONSTANT_KIND_INT32),
+        ("i32(-2.9)", -2, "numeric", CONSTANT_KIND_INT32),
+        ("u32(-1)", 2**32 - 1, "numeric", CONSTANT_KIND_UINT32),
+        ("u32(4294967297)", 1, "numeric", CONSTANT_KIND_UINT32),
+        ("u32(-0.5)", 0, "numeric", CONSTANT_KIND_UINT32),
+        ("i64(false)", 0, "numeric", CONSTANT_KIND_INT64),
+        (
+            "i64(18446744073709551615)",
+            -1,
+            "numeric",
+            CONSTANT_KIND_INT64,
+        ),
+        ("u64(true)", 1, "numeric", CONSTANT_KIND_UINT64),
+        ("u64(-1)", 2**64 - 1, "numeric", CONSTANT_KIND_UINT64),
+        ("f32(16777217)", 16777216.0, "numeric", CONSTANT_KIND_FLOAT),
+        ("f32(true)", 1.0, "numeric", CONSTANT_KIND_FLOAT),
+        (
+            "f64(9007199254740993)",
+            9007199254740992.0,
+            "numeric",
+            CONSTANT_KIND_DOUBLE,
+        ),
+        ("f64(false)", 0.0, "numeric", CONSTANT_KIND_DOUBLE),
+        ('str("hello")', "hello", CONSTANT_KIND_STRING, None),
+        ("str(true)", "true", CONSTANT_KIND_STRING, None),
+        ("str(-42)", "-42", CONSTANT_KIND_STRING, None),
+        ("str(f32(1.5))", "1.5", CONSTANT_KIND_STRING, None),
+    ],
+)
+def test_scalar_casts_convert_supported_values(
+    expression: str,
+    expected: object,
+    expected_family: str,
+    expected_kind: str | None,
+) -> None:
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == expected
+    assert parsed.family == expected_family
+    assert parsed.numeric_kind == expected_kind
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "expected", "expected_kind"),
+    [
+        (
+            "f64(-3)",
+            CONSTANT_KIND_UINT32,
+            -3.0,
+            CONSTANT_KIND_DOUBLE,
+        ),
+        (
+            "i32(4294967295)",
+            CONSTANT_KIND_INT32,
+            -1,
+            CONSTANT_KIND_INT32,
+        ),
+        (
+            "u32(-1) + 1",
+            CONSTANT_KIND_INT64,
+            2**32,
+            CONSTANT_KIND_INT64,
+        ),
+        (
+            "i32(u32(-1))",
+            CONSTANT_KIND_UINT64,
+            -1,
+            CONSTANT_KIND_INT32,
+        ),
+        (
+            "u32(i32(-1))",
+            CONSTANT_KIND_INT64,
+            2**32 - 1,
+            CONSTANT_KIND_UINT32,
+        ),
+    ],
+)
+def test_scalar_cast_arguments_have_an_independent_literal_context(
+    expression: str,
+    integer_context: str,
+    expected: int | float,
+    expected_kind: str,
+) -> None:
+    parsed = _ExprParser(
+        expression,
+        lambda name: None,
+        expression,
+        integer_context=integer_context,
+    ).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+def test_scalar_casts_support_nested_comparisons_with_cpp_conversions() -> None:
+    equal = _ExprParser(
+        "i32(-1) == u32(4294967295)",
+        lambda name: None,
+        "mixed cast equality",
+    ).parse()
+    ordered = _ExprParser(
+        "i64(-1) < u32(0)",
+        lambda name: None,
+        "mixed cast ordering",
+    ).parse()
+
+    assert equal.value is True
+    assert ordered.value is True
+
+
+def test_str_cast_preserves_floating_signed_zero() -> None:
+    parsed = _ExprParser(
+        "str(f64(-0.0))",
+        lambda name: None,
+        "string negative zero",
+    ).parse()
+
+    assert parsed.value == "-0.0"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["bool", "i32", "u32", "i64", "u64", "f32", "f64", "str"],
+)
+@pytest.mark.parametrize("arguments", ["", "1, 2"])
+def test_scalar_casts_require_exactly_one_argument(name: str, arguments: str) -> None:
+    with pytest.raises(
+        ProtocyteError, match=rf"{name}\(\) expects one scalar argument"
+    ):
+        _ExprParser(
+            f"{name}({arguments})",
+            lambda value: None,
+            f"{name} arity",
+        ).parse()
+
+
+@pytest.mark.parametrize("name", ["bool", "i32", "u32", "i64", "u64", "f32", "f64"])
+def test_numeric_and_bool_casts_do_not_parse_strings(name: str) -> None:
+    with pytest.raises(
+        ProtocyteError, match=rf"{name}\(\) expects one bool or numeric argument"
+    ):
+        _ExprParser(
+            f'{name}("1")',
+            lambda value: None,
+            f"{name} string source",
+        ).parse()
+
+
+@pytest.mark.parametrize(
+    ("expression", "error"),
+    [
+        ("i32(2147483648.0)", "i32\\(\\) result is out of range for int32"),
+        ("u32(-1.0)", "u32\\(\\) result is out of range for uint32"),
+        ("i64(9223372036854775808.0)", "i64\\(\\) result is out of range for int64"),
+        ("u64(-1.0)", "u64\\(\\) result is out of range for uint64"),
+        ("f32(1e100)", "f32\\(\\) result is not finite"),
+    ],
+)
+def test_scalar_casts_reject_undefined_or_nonfinite_results(
+    expression: str, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        _ExprParser(expression, lambda name: None, expression).parse()
+
+
+@pytest.mark.parametrize(
+    ("name", "expression"),
+    [
+        ("pow", "pow(X, 2)"),
+        ("abs", "abs(X)"),
+        ("min", "min(X, X)"),
+        ("max", "max(X, X)"),
+        ("sqrt", "sqrt(X)"),
+        ("exp", "exp(X)"),
+        ("log", "log(X)"),
+        ("log2", "log2(X)"),
+        ("log10", "log10(X)"),
+        ("ceil", "ceil(X)"),
+        ("floor", "floor(X)"),
+        ("trunc", "trunc(X)"),
+        ("round", "round(X)"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "source_kind"),
+    [
+        (_TypedValue("bool", True), "bool"),
+        (
+            _TypedValue("numeric", 4, numeric_kind=CONSTANT_KIND_INT32),
+            CONSTANT_KIND_INT32,
+        ),
+        (
+            _TypedValue("numeric", 4, numeric_kind=CONSTANT_KIND_UINT32),
+            CONSTANT_KIND_UINT32,
+        ),
+        (
+            _TypedValue("numeric", 4, numeric_kind=CONSTANT_KIND_INT64),
+            CONSTANT_KIND_INT64,
+        ),
+        (
+            _TypedValue("numeric", 4, numeric_kind=CONSTANT_KIND_UINT64),
+            CONSTANT_KIND_UINT64,
+        ),
+        (
+            _TypedValue("numeric", 4.0, numeric_kind=CONSTANT_KIND_FLOAT),
+            CONSTANT_KIND_FLOAT,
+        ),
+        (
+            _TypedValue("numeric", 4.0, numeric_kind=CONSTANT_KIND_DOUBLE),
+            CONSTANT_KIND_DOUBLE,
+        ),
+    ],
+)
+def test_math_functions_accept_every_numeric_kind_and_bool(
+    name: str, expression: str, source: _TypedValue, source_kind: str
+) -> None:
+    parsed = _ExprParser(expression, {"X": source}.__getitem__, expression).parse()
+
+    if name in {
+        "sqrt",
+        "exp",
+        "log",
+        "log2",
+        "log10",
+        "ceil",
+        "floor",
+        "trunc",
+        "round",
+    }:
+        expected_kind = (
+            CONSTANT_KIND_FLOAT
+            if source_kind == CONSTANT_KIND_FLOAT
+            else CONSTANT_KIND_DOUBLE
+        )
+    elif source_kind == "bool":
+        expected_kind = CONSTANT_KIND_INT32
+    else:
+        expected_kind = source_kind
+    assert parsed.numeric_kind == expected_kind
+    assert isinstance(parsed.value, int | float)
+    assert math.isfinite(parsed.value)
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "expected", "expected_kind"),
+    [
+        ("pow(0, 0)", None, 1, CONSTANT_KIND_INT32),
+        ("pow(2, -3.0)", None, 0.125, CONSTANT_KIND_DOUBLE),
+        ("pow(-1, -3.0)", None, -1.0, CONSTANT_KIND_DOUBLE),
+        ("pow(2.0, -3.0)", None, 0.125, CONSTANT_KIND_DOUBLE),
+        ("pow(2, f64(-3))", CONSTANT_KIND_UINT32, 0.125, CONSTANT_KIND_DOUBLE),
+        ("pow(2, f32(-3))", CONSTANT_KIND_UINT32, 0.125, CONSTANT_KIND_FLOAT),
+        ("pow(2, -3)", CONSTANT_KIND_UINT32, 0, CONSTANT_KIND_UINT32),
+        ("pow(2, -3)", CONSTANT_KIND_UINT64, 0, CONSTANT_KIND_UINT64),
+        ("pow(0, -1)", CONSTANT_KIND_UINT32, 0, CONSTANT_KIND_UINT32),
+        ("pow(0.0, -1)", CONSTANT_KIND_UINT32, 0.0, CONSTANT_KIND_DOUBLE),
+        ("pow(-1, -3)", CONSTANT_KIND_UINT32, 2**32 - 1, CONSTANT_KIND_UINT32),
+        ("pow(65536, 2)", CONSTANT_KIND_UINT32, 0, CONSTANT_KIND_UINT32),
+        (
+            "pow(2, 18446744073709551615)",
+            CONSTANT_KIND_UINT64,
+            0,
+            CONSTANT_KIND_UINT64,
+        ),
+        ("pow(2.0, 3)", None, 8.0, CONSTANT_KIND_DOUBLE),
+    ],
+)
+def test_pow_semantics(
+    expression: str,
+    integer_context: str | None,
+    expected: int | float,
+    expected_kind: str,
+) -> None:
+    parsed = _ExprParser(
+        expression,
+        lambda name: None,
+        expression,
+        integer_context=integer_context,
+    ).parse()
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == expected_kind
+
+
+def test_pow_rounds_f32_before_nested_operations() -> None:
+    source = _TypedValue(
+        "numeric",
+        struct.unpack("<f", struct.pack("<f", 1.1))[0],
+        numeric_kind=CONSTANT_KIND_FLOAT,
+    )
+    parsed = _ExprParser("pow(F, 2) + F", {"F": source}.__getitem__, "f32 pow").parse()
+    expected = struct.unpack(
+        "<f",
+        struct.pack(
+            "<f",
+            struct.unpack("<f", struct.pack("<f", source.value * source.value))[0]
+            + source.value,
+        ),
+    )[0]
+
+    assert parsed.value == expected
+    assert parsed.numeric_kind == CONSTANT_KIND_FLOAT
+
+
+def test_pow_rounds_explicit_f32_exponent_before_evaluation() -> None:
+    source = _TypedValue("numeric", -1.0, numeric_kind=CONSTANT_KIND_FLOAT)
+    parsed = _ExprParser(
+        "pow(F, f32(-16777217))",
+        {"F": source}.__getitem__,
+        "f32 negative exponent",
+        integer_context=CONSTANT_KIND_UINT32,
+    ).parse()
+
+    assert parsed.value == 1.0
+    assert parsed.numeric_kind == CONSTANT_KIND_FLOAT
+
+
+@pytest.mark.parametrize("exponent", [-23, -305])
+def test_pow_with_an_explicit_f64_exponent_is_accurately_rounded(
+    exponent: int,
+) -> None:
+    expression = f"pow(10, f64({exponent}))"
+    parsed = _ExprParser(expression, lambda name: None, expression).parse()
+
+    assert parsed.value == math.pow(10.0, float(exponent))
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "error"),
+    [
+        ("pow(0, -1)", None, "pow\\(\\) domain error"),
+        ("pow(0.0, -1)", None, "pow\\(\\) domain error"),
+        ("pow(2, -3)", None, "pow\\(\\) domain error"),
+        ("pow(2.0, -3)", None, "pow\\(\\) domain error"),
+        ("pow(-2, 0.5)", None, "pow\\(\\) domain error"),
+        (
+            "pow(2, 31)",
+            CONSTANT_KIND_INT32,
+            "pow\\(\\) result is out of range for int32",
+        ),
+        ("pow(2.0, 1024)", None, "pow\\(\\) result is not finite"),
+        (
+            'pow("bad", 2)',
+            None,
+            "pow\\(\\) expects numeric arguments",
+        ),
+        ("pow(2)", None, "pow\\(\\) expects two numeric arguments"),
+        (
+            "pow(2, 100000000000000000000000000)",
+            None,
+            "pow\\(\\) argument is outside the supported numeric range",
+        ),
+        (
+            "pow(2, 4294967296)",
+            CONSTANT_KIND_UINT32,
+            "value 4294967296 is out of range for uint32",
+        ),
+    ],
+)
+def test_pow_rejects_invalid_or_unrepresentable_results(
+    expression: str, integer_context: str | None, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        _ExprParser(
+            expression,
+            lambda name: None,
+            expression,
+            integer_context=integer_context,
+        ).parse()
+
+
+def test_abs_preserves_kind_and_normalizes_floating_negative_zero() -> None:
+    negative_zero = _TypedValue("numeric", -0.0, numeric_kind=CONSTANT_KIND_DOUBLE)
+    parsed = _ExprParser("abs(Z)", {"Z": negative_zero}.__getitem__, "abs zero").parse()
+
+    assert parsed.value == 0.0
+    assert math.copysign(1.0, parsed.value) == 1.0
+    assert parsed.numeric_kind == CONSTANT_KIND_DOUBLE
+
+
+@pytest.mark.parametrize(
+    ("expression", "integer_context", "kind"),
+    [
+        ("abs(-2147483648)", CONSTANT_KIND_INT32, CONSTANT_KIND_INT32),
+        ("abs(-9223372036854775808)", CONSTANT_KIND_INT64, CONSTANT_KIND_INT64),
+    ],
+)
+def test_abs_rejects_signed_minimum(
+    expression: str, integer_context: str, kind: str
+) -> None:
+    with pytest.raises(
+        ProtocyteError, match=f"abs\\(\\) result is out of range for {kind}"
+    ):
+        _ExprParser(
+            expression,
+            lambda name: None,
+            expression,
+            integer_context=integer_context,
+        ).parse()
+
+
+def test_min_max_use_common_kind_and_keep_first_equal_value() -> None:
+    values = {
+        "U": _TypedValue("numeric", 0, numeric_kind=CONSTANT_KIND_UINT32),
+        "NEG": _TypedValue("numeric", -1, numeric_kind=CONSTANT_KIND_INT32),
+        "NZ": _TypedValue("numeric", -0.0, numeric_kind=CONSTANT_KIND_DOUBLE),
+        "PZ": _TypedValue("numeric", 0.0, numeric_kind=CONSTANT_KIND_DOUBLE),
+    }
+
+    promoted = _ExprParser("max(U, NEG)", values.__getitem__, "mixed max").parse()
+    min_zero = _ExprParser("min(NZ, PZ)", values.__getitem__, "min zero").parse()
+    max_zero = _ExprParser("max(NZ, PZ)", values.__getitem__, "max zero").parse()
+
+    assert promoted.value == 2**32 - 1
+    assert promoted.numeric_kind == CONSTANT_KIND_UINT32
+    assert math.copysign(1.0, min_zero.value) == -1.0
+    assert math.copysign(1.0, max_zero.value) == -1.0
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("ceil(2.1)", 3.0),
+        ("ceil(-2.1)", -2.0),
+        ("floor(2.9)", 2.0),
+        ("floor(-2.1)", -3.0),
+        ("trunc(2.9)", 2.0),
+        ("trunc(-2.9)", -2.0),
+        ("round(2.5)", 3.0),
+        ("round(-2.5)", -3.0),
+        ("round(0.49999999999999994)", 0.0),
+        ("round(0.5000000000000001)", 1.0),
+        ("round(-0.5000000000000001)", -1.0),
+    ],
+)
+def test_rounding_functions_match_cpp_semantics(
+    expression: str, expected: float
+) -> None:
+    assert (
+        _ExprParser(expression, lambda name: None, expression).parse().value == expected
+    )
+
+
+@pytest.mark.parametrize("name", ["ceil", "trunc", "round"])
+def test_rounding_functions_preserve_negative_zero(name: str) -> None:
+    parsed = _ExprParser(
+        f"{name}(-0.25)", lambda value: None, f"{name} negative zero"
+    ).parse()
+
+    assert parsed.value == 0.0
+    assert math.copysign(1.0, parsed.value) == -1.0
+
+
+def test_round_preserves_negative_zero_immediately_below_half() -> None:
+    parsed = _ExprParser(
+        "round(-0.49999999999999994)",
+        lambda value: None,
+        "round below half",
+    ).parse()
+
+    assert parsed.value == 0.0
+    assert math.copysign(1.0, parsed.value) == -1.0
+
+
+@pytest.mark.parametrize(
+    ("expression", "error"),
+    [
+        ("sqrt(-1)", "sqrt\\(\\) domain error"),
+        ("log(0)", "log\\(\\) domain error"),
+        ("log2(-1)", "log2\\(\\) domain error"),
+        ("log10(0)", "log10\\(\\) domain error"),
+        ("exp(1000)", "exp\\(\\) result is not finite"),
+        ('abs("bad")', "abs\\(\\) expects numeric arguments"),
+        ("min(1)", "min\\(\\) expects at least two numeric arguments"),
+        ('max(1, "bad")', "max\\(\\) expects numeric arguments"),
+        ("sqrt(1, 2)", "sqrt\\(\\) expects one numeric argument"),
+    ],
+)
+def test_math_functions_reject_invalid_arguments_and_domains(
+    expression: str, error: str
+) -> None:
+    with pytest.raises(ProtocyteError, match=error):
+        _ExprParser(expression, lambda name: None, expression).parse()
+
+
+def test_math_functions_work_in_every_expression_destination() -> None:
+    request = _math_expression_request()
+    model = build_model(request)
+    message = model.messages["demo.MathExpressions"]
+    constants = {constant.name: constant.value for constant in message.constants}
+
+    assert model.files["math_expressions.proto"].constants[0].value == 3
+    assert constants["I32_POWER"] == 32
+    assert constants["I32_TRUNC"] == -2
+    assert constants["U32_MAX"] == 5
+    assert constants["U32_TRUNC"] == 2
+    assert constants["U32_NEGATIVE_POWER"] == 1
+    assert constants["I64_POWER"] == 1 << 40
+    assert constants["U64_POWER"] == 1 << 63
+    assert (
+        constants["F32_ROOT"]
+        == struct.unpack("<f", struct.pack("<f", math.sqrt(2.0)))[0]
+    )
+    assert constants["F64_NESTED"] == pytest.approx(2.0)
+    assert constants["BOOL_MATH"] is True
+    assert constants["BOOL_MIXED_EQUAL"] is True
+    assert constants["BOOL_F32_EQUAL"] is True
+    assert constants["STR_MATH"] == "b"
+    assert message.fields[0].array_max == 7
+
+    response = generate_response(request)
+    assert not response.error
+    header = next(
+        item.content
+        for item in response.file
+        if item.name == "math_expressions.protocyte.hpp"
+    )
+    assert "inline constexpr ::protocyte::u32 PACKAGE_ROOT {3u};" in header
+    assert "static constexpr ::protocyte::i32 I32_TRUNC {-2};" in header
+    assert "static constexpr ::protocyte::u32 U32_TRUNC {2u};" in header
+    assert "static constexpr ::protocyte::u32 U32_NEGATIVE_POWER {1u};" in header
+    assert "static constexpr bool BOOL_MATH {true};" in header
+    assert "static constexpr bool BOOL_MIXED_EQUAL {true};" in header
+    assert "static constexpr bool BOOL_F32_EQUAL {true};" in header
+    assert "::protocyte::ByteArray<7u> data_;" in header
+    assert all(f"{name}(" not in header for name in ("pow", "sqrt", "exp", "log"))
 
 
 def test_generated_header_emits_constants_and_array_storage() -> None:
@@ -2733,7 +3911,7 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
             lambda: _missing_constant_value_request(),
         ),
         (
-            "expression must evaluate to bool",
+            "expression must evaluate to bool or integer",
             lambda: _boolean_expr_type_error_request(),
         ),
         (
@@ -2865,6 +4043,195 @@ def test_rejects_invalid_hex_numeric_literals() -> None:
     response = generate_response(_invalid_hex_request())
 
     assert "invalid numeric literal '0x'" in response.error
+
+
+@pytest.mark.parametrize(
+    ("value_field", "expression", "expected"),
+    [
+        ("str_expr", r'"\x"', "invalid string literal"),
+        ("str_expr", r'"\q"', "invalid string literal"),
+        (
+            "str_expr",
+            r'"\ud800"',
+            "string value must be valid UTF-8",
+        ),
+        (
+            "i32_expr",
+            "(" * (_MAX_EXPRESSION_NESTING + 1)
+            + "1"
+            + ")" * (_MAX_EXPRESSION_NESTING + 1),
+            f"expression nesting exceeds maximum depth of {_MAX_EXPRESSION_NESTING}",
+        ),
+    ],
+)
+def test_expression_parser_failures_are_public_generator_errors(
+    value_field: str, expression: str, expected: str
+) -> None:
+    response = generate_response(_expression_error_request(value_field, expression))
+
+    assert expected in response.error
+    assert "internal Protocyte error" not in response.error
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "package_scope", [False, True], ids=["message", "package"]
+)
+def test_constant_dependency_nesting_accepts_the_boundary(
+    package_scope: bool,
+) -> None:
+    model = build_model(
+        _constant_dependency_chain_request(
+            _MAX_CONSTANT_DEPENDENCY_DEPTH,
+            package_scope=package_scope,
+        )
+    )
+    constants = (
+        model.files["package_constant_chain.proto"].constants
+        if package_scope
+        else model.messages["demo.ConstantChain"].constants
+    )
+
+    assert constants[0].value == 1
+
+
+@pytest.mark.parametrize(
+    "package_scope", [False, True], ids=["message", "package"]
+)
+def test_constant_dependency_nesting_returns_a_public_error(
+    package_scope: bool,
+) -> None:
+    expected = (
+        "constant dependency nesting exceeds maximum depth of "
+        f"{_MAX_CONSTANT_DEPENDENCY_DEPTH}"
+    )
+    with pytest.raises(ProtocyteError, match=expected):
+        build_model(
+            _constant_dependency_chain_request(
+                _MAX_CONSTANT_DEPENDENCY_DEPTH + 1,
+                package_scope=package_scope,
+            )
+        )
+
+    response = generate_response(
+        _constant_dependency_chain_request(
+            _MAX_CONSTANT_DEPENDENCY_DEPTH + 1,
+            package_scope=package_scope,
+        )
+    )
+
+    assert expected in response.error
+    assert "internal Protocyte error" not in response.error
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "package_scope", [False, True], ids=["message", "package"]
+)
+def test_constant_dependency_nesting_is_independent_of_declaration_order(
+    package_scope: bool,
+) -> None:
+    expected = (
+        "constant dependency nesting exceeds maximum depth of "
+        f"{_MAX_CONSTANT_DEPENDENCY_DEPTH}"
+    )
+    with pytest.raises(ProtocyteError, match=expected):
+        build_model(
+            _constant_dependency_chain_request(
+                _MAX_CONSTANT_DEPENDENCY_DEPTH + 1,
+                package_scope=package_scope,
+                leaf_first=True,
+            )
+        )
+
+    response = generate_response(
+        _constant_dependency_chain_request(
+            _MAX_CONSTANT_DEPENDENCY_DEPTH + 1,
+            package_scope=package_scope,
+            leaf_first=True,
+        )
+    )
+
+    assert expected in response.error
+    assert "internal Protocyte error" not in response.error
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "package_scope", [False, True], ids=["message", "package"]
+)
+def test_expression_and_dependency_nesting_boundaries_compose(
+    package_scope: bool,
+) -> None:
+    expression = (
+        "(" * _MAX_EXPRESSION_NESTING
+        + "1"
+        + ")" * _MAX_EXPRESSION_NESTING
+    )
+    request = _constant_dependency_chain_request(
+        _MAX_CONSTANT_DEPENDENCY_DEPTH,
+        package_scope=package_scope,
+        leaf_expression=expression,
+    )
+
+    build_model(request)
+    response = generate_response(
+        _constant_dependency_chain_request(
+            _MAX_CONSTANT_DEPENDENCY_DEPTH,
+            package_scope=package_scope,
+            leaf_expression=expression,
+        )
+    )
+
+    assert not response.error
+
+
+@pytest.mark.parametrize(
+    "package_scope", [False, True], ids=["message", "package"]
+)
+def test_composed_nesting_failure_is_a_public_generator_error(
+    package_scope: bool,
+) -> None:
+    expression = (
+        "(" * (_MAX_EXPRESSION_NESTING + 1)
+        + "1"
+        + ")" * (_MAX_EXPRESSION_NESTING + 1)
+    )
+    expected = (
+        "expression nesting exceeds maximum depth of "
+        f"{_MAX_EXPRESSION_NESTING}"
+    )
+    with pytest.raises(ProtocyteError, match=expected):
+        build_model(
+            _constant_dependency_chain_request(
+                _MAX_CONSTANT_DEPENDENCY_DEPTH,
+                package_scope=package_scope,
+                leaf_expression=expression,
+            )
+        )
+
+    response = generate_response(
+        _constant_dependency_chain_request(
+            _MAX_CONSTANT_DEPENDENCY_DEPTH,
+            package_scope=package_scope,
+            leaf_expression=expression,
+        )
+    )
+
+    assert expected in response.error
+    assert "internal Protocyte error" not in response.error
+    assert not response.file
+
+
+def test_package_and_message_constants_with_the_same_full_name_resolve() -> None:
+    model = build_model(_constant_scope_identity_collision_request())
+
+    assert model.files["package_identity.proto"].constants[0].value == 2
+    assert model.messages["demo.Foo"].constants[0].value == 1
+
+    response = generate_response(_constant_scope_identity_collision_request())
+
+    assert not response.error
 
 
 def test_resolves_constants_across_messages() -> None:
@@ -3595,6 +4962,93 @@ def _constant_array_request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+def _expression_error_request(
+    value_field: str, expression: str
+) -> plugin_pb2.CodeGeneratorRequest:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "expression_error.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    message = file.message_type.add()
+    message.name = "ExpressionError"
+    message.options.ParseFromString(
+        _constant_options_bytes([("BROKEN", value_field, expression)])
+    )
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append(file.name)
+    request.proto_file.extend([_options_file(), file])
+    return request
+
+
+def _constant_dependency_chain_request(
+    count: int,
+    *,
+    package_scope: bool,
+    leaf_expression: str = "1",
+    leaf_first: bool = False,
+) -> plugin_pb2.CodeGeneratorRequest:
+    assert count > 0
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = (
+        "package_constant_chain.proto"
+        if package_scope
+        else "message_constant_chain.proto"
+    )
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    constants = [
+        (
+            f"C{index}",
+            "i32_expr",
+            f"C{index + 1}" if index + 1 < count else leaf_expression,
+        )
+        for index in range(count)
+    ]
+    if leaf_first:
+        constants.reverse()
+    if package_scope:
+        file.options.ParseFromString(_package_constant_options_bytes(constants))
+    else:
+        message = file.message_type.add()
+        message.name = "ConstantChain"
+        message.options.ParseFromString(_constant_options_bytes(constants))
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append(file.name)
+    request.proto_file.extend([_options_file(), file])
+    return request
+
+
+def _constant_scope_identity_collision_request() -> plugin_pb2.CodeGeneratorRequest:
+    package_file = descriptor_pb2.FileDescriptorProto()
+    package_file.name = "package_identity.proto"
+    package_file.package = "demo.Foo"
+    package_file.syntax = "proto3"
+    package_file.dependency.append("protocyte/options.proto")
+    package_file.options.ParseFromString(
+        _package_constant_options_bytes([("C", "i32_expr", "2")])
+    )
+
+    message_file = descriptor_pb2.FileDescriptorProto()
+    message_file.name = "message_identity.proto"
+    message_file.package = "demo"
+    message_file.syntax = "proto3"
+    message_file.dependency.append("protocyte/options.proto")
+    message = message_file.message_type.add()
+    message.name = "Foo"
+    message.options.ParseFromString(
+        _constant_options_bytes([("C", "i32_expr", "1")])
+    )
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append(message_file.name)
+    request.proto_file.extend([_options_file(), package_file, message_file])
+    return request
+
+
 def _invalid_array_request() -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("invalid_array.proto")
@@ -3879,6 +5333,119 @@ def _obsolete_fixed_size_request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+def _bitwise_expression_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("bitwise_expressions.proto")
+    request.proto_file.extend([_options_file(), _bitwise_expression_file()])
+    return request
+
+
+def _bitwise_expression_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "bitwise_expressions.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        _package_constant_options_bytes([("BASE_BITS", "u32_expr", "(true << 3) | 2")])
+    )
+
+    message = file.message_type.add()
+    message.name = "BitwiseExpressions"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("I32_MASK", "i32_expr", "~0"),
+                ("U32_MASK", "u32_expr", "~0"),
+                ("I64_SHIFT", "i64_expr", "1 << 40"),
+                ("U64_MASK", "u64_expr", "(~0) ^ 0xf"),
+                ("F32_BITS", "f32_expr", "(1 << 3) | 1"),
+                ("F64_BITS", "f64_expr", "true << 4"),
+                ("BOOL_BITS", "boolean_expr", "BASE_BITS & 0x8"),
+                ("BOOL_LOGIC", "boolean_expr", "(BASE_BITS & 0x8) && true"),
+                ("BOOL_ARITH", "boolean_expr", "1 + 1"),
+                ("STR_BITS", "str_expr", 'substr("abcd", 1 << 0, 1 | 0)'),
+            ]
+        )
+    )
+
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(_array_option_bytes(expr="(BASE_BITS & 0xf) - 1"))
+    return file
+
+
+def _math_expression_request() -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("math_expressions.proto")
+    request.proto_file.extend([_options_file(), _math_expression_file()])
+    return request
+
+
+def _math_expression_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "math_expressions.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        _package_constant_options_bytes(
+            [("PACKAGE_ROOT", "u32_expr", "max(2, sqrt(9))")]
+        )
+    )
+
+    message = file.message_type.add()
+    message.name = "MathExpressions"
+    message.options.ParseFromString(
+        _constant_options_bytes(
+            [
+                ("F32_INPUT", "f32", 2.0),
+                ("I32_POWER", "i32_expr", "pow(2, 5)"),
+                ("I32_TRUNC", "i32_expr", "-2.9"),
+                ("U32_MAX", "u32_expr", "max(PACKAGE_ROOT, 5)"),
+                ("U32_TRUNC", "u32_expr", "2.9"),
+                ("U32_NEGATIVE_POWER", "u32_expr", "pow(2, f64(-3)) * 8"),
+                ("I64_POWER", "i64_expr", "pow(2, 40)"),
+                ("U64_POWER", "u64_expr", "pow(2, 63)"),
+                ("F32_ROOT", "f32_expr", "sqrt(F32_INPUT)"),
+                ("F64_NESTED", "f64_expr", "log(exp(2.0))"),
+                ("BOOL_MATH", "boolean_expr", "min(1, 2)"),
+                ("I32_NEGATIVE_ONE", "i32_expr", "-1"),
+                ("U32_ALL_ONES", "u32_expr", "~0"),
+                (
+                    "BOOL_MIXED_EQUAL",
+                    "boolean_expr",
+                    "I32_NEGATIVE_ONE == U32_ALL_ONES",
+                ),
+                ("F32_ROUNDED", "f32", 16777216.0),
+                (
+                    "BOOL_F32_EQUAL",
+                    "boolean_expr",
+                    "F32_ROUNDED == 16777217",
+                ),
+                (
+                    "STR_MATH",
+                    "str_expr",
+                    'substr("abcd", floor(1.9), max(1, 1))',
+                ),
+            ]
+        )
+    )
+
+    field = message.field.add()
+    field.name = "data"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_BYTES
+    field.options.ParseFromString(
+        _array_option_bytes(expr="pow(2, f64(-1)) * 8 + PACKAGE_ROOT")
+    )
+    return file
+
+
 def _constant_array_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = "arrays.proto"
@@ -4065,7 +5632,7 @@ def _boolean_expr_type_error_file() -> descriptor_pb2.FileDescriptorProto:
     message = file.message_type.add()
     message.name = "Broken"
     message.options.ParseFromString(
-        _constant_options_bytes([("BROKEN", "boolean_expr", "1 + 1")])
+        _constant_options_bytes([("BROKEN", "boolean_expr", "1.0")])
     )
     return file
 

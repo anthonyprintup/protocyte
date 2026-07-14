@@ -24,6 +24,8 @@ namespace test::ultimate {
     inline constexpr ::protocyte::i32 BASE_COUNT {5};
     inline constexpr ::protocyte::StringView PREFIX {"proto", 5u};
     inline constexpr ::protocyte::u32 BYTE_ARRAY_CAP {4u};
+    inline constexpr ::protocyte::u32 BITWISE_BASE {10u};
+    inline constexpr ::protocyte::u32 MATH_BASE {3u};
 
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1_NestedLevel2;
     template<typename Config = ::protocyte::DefaultConfig> struct UltimateComplexMessage_NestedLevel1;
@@ -1662,6 +1664,7 @@ namespace test::ultimate {
         static constexpr bool FLAG_LITERAL {true};
         static constexpr ::protocyte::u32 HEX_LITERAL {32u};
         static constexpr ::protocyte::u32 HEX_SUM {24u};
+        static constexpr ::protocyte::u32 HEX_E_DIGITS {48879u};
         static constexpr ::protocyte::u32 INTEGER_ARRAY_CAP {8u};
         static constexpr ::protocyte::StringView LABEL {"proto-demo", 10u};
         static constexpr ::protocyte::StringView UNICODE_LABEL {"\xc4"
@@ -1678,6 +1681,53 @@ namespace test::ultimate {
         static constexpr bool HAS_PREFIX {true};
         static constexpr ::protocyte::i32 MOD_CHECK {1};
         static constexpr bool OR_CHECK {true};
+        static constexpr ::protocyte::i32 I32_BITWISE {-1};
+        static constexpr ::protocyte::u32 U32_BITWISE {4294967295u};
+        static constexpr ::protocyte::i64 I64_BITWISE {1099511627776ll};
+        static constexpr ::protocyte::u64 U64_BITWISE {18446744073709551600ull};
+        static constexpr ::protocyte::f32 F32_BITWISE {9.0f};
+        static constexpr ::protocyte::f64 F64_BITWISE {16.0};
+        static constexpr bool BOOL_BITWISE {true};
+        static constexpr bool BOOL_BITWISE_LOGIC {true};
+        static constexpr bool BOOL_INTEGER {true};
+        static constexpr bool SHORT_CIRCUIT_AND {false};
+        static constexpr bool SHORT_CIRCUIT_OR {true};
+        static constexpr ::protocyte::u32 MIXED_UNSIGNED {4294967291u};
+        static constexpr bool MIXED_COMPARE {false};
+        static constexpr bool MIXED_EQUAL {true};
+        static constexpr ::protocyte::f32 F32_EQUAL_SOURCE {16777216.0f};
+        static constexpr bool MIXED_F32_EQUAL {true};
+        static constexpr ::protocyte::i64 BITWISE_SOURCE_NORMALIZED {0ll};
+        static constexpr ::protocyte::i32 SHIFT_COUNT_NORMALIZED {2};
+        static constexpr ::protocyte::u32 CAST_U32 {4294967295u};
+        static constexpr ::protocyte::i32 CAST_I32 {-1};
+        static constexpr ::protocyte::i64 CAST_I64 {-1ll};
+        static constexpr ::protocyte::u64 CAST_U64 {18446744073709551615ull};
+        static constexpr ::protocyte::f32 CAST_F32 {16777216.0f};
+        static constexpr ::protocyte::f64 CAST_F64 {16777216.5};
+        static constexpr bool CAST_BOOL {true};
+        static constexpr ::protocyte::StringView CAST_STR {"-1", 2u};
+        static constexpr ::protocyte::StringView STR_BITWISE {"b", 1u};
+        static constexpr ::protocyte::i32 MATH_POW {32};
+        static constexpr ::protocyte::u64 MATH_U64_POW {9223372036854775808ull};
+        static constexpr ::protocyte::i64 MATH_ABS {9ll};
+        static constexpr ::protocyte::u32 MATH_MIN {3u};
+        static constexpr ::protocyte::f32 MATH_F32 {1.5625f};
+        static constexpr ::protocyte::f64 MATH_EXP {1.0};
+        static constexpr ::protocyte::f64 MATH_LOG {2.0};
+        static constexpr ::protocyte::f64 MATH_LOG2 {4.0};
+        static constexpr ::protocyte::f64 MATH_LOG10 {3.0};
+        static constexpr ::protocyte::f64 MATH_CEIL {-2.0};
+        static constexpr ::protocyte::f64 MATH_FLOOR {-3.0};
+        static constexpr ::protocyte::f64 MATH_TRUNC {-2.0};
+        static constexpr ::protocyte::f64 MATH_ROUND {-3.0};
+        static constexpr ::protocyte::f64 MATH_ROUND_BELOW {0.0};
+        static constexpr ::protocyte::u32 MATH_NEGATIVE_POW {1u};
+        static constexpr ::protocyte::u32 MATH_UNSIGNED_POW {0u};
+        static constexpr ::protocyte::f64 MATH_ACCURATE_NEGATIVE_POW {9.9999999999999996e-24};
+        static constexpr ::protocyte::i32 MATH_TRUNC_INT {-2};
+        static constexpr bool MATH_BOOL {true};
+        static constexpr ::protocyte::StringView MATH_STR {"b", 1u};
 
         enum struct Special_oneofCase : ::protocyte::u32 {
             none = 0u,

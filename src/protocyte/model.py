@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 import math
+import struct
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
@@ -170,6 +172,36 @@ CONSTANT_KIND_UINT64 = "uint64"
 CONSTANT_KIND_FLOAT = "float"
 CONSTANT_KIND_DOUBLE = "double"
 CONSTANT_KIND_STRING = "string"
+
+_INTEGER_EXPRESSION_KINDS = frozenset(
+    {
+        CONSTANT_KIND_INT32,
+        CONSTANT_KIND_UINT32,
+        CONSTANT_KIND_INT64,
+        CONSTANT_KIND_UINT64,
+    }
+)
+_INTEGER_KIND_INFO = {
+    CONSTANT_KIND_INT32: (32, True),
+    CONSTANT_KIND_UINT32: (32, False),
+    CONSTANT_KIND_INT64: (64, True),
+    CONSTANT_KIND_UINT64: (64, False),
+}
+_NUMERIC_EXPRESSION_KINDS = _INTEGER_EXPRESSION_KINDS | frozenset(
+    {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}
+)
+_SCALAR_CAST_KINDS = {
+    "bool": CONSTANT_KIND_BOOL,
+    "i32": CONSTANT_KIND_INT32,
+    "u32": CONSTANT_KIND_UINT32,
+    "i64": CONSTANT_KIND_INT64,
+    "u64": CONSTANT_KIND_UINT64,
+    "f32": CONSTANT_KIND_FLOAT,
+    "f64": CONSTANT_KIND_DOUBLE,
+    "str": CONSTANT_KIND_STRING,
+}
+_MAX_EXPRESSION_NESTING = 32
+_MAX_CONSTANT_DEPENDENCY_DEPTH = 32
 
 INTEGER_CONSTANT_KINDS = {
     FieldDescriptorProto.TYPE_INT32: CONSTANT_KIND_INT32,
@@ -695,7 +727,8 @@ class _TypedValue:
     family: str
     value: object
     cpp_expr: str = ""
-    cpp_precedence: int = 100
+    cpp_precedence: int = 120
+    numeric_kind: str | None = None
 
 
 class _ExprParser:
@@ -706,38 +739,123 @@ class _ExprParser:
         label: str,
         *,
         unsigned_integer_literals: bool = False,
+        integer_context: str | None = None,
     ) -> None:
         self._tokens = _tokenize(text, label)
         self._index = 0
         self._resolve_name = resolve_name
         self._label = label
         self._unsigned_integer_literals = unsigned_integer_literals
+        self._integer_context = integer_context
+        self._evaluate_values = True
+        self._nesting_depth = 0
 
     def parse(self) -> _TypedValue:
-        value = self._parse_or()
-        if self._peek()[0] != "EOF":
-            raise ProtocyteError(f"{self._label}: unexpected token {self._peek()[1]!r}")
-        return value
+        try:
+            value = self._parse_or()
+            if self._peek()[0] != "EOF":
+                raise ProtocyteError(
+                    f"{self._label}: unexpected token {self._peek()[1]!r}"
+                )
+            return value
+        except RecursionError as exc:
+            raise ProtocyteError(
+                f"{self._label}: expression evaluation exceeds safe recursion depth"
+            ) from exc
+
+    def _parse_with_evaluation(
+        self, evaluate: bool, parser: Callable[[], _TypedValue]
+    ) -> _TypedValue:
+        previous = self._evaluate_values
+        self._evaluate_values = evaluate
+        try:
+            return parser()
+        finally:
+            self._evaluate_values = previous
+
+    def _parse_nested(self, parser: Callable[[], _TypedValue]) -> _TypedValue:
+        if self._nesting_depth >= _MAX_EXPRESSION_NESTING:
+            raise ProtocyteError(
+                f"{self._label}: expression nesting exceeds maximum depth of "
+                f"{_MAX_EXPRESSION_NESTING}"
+            )
+        self._nesting_depth += 1
+        try:
+            return parser()
+        finally:
+            self._nesting_depth -= 1
 
     def _parse_or(self) -> _TypedValue:
         value = self._parse_and()
         while self._match("||"):
-            rhs = self._parse_and()
+            lhs_bool = _expect_bool(value, self._label)
+            rhs = self._parse_with_evaluation(
+                self._evaluate_values and not lhs_bool, self._parse_and
+            )
+            rhs_bool = _expect_bool(rhs, self._label)
+            result = False if not self._evaluate_values else lhs_bool or rhs_bool
             value = _bool_value(
-                _expect_bool(value, self._label) or _expect_bool(rhs, self._label),
+                result,
                 cpp_expr=_binary_cpp(value, rhs, "||", 10),
                 cpp_precedence=10,
             )
         return value
 
     def _parse_and(self) -> _TypedValue:
-        value = self._parse_equality()
+        value = self._parse_bitwise_or()
         while self._match("&&"):
-            rhs = self._parse_equality()
+            lhs_bool = _expect_bool(value, self._label)
+            rhs = self._parse_with_evaluation(
+                self._evaluate_values and lhs_bool, self._parse_bitwise_or
+            )
+            rhs_bool = _expect_bool(rhs, self._label)
+            result = False if not self._evaluate_values else lhs_bool and rhs_bool
             value = _bool_value(
-                _expect_bool(value, self._label) and _expect_bool(rhs, self._label),
+                result,
                 cpp_expr=_binary_cpp(value, rhs, "&&", 20),
                 cpp_precedence=20,
+            )
+        return value
+
+    def _parse_bitwise_or(self) -> _TypedValue:
+        value = self._parse_bitwise_xor()
+        while self._match("|"):
+            rhs = self._parse_bitwise_xor()
+            value = _bitwise_binary(
+                value,
+                rhs,
+                self._label,
+                lambda lhs, rhs: lhs | rhs,
+                symbol="|",
+                precedence=30,
+            )
+        return value
+
+    def _parse_bitwise_xor(self) -> _TypedValue:
+        value = self._parse_bitwise_and()
+        while self._match("^"):
+            rhs = self._parse_bitwise_and()
+            value = _bitwise_binary(
+                value,
+                rhs,
+                self._label,
+                lambda lhs, rhs: lhs ^ rhs,
+                symbol="^",
+                precedence=40,
+            )
+        return value
+
+    def _parse_bitwise_and(self) -> _TypedValue:
+        value = self._parse_equality()
+        while self._match("&"):
+            rhs = self._parse_equality()
+            value = _bitwise_binary(
+                value,
+                rhs,
+                self._label,
+                lambda lhs, rhs: lhs & rhs,
+                symbol="&",
+                precedence=50,
             )
         return value
 
@@ -748,62 +866,75 @@ class _ExprParser:
                 rhs = self._parse_compare()
                 value = _bool_value(
                     _compare_equal(value, rhs, self._label),
-                    cpp_expr=_binary_cpp(value, rhs, "==", 30),
-                    cpp_precedence=30,
+                    cpp_expr=_binary_cpp(value, rhs, "==", 60),
+                    cpp_precedence=60,
                 )
                 continue
             if self._match("!="):
                 rhs = self._parse_compare()
                 value = _bool_value(
                     not _compare_equal(value, rhs, self._label),
-                    cpp_expr=_binary_cpp(value, rhs, "!=", 30),
-                    cpp_precedence=30,
+                    cpp_expr=_binary_cpp(value, rhs, "!=", 60),
+                    cpp_precedence=60,
                 )
                 continue
             return value
 
     def _parse_compare(self) -> _TypedValue:
-        value = self._parse_add()
+        value = self._parse_shift()
         while True:
             if self._match("<"):
-                rhs = self._parse_add()
+                rhs = self._parse_shift()
                 value = _bool_value(
                     _numeric_compare(
                         value, rhs, self._label, lambda lhs, rhs: lhs < rhs
                     ),
-                    cpp_expr=_binary_cpp(value, rhs, "<", 40),
-                    cpp_precedence=40,
+                    cpp_expr=_binary_cpp(value, rhs, "<", 70),
+                    cpp_precedence=70,
                 )
                 continue
             if self._match("<="):
-                rhs = self._parse_add()
+                rhs = self._parse_shift()
                 value = _bool_value(
                     _numeric_compare(
                         value, rhs, self._label, lambda lhs, rhs: lhs <= rhs
                     ),
-                    cpp_expr=_binary_cpp(value, rhs, "<=", 40),
-                    cpp_precedence=40,
+                    cpp_expr=_binary_cpp(value, rhs, "<=", 70),
+                    cpp_precedence=70,
                 )
                 continue
             if self._match(">"):
-                rhs = self._parse_add()
+                rhs = self._parse_shift()
                 value = _bool_value(
                     _numeric_compare(
                         value, rhs, self._label, lambda lhs, rhs: lhs > rhs
                     ),
-                    cpp_expr=_binary_cpp(value, rhs, ">", 40),
-                    cpp_precedence=40,
+                    cpp_expr=_binary_cpp(value, rhs, ">", 70),
+                    cpp_precedence=70,
                 )
                 continue
             if self._match(">="):
-                rhs = self._parse_add()
+                rhs = self._parse_shift()
                 value = _bool_value(
                     _numeric_compare(
                         value, rhs, self._label, lambda lhs, rhs: lhs >= rhs
                     ),
-                    cpp_expr=_binary_cpp(value, rhs, ">=", 40),
-                    cpp_precedence=40,
+                    cpp_expr=_binary_cpp(value, rhs, ">=", 70),
+                    cpp_precedence=70,
                 )
+                continue
+            return value
+
+    def _parse_shift(self) -> _TypedValue:
+        value = self._parse_add()
+        while True:
+            if self._match("<<"):
+                rhs = self._parse_add()
+                value = _shift_value(value, rhs, self._label, left=True)
+                continue
+            if self._match(">>"):
+                rhs = self._parse_add()
+                value = _shift_value(value, rhs, self._label, left=False)
                 continue
             return value
 
@@ -825,8 +956,8 @@ class _ExprParser:
                         )
                     value = _string_value(
                         str(value.value) + str(rhs.value),
-                        cpp_expr=_binary_cpp(value, rhs, "+", 50),
-                        cpp_precedence=50,
+                        cpp_expr=_binary_cpp(value, rhs, "+", 90),
+                        cpp_precedence=90,
                     )
                 else:
                     value = _numeric_binary(
@@ -835,7 +966,7 @@ class _ExprParser:
                         self._label,
                         lambda lhs, rhs: lhs + rhs,
                         symbol="+",
-                        precedence=50,
+                        precedence=90,
                     )
                 continue
             if self._match("-"):
@@ -846,7 +977,7 @@ class _ExprParser:
                     self._label,
                     lambda lhs, rhs: lhs - rhs,
                     symbol="-",
-                    precedence=50,
+                    precedence=90,
                 )
                 continue
             return value
@@ -862,70 +993,141 @@ class _ExprParser:
                     self._label,
                     lambda lhs, rhs: lhs * rhs,
                     symbol="*",
-                    precedence=60,
+                    precedence=100,
                 )
                 continue
             if self._match("/"):
                 rhs = self._parse_unary()
-                lhs_value, rhs_value, result_family = _numeric_operands(
+                lhs_value, rhs_value, result_kind = _numeric_operands(
                     value, rhs, self._label
                 )
-                if rhs_value == 0:
+                if not self._evaluate_values:
+                    value = _numeric_value(
+                        0.0
+                        if result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}
+                        else 0,
+                        cpp_expr=_binary_cpp(value, rhs, "/", 100),
+                        cpp_precedence=100,
+                        numeric_kind=result_kind,
+                    )
+                elif rhs_value == 0:
                     raise ProtocyteError(f"{self._label}: division by zero")
-                if result_family == "float":
+                elif result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
                     value = _numeric_value(
                         lhs_value / rhs_value,
-                        cpp_expr=_binary_cpp(value, rhs, "/", 60),
-                        cpp_precedence=60,
+                        cpp_expr=_binary_cpp(value, rhs, "/", 100),
+                        cpp_precedence=100,
+                        numeric_kind=result_kind,
                     )
                 else:
+                    left_integer = int(lhs_value)
+                    right_integer = int(rhs_value)
+                    _, signed = _INTEGER_KIND_INFO[result_kind]
+                    if signed and _signed_division_overflows(
+                        left_integer, right_integer, result_kind
+                    ):
+                        raise ProtocyteError(
+                            f"{self._label}: integer result is out of range for {result_kind}"
+                        )
+                    result = (
+                        _truncating_integer_divide(left_integer, right_integer)
+                        if signed
+                        else left_integer // right_integer
+                    )
                     value = _numeric_value(
-                        _truncating_integer_divide(int(lhs_value), int(rhs_value)),
-                        cpp_expr=_binary_cpp(value, rhs, "/", 60),
-                        cpp_precedence=60,
+                        _normalize_numeric_result(result, result_kind, self._label),
+                        cpp_expr=_binary_cpp(value, rhs, "/", 100),
+                        cpp_precedence=100,
+                        numeric_kind=result_kind,
                     )
                 continue
             if self._match("%"):
                 rhs = self._parse_unary()
-                lhs_value, rhs_value, result_family = _numeric_operands(
+                lhs_value, rhs_value, result_kind = _numeric_operands(
                     value, rhs, self._label
                 )
-                if rhs_value == 0:
-                    raise ProtocyteError(f"{self._label}: modulo by zero")
-                if result_family == "float":
+                if result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
                     raise ProtocyteError(
                         f"{self._label}: '%' only supports integer operands"
                     )
+                if not self._evaluate_values:
+                    value = _numeric_value(
+                        0,
+                        cpp_expr=_binary_cpp(value, rhs, "%", 100),
+                        cpp_precedence=100,
+                        numeric_kind=result_kind,
+                    )
+                    continue
+                if rhs_value == 0:
+                    raise ProtocyteError(f"{self._label}: modulo by zero")
+                left_integer = int(lhs_value)
+                right_integer = int(rhs_value)
+                _, signed = _INTEGER_KIND_INFO[result_kind]
+                if signed and _signed_division_overflows(
+                    left_integer, right_integer, result_kind
+                ):
+                    raise ProtocyteError(
+                        f"{self._label}: integer result is out of range for {result_kind}"
+                    )
+                result = (
+                    left_integer
+                    - _truncating_integer_divide(left_integer, right_integer)
+                    * right_integer
+                    if signed
+                    else left_integer % right_integer
+                )
                 value = _numeric_value(
-                    lhs_value % rhs_value,
-                    cpp_expr=_binary_cpp(value, rhs, "%", 60),
-                    cpp_precedence=60,
+                    _normalize_numeric_result(result, result_kind, self._label),
+                    cpp_expr=_binary_cpp(value, rhs, "%", 100),
+                    cpp_precedence=100,
+                    numeric_kind=result_kind,
                 )
                 continue
             return value
 
     def _parse_unary(self) -> _TypedValue:
         if self._match("!"):
-            value = self._parse_unary()
+            value = self._parse_nested(self._parse_unary)
             return _bool_value(
                 not _expect_bool(value, self._label),
-                cpp_expr="!" + _wrap_cpp(value, 90),
-                cpp_precedence=90,
+                cpp_expr="!" + _wrap_cpp(value, 110),
+                cpp_precedence=110,
             )
+        if self._match("~"):
+            value = self._parse_nested(self._parse_unary)
+            return _bitwise_complement(value, self._label)
         if self._match("+"):
-            value = self._parse_unary()
-            _expect_numeric(value, self._label)
+            value = self._parse_nested(self._parse_unary)
+            result = _expect_numeric(value, self._label)
+            if value.numeric_kind in {
+                CONSTANT_KIND_INT32,
+                CONSTANT_KIND_INT64,
+            }:
+                result = _normalize_numeric_result(
+                    result, value.numeric_kind, self._label
+                )
             return _numeric_value(
-                _expect_numeric(value, self._label),
-                cpp_expr="+" + _wrap_cpp(value, 90),
-                cpp_precedence=90,
+                result,
+                cpp_expr="+" + _wrap_cpp(value, 110),
+                cpp_precedence=110,
+                numeric_kind=value.numeric_kind,
             )
         if self._match("-"):
-            value = self._parse_unary()
+            value = self._parse_nested(self._parse_unary)
+            operand = _expect_numeric(value, self._label)
+            result = -operand
+            if value.numeric_kind in {
+                CONSTANT_KIND_INT32,
+                CONSTANT_KIND_INT64,
+            }:
+                result = _normalize_numeric_result(
+                    result, value.numeric_kind, self._label
+                )
             return _numeric_value(
-                -_expect_numeric(value, self._label),
-                cpp_expr="-" + _wrap_cpp(value, 90),
-                cpp_precedence=90,
+                result,
+                cpp_expr="-" + _wrap_cpp(value, 110),
+                cpp_precedence=110,
+                numeric_kind=value.numeric_kind,
             )
         return self._parse_primary()
 
@@ -933,33 +1135,62 @@ class _ExprParser:
         token_type, token_value = self._peek()
         if token_type == "NUMBER":
             self._index += 1
-            return _numeric_value(
-                _parse_number_token(token_value, self._label),
+            numeric = _parse_number_token(token_value, self._label)
+            numeric_kind = (
+                _literal_integer_kind(
+                    numeric,
+                    self._integer_context,
+                    hexadecimal=token_value.lower().startswith("0x"),
+                )
+                if isinstance(numeric, int)
+                else CONSTANT_KIND_DOUBLE
+            )
+            if isinstance(numeric, int) and self._integer_context is not None:
+                _validate_contextual_integer_literal(
+                    numeric, self._integer_context, self._label
+                )
+            result = _numeric_value(
+                numeric,
                 cpp_expr=_cpp_number_token(
                     token_value, unsigned_integer=self._unsigned_integer_literals
                 ),
+                numeric_kind=numeric_kind,
             )
+            return result if self._evaluate_values else _type_only_value(result)
         if token_type == "STRING":
             self._index += 1
-            return _string_value(ast.literal_eval(token_value), cpp_expr=token_value)
+            result = _string_value(
+                _parse_string_token(token_value, self._label), cpp_expr=token_value
+            )
+            return result if self._evaluate_values else _type_only_value(result)
         if token_type == "IDENT":
             self._index += 1
             if token_value == "true":
-                return _bool_value(True, cpp_expr="true")
+                result = _bool_value(True, cpp_expr="true")
+                return result if self._evaluate_values else _type_only_value(result)
             if token_value == "false":
                 return _bool_value(False, cpp_expr="false")
             if self._match("("):
                 args: list[_TypedValue] = []
-                if not self._match(")"):
-                    while True:
-                        args.append(self._parse_or())
-                        if self._match(")"):
-                            break
-                        self._expect(",")
-                return _evaluate_function(token_value, args, self._label)
-            return self._resolve_name(token_value)
+                previous_context = self._integer_context
+                if token_value in _SCALAR_CAST_KINDS:
+                    self._integer_context = None
+                try:
+                    if not self._match(")"):
+                        while True:
+                            args.append(self._parse_nested(self._parse_or))
+                            if self._match(")"):
+                                break
+                            self._expect(",")
+                finally:
+                    self._integer_context = previous_context
+                return _evaluate_function(
+                    token_value, args, self._label, evaluate=self._evaluate_values
+                )
+            result = self._resolve_name(token_value)
+            return result if self._evaluate_values else _type_only_value(result)
         if self._match("("):
-            value = self._parse_or()
+            value = self._parse_nested(self._parse_or)
             self._expect(")")
             return value
         raise ProtocyteError(f"{self._label}: unexpected token {token_value!r}")
@@ -2010,7 +2241,39 @@ def _resolve_constants_and_arrays(
         package_constants = constants_by_package.setdefault(file_model.package, {})
         for constant in file_model.constants:
             package_constants[constant.name] = constant
-    states: dict[str, str] = {}
+    states: dict[int, str] = {}
+    resolved_dependency_depths: dict[int, int] = {}
+    dependency_child_depths: list[int] = []
+    active_dependency_depth = 0
+
+    def enter_constant_dependency(constant: ConstantModel) -> None:
+        nonlocal active_dependency_depth
+        if active_dependency_depth >= _MAX_CONSTANT_DEPENDENCY_DEPTH:
+            raise ProtocyteError(
+                f"{constant.full_name}: constant dependency nesting exceeds "
+                f"maximum depth of {_MAX_CONSTANT_DEPENDENCY_DEPTH}"
+            )
+        active_dependency_depth += 1
+
+    def leave_constant_dependency() -> None:
+        nonlocal active_dependency_depth
+        active_dependency_depth -= 1
+
+    def record_constant_dependency(constant: ConstantModel) -> None:
+        if dependency_child_depths:
+            dependency_child_depths[-1] = max(
+                dependency_child_depths[-1],
+                resolved_dependency_depths[id(constant)],
+            )
+
+    def resolved_constant_dependency_depth(constant: ConstantModel) -> int:
+        depth = dependency_child_depths[-1] + 1
+        if depth > _MAX_CONSTANT_DEPENDENCY_DEPTH:
+            raise ProtocyteError(
+                f"{constant.full_name}: constant dependency nesting exceeds "
+                f"maximum depth of {_MAX_CONSTANT_DEPENDENCY_DEPTH}"
+            )
+        return depth
 
     def find_message_constant(
         owner: MessageModel, scope: str, constant_name: str
@@ -2068,7 +2331,7 @@ def _resolve_constants_and_arrays(
     def resolve_constant(
         target: MessageModel, constant: ConstantModel, owner: MessageModel
     ) -> _TypedValue:
-        key = constant.full_name
+        key = id(constant)
         state = states.get(key)
         if state == "visiting":
             raise ProtocyteError(
@@ -2079,40 +2342,61 @@ def _resolve_constants_and_arrays(
                 constant.family,
                 constant.value,
                 cpp_expr=_reference_cpp_expr(owner, target, constant),
+                numeric_kind=_constant_numeric_kind(constant.kind),
             )
+        enter_constant_dependency(constant)
+        dependency_child_depths.append(0)
         states[key] = "visiting"
-        if constant.literal is not None:
-            value = _coerce_literal(constant.kind, constant.literal, constant.full_name)
-        else:
-            assert constant.expr is not None
-            parsed = _ExprParser(
-                constant.expr,
-                lambda name: lookup_constant(target, name),
-                constant.full_name,
-            ).parse()
-            value = _coerce_expression_value(constant.kind, parsed, constant.full_name)
-        constant.family = _constant_family(constant.kind)
-        constant.value = value
-        constant.cpp_type = _cpp_constant_type(constant.kind)
-        constant.cpp_value = _cpp_constant_value(constant.kind, value)
-        states[key] = "done"
+        try:
+            if constant.literal is not None:
+                value = _coerce_literal(
+                    constant.kind, constant.literal, constant.full_name
+                )
+            else:
+                assert constant.expr is not None
+                parsed = _ExprParser(
+                    constant.expr,
+                    lambda name: lookup_constant(target, name),
+                    constant.full_name,
+                    integer_context=_constant_integer_kind(constant.kind),
+                ).parse()
+                value = _coerce_expression_value(
+                    constant.kind, parsed, constant.full_name
+                )
+            resolved_depth = resolved_constant_dependency_depth(constant)
+            constant.family = _constant_family(constant.kind)
+            constant.value = value
+            constant.cpp_type = _cpp_constant_type(constant.kind)
+            constant.cpp_value = _cpp_constant_value(constant.kind, value)
+            resolved_dependency_depths[key] = resolved_depth
+            states[key] = "done"
+        except Exception:
+            states.pop(key, None)
+            resolved_dependency_depths.pop(key, None)
+            raise
+        finally:
+            dependency_child_depths.pop()
+            leave_constant_dependency()
         return _TypedValue(
             constant.family,
             constant.value,
             cpp_expr=_reference_cpp_expr(owner, target, constant),
+            numeric_kind=_constant_numeric_kind(constant.kind),
         )
 
     def lookup_constant(owner: MessageModel, name: str) -> _TypedValue:
         target_message, target_constant = find_constant(owner, name)
         if target_message is None:
             return lookup_package_constant(owner.package, name)
-        return resolve_constant(target_message, target_constant, owner)
+        value = resolve_constant(target_message, target_constant, owner)
+        record_constant_dependency(target_constant)
+        return value
 
     def lookup_constant_for_array(owner: MessageModel, name: str) -> _TypedValue:
         return lookup_constant(owner, name)
 
     def resolve_package_constant(package: str, constant: ConstantModel) -> None:
-        key = constant.full_name
+        key = id(constant)
         state = states.get(key)
         if state == "visiting":
             raise ProtocyteError(
@@ -2120,22 +2404,39 @@ def _resolve_constants_and_arrays(
             )
         if state == "done":
             return
+        enter_constant_dependency(constant)
+        dependency_child_depths.append(0)
         states[key] = "visiting"
-        if constant.literal is not None:
-            value = _coerce_literal(constant.kind, constant.literal, constant.full_name)
-        else:
-            assert constant.expr is not None
-            parsed = _ExprParser(
-                constant.expr,
-                lambda name: lookup_package_constant(package, name),
-                constant.full_name,
-            ).parse()
-            value = _coerce_expression_value(constant.kind, parsed, constant.full_name)
-        constant.family = _constant_family(constant.kind)
-        constant.value = value
-        constant.cpp_type = _cpp_constant_type(constant.kind)
-        constant.cpp_value = _cpp_constant_value(constant.kind, value)
-        states[key] = "done"
+        try:
+            if constant.literal is not None:
+                value = _coerce_literal(
+                    constant.kind, constant.literal, constant.full_name
+                )
+            else:
+                assert constant.expr is not None
+                parsed = _ExprParser(
+                    constant.expr,
+                    lambda name: lookup_package_constant(package, name),
+                    constant.full_name,
+                    integer_context=_constant_integer_kind(constant.kind),
+                ).parse()
+                value = _coerce_expression_value(
+                    constant.kind, parsed, constant.full_name
+                )
+            resolved_depth = resolved_constant_dependency_depth(constant)
+            constant.family = _constant_family(constant.kind)
+            constant.value = value
+            constant.cpp_type = _cpp_constant_type(constant.kind)
+            constant.cpp_value = _cpp_constant_value(constant.kind, value)
+            resolved_dependency_depths[key] = resolved_depth
+            states[key] = "done"
+        except Exception:
+            states.pop(key, None)
+            resolved_dependency_depths.pop(key, None)
+            raise
+        finally:
+            dependency_child_depths.pop()
+            leave_constant_dependency()
 
     def lookup_package_constant(package: str, name: str) -> _TypedValue:
         if "." in name:
@@ -2152,10 +2453,12 @@ def _resolve_constants_and_arrays(
                 f"{package or '<root>'}: unknown package constant {name!r}"
             )
         resolve_package_constant(target_package, target_constant)
+        record_constant_dependency(target_constant)
         return _TypedValue(
             target_constant.family,
             target_constant.value,
             cpp_expr=_constant_cpp_expr(package, target_constant),
+            numeric_kind=_constant_numeric_kind(target_constant.kind),
         )
 
     for package, package_constants in constants_by_package.items():
@@ -2175,6 +2478,7 @@ def _resolve_constants_and_arrays(
                 lambda name, owner=message: lookup_constant_for_array(owner, name),
                 f"{message.full_name}.{field_model.name}",
                 unsigned_integer_literals=True,
+                integer_context=CONSTANT_KIND_UINT32,
             ).parse()
             numeric = _coerce_expression_value(
                 CONSTANT_KIND_UINT32,
@@ -2263,7 +2567,7 @@ def _can_reach(graph: dict[str, set[str]], start: str, goal: str) -> bool:
 def _tokenize(text: str, label: str) -> list[tuple[str, str]]:
     tokens: list[tuple[str, str]] = []
     index = 0
-    multi_ops = ("&&", "||", "==", "!=", "<=", ">=")
+    multi_ops = ("&&", "||", "==", "!=", "<=", ">=", "<<", ">>")
     while index < len(text):
         char = text[index]
         if char.isspace():
@@ -2274,7 +2578,7 @@ def _tokenize(text: str, label: str) -> list[tuple[str, str]]:
             tokens.append(("OP", matched))
             index += len(matched)
             continue
-        if char in "+-*/%()!,<>":
+        if char in "+-*/%()!,<>&|^~":
             tokens.append(("OP", char))
             index += 1
             continue
@@ -2341,7 +2645,7 @@ def _tokenize(text: str, label: str) -> list[tuple[str, str]]:
 
 def _parse_number_token(token: str, label: str) -> int | float:
     try:
-        if "." in token or "e" in token or "E" in token:
+        if _number_token_is_floating(token):
             value = float(token)
             if not math.isfinite(value):
                 raise ProtocyteError(f"{label}: numeric literal must be finite")
@@ -2351,12 +2655,77 @@ def _parse_number_token(token: str, label: str) -> int | float:
         raise ProtocyteError(f"{label}: invalid numeric literal {token!r}") from exc
 
 
+def _parse_string_token(token: str, label: str) -> str:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", SyntaxWarning)
+            value = ast.literal_eval(token)
+    except (SyntaxError, SyntaxWarning, ValueError) as exc:
+        raise ProtocyteError(f"{label}: invalid string literal") from exc
+    if not isinstance(value, str):
+        raise ProtocyteError(f"{label}: invalid string literal")
+    _validate_utf8_string(value, label)
+    return value
+
+
+def _validate_utf8_string(value: str, label: str) -> None:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ProtocyteError(f"{label}: string value must be valid UTF-8") from exc
+
+
+def _number_token_is_floating(token: str) -> bool:
+    return not token.lower().startswith("0x") and (
+        "." in token or "e" in token or "E" in token
+    )
+
+
 def _constant_family(kind: str) -> str:
     if kind == CONSTANT_KIND_BOOL:
         return CONSTANT_KIND_BOOL
     if kind == CONSTANT_KIND_STRING:
         return CONSTANT_KIND_STRING
     return "numeric"
+
+
+def _constant_integer_kind(kind: str) -> str | None:
+    return kind if kind in _INTEGER_EXPRESSION_KINDS else None
+
+
+def _constant_numeric_kind(kind: str) -> str | None:
+    return kind if kind in _NUMERIC_EXPRESSION_KINDS else None
+
+
+def _literal_integer_kind(
+    value: int, context: str | None, *, hexadecimal: bool = False
+) -> str | None:
+    if context in _INTEGER_EXPRESSION_KINDS:
+        return context
+    if hexadecimal:
+        if 0 <= value <= 2**31 - 1:
+            return CONSTANT_KIND_INT32
+        if value <= 2**32 - 1:
+            return CONSTANT_KIND_UINT32
+        if value <= 2**63 - 1:
+            return CONSTANT_KIND_INT64
+        if value <= 2**64 - 1:
+            return CONSTANT_KIND_UINT64
+        return None
+    if -(2**31) <= value <= 2**31 - 1:
+        return CONSTANT_KIND_INT32
+    if -(2**63) <= value <= 2**63 - 1:
+        return CONSTANT_KIND_INT64
+    if 0 <= value <= 2**64 - 1:
+        return CONSTANT_KIND_UINT64
+    return None
+
+
+def _validate_contextual_integer_literal(value: int, kind: str, label: str) -> None:
+    lower, upper = _integer_range(kind)
+    magnitude_limit = -lower if lower < 0 else upper
+    if value > magnitude_limit:
+        raise ProtocyteError(f"{label}: value {value} is out of range for {kind}")
 
 
 def _wrap_cpp(value: _TypedValue, precedence: int) -> str:
@@ -2374,13 +2743,13 @@ def _binary_cpp(
 
 
 def _cpp_number_token(token: str, *, unsigned_integer: bool) -> str:
-    if unsigned_integer and "." not in token and "e" not in token and "E" not in token:
+    if unsigned_integer and not _number_token_is_floating(token):
         return f"{token}u"
     return token
 
 
 def _bool_value(
-    value: bool, *, cpp_expr: str | None = None, cpp_precedence: int = 100
+    value: bool, *, cpp_expr: str | None = None, cpp_precedence: int = 120
 ) -> _TypedValue:
     return _TypedValue(
         CONSTANT_KIND_BOOL,
@@ -2391,7 +2760,7 @@ def _bool_value(
 
 
 def _string_value(
-    value: str, *, cpp_expr: str | None = None, cpp_precedence: int = 100
+    value: str, *, cpp_expr: str | None = None, cpp_precedence: int = 120
 ) -> _TypedValue:
     if cpp_expr is None:
         cpp_expr = f'"{_cpp_escape_string(value)}"'
@@ -2402,13 +2771,82 @@ def _numeric_value(
     value: int | float,
     *,
     cpp_expr: str | None = None,
-    cpp_precedence: int = 100,
+    cpp_precedence: int = 120,
+    numeric_kind: str | None = None,
 ) -> _TypedValue:
+    if numeric_kind is None:
+        numeric_kind = (
+            CONSTANT_KIND_DOUBLE
+            if isinstance(value, float)
+            else _literal_integer_kind(value, None)
+        )
+    if numeric_kind == CONSTANT_KIND_FLOAT:
+        value = _round_f32(value)
     if isinstance(value, float) and not math.isfinite(value):
         raise ProtocyteError("numeric expression must be finite")
     if cpp_expr is None:
         cpp_expr = str(value)
-    return _TypedValue("numeric", value, cpp_expr, cpp_precedence)
+    return _TypedValue("numeric", value, cpp_expr, cpp_precedence, numeric_kind)
+
+
+def _type_only_value(value: _TypedValue) -> _TypedValue:
+    if value.family == CONSTANT_KIND_BOOL:
+        return _bool_value(False, cpp_expr=value.cpp_expr)
+    if value.family == CONSTANT_KIND_STRING:
+        return _string_value("", cpp_expr=value.cpp_expr)
+    if value.family == "numeric":
+        kind = value.numeric_kind
+        placeholder = (
+            value.value
+            if kind is None
+            else (0.0 if kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE} else 0)
+        )
+        return _numeric_value(
+            placeholder,  # type: ignore[arg-type]
+            cpp_expr=value.cpp_expr,
+            cpp_precedence=value.cpp_precedence,
+            numeric_kind=kind,
+        )
+    raise AssertionError(f"unsupported expression family {value.family!r}")
+
+
+def _round_f32(
+    value: int | float, error: str = "numeric expression must be finite"
+) -> float:
+    try:
+        numeric = (
+            _round_integer_to_f32_input(value)
+            if isinstance(value, int)
+            else float(value)
+        )
+    except OverflowError as exc:
+        raise ProtocyteError(error) from exc
+    if not math.isfinite(numeric):
+        raise ProtocyteError(error)
+    try:
+        rounded = struct.unpack("<f", struct.pack("<f", numeric))[0]
+    except OverflowError as exc:
+        raise ProtocyteError(error) from exc
+    if not math.isfinite(rounded):
+        raise ProtocyteError(error)
+    return rounded
+
+
+def _round_integer_to_f32_input(value: int) -> float:
+    magnitude = abs(value)
+    shift = magnitude.bit_length() - 24
+    if shift <= 0:
+        return float(value)
+    truncated = magnitude >> shift
+    remainder = magnitude & (2**shift - 1)
+    halfway = 2 ** (shift - 1)
+    if remainder > halfway or (remainder == halfway and truncated & 1):
+        truncated += 1
+    if truncated == 2**24:
+        truncated >>= 1
+        shift += 1
+    rounded = truncated << shift
+    return -float(rounded) if value < 0 else float(rounded)
 
 
 def _cpp_escape_string(value: str) -> str:
@@ -2416,9 +2854,13 @@ def _cpp_escape_string(value: str) -> str:
 
 
 def _expect_bool(value: _TypedValue, label: str) -> bool:
-    if value.family != CONSTANT_KIND_BOOL:
-        raise ProtocyteError(f"{label}: expected bool expression")
-    return bool(value.value)
+    if value.family == CONSTANT_KIND_BOOL:
+        return bool(value.value)
+    if value.family == "numeric" and isinstance(value.value, int):
+        kind = _typed_numeric_kind(value, label)
+        normalized = _convert_numeric_value(value.value, kind, kind, label)
+        return normalized != 0
+    raise ProtocyteError(f"{label}: expected bool or integer expression")
 
 
 def _expect_numeric(value: _TypedValue, label: str) -> int | float:
@@ -2432,15 +2874,24 @@ def _truncating_integer_divide(lhs: int, rhs: int) -> int:
     return -quotient if (lhs < 0) != (rhs < 0) else quotient
 
 
+def _signed_division_overflows(lhs: int, rhs: int, kind: str) -> bool:
+    lower, _ = _integer_range(kind)
+    return lhs == lower and rhs == -1
+
+
 def _numeric_operands(
     lhs: _TypedValue, rhs: _TypedValue, label: str
 ) -> tuple[int | float, int | float, str]:
     left = _expect_numeric(lhs, label)
     right = _expect_numeric(rhs, label)
-    result_family = (
-        "float" if isinstance(left, float) or isinstance(right, float) else "int"
+    result_kind = _common_value_numeric_kind(lhs, rhs)
+    left = _convert_numeric_value(
+        left, _typed_numeric_kind(lhs, label), result_kind, label
     )
-    return left, right, result_family
+    right = _convert_numeric_value(
+        right, _typed_numeric_kind(rhs, label), result_kind, label
+    )
+    return left, right, result_kind
 
 
 def _numeric_binary(
@@ -2452,11 +2903,236 @@ def _numeric_binary(
     symbol: str,
     precedence: int,
 ) -> _TypedValue:
-    left, right, _ = _numeric_operands(lhs, rhs, label)
+    left, right, result_kind = _numeric_operands(lhs, rhs, label)
+    result = _normalize_numeric_result(op(left, right), result_kind, label)
     return _numeric_value(
-        op(left, right),
+        result,
         cpp_expr=_binary_cpp(lhs, rhs, symbol, precedence),
         cpp_precedence=precedence,
+        numeric_kind=result_kind,
+    )
+
+
+def _typed_numeric_kind(value: _TypedValue, label: str) -> str:
+    if value.family != "numeric":
+        raise ProtocyteError(f"{label}: expected numeric expression")
+    if value.numeric_kind in _NUMERIC_EXPRESSION_KINDS:
+        return value.numeric_kind
+    if isinstance(value.value, int):
+        inferred = _literal_integer_kind(value.value, None)
+        if inferred is not None:
+            return inferred
+    raise ProtocyteError(f"{label}: numeric expression is outside the supported range")
+
+
+def _common_value_numeric_kind(lhs: _TypedValue, rhs: _TypedValue) -> str:
+    return _common_numeric_kind(
+        [
+            _typed_numeric_kind(lhs, "numeric expression"),
+            _typed_numeric_kind(rhs, "numeric expression"),
+        ]
+    )
+
+
+def _common_numeric_kind(kinds: Iterable[str]) -> str:
+    kind_list = list(kinds)
+    if CONSTANT_KIND_DOUBLE in kind_list:
+        return CONSTANT_KIND_DOUBLE
+    if CONSTANT_KIND_FLOAT in kind_list:
+        return CONSTANT_KIND_FLOAT
+    result = kind_list[0]
+    for kind in kind_list[1:]:
+        result = _common_integer_kind(result, kind)
+    return result
+
+
+def _convert_numeric_value(
+    value: int | float,
+    source_kind: str,
+    target_kind: str,
+    label: str = "numeric expression",
+) -> int | float:
+    if source_kind in _INTEGER_EXPRESSION_KINDS:
+        if not isinstance(value, int):
+            raise ProtocyteError(
+                "numeric expression cannot be converted from an integer kind"
+            )
+        source_bits, source_signed = _INTEGER_KIND_INFO[source_kind]
+        if source_signed:
+            lower, upper = _integer_range(source_kind)
+            if value < lower or value > upper:
+                raise ProtocyteError(
+                    f"{label}: integer operand {value} is out of range for {source_kind}"
+                )
+        else:
+            value &= 2**source_bits - 1
+    if target_kind == CONSTANT_KIND_DOUBLE:
+        return float(value)
+    if target_kind == CONSTANT_KIND_FLOAT:
+        return _round_f32(value)
+    if source_kind not in _INTEGER_EXPRESSION_KINDS or not isinstance(value, int):
+        raise ProtocyteError(
+            "numeric expression cannot be converted to an integer kind"
+        )
+    bits, signed = _INTEGER_KIND_INFO[target_kind]
+    if not signed:
+        return value & (2**bits - 1)
+    lower, upper = _integer_range(target_kind)
+    if value < lower or value > upper:
+        raise ProtocyteError(
+            f"{label}: integer operand {value} is out of range for {target_kind}"
+        )
+    return value
+
+
+def _normalize_numeric_result(value: int | float, kind: str, label: str) -> int | float:
+    if kind not in _INTEGER_EXPRESSION_KINDS or not isinstance(value, int):
+        return value
+    bits, signed = _INTEGER_KIND_INFO[kind]
+    if not signed:
+        return value & (2**bits - 1)
+    lower, upper = _integer_range(kind)
+    if value < lower or value > upper:
+        raise ProtocyteError(
+            f"{label}: integer result {value} is out of range for {kind}"
+        )
+    return value
+
+
+def _expect_integral(value: _TypedValue, label: str) -> tuple[int, str]:
+    if value.family == CONSTANT_KIND_BOOL:
+        return (1 if bool(value.value) else 0), CONSTANT_KIND_INT32
+    if value.family != "numeric" or not isinstance(value.value, int):
+        raise ProtocyteError(
+            f"{label}: bitwise operators require integer or bool operands"
+        )
+    kind = value.numeric_kind or _literal_integer_kind(value.value, None)
+    if kind is None:
+        raise ProtocyteError(
+            f"{label}: bitwise integer operand is outside the supported 64-bit range"
+        )
+    return value.value, kind
+
+
+def _common_integer_kind(lhs: str, rhs: str) -> str:
+    lhs_bits, lhs_signed = _INTEGER_KIND_INFO[lhs]
+    rhs_bits, rhs_signed = _INTEGER_KIND_INFO[rhs]
+    if lhs == rhs:
+        return lhs
+    if lhs_signed == rhs_signed:
+        return _integer_kind(max(lhs_bits, rhs_bits), lhs_signed)
+    unsigned_kind = lhs if not lhs_signed else rhs
+    signed_kind = rhs if not lhs_signed else lhs
+    unsigned_bits, _ = _INTEGER_KIND_INFO[unsigned_kind]
+    signed_bits, _ = _INTEGER_KIND_INFO[signed_kind]
+    if unsigned_bits >= signed_bits:
+        return _integer_kind(unsigned_bits, False)
+    return _integer_kind(signed_bits, True)
+
+
+def _integer_kind(bits: int, signed: bool) -> str:
+    return {
+        (32, True): CONSTANT_KIND_INT32,
+        (32, False): CONSTANT_KIND_UINT32,
+        (64, True): CONSTANT_KIND_INT64,
+        (64, False): CONSTANT_KIND_UINT64,
+    }[(bits, signed)]
+
+
+def _integer_range(kind: str) -> tuple[int, int]:
+    bits, signed = _INTEGER_KIND_INFO[kind]
+    if signed:
+        return -(2 ** (bits - 1)), 2 ** (bits - 1) - 1
+    return 0, 2**bits - 1
+
+
+def _integer_bits(value: int, kind: str, label: str) -> int:
+    bits, signed = _INTEGER_KIND_INFO[kind]
+    if signed:
+        lower, upper = _integer_range(kind)
+        if value < lower or value > upper:
+            raise ProtocyteError(
+                f"{label}: integer operand {value} is out of range for {kind}"
+            )
+    return value & (2**bits - 1)
+
+
+def _integer_from_bits(value: int, kind: str) -> int:
+    bits, signed = _INTEGER_KIND_INFO[kind]
+    value &= 2**bits - 1
+    if signed and value >= 2 ** (bits - 1):
+        return value - 2**bits
+    return value
+
+
+def _bitwise_binary(
+    lhs: _TypedValue,
+    rhs: _TypedValue,
+    label: str,
+    op: Callable[[int, int], int],
+    *,
+    symbol: str,
+    precedence: int,
+) -> _TypedValue:
+    lhs_value, lhs_kind = _expect_integral(lhs, label)
+    rhs_value, rhs_kind = _expect_integral(rhs, label)
+    result_kind = _common_integer_kind(lhs_kind, rhs_kind)
+    lhs_value = int(_convert_numeric_value(lhs_value, lhs_kind, result_kind, label))
+    rhs_value = int(_convert_numeric_value(rhs_value, rhs_kind, result_kind, label))
+    bits, _ = _INTEGER_KIND_INFO[result_kind]
+    result_bits = op(
+        _integer_bits(lhs_value, result_kind, label),
+        _integer_bits(rhs_value, result_kind, label),
+    ) & (2**bits - 1)
+    return _numeric_value(
+        _integer_from_bits(result_bits, result_kind),
+        cpp_expr=_binary_cpp(lhs, rhs, symbol, precedence),
+        cpp_precedence=precedence,
+        numeric_kind=result_kind,
+    )
+
+
+def _bitwise_complement(value: _TypedValue, label: str) -> _TypedValue:
+    operand, kind = _expect_integral(value, label)
+    bits, _ = _INTEGER_KIND_INFO[kind]
+    result_bits = (~_integer_bits(operand, kind, label)) & (2**bits - 1)
+    return _numeric_value(
+        _integer_from_bits(result_bits, kind),
+        cpp_expr="~" + _wrap_cpp(value, 110),
+        cpp_precedence=110,
+        numeric_kind=kind,
+    )
+
+
+def _shift_value(
+    lhs: _TypedValue, rhs: _TypedValue, label: str, *, left: bool
+) -> _TypedValue:
+    lhs_value, lhs_kind = _expect_integral(lhs, label)
+    rhs_value, rhs_kind = _expect_integral(rhs, label)
+    lhs_value = int(_convert_numeric_value(lhs_value, lhs_kind, lhs_kind, label))
+    rhs_value = int(_convert_numeric_value(rhs_value, rhs_kind, rhs_kind, label))
+    bits, signed = _INTEGER_KIND_INFO[lhs_kind]
+    if rhs_value < 0:
+        raise ProtocyteError(f"{label}: shift count must not be negative")
+    if rhs_value >= bits:
+        raise ProtocyteError(
+            f"{label}: shift count {rhs_value} must be less than {bits}"
+        )
+
+    symbol = "<<" if left else ">>"
+    mask = 2**bits - 1
+    if left:
+        result = _integer_from_bits((lhs_value & mask) << rhs_value, lhs_kind)
+    elif signed:
+        result = lhs_value >> rhs_value
+    else:
+        result = (lhs_value & mask) >> rhs_value
+
+    return _numeric_value(
+        result,
+        cpp_expr=_binary_cpp(lhs, rhs, symbol, 80),
+        cpp_precedence=80,
+        numeric_kind=lhs_kind,
     )
 
 
@@ -2471,18 +3147,406 @@ def _numeric_compare(
 
 
 def _compare_equal(lhs: _TypedValue, rhs: _TypedValue, label: str) -> bool:
+    if lhs.family == "numeric" and rhs.family == "numeric":
+        left, right, _ = _numeric_operands(lhs, rhs, label)
+        return left == right
     if lhs.family != rhs.family:
         raise ProtocyteError(f"{label}: equality requires operands of the same type")
     return lhs.value == rhs.value
 
 
-def _evaluate_function(name: str, args: list[_TypedValue], label: str) -> _TypedValue:
+def _function_numeric_argument(
+    name: str, value: _TypedValue, label: str
+) -> tuple[int | float, str]:
+    if value.family == CONSTANT_KIND_BOOL:
+        return (1 if bool(value.value) else 0), CONSTANT_KIND_INT32
+    if value.family != "numeric" or not isinstance(value.value, int | float):
+        raise ProtocyteError(f"{label}: {name}() expects numeric arguments")
+    kind = value.numeric_kind
+    if kind not in _NUMERIC_EXPRESSION_KINDS:
+        if isinstance(value.value, int):
+            kind = _literal_integer_kind(value.value, None)
+    if kind not in _NUMERIC_EXPRESSION_KINDS:
+        raise ProtocyteError(
+            f"{label}: {name}() argument is outside the supported numeric range"
+        )
+    numeric = value.value
+    if kind in _INTEGER_EXPRESSION_KINDS:
+        assert isinstance(numeric, int)
+        bits, signed = _INTEGER_KIND_INFO[kind]
+        if signed:
+            lower, upper = _integer_range(kind)
+            if numeric < lower or numeric > upper:
+                raise ProtocyteError(
+                    f"{label}: {name}() argument is out of range for {kind}"
+                )
+        else:
+            numeric &= 2**bits - 1
+    return numeric, kind
+
+
+def _function_numeric_result(
+    name: str, value: int | float, kind: str, label: str
+) -> _TypedValue:
+    error = f"{label}: {name}() result is not finite"
+    if kind == CONSTANT_KIND_FLOAT:
+        value = _round_f32(value, error)
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ProtocyteError(error)
+    return _numeric_value(
+        value,
+        cpp_expr=_cpp_constant_value(kind, value),
+        numeric_kind=kind,
+    )
+
+
+def _evaluate_real_function(
+    name: str,
+    value: int | float,
+    source_kind: str,
+    label: str,
+) -> _TypedValue:
+    result_kind = (
+        CONSTANT_KIND_FLOAT
+        if source_kind == CONSTANT_KIND_FLOAT
+        else CONSTANT_KIND_DOUBLE
+    )
+    operand = float(_convert_numeric_value(value, source_kind, result_kind))
+    if name == "sqrt" and operand < 0:
+        raise ProtocyteError(f"{label}: sqrt() domain error")
+    if name in {"log", "log2", "log10"} and operand <= 0:
+        raise ProtocyteError(f"{label}: {name}() domain error")
+    function = {
+        "sqrt": math.sqrt,
+        "exp": math.exp,
+        "log": math.log,
+        "log2": math.log2,
+        "log10": math.log10,
+    }[name]
+    try:
+        result = function(operand)
+    except ValueError as exc:
+        raise ProtocyteError(f"{label}: {name}() domain error") from exc
+    except OverflowError as exc:
+        raise ProtocyteError(f"{label}: {name}() result is not finite") from exc
+    return _function_numeric_result(name, result, result_kind, label)
+
+
+def _evaluate_rounding_function(
+    name: str,
+    value: int | float,
+    source_kind: str,
+    label: str,
+) -> _TypedValue:
+    result_kind = (
+        CONSTANT_KIND_FLOAT
+        if source_kind == CONSTANT_KIND_FLOAT
+        else CONSTANT_KIND_DOUBLE
+    )
+    operand = float(_convert_numeric_value(value, source_kind, result_kind))
+    if name == "ceil":
+        result = float(math.ceil(operand))
+    elif name == "floor":
+        result = float(math.floor(operand))
+    elif name == "trunc":
+        result = float(math.trunc(operand))
+    elif operand.is_integer():
+        result = operand
+    else:
+        fractional, integral = math.modf(abs(operand))
+        magnitude = integral + (1.0 if fractional >= 0.5 else 0.0)
+        result = math.copysign(magnitude, operand)
+    if result == 0.0:
+        result = math.copysign(0.0, operand)
+    return _function_numeric_result(name, result, result_kind, label)
+
+
+def _checked_signed_power(base: int, exponent: int, kind: str, label: str) -> int:
+    lower, upper = _integer_range(kind)
+
+    def checked_multiply(lhs: int, rhs: int) -> int:
+        result = lhs * rhs
+        if result < lower or result > upper:
+            raise ProtocyteError(f"{label}: pow() result is out of range for {kind}")
+        return result
+
+    result = 1
+    factor = base
+    remaining = exponent
+    while remaining:
+        if remaining & 1:
+            result = checked_multiply(result, factor)
+        remaining >>= 1
+        if remaining:
+            factor = checked_multiply(factor, factor)
+    return result
+
+
+def _unsigned_power(base: int, exponent: int, kind: str) -> int:
+    bits, _ = _INTEGER_KIND_INFO[kind]
+    mask = 2**bits - 1
+    result = 1
+    factor = base & mask
+    remaining = exponent
+    while remaining:
+        if remaining & 1:
+            result = (result * factor) & mask
+        remaining >>= 1
+        if remaining:
+            factor = (factor * factor) & mask
+    return result
+
+
+def _evaluate_pow(args: list[_TypedValue], label: str) -> _TypedValue:
+    if len(args) != 2:
+        raise ProtocyteError(f"{label}: pow() expects two numeric arguments")
+    base, base_kind = _function_numeric_argument("pow", args[0], label)
+    exponent, exponent_kind = _function_numeric_argument("pow", args[1], label)
+    if (
+        exponent_kind in _INTEGER_EXPRESSION_KINDS
+        and isinstance(exponent, int)
+        and exponent < 0
+    ):
+        raise ProtocyteError(f"{label}: pow() domain error")
+    result_kind = _common_numeric_kind([base_kind, exponent_kind])
+    if result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
+        float_base = float(_convert_numeric_value(base, base_kind, result_kind, label))
+        float_exponent = float(
+            _convert_numeric_value(exponent, exponent_kind, result_kind, label)
+        )
+        if float_base < 0 and not float_exponent.is_integer():
+            raise ProtocyteError(f"{label}: pow() domain error")
+        if float_base == 0 and float_exponent < 0:
+            raise ProtocyteError(f"{label}: pow() domain error")
+        try:
+            result = math.pow(float_base, float_exponent)
+        except ValueError as exc:
+            raise ProtocyteError(f"{label}: pow() domain error") from exc
+        except OverflowError as exc:
+            raise ProtocyteError(f"{label}: pow() result is not finite") from exc
+        return _function_numeric_result("pow", result, result_kind, label)
+
+    assert isinstance(base, int) and isinstance(exponent, int)
+    converted_base = int(_convert_numeric_value(base, base_kind, result_kind))
+    converted_exponent = int(
+        _convert_numeric_value(exponent, exponent_kind, result_kind, label)
+    )
+    if converted_exponent < 0:
+        raise ProtocyteError(f"{label}: pow() domain error")
+    _, signed = _INTEGER_KIND_INFO[result_kind]
+    if signed:
+        result = _checked_signed_power(
+            converted_base, converted_exponent, result_kind, label
+        )
+    else:
+        result = _unsigned_power(converted_base, converted_exponent, result_kind)
+    return _function_numeric_result("pow", result, result_kind, label)
+
+
+def _evaluate_abs(args: list[_TypedValue], label: str) -> _TypedValue:
+    if len(args) != 1:
+        raise ProtocyteError(f"{label}: abs() expects one numeric argument")
+    value, kind = _function_numeric_argument("abs", args[0], label)
+    if kind in _INTEGER_EXPRESSION_KINDS:
+        assert isinstance(value, int)
+        lower, _ = _integer_range(kind)
+        if _INTEGER_KIND_INFO[kind][1] and value == lower:
+            raise ProtocyteError(f"{label}: abs() result is out of range for {kind}")
+    return _function_numeric_result("abs", abs(value), kind, label)
+
+
+def _evaluate_min_max(name: str, args: list[_TypedValue], label: str) -> _TypedValue:
+    if len(args) < 2:
+        raise ProtocyteError(
+            f"{label}: {name}() expects at least two numeric arguments"
+        )
+    values = [_function_numeric_argument(name, arg, label) for arg in args]
+    result_kind = _common_numeric_kind(kind for _, kind in values)
+    converted = [
+        _convert_numeric_value(value, kind, result_kind) for value, kind in values
+    ]
+    result = converted[0]
+    for candidate in converted[1:]:
+        if (name == "min" and candidate < result) or (
+            name == "max" and candidate > result
+        ):
+            result = candidate
+    return _function_numeric_result(name, result, result_kind, label)
+
+
+def _cast_string_value(value: _TypedValue, label: str) -> str:
+    if value.family == CONSTANT_KIND_STRING:
+        return str(value.value)
+    if value.family == CONSTANT_KIND_BOOL:
+        return "true" if bool(value.value) else "false"
+    if value.family != "numeric":
+        raise ProtocyteError(f"{label}: str() expects one scalar argument")
+    kind = _typed_numeric_kind(value, label)
+    numeric = _convert_numeric_value(value.value, kind, kind, label)  # type: ignore[arg-type]
+    if kind in _INTEGER_EXPRESSION_KINDS:
+        return str(int(numeric))
+    precision = ".9g" if kind == CONSTANT_KIND_FLOAT else ".17g"
+    text = format(float(numeric), precision)
+    if "e" not in text and "E" not in text and "." not in text:
+        text += ".0"
+    return text
+
+
+def _evaluate_scalar_cast(
+    name: str, args: list[_TypedValue], label: str
+) -> _TypedValue:
+    if len(args) != 1:
+        raise ProtocyteError(f"{label}: {name}() expects one scalar argument")
+    value = args[0]
+    target_kind = _SCALAR_CAST_KINDS[name]
+    if target_kind == CONSTANT_KIND_STRING:
+        return _string_value(_cast_string_value(value, label))
+    if value.family == CONSTANT_KIND_STRING:
+        raise ProtocyteError(f"{label}: {name}() expects one bool or numeric argument")
+    if target_kind == CONSTANT_KIND_BOOL:
+        if value.family == CONSTANT_KIND_BOOL:
+            result = bool(value.value)
+        elif value.family == "numeric":
+            source_kind = _typed_numeric_kind(value, label)
+            normalized = _convert_numeric_value(
+                value.value,
+                source_kind,
+                source_kind,
+                label,  # type: ignore[arg-type]
+            )
+            result = normalized != 0
+        else:
+            raise ProtocyteError(
+                f"{label}: bool() expects one bool or numeric argument"
+            )
+        return _bool_value(result, cpp_expr=_cpp_constant_value(target_kind, result))
+
+    if value.family == CONSTANT_KIND_BOOL:
+        source_kind = CONSTANT_KIND_INT32
+        numeric: int | float = 1 if bool(value.value) else 0
+    elif value.family == "numeric":
+        source_kind = _typed_numeric_kind(value, label)
+        numeric = value.value  # type: ignore[assignment]
+    else:
+        raise ProtocyteError(f"{label}: {name}() expects one bool or numeric argument")
+
+    normalized = _convert_numeric_value(numeric, source_kind, source_kind, label)
+    if target_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
+        result = (
+            _round_f32(
+                normalized,
+                f"{label}: {name}() result is not finite",
+            )
+            if target_kind == CONSTANT_KIND_FLOAT
+            else float(normalized)
+        )
+        return _function_numeric_result(name, result, target_kind, label)
+
+    if source_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
+        result = math.trunc(float(normalized))
+        lower, upper = _integer_range(target_kind)
+        if result < lower or result > upper:
+            raise ProtocyteError(
+                f"{label}: {name}() result is out of range for {target_kind}"
+            )
+    else:
+        result = _integer_from_bits(int(normalized), target_kind)
+    return _function_numeric_result(name, result, target_kind, label)
+
+
+def _evaluate_function_type(
+    name: str, args: list[_TypedValue], label: str
+) -> _TypedValue:
+    if name in _SCALAR_CAST_KINDS:
+        return _type_only_value(_evaluate_scalar_cast(name, args, label))
+    if name == "len":
+        if len(args) != 1 or args[0].family != CONSTANT_KIND_STRING:
+            raise ProtocyteError(f"{label}: len() expects one string argument")
+        return _numeric_value(0, numeric_kind=CONSTANT_KIND_UINT32)
+    if name == "substr":
+        if len(args) != 3 or args[0].family != CONSTANT_KIND_STRING:
+            raise ProtocyteError(f"{label}: substr() expects string, start, count")
+        _coerce_expression_value(CONSTANT_KIND_UINT32, args[1], label)
+        _coerce_expression_value(CONSTANT_KIND_UINT32, args[2], label)
+        return _string_value("")
+    if name == "starts_with":
+        if (
+            len(args) != 2
+            or args[0].family != CONSTANT_KIND_STRING
+            or args[1].family != CONSTANT_KIND_STRING
+        ):
+            raise ProtocyteError(f"{label}: starts_with() expects two string arguments")
+        return _bool_value(False)
+    if name == "pow":
+        if len(args) != 2:
+            raise ProtocyteError(f"{label}: pow() expects two numeric arguments")
+        values = [_function_numeric_argument(name, arg, label) for arg in args]
+        result_kind = _common_numeric_kind(kind for _, kind in values)
+        return _numeric_value(
+            0.0 if result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE} else 0,
+            numeric_kind=result_kind,
+        )
+    if name == "abs":
+        if len(args) != 1:
+            raise ProtocyteError(f"{label}: abs() expects one numeric argument")
+        _, result_kind = _function_numeric_argument(name, args[0], label)
+        return _numeric_value(
+            0.0 if result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE} else 0,
+            numeric_kind=result_kind,
+        )
+    if name in {"min", "max"}:
+        if len(args) < 2:
+            raise ProtocyteError(
+                f"{label}: {name}() expects at least two numeric arguments"
+            )
+        values = [_function_numeric_argument(name, arg, label) for arg in args]
+        result_kind = _common_numeric_kind(kind for _, kind in values)
+        return _numeric_value(
+            0.0 if result_kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE} else 0,
+            numeric_kind=result_kind,
+        )
+    if name in {
+        "sqrt",
+        "exp",
+        "log",
+        "log2",
+        "log10",
+        "ceil",
+        "floor",
+        "trunc",
+        "round",
+    }:
+        if len(args) != 1:
+            raise ProtocyteError(f"{label}: {name}() expects one numeric argument")
+        _, source_kind = _function_numeric_argument(name, args[0], label)
+        result_kind = (
+            CONSTANT_KIND_FLOAT
+            if source_kind == CONSTANT_KIND_FLOAT
+            else CONSTANT_KIND_DOUBLE
+        )
+        return _numeric_value(0.0, numeric_kind=result_kind)
+    raise ProtocyteError(f"{label}: unsupported function {name}()")
+
+
+def _evaluate_function(
+    name: str,
+    args: list[_TypedValue],
+    label: str,
+    *,
+    evaluate: bool = True,
+) -> _TypedValue:
+    if not evaluate:
+        return _evaluate_function_type(name, args, label)
+    if name in _SCALAR_CAST_KINDS:
+        return _evaluate_scalar_cast(name, args, label)
     if name == "len":
         if len(args) != 1 or args[0].family != CONSTANT_KIND_STRING:
             raise ProtocyteError(f"{label}: len() expects one string argument")
         size = len(str(args[0].value))
         return _numeric_value(
-            size, cpp_expr=_cpp_constant_value(CONSTANT_KIND_UINT32, size)
+            size,
+            cpp_expr=_cpp_constant_value(CONSTANT_KIND_UINT32, size),
+            numeric_kind=CONSTANT_KIND_UINT32,
         )
     if name == "substr":
         if len(args) != 3 or args[0].family != CONSTANT_KIND_STRING:
@@ -2505,6 +3569,22 @@ def _evaluate_function(name: str, args: list[_TypedValue], label: str) -> _Typed
             str(args[0].value).startswith(str(args[1].value)),
             cpp_expr=f"{_wrap_cpp(args[0], 100)}.starts_with({_wrap_cpp(args[1], 0)})",
         )
+    if name == "pow":
+        return _evaluate_pow(args, label)
+    if name == "abs":
+        return _evaluate_abs(args, label)
+    if name in {"min", "max"}:
+        return _evaluate_min_max(name, args, label)
+    if name in {"sqrt", "exp", "log", "log2", "log10"}:
+        if len(args) != 1:
+            raise ProtocyteError(f"{label}: {name}() expects one numeric argument")
+        value, kind = _function_numeric_argument(name, args[0], label)
+        return _evaluate_real_function(name, value, kind, label)
+    if name in {"ceil", "floor", "trunc", "round"}:
+        if len(args) != 1:
+            raise ProtocyteError(f"{label}: {name}() expects one numeric argument")
+        value, kind = _function_numeric_argument(name, args[0], label)
+        return _evaluate_rounding_function(name, value, kind, label)
     raise ProtocyteError(f"{label}: unsupported function {name}()")
 
 
@@ -2513,6 +3593,7 @@ def _coerce_literal(kind: str, literal: object, label: str) -> object:
     if family == CONSTANT_KIND_STRING:
         if not isinstance(literal, str):
             raise ProtocyteError(f"{label}: invalid string literal {literal!r}")
+        _validate_utf8_string(literal, label)
         return literal
     if family == CONSTANT_KIND_BOOL:
         if not isinstance(literal, bool):
@@ -2521,14 +3602,19 @@ def _coerce_literal(kind: str, literal: object, label: str) -> object:
     if kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
         if isinstance(literal, bool) or not isinstance(literal, int | float):
             raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}")
+        finite_error = f"{label}: numeric literal must be finite"
+        if kind == CONSTANT_KIND_FLOAT:
+            return _round_f32(literal, finite_error)
         try:
             value = float(literal)
+        except OverflowError as exc:
+            raise ProtocyteError(finite_error) from exc
         except (TypeError, ValueError) as exc:
             raise ProtocyteError(
                 f"{label}: invalid numeric literal {literal!r}"
             ) from exc
         if not math.isfinite(value):
-            raise ProtocyteError(f"{label}: numeric literal must be finite")
+            raise ProtocyteError(finite_error)
         return value
     if isinstance(literal, bool) or not isinstance(literal, int):
         raise ProtocyteError(f"{label}: invalid numeric literal {literal!r}")
@@ -2544,25 +3630,34 @@ def _coerce_expression_value(kind: str, value: _TypedValue, label: str) -> objec
     if family == CONSTANT_KIND_STRING:
         if value.family != CONSTANT_KIND_STRING:
             raise ProtocyteError(f"{label}: expression must evaluate to string")
-        return str(value.value)
+        string_value = str(value.value)
+        _validate_utf8_string(string_value, label)
+        return string_value
     if family == CONSTANT_KIND_BOOL:
-        if value.family != CONSTANT_KIND_BOOL:
-            raise ProtocyteError(f"{label}: expression must evaluate to bool")
-        return bool(value.value)
+        if value.family == CONSTANT_KIND_BOOL:
+            return bool(value.value)
+        if value.family == "numeric" and isinstance(value.value, int):
+            source_kind = _typed_numeric_kind(value, label)
+            normalized = _convert_numeric_value(
+                value.value, source_kind, source_kind, label
+            )
+            return normalized != 0
+        raise ProtocyteError(f"{label}: expression must evaluate to bool or integer")
     if value.family != "numeric":
         raise ProtocyteError(f"{label}: expression must evaluate to numeric")
     numeric_value = value.value
+    source_kind = _typed_numeric_kind(value, label)
     if kind in {CONSTANT_KIND_FLOAT, CONSTANT_KIND_DOUBLE}:
-        out = float(numeric_value)
+        out = float(_convert_numeric_value(numeric_value, source_kind, kind, label))
         if not math.isfinite(out):
             raise ProtocyteError(f"{label}: numeric expression must be finite")
         return out
     if isinstance(numeric_value, float):
-        if not numeric_value.is_integer():
-            raise ProtocyteError(
-                f"{label}: integer expression must evaluate to an integral value"
-            )
         numeric_value = int(numeric_value)
+    else:
+        numeric_value = int(
+            _convert_numeric_value(numeric_value, source_kind, source_kind, label)
+        )
     return _coerce_integer(kind, int(numeric_value), label)
 
 
@@ -2616,7 +3711,10 @@ def _cpp_constant_value(kind: str, value: object) -> str:
         if "e" not in text and "E" not in text and "." not in text:
             text += ".0"
         return text
-    encoded = str(value).encode("utf-8")
+    try:
+        encoded = str(value).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ProtocyteError("string constant must be valid UTF-8") from exc
     return f"{_cpp_string_literal(encoded)}, {len(encoded)}u"
 
 
