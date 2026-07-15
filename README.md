@@ -500,11 +500,199 @@ Constants can be referenced from `array.expr`. Resolution works:
 Supported expression features:
 
 - Numeric operators: `+`, `-`, `*`, `/`, `%`
+- Bitwise operators: `~`, `&`, `^`, `|`, `<<`, `>>`
 - Comparisons: `<`, `<=`, `>`, `>=`
 - Equality: `==`, `!=`
 - Boolean operators: `!`, `&&`, `||`
 - String concatenation: `+`
 - String helpers: `len(...)`, `substr(...)`, `starts_with(...)`
+- Scalar casts: `bool(...)`, `i32(...)`, `u32(...)`, `i64(...)`, `u64(...)`,
+  `f32(...)`, `f64(...)`, `str(...)`
+- Math functions: `pow(...)`, `abs(...)`, `min(...)`, `max(...)`, `sqrt(...)`,
+  `exp(...)`, `log(...)`, `log2(...)`, `log10(...)`, `ceil(...)`, `floor(...)`,
+  `trunc(...)`, `round(...)`
+
+#### Expression And Constant Resolution Limits
+
+Protocyte bounds generator-side recursion along two dimensions:
+
+- Expression syntax may be nested to at most 32 levels. Parenthesized
+  subexpressions, unary-operator operands, and nested function-argument
+  expressions contribute to that depth. The boundary is accepted; entering a
+  33rd level rejects the expression with a labeled
+  `expression nesting exceeds maximum depth of 32` error.
+- A constant dependency chain may contain at most 32 constants, including the
+  constant where resolution begins. This applies to message and package
+  constants, including chains reached from `array.expr`, and is independent of
+  constant declaration order. The boundary is accepted; resolving a 33rd
+  constant rejects the model with a labeled
+  `constant dependency nesting exceeds maximum depth of 32` error.
+
+The two boundaries may be used together. Residual host recursion exhaustion is
+also translated to a labeled `expression evaluation exceeds safe recursion
+depth` error. All three failures are normal `ProtocyteError` generator
+diagnostics; the plugin returns the diagnostic without emitting partial
+generated files.
+
+#### Numeric Literals And Conversions
+
+Integer literals may be decimal or hexadecimal with a `0x` or `0X` prefix;
+hexadecimal digits are case-insensitive. Bare integer literals are typed before
+and independently of the expression destination, following the fixed-width
+equivalent of the standard C++ unsuffixed candidate order. Decimal literals use
+`i32` and then `i64`; a decimal value greater than `INT64_MAX` is rejected
+instead of being inferred as `u64`. Hexadecimal literals use `i32`, `u32`,
+`i64`, then `u64`, so `0xffffffff` is a `u32` value. Referenced constants retain
+their declared kind, and bare floating-point literals, including exponent
+notation, are `f64`. As in C++, a leading sign is a unary operator rather than
+part of the literal, so `-2147483648` has `i64` kind; use `i32(-2147483648)`
+when the intermediate must be `i32`.
+
+The destination converts only the completed expression; it never changes the
+types of literals or intermediate operations. Use an explicit cast when an
+intermediate must have a particular width or signedness, for example
+`u64(1) << 40`.
+
+Bool operands promote to `i32` for every numeric or integral operator,
+including unary arithmetic, ordering, and mixed bool/numeric equality. Binary
+numeric arithmetic, ordering, equality, and non-shift bitwise operators then
+convert their operands to one common kind: `f64` wins over every other kind,
+then `f32`, then the C++ usual signed/unsigned integer conversion result. For
+example, `true + true` is the `i32` value `2`, `true == 1` is true,
+`i32(-1) == u32(0xFFFFFFFF)` is true after both operands convert to `u32`, and
+`i64(-1) < u32(0)` remains true because every `u32` value fits in `i64`. Every
+`f32` operation is rounded to binary32 before a containing operation uses it.
+
+Unsigned arithmetic wraps to its selected width. Signed overflow and the
+unrepresentable signed `MIN / -1` and `MIN % -1` cases are rejected. Signed
+division truncates toward zero and signed remainder has the dividend's sign,
+matching C++ integer semantics. `%` and bitwise operators reject floating-point
+operands.
+
+#### Scalar Casts
+
+Scalar casts are generator-side functions that require exactly one argument.
+Because literals and operations do not inherit the expression destination's
+kind, an explicit cast is the way to select a width or signedness for an
+intermediate. For example, `u64(1) << 40` performs a 64-bit shift and
+`u32(-1) + 1` performs unsigned 32-bit arithmetic. Referenced constants retain
+and convert from their declared kind.
+
+| Cast | Accepted source | Result |
+| --- | --- | --- |
+| `bool(value)` | Bool or numeric | `false` for zero, including either floating signed zero; `true` for every other finite numeric value. |
+| `i32(value)`, `u32(value)`, `i64(value)`, `u64(value)` | Bool or numeric | Bool becomes `0` or `1`. Integer conversion uses the target-width C++ modulo/two's-complement result. Floating conversion truncates toward zero and then requires the result to fit the target range. |
+| `f32(value)` | Bool or numeric | Converts to finite binary32 and rounds immediately before reuse. |
+| `f64(value)` | Bool or numeric | Converts to finite binary64. |
+| `str(value)` | Any scalar | Leaves strings unchanged; formats bool as `true` or `false`, integers in decimal, `f32` with up to 9 significant digits, and `f64` with up to 17 significant digits. Integral-looking floating values retain a floating marker such as `.0`, and signed zero formats as `-0.0`. |
+
+String conversion is deliberately one-way: numeric and bool casts do not parse
+strings. Use expression operations or typed constants to produce a numeric or
+bool source before casting it.
+
+#### String Helpers
+
+Generator-side strings are Unicode values. `len(value)` returns a `u32` count
+of Unicode code points, and `substr(value, start, count)` interprets `start` and
+`count` as Unicode code-point indices. This intentionally differs from the
+generated C++ `StringView`: generated strings contain UTF-8, so its `size()` and
+indexing are byte-oriented. For example, expression `len("\u00e9")` is `1`,
+while the generated view contains two UTF-8 bytes. Do not reuse a generator-side
+`substr` index as a runtime byte offset without converting it to a UTF-8 byte
+offset. `starts_with(value, prefix)` compares the generator-side Unicode
+strings.
+
+#### Math Functions
+
+Math functions are evaluated by the generator and emitted as final typed
+literals; they do not add generated runtime dependencies. Numeric arguments
+preserve their declared `i32`, `u32`, `i64`, `u64`, `f32`, or `f64` kind.
+Booleans passed to math functions promote to signed `i32` values. Except for
+`pow`, mixed arguments promote to `f64` when present, then `f32`, then the C++
+usual integer conversion result.
+
+| Function | Arguments | Result and restrictions |
+| --- | --- | --- |
+| `pow(base, exponent)` | Exactly two numeric values | Converts both arguments to `f64` and always returns `f64`. This is a uniform Protocyte rule: unlike the dedicated C++ `std::pow(float, float)` overload, two `f32` arguments do not produce `f32`. Negative exponents produce reciprocal powers. A negative base with a non-integral exponent and zero with a negative exponent are domain errors; zero to zero is `1`. Non-finite results are rejected. There is no signed checked or unsigned modular integer-power mode. |
+| `abs(value)` | One numeric value | Preserves the promoted input kind. Signed minimum values are rejected; unsigned values are unchanged and floating negative zero becomes positive zero. |
+| `min(...)`, `max(...)` | At least two numeric values | Convert every argument to one common kind and return that kind. The first argument wins a tie, including signed-zero ties. |
+| `sqrt`, `exp`, `log`, `log2`, `log10` | One numeric value | `f32` returns `f32`; every other non-`f32` numeric kind returns `f64`. Square root rejects negative values, logarithms reject zero and negative values, and all non-finite results are rejected. |
+| `ceil`, `floor`, `trunc`, `round` | One numeric value | `f32` returns `f32`; every other non-`f32` numeric kind returns `f64`. `round` uses halfway-away-from-zero behavior like `std::round`; signed zero is preserved where the corresponding C++ operation preserves it. |
+
+`pow` does not perform integral exponentiation: `pow(2, -3)` is the `f64` value
+`0.125`, and `pow(2, 63)` is evaluated and returned as `f64` regardless of the
+destination. Use an explicit cast if the final floating result must be
+converted to an integer.
+
+`pow`, `sqrt`, `exp`, `log`, `log2`, and `log10` use Protocyte's
+dependency-free deterministic math backend rather than the host's `libm`.
+After the function's type promotion, the backend converts each resulting
+binary32 or binary64 input exactly to a decimal value. It evaluates the
+operation in a 160-digit decimal context using round-to-nearest, ties-to-even.
+`sqrt`, `exp`, `log`, and `log10` use the corresponding decimal primitive;
+`log2(x)` is `ln(x) / ln(2)`. Before using decimal transcendental operations,
+`pow` evaluates integral exponents as an exact rational whenever a conservative
+bound keeps both powered operands within 4096 bits. Exact power-of-two bases
+also use a constant-space direct binary path whenever multiplying the base's
+binary exponent by the supplied exponent produces an integer. These exact
+paths round the resulting ratio or power of two directly to binary64, including
+subnormal halfway cases. Other powers use `exp(y * ln(abs(x)))` with the
+real-domain checks and result sign applied separately. Each decimal primitive
+and arithmetic step rounds in the 160-digit context. The backend then converts
+the decimal result directly to IEEE-754 binary32 or binary64 with
+round-to-nearest, ties-to-even. This defines stable generator behavior but does
+not promise bit-for-bit agreement with a target C++ CRT; edge cases may differ
+from the MSVC, clang, or platform `<cmath>` implementation. Domain and
+non-finite checks still apply before a literal is emitted.
+
+All numeric expressions must remain finite. Floating signed zero is preserved
+except where a function specifies otherwise: `abs(-0.0)` returns positive
+zero, `min` and `max` retain the first converted operand on a zero tie, and
+`ceil`, `floor`, `trunc`, and `round` preserve the operand's sign when their
+result is zero.
+
+When a floating result is assigned to an integer expression destination, it is
+truncated toward zero before the destination range check (`2.9` becomes `2`,
+and `-2.9` becomes `-2`). Explicit floating-to-integer casts use the same
+truncation rule. Floating results are not implicitly accepted by
+`boolean_expr`. Integer source kinds are validated before destination
+conversion, and a completed value outside the destination range is rejected.
+
+#### Bitwise And Shift Operators
+
+Bitwise operators use fixed-width `i32`, `u32`, `i64`, or `u64` evaluation.
+Mixed operands use the C++ usual integer conversions described above. Boolean
+operands are promoted to signed `i32` values (`false` to `0`, `true` to `1`);
+floating-point and string values are not valid bitwise operands.
+
+Shifts follow C++'s per-operand conversion model rather than converting both
+operands to a common kind. Each operand is first normalized in its own source
+kind, bool promotes to `i32`, and the result keeps the left operand's kind and
+width. Consequently, negating an unsigned shift count wraps in that unsigned
+kind before validation. The normalized count must be nonnegative and smaller
+than the left operand's width.
+
+Left shifts use C++20 width-modulo behavior for both signed and unsigned left
+operands: bits shifted beyond the left operand's width are discarded, and a
+signed result is interpreted in that same signed kind. For example, `i32(1) <<
+31` is `INT32_MIN`, while `i32(-1) << 1` is `-2`. Unsigned right shifts are
+logical and signed right shifts are arithmetic.
+
+#### Logical Operators
+
+Logical operators accept bool and finite numeric operands and use zero/nonzero
+conversion, matching C++ contextual conversion to bool. `&&` and `||` evaluate
+left to right and genuinely short-circuit value evaluation of an unreachable
+right operand. The skipped operand is still parsed, names are resolved, and its
+arity and types are validated. Thus `false && (1 / 0 > 0)` is `false`, while
+`false && "not numeric"` remains a type error.
+
+A `boolean_expr` may likewise resolve to bool or integer, with zero emitted as
+`false` and nonzero as `true`. A bare floating result is still rejected by a
+`boolean_expr`; use `bool(value)` or a logical operator when floating
+zero/nonzero conversion is intended. Operator precedence follows C++: unary,
+multiplication, addition, shifts, comparisons, equality, bitwise AND, bitwise
+XOR, bitwise OR, logical AND, then logical OR.
 
 ### Array And Fixed Storage
 

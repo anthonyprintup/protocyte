@@ -200,6 +200,8 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
                 ("BASE_COUNT", "i32", 5),
                 ("PREFIX", "str_expr", 'substr("protocyte", 0, 5)'),
                 ("BYTE_ARRAY_CAP", "u32_expr", "len(PREFIX) - 1"),
+                ("BITWISE_BASE", "u32_expr", "(true << 3) | 2"),
+                ("MATH_BASE", "u32_expr", "max(2, sqrt(9))"),
             ]
         )
     )
@@ -209,13 +211,14 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     msg.options.ParseFromString(
         constant_options_bytes(
             [
-                ("SHIFTED_COUNT", "i64_expr", "BASE_COUNT * 1000000000"),
+                ("SHIFTED_COUNT", "i64_expr", "i64(BASE_COUNT) * 1000000000"),
                 ("MASK_BITS", "u64", 1234567890123456789),
                 ("FLOAT_SCALE", "f32", 1.25),
                 ("DOUBLE_SCALE", "f64_expr", "FLOAT_SCALE + 2.5"),
                 ("FLAG_LITERAL", "boolean", True),
                 ("HEX_LITERAL", "u32", 0x20),
                 ("HEX_SUM", "u32_expr", "0x10 + 0x8"),
+                ("HEX_E_DIGITS", "u32_expr", "0xDEADBEEF & 0xFFFF"),
                 ("INTEGER_ARRAY_CAP", "u32_expr", "(BASE_COUNT * 2) - 2"),
                 ("LABEL", "str_expr", 'PREFIX + "-demo"'),
                 ("UNICODE_LABEL", "str", chr(0x0100) + chr(0x00E9)),
@@ -228,6 +231,107 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
                 ("HAS_PREFIX", "boolean_expr", 'starts_with(LABEL, PREFIX) && !starts_with(LABEL, "zzz")'),
                 ("MOD_CHECK", "i32_expr", "BASE_COUNT % 2"),
                 ("OR_CHECK", "boolean_expr", "HAS_PREFIX || false"),
+                ("I32_BITWISE", "i32_expr", "~0"),
+                ("U32_BITWISE", "u32_expr", "~u32(0)"),
+                ("I64_BITWISE", "i64_expr", "i64(1) << 40"),
+                ("U64_BITWISE", "u64_expr", "(~u64(0)) ^ 0xf"),
+                ("F32_BITWISE", "f32_expr", "(1 << 3) | 1"),
+                ("F64_BITWISE", "f64_expr", "true << 4"),
+                ("BOOL_BITWISE", "boolean_expr", "BITWISE_BASE & 0x8"),
+                (
+                    "BOOL_BITWISE_LOGIC",
+                    "boolean_expr",
+                    "(BITWISE_BASE & 0x8) && FLAG_LITERAL",
+                ),
+                ("BOOL_INTEGER", "boolean_expr", "1 + 1"),
+                ("BOOL_ARITHMETIC", "i32_expr", "true + true"),
+                ("FLOAT_LOGIC", "boolean_expr", "0.5 && !0.0"),
+                (
+                    "SHORT_CIRCUIT_AND",
+                    "boolean_expr",
+                    "false && (1 / 0)",
+                ),
+                (
+                    "SHORT_CIRCUIT_OR",
+                    "boolean_expr",
+                    "true || (1 / 0)",
+                ),
+                (
+                    "MIXED_UNSIGNED",
+                    "u32_expr",
+                    "BASE_COUNT - BITWISE_BASE",
+                ),
+                ("MIXED_COMPARE", "boolean_expr", "(-1) < BITWISE_BASE"),
+                (
+                    "MIXED_EQUAL",
+                    "boolean_expr",
+                    "I32_BITWISE == U32_BITWISE",
+                ),
+                ("F32_EQUAL_SOURCE", "f32", 16777216.0),
+                (
+                    "MIXED_F32_EQUAL",
+                    "boolean_expr",
+                    "F32_EQUAL_SOURCE == 16777217",
+                ),
+                (
+                    "BITWISE_SOURCE_NORMALIZED",
+                    "i64_expr",
+                    "(-u32(1)) & i64(4294967296)",
+                ),
+                (
+                    "SHIFT_COUNT_NORMALIZED",
+                    "i32_expr",
+                    "1 << -U32_BITWISE",
+                ),
+                ("CAST_U32", "u32_expr", "u32(-1)"),
+                ("CAST_I32", "i32_expr", "i32(CAST_U32)"),
+                ("CAST_I64", "i64_expr", "i64(CAST_I32)"),
+                ("CAST_U64", "u64_expr", "u64(CAST_I32)"),
+                ("CAST_F32", "f32_expr", "f32(16777217)"),
+                ("CAST_F64", "f64_expr", "f64(CAST_F32) + 0.5"),
+                ("CAST_BOOL", "boolean_expr", "bool(0.5)"),
+                ("CAST_STR", "str_expr", "str(CAST_I32)"),
+                (
+                    "STR_BITWISE",
+                    "str_expr",
+                    'substr("abcd", 1 << 0, 1 | 0)',
+                ),
+                ("MATH_POW", "i32_expr", "pow(2, 5)"),
+                ("MATH_U64_POW", "u64_expr", "pow(2, 63)"),
+                ("MATH_ABS", "i64_expr", "abs(-9)"),
+                ("MATH_MIN", "u32_expr", "min(MATH_BASE, 5, 4)"),
+                ("MATH_F32", "f32_expr", "pow(FLOAT_SCALE, 2)"),
+                ("MATH_EXP", "f64_expr", "exp(0)"),
+                ("MATH_LOG", "f64_expr", "log(exp(2.0))"),
+                ("MATH_LOG2", "f64_expr", "log2(16)"),
+                ("MATH_LOG10", "f64_expr", "log10(1000)"),
+                ("MATH_CEIL", "f64_expr", "ceil(-2.1)"),
+                ("MATH_FLOOR", "f64_expr", "floor(-2.1)"),
+                ("MATH_TRUNC", "f64_expr", "trunc(-2.9)"),
+                ("MATH_ROUND", "f64_expr", "round(-2.5)"),
+                (
+                    "MATH_ROUND_BELOW",
+                    "f64_expr",
+                    "round(0.49999999999999994)",
+                ),
+                (
+                    "MATH_NEGATIVE_POW",
+                    "u32_expr",
+                    "pow(2, -3) * 8",
+                ),
+                ("MATH_INTEGRAL_NEGATIVE_POW", "f64_expr", "pow(2, -3)"),
+                (
+                    "MATH_ACCURATE_NEGATIVE_POW",
+                    "f64_expr",
+                    "pow(10, f64(-23))",
+                ),
+                ("MATH_TRUNC_INT", "i32_expr", "-2.9"),
+                ("MATH_BOOL", "boolean_expr", "max(false, true)"),
+                (
+                    "MATH_STR",
+                    "str_expr",
+                    'substr("abcd", floor(1.9), max(1, 1))',
+                ),
             ]
         )
     )
@@ -451,9 +555,9 @@ def example_file() -> descriptor_pb2.FileDescriptorProto:
     byte_array = add_field(msg, "byte_array", 43, F.TYPE_BYTES)
     byte_array.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
     fixed_integer_array = add_field(msg, "fixed_integer_array", 44, F.TYPE_UINT32, label=F.LABEL_REPEATED)
-    fixed_integer_array.options.ParseFromString(array_option_bytes(expr="FIXED_INTEGER_ARRAY_CAP", fixed=True))
+    fixed_integer_array.options.ParseFromString(array_option_bytes(expr="(BITWISE_BASE >> 1) - 2", fixed=True))
     float_expr_array = add_field(msg, "float_expr_array", 45, F.TYPE_BYTES)
-    float_expr_array.options.ParseFromString(array_option_bytes(expr="FLOATISH_BOUND"))
+    float_expr_array.options.ParseFromString(array_option_bytes(expr="pow(2, f64(-1)) * 4"))
     add_field(msg, "repeated_byte_array", 46, F.TYPE_BYTES, label=F.LABEL_REPEATED)
     bounded_repeated_byte_array = add_field(msg, "bounded_repeated_byte_array", 47, F.TYPE_BYTES,
                                             label=F.LABEL_REPEATED)
