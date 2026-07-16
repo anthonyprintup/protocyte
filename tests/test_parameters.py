@@ -101,6 +101,25 @@ def test_rejects_noncanonical_namespace_prefixes(parameter: str) -> None:
         parse_parameter(parameter)
 
 
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "my-corp",
+        "123corp",
+        "class",
+        "drv::alignas",
+        "drv::_private",
+        "drv::__private",
+        "drv::naïve",
+    ],
+)
+def test_rejects_namespace_prefixes_that_are_not_portable_cpp_identifiers(
+    prefix: str,
+) -> None:
+    with pytest.raises(ProtocyteError, match=r"non-reserved C\+\+ identifiers"):
+        parse_parameter(f"namespace_prefix={prefix}")
+
+
 def test_generator_options_rejects_noncanonical_namespace_prefix() -> None:
     with pytest.raises(ProtocyteError, match="namespace prefix"):
         GeneratorOptions(namespace_prefix="drv::::wire")
@@ -199,6 +218,31 @@ def test_rejects_prefix_whitespace_and_terminal_controls(parameter: str) -> None
 def test_rejects_unsafe_include_prefixes(prefix: str) -> None:
     with pytest.raises(ProtocyteError, match="include prefix"):
         parse_parameter(f"include_prefix={prefix}")
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        'vendor/runtime"injected',
+        "vendor/runtime<injected",
+        "vendor/runtime>injected",
+        "vendor/runtime|injected",
+        "vendor/runtime?injected",
+        "vendor/runtime*injected",
+        "vendor/runtime;injected",
+        "vendor/trailing.",
+        "vendor/CON",
+        "vendor/nul.hpp",
+        "vendor/COM1",
+        "vendor/lpt9.generated",
+    ],
+)
+@pytest.mark.parametrize("parameter", ["runtime_prefix", "include_prefix"])
+def test_rejects_virtual_prefixes_that_are_unsafe_in_generated_includes(
+    prefix: str, parameter: str
+) -> None:
+    with pytest.raises(ProtocyteError, match="unsafe in generated includes"):
+        parse_parameter(f"{parameter}={prefix}")
 
 
 def test_accepts_normalized_nested_virtual_directory_prefixes() -> None:

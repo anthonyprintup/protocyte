@@ -1,6 +1,6 @@
 #include "compat.protocyte.hpp"
 
-#ifdef PROTOCYTE_ENABLE_REFLECTION
+#if PROTOCYTE_ENABLE_REFLECTION
 namespace protocyte_smoke::test::compat {
 
     namespace protocyte_reflection {

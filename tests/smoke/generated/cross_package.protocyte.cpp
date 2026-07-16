@@ -1,6 +1,6 @@
 #include "cross_package.protocyte.hpp"
 
-#ifdef PROTOCYTE_ENABLE_REFLECTION
+#if PROTOCYTE_ENABLE_REFLECTION
 namespace test::crosspkg {
 
     namespace protocyte_reflection {

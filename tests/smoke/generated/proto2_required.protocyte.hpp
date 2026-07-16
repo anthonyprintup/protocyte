@@ -27,7 +27,7 @@ namespace test::required {
 
         explicit RequiredChild(Context &ctx) noexcept: ctx_ {&ctx}, note_ {&ctx} {}
 
-        static ::protocyte::Result<RequiredChild> create(Context &ctx) noexcept { return RequiredChild {ctx}; }
+        static RequiredChild create(Context &ctx) noexcept { return RequiredChild {ctx}; }
         Context *context() const noexcept { return ctx_; }
         RequiredChild(RequiredChild &&) noexcept = default;
         RequiredChild &operator=(RequiredChild &&) noexcept = default;
@@ -60,13 +60,10 @@ namespace test::required {
 
         ::protocyte::Result<RequiredChild> clone() const noexcept {
             auto output = RequiredChild::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(RequiredChild &output) const noexcept {
@@ -89,9 +86,7 @@ namespace test::required {
 
         ::protocyte::Status copy_from_in_place_(const RequiredChild &source) noexcept {
             if (source.has_id()) {
-                if (const auto st = set_id(source.id()); !st) {
-                    return st;
-                }
+                set_id(source.id());
             } else {
                 clear_id();
             }
@@ -109,10 +104,9 @@ namespace test::required {
 
         constexpr ::protocyte::i32 id() const noexcept { return id_; }
         constexpr bool has_id() const noexcept { return has_id_; }
-        ::protocyte::Status set_id(const ::protocyte::i32 value) noexcept {
+        void set_id(const ::protocyte::i32 value) noexcept {
             id_ = value;
             has_id_ = true;
-            return {};
         }
         constexpr void clear_id() noexcept {
             id_ = {};
@@ -163,13 +157,10 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<RequiredChild> parse(Context &ctx, Reader &reader) noexcept {
             auto output = RequiredChild::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -321,7 +312,7 @@ namespace test::required {
 
         explicit RequiredParent(Context &ctx) noexcept: ctx_ {&ctx}, children_ {&ctx} {}
 
-        static ::protocyte::Result<RequiredParent> create(Context &ctx) noexcept { return RequiredParent {ctx}; }
+        static RequiredParent create(Context &ctx) noexcept { return RequiredParent {ctx}; }
         Context *context() const noexcept { return ctx_; }
         RequiredParent(RequiredParent &&) noexcept = default;
         RequiredParent &operator=(RequiredParent &&) noexcept = default;
@@ -354,13 +345,10 @@ namespace test::required {
 
         ::protocyte::Result<RequiredParent> clone() const noexcept {
             auto output = RequiredParent::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(RequiredParent &output) const noexcept {
@@ -427,13 +415,10 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<RequiredParent> parse(Context &ctx, Reader &reader) noexcept {
             auto output = RequiredParent::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -610,9 +595,7 @@ namespace test::required {
 
         explicit Proto2ArrayDefaults(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<Proto2ArrayDefaults> create(Context &ctx) noexcept {
-            return Proto2ArrayDefaults {ctx};
-        }
+        static Proto2ArrayDefaults create(Context &ctx) noexcept { return Proto2ArrayDefaults {ctx}; }
         Context *context() const noexcept { return ctx_; }
         Proto2ArrayDefaults(Proto2ArrayDefaults &&) noexcept = default;
         Proto2ArrayDefaults &operator=(Proto2ArrayDefaults &&) noexcept = default;
@@ -646,13 +629,10 @@ namespace test::required {
 
         ::protocyte::Result<Proto2ArrayDefaults> clone() const noexcept {
             auto output = Proto2ArrayDefaults::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(Proto2ArrayDefaults &output) const noexcept {
@@ -814,13 +794,10 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<Proto2ArrayDefaults> parse(Context &ctx, Reader &reader) noexcept {
             auto output = Proto2ArrayDefaults::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -1024,9 +1001,7 @@ namespace test::required {
 
         explicit Proto2DefaultValues(Context &ctx) noexcept: ctx_ {&ctx}, string_value_ {&ctx}, bytes_value_ {&ctx} {}
 
-        static ::protocyte::Result<Proto2DefaultValues> create(Context &ctx) noexcept {
-            return Proto2DefaultValues {ctx};
-        }
+        static Proto2DefaultValues create(Context &ctx) noexcept { return Proto2DefaultValues {ctx}; }
         Context *context() const noexcept { return ctx_; }
         Proto2DefaultValues(Proto2DefaultValues &&) noexcept = default;
         Proto2DefaultValues &operator=(Proto2DefaultValues &&) noexcept = default;
@@ -1060,13 +1035,10 @@ namespace test::required {
 
         ::protocyte::Result<Proto2DefaultValues> clone() const noexcept {
             auto output = Proto2DefaultValues::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(Proto2DefaultValues &output) const noexcept {
@@ -1089,58 +1061,42 @@ namespace test::required {
 
         ::protocyte::Status copy_from_in_place_(const Proto2DefaultValues &source) noexcept {
             if (source.has_double_value()) {
-                if (const auto st = set_double_value(source.double_value()); !st) {
-                    return st;
-                }
+                set_double_value(source.double_value());
             } else {
                 clear_double_value();
             }
             if (source.has_float_value()) {
-                if (const auto st = set_float_value(source.float_value()); !st) {
-                    return st;
-                }
+                set_float_value(source.float_value());
             } else {
                 clear_float_value();
             }
             if (source.has_int64_value()) {
-                if (const auto st = set_int64_value(source.int64_value()); !st) {
-                    return st;
-                }
+                set_int64_value(source.int64_value());
             } else {
                 clear_int64_value();
             }
             if (source.has_uint64_value()) {
-                if (const auto st = set_uint64_value(source.uint64_value()); !st) {
-                    return st;
-                }
+                set_uint64_value(source.uint64_value());
             } else {
                 clear_uint64_value();
             }
             if (source.has_int32_value()) {
-                if (const auto st = set_int32_value(source.int32_value()); !st) {
-                    return st;
-                }
+                set_int32_value(source.int32_value());
             } else {
                 clear_int32_value();
             }
             if (source.has_fixed64_value()) {
-                if (const auto st = set_fixed64_value(source.fixed64_value()); !st) {
-                    return st;
-                }
+                set_fixed64_value(source.fixed64_value());
             } else {
                 clear_fixed64_value();
             }
             if (source.has_fixed32_value()) {
-                if (const auto st = set_fixed32_value(source.fixed32_value()); !st) {
-                    return st;
-                }
+                set_fixed32_value(source.fixed32_value());
             } else {
                 clear_fixed32_value();
             }
             if (source.has_bool_value()) {
-                if (const auto st = set_bool_value(source.bool_value()); !st) {
-                    return st;
-                }
+                set_bool_value(source.bool_value());
             } else {
                 clear_bool_value();
             }
@@ -1159,9 +1115,7 @@ namespace test::required {
                 clear_bytes_value();
             }
             if (source.has_uint32_value()) {
-                if (const auto st = set_uint32_value(source.uint32_value()); !st) {
-                    return st;
-                }
+                set_uint32_value(source.uint32_value());
             } else {
                 clear_uint32_value();
             }
@@ -1173,30 +1127,22 @@ namespace test::required {
                 clear_enum_value();
             }
             if (source.has_sfixed32_value()) {
-                if (const auto st = set_sfixed32_value(source.sfixed32_value()); !st) {
-                    return st;
-                }
+                set_sfixed32_value(source.sfixed32_value());
             } else {
                 clear_sfixed32_value();
             }
             if (source.has_sfixed64_value()) {
-                if (const auto st = set_sfixed64_value(source.sfixed64_value()); !st) {
-                    return st;
-                }
+                set_sfixed64_value(source.sfixed64_value());
             } else {
                 clear_sfixed64_value();
             }
             if (source.has_sint32_value()) {
-                if (const auto st = set_sint32_value(source.sint32_value()); !st) {
-                    return st;
-                }
+                set_sint32_value(source.sint32_value());
             } else {
                 clear_sint32_value();
             }
             if (source.has_sint64_value()) {
-                if (const auto st = set_sint64_value(source.sint64_value()); !st) {
-                    return st;
-                }
+                set_sint64_value(source.sint64_value());
             } else {
                 clear_sint64_value();
             }
@@ -1214,10 +1160,9 @@ namespace test::required {
 
         constexpr ::protocyte::f64 double_value() const noexcept { return has_double_value_ ? double_value_ : 1.5; }
         constexpr bool has_double_value() const noexcept { return has_double_value_; }
-        ::protocyte::Status set_double_value(const ::protocyte::f64 value) noexcept {
+        void set_double_value(const ::protocyte::f64 value) noexcept {
             double_value_ = value;
             has_double_value_ = true;
-            return {};
         }
         constexpr void clear_double_value() noexcept {
             double_value_ = {};
@@ -1226,10 +1171,9 @@ namespace test::required {
 
         constexpr ::protocyte::f32 float_value() const noexcept { return has_float_value_ ? float_value_ : -2.25f; }
         constexpr bool has_float_value() const noexcept { return has_float_value_; }
-        ::protocyte::Status set_float_value(const ::protocyte::f32 value) noexcept {
+        void set_float_value(const ::protocyte::f32 value) noexcept {
             float_value_ = value;
             has_float_value_ = true;
-            return {};
         }
         constexpr void clear_float_value() noexcept {
             float_value_ = {};
@@ -1240,10 +1184,9 @@ namespace test::required {
             return has_int64_value_ ? int64_value_ : -1234567890123ll;
         }
         constexpr bool has_int64_value() const noexcept { return has_int64_value_; }
-        ::protocyte::Status set_int64_value(const ::protocyte::i64 value) noexcept {
+        void set_int64_value(const ::protocyte::i64 value) noexcept {
             int64_value_ = value;
             has_int64_value_ = true;
-            return {};
         }
         constexpr void clear_int64_value() noexcept {
             int64_value_ = {};
@@ -1254,10 +1197,9 @@ namespace test::required {
             return has_uint64_value_ ? uint64_value_ : 1234567890123ull;
         }
         constexpr bool has_uint64_value() const noexcept { return has_uint64_value_; }
-        ::protocyte::Status set_uint64_value(const ::protocyte::u64 value) noexcept {
+        void set_uint64_value(const ::protocyte::u64 value) noexcept {
             uint64_value_ = value;
             has_uint64_value_ = true;
-            return {};
         }
         constexpr void clear_uint64_value() noexcept {
             uint64_value_ = {};
@@ -1266,10 +1208,9 @@ namespace test::required {
 
         constexpr ::protocyte::i32 int32_value() const noexcept { return has_int32_value_ ? int32_value_ : -12345; }
         constexpr bool has_int32_value() const noexcept { return has_int32_value_; }
-        ::protocyte::Status set_int32_value(const ::protocyte::i32 value) noexcept {
+        void set_int32_value(const ::protocyte::i32 value) noexcept {
             int32_value_ = value;
             has_int32_value_ = true;
-            return {};
         }
         constexpr void clear_int32_value() noexcept {
             int32_value_ = {};
@@ -1280,10 +1221,9 @@ namespace test::required {
             return has_fixed64_value_ ? fixed64_value_ : 12345678901234ull;
         }
         constexpr bool has_fixed64_value() const noexcept { return has_fixed64_value_; }
-        ::protocyte::Status set_fixed64_value(const ::protocyte::u64 value) noexcept {
+        void set_fixed64_value(const ::protocyte::u64 value) noexcept {
             fixed64_value_ = value;
             has_fixed64_value_ = true;
-            return {};
         }
         constexpr void clear_fixed64_value() noexcept {
             fixed64_value_ = {};
@@ -1294,10 +1234,9 @@ namespace test::required {
             return has_fixed32_value_ ? fixed32_value_ : 123456789u;
         }
         constexpr bool has_fixed32_value() const noexcept { return has_fixed32_value_; }
-        ::protocyte::Status set_fixed32_value(const ::protocyte::u32 value) noexcept {
+        void set_fixed32_value(const ::protocyte::u32 value) noexcept {
             fixed32_value_ = value;
             has_fixed32_value_ = true;
-            return {};
         }
         constexpr void clear_fixed32_value() noexcept {
             fixed32_value_ = {};
@@ -1306,10 +1245,9 @@ namespace test::required {
 
         constexpr bool bool_value() const noexcept { return has_bool_value_ ? bool_value_ : true; }
         constexpr bool has_bool_value() const noexcept { return has_bool_value_; }
-        ::protocyte::Status set_bool_value(const bool value) noexcept {
+        void set_bool_value(const bool value) noexcept {
             bool_value_ = value;
             has_bool_value_ = true;
-            return {};
         }
         constexpr void clear_bool_value() noexcept {
             bool_value_ = {};
@@ -1391,10 +1329,9 @@ namespace test::required {
 
         constexpr ::protocyte::u32 uint32_value() const noexcept { return has_uint32_value_ ? uint32_value_ : 456789u; }
         constexpr bool has_uint32_value() const noexcept { return has_uint32_value_; }
-        ::protocyte::Status set_uint32_value(const ::protocyte::u32 value) noexcept {
+        void set_uint32_value(const ::protocyte::u32 value) noexcept {
             uint32_value_ = value;
             has_uint32_value_ = true;
-            return {};
         }
         constexpr void clear_uint32_value() noexcept {
             uint32_value_ = {};
@@ -1427,10 +1364,9 @@ namespace test::required {
             return has_sfixed32_value_ ? sfixed32_value_ : -54321;
         }
         constexpr bool has_sfixed32_value() const noexcept { return has_sfixed32_value_; }
-        ::protocyte::Status set_sfixed32_value(const ::protocyte::i32 value) noexcept {
+        void set_sfixed32_value(const ::protocyte::i32 value) noexcept {
             sfixed32_value_ = value;
             has_sfixed32_value_ = true;
-            return {};
         }
         constexpr void clear_sfixed32_value() noexcept {
             sfixed32_value_ = {};
@@ -1441,10 +1377,9 @@ namespace test::required {
             return has_sfixed64_value_ ? sfixed64_value_ : -9876543210ll;
         }
         constexpr bool has_sfixed64_value() const noexcept { return has_sfixed64_value_; }
-        ::protocyte::Status set_sfixed64_value(const ::protocyte::i64 value) noexcept {
+        void set_sfixed64_value(const ::protocyte::i64 value) noexcept {
             sfixed64_value_ = value;
             has_sfixed64_value_ = true;
-            return {};
         }
         constexpr void clear_sfixed64_value() noexcept {
             sfixed64_value_ = {};
@@ -1453,10 +1388,9 @@ namespace test::required {
 
         constexpr ::protocyte::i32 sint32_value() const noexcept { return has_sint32_value_ ? sint32_value_ : -23456; }
         constexpr bool has_sint32_value() const noexcept { return has_sint32_value_; }
-        ::protocyte::Status set_sint32_value(const ::protocyte::i32 value) noexcept {
+        void set_sint32_value(const ::protocyte::i32 value) noexcept {
             sint32_value_ = value;
             has_sint32_value_ = true;
-            return {};
         }
         constexpr void clear_sint32_value() noexcept {
             sint32_value_ = {};
@@ -1467,10 +1401,9 @@ namespace test::required {
             return has_sint64_value_ ? sint64_value_ : -123456789012ll;
         }
         constexpr bool has_sint64_value() const noexcept { return has_sint64_value_; }
-        ::protocyte::Status set_sint64_value(const ::protocyte::i64 value) noexcept {
+        void set_sint64_value(const ::protocyte::i64 value) noexcept {
             sint64_value_ = value;
             has_sint64_value_ = true;
-            return {};
         }
         constexpr void clear_sint64_value() noexcept {
             sint64_value_ = {};
@@ -1505,13 +1438,10 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<Proto2DefaultValues> parse(Context &ctx, Reader &reader) noexcept {
             auto output = Proto2DefaultValues::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -2095,9 +2025,7 @@ namespace test::required {
 
         explicit OneofShadowingValue(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<OneofShadowingValue> create(Context &ctx) noexcept {
-            return OneofShadowingValue {ctx};
-        }
+        static OneofShadowingValue create(Context &ctx) noexcept { return OneofShadowingValue {ctx}; }
         Context *context() const noexcept { return ctx_; }
         OneofShadowingValue(OneofShadowingValue &&other) noexcept: ctx_ {other.ctx_} {
             switch (other.value_case_) {
@@ -2166,13 +2094,10 @@ namespace test::required {
 
         ::protocyte::Result<OneofShadowingValue> clone() const noexcept {
             auto output = OneofShadowingValue::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(OneofShadowingValue &output) const noexcept {
@@ -2196,9 +2121,7 @@ namespace test::required {
         ::protocyte::Status copy_from_in_place_(const OneofShadowingValue &source) noexcept {
             switch (source.value_case_) {
                 case ValueCase::bool_value: {
-                    if (const auto st = set_bool_value(source.bool_value()); !st) {
-                        return st;
-                    }
+                    set_bool_value(source.bool_value());
                     break;
                 }
                 case ValueCase::none:
@@ -2228,23 +2151,19 @@ namespace test::required {
 
         constexpr bool has_bool_value() const noexcept { return value_case_ == ValueCase::bool_value; }
         constexpr bool bool_value() const noexcept { return has_bool_value() ? value_.bool_value_ : false; }
-        ::protocyte::Status set_bool_value(const bool value) noexcept {
+        void set_bool_value(const bool value) noexcept {
             clear_value();
             new (&value_.bool_value_) bool {value};
             value_case_ = ValueCase::bool_value;
-            return {};
         }
 
         template<typename Reader>
         static ::protocyte::Result<OneofShadowingValue> parse(Context &ctx, Reader &reader) noexcept {
             auto output = OneofShadowingValue::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>

@@ -25,9 +25,7 @@ namespace protocyte_smoke::test::compat {
 
         explicit EncodingMatrix_Inner(Context &ctx) noexcept: ctx_ {&ctx}, label_ {&ctx} {}
 
-        static ::protocyte::Result<EncodingMatrix_Inner> create(Context &ctx) noexcept {
-            return EncodingMatrix_Inner {ctx};
-        }
+        static EncodingMatrix_Inner create(Context &ctx) noexcept { return EncodingMatrix_Inner {ctx}; }
         Context *context() const noexcept { return ctx_; }
         EncodingMatrix_Inner(EncodingMatrix_Inner &&) noexcept = default;
         EncodingMatrix_Inner &operator=(EncodingMatrix_Inner &&) noexcept = default;
@@ -61,13 +59,10 @@ namespace protocyte_smoke::test::compat {
 
         ::protocyte::Result<EncodingMatrix_Inner> clone() const noexcept {
             auto output = EncodingMatrix_Inner::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(EncodingMatrix_Inner &output) const noexcept {
@@ -89,9 +84,7 @@ namespace protocyte_smoke::test::compat {
         }
 
         ::protocyte::Status copy_from_in_place_(const EncodingMatrix_Inner &source) noexcept {
-            if (const auto st = set_value(source.value()); !st) {
-                return st;
-            }
+            set_value(source.value());
             if (const auto st = set_label(source.label()); !st) {
                 return st;
             }
@@ -101,10 +94,7 @@ namespace protocyte_smoke::test::compat {
     public:
 
         constexpr ::protocyte::i32 value() const noexcept { return value_; }
-        ::protocyte::Status set_value(const ::protocyte::i32 value) noexcept {
-            value_ = value;
-            return {};
-        }
+        void set_value(const ::protocyte::i32 value) noexcept { value_ = value; }
         constexpr void clear_value() noexcept { value_ = {}; }
 
         ::protocyte::StringView label() const noexcept { return label_.view(); }
@@ -142,13 +132,10 @@ namespace protocyte_smoke::test::compat {
         template<typename Reader>
         static ::protocyte::Result<EncodingMatrix_Inner> parse(Context &ctx, Reader &reader) noexcept {
             auto output = EncodingMatrix_Inner::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -338,7 +325,7 @@ namespace protocyte_smoke::test::compat {
             map_str_int32_ {&ctx},
             map_int32_str_ {&ctx} {}
 
-        static ::protocyte::Result<EncodingMatrix> create(Context &ctx) noexcept { return EncodingMatrix {ctx}; }
+        static EncodingMatrix create(Context &ctx) noexcept { return EncodingMatrix {ctx}; }
         Context *context() const noexcept { return ctx_; }
         EncodingMatrix(EncodingMatrix &&other) noexcept:
             ctx_ {other.ctx_},
@@ -497,13 +484,10 @@ namespace protocyte_smoke::test::compat {
 
         ::protocyte::Result<EncodingMatrix> clone() const noexcept {
             auto output = EncodingMatrix::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(EncodingMatrix &output) const noexcept {
@@ -525,48 +509,22 @@ namespace protocyte_smoke::test::compat {
         }
 
         ::protocyte::Status copy_from_in_place_(const EncodingMatrix &source) noexcept {
-            if (const auto st = set_f_int32(source.f_int32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_int64(source.f_int64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_uint32(source.f_uint32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_uint64(source.f_uint64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sint32(source.f_sint32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sint64(source.f_sint64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_bool(source.f_bool()); !st) {
-                return st;
-            }
+            set_f_int32(source.f_int32());
+            set_f_int64(source.f_int64());
+            set_f_uint32(source.f_uint32());
+            set_f_uint64(source.f_uint64());
+            set_f_sint32(source.f_sint32());
+            set_f_sint64(source.f_sint64());
+            set_f_bool(source.f_bool());
             if (const auto st = set_mode_raw(source.mode_raw()); !st) {
                 return st;
             }
-            if (const auto st = set_f_fixed32(source.f_fixed32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_fixed64(source.f_fixed64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sfixed32(source.f_sfixed32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sfixed64(source.f_sfixed64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_float(source.f_float()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_double(source.f_double()); !st) {
-                return st;
-            }
+            set_f_fixed32(source.f_fixed32());
+            set_f_fixed64(source.f_fixed64());
+            set_f_sfixed32(source.f_sfixed32());
+            set_f_sfixed64(source.f_sfixed64());
+            set_f_float(source.f_float());
+            set_f_double(source.f_double());
             if (const auto st = set_f_string(source.f_string()); !st) {
                 return st;
             }
@@ -594,9 +552,7 @@ namespace protocyte_smoke::test::compat {
                 return st;
             }
             if (source.has_opt_int32()) {
-                if (const auto st = set_opt_int32(source.opt_int32()); !st) {
-                    return st;
-                }
+                set_opt_int32(source.opt_int32());
             } else {
                 clear_opt_int32();
             }
@@ -621,9 +577,7 @@ namespace protocyte_smoke::test::compat {
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    if (const auto st = set_oneof_int32(source.oneof_int32()); !st) {
-                        return st;
-                    }
+                    set_oneof_int32(source.oneof_int32());
                     break;
                 }
                 case Special_oneofCase::oneof_nested: {
@@ -680,52 +634,31 @@ namespace protocyte_smoke::test::compat {
         }
 
         constexpr ::protocyte::i32 f_int32() const noexcept { return f_int32_; }
-        ::protocyte::Status set_f_int32(const ::protocyte::i32 value) noexcept {
-            f_int32_ = value;
-            return {};
-        }
+        void set_f_int32(const ::protocyte::i32 value) noexcept { f_int32_ = value; }
         constexpr void clear_f_int32() noexcept { f_int32_ = {}; }
 
         constexpr ::protocyte::i64 f_int64() const noexcept { return f_int64_; }
-        ::protocyte::Status set_f_int64(const ::protocyte::i64 value) noexcept {
-            f_int64_ = value;
-            return {};
-        }
+        void set_f_int64(const ::protocyte::i64 value) noexcept { f_int64_ = value; }
         constexpr void clear_f_int64() noexcept { f_int64_ = {}; }
 
         constexpr ::protocyte::u32 f_uint32() const noexcept { return f_uint32_; }
-        ::protocyte::Status set_f_uint32(const ::protocyte::u32 value) noexcept {
-            f_uint32_ = value;
-            return {};
-        }
+        void set_f_uint32(const ::protocyte::u32 value) noexcept { f_uint32_ = value; }
         constexpr void clear_f_uint32() noexcept { f_uint32_ = {}; }
 
         constexpr ::protocyte::u64 f_uint64() const noexcept { return f_uint64_; }
-        ::protocyte::Status set_f_uint64(const ::protocyte::u64 value) noexcept {
-            f_uint64_ = value;
-            return {};
-        }
+        void set_f_uint64(const ::protocyte::u64 value) noexcept { f_uint64_ = value; }
         constexpr void clear_f_uint64() noexcept { f_uint64_ = {}; }
 
         constexpr ::protocyte::i32 f_sint32() const noexcept { return f_sint32_; }
-        ::protocyte::Status set_f_sint32(const ::protocyte::i32 value) noexcept {
-            f_sint32_ = value;
-            return {};
-        }
+        void set_f_sint32(const ::protocyte::i32 value) noexcept { f_sint32_ = value; }
         constexpr void clear_f_sint32() noexcept { f_sint32_ = {}; }
 
         constexpr ::protocyte::i64 f_sint64() const noexcept { return f_sint64_; }
-        ::protocyte::Status set_f_sint64(const ::protocyte::i64 value) noexcept {
-            f_sint64_ = value;
-            return {};
-        }
+        void set_f_sint64(const ::protocyte::i64 value) noexcept { f_sint64_ = value; }
         constexpr void clear_f_sint64() noexcept { f_sint64_ = {}; }
 
         constexpr bool f_bool() const noexcept { return f_bool_; }
-        ::protocyte::Status set_f_bool(const bool value) noexcept {
-            f_bool_ = value;
-            return {};
-        }
+        void set_f_bool(const bool value) noexcept { f_bool_ = value; }
         constexpr void clear_f_bool() noexcept { f_bool_ = {}; }
 
         constexpr ::protocyte::i32 mode_raw() const noexcept { return mode_; }
@@ -742,45 +675,27 @@ namespace protocyte_smoke::test::compat {
         constexpr void clear_mode() noexcept { mode_ = {}; }
 
         constexpr ::protocyte::u32 f_fixed32() const noexcept { return f_fixed32_; }
-        ::protocyte::Status set_f_fixed32(const ::protocyte::u32 value) noexcept {
-            f_fixed32_ = value;
-            return {};
-        }
+        void set_f_fixed32(const ::protocyte::u32 value) noexcept { f_fixed32_ = value; }
         constexpr void clear_f_fixed32() noexcept { f_fixed32_ = {}; }
 
         constexpr ::protocyte::u64 f_fixed64() const noexcept { return f_fixed64_; }
-        ::protocyte::Status set_f_fixed64(const ::protocyte::u64 value) noexcept {
-            f_fixed64_ = value;
-            return {};
-        }
+        void set_f_fixed64(const ::protocyte::u64 value) noexcept { f_fixed64_ = value; }
         constexpr void clear_f_fixed64() noexcept { f_fixed64_ = {}; }
 
         constexpr ::protocyte::i32 f_sfixed32() const noexcept { return f_sfixed32_; }
-        ::protocyte::Status set_f_sfixed32(const ::protocyte::i32 value) noexcept {
-            f_sfixed32_ = value;
-            return {};
-        }
+        void set_f_sfixed32(const ::protocyte::i32 value) noexcept { f_sfixed32_ = value; }
         constexpr void clear_f_sfixed32() noexcept { f_sfixed32_ = {}; }
 
         constexpr ::protocyte::i64 f_sfixed64() const noexcept { return f_sfixed64_; }
-        ::protocyte::Status set_f_sfixed64(const ::protocyte::i64 value) noexcept {
-            f_sfixed64_ = value;
-            return {};
-        }
+        void set_f_sfixed64(const ::protocyte::i64 value) noexcept { f_sfixed64_ = value; }
         constexpr void clear_f_sfixed64() noexcept { f_sfixed64_ = {}; }
 
         constexpr ::protocyte::f32 f_float() const noexcept { return f_float_; }
-        ::protocyte::Status set_f_float(const ::protocyte::f32 value) noexcept {
-            f_float_ = value;
-            return {};
-        }
+        void set_f_float(const ::protocyte::f32 value) noexcept { f_float_ = value; }
         constexpr void clear_f_float() noexcept { f_float_ = {}; }
 
         constexpr ::protocyte::f64 f_double() const noexcept { return f_double_; }
-        ::protocyte::Status set_f_double(const ::protocyte::f64 value) noexcept {
-            f_double_ = value;
-            return {};
-        }
+        void set_f_double(const ::protocyte::f64 value) noexcept { f_double_ = value; }
         constexpr void clear_f_double() noexcept { f_double_ = {}; }
 
         ::protocyte::StringView f_string() const noexcept { return f_string_.view(); }
@@ -913,11 +828,10 @@ namespace protocyte_smoke::test::compat {
         constexpr ::protocyte::i32 oneof_int32() const noexcept {
             return has_oneof_int32() ? special_oneof_.oneof_int32_ : 0;
         }
-        ::protocyte::Status set_oneof_int32(const ::protocyte::i32 value) noexcept {
+        void set_oneof_int32(const ::protocyte::i32 value) noexcept {
             clear_special_oneof();
             new (&special_oneof_.oneof_int32_)::protocyte::i32 {value};
             special_oneof_case_ = Special_oneofCase::oneof_int32;
-            return {};
         }
 
         constexpr bool has_oneof_nested() const noexcept {
@@ -970,10 +884,9 @@ namespace protocyte_smoke::test::compat {
 
         constexpr ::protocyte::i32 opt_int32() const noexcept { return opt_int32_; }
         constexpr bool has_opt_int32() const noexcept { return has_opt_int32_; }
-        ::protocyte::Status set_opt_int32(const ::protocyte::i32 value) noexcept {
+        void set_opt_int32(const ::protocyte::i32 value) noexcept {
             opt_int32_ = value;
             has_opt_int32_ = true;
-            return {};
         }
         constexpr void clear_opt_int32() noexcept {
             opt_int32_ = {};
@@ -1040,13 +953,10 @@ namespace protocyte_smoke::test::compat {
         template<typename Reader>
         static ::protocyte::Result<EncodingMatrix> parse(Context &ctx, Reader &reader) noexcept {
             auto output = EncodingMatrix::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>

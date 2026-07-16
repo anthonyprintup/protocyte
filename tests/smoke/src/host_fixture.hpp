@@ -154,9 +154,7 @@ namespace protocyte_smoke::fixture {
         if (const auto st = value.set_name(name); !st) {
             return st;
         }
-        if (const auto st = value.set_id(id); !st) {
-            return st;
-        }
+        value.set_id(id);
         auto inner = value.ensure_inner();
         if (!inner) {
             return protocyte::unexpected(inner.error());
@@ -223,45 +221,19 @@ namespace protocyte_smoke::fixture {
     }
 
     inline protocyte::Status populate_message(Message &message, Config::Context &ctx) noexcept {
-        if (const auto st = message.set_f_double(123.5); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_float(12.25f); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_int32(42); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_int64(42000000000ll); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_uint32(99u); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_uint64(99000000000ull); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_sint32(-17); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_sint64(-17000000000ll); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_fixed32(0x11223344u); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_fixed64(0x1122334455667788ull); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_sfixed32(-1234567); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_sfixed64(-1234567890123ll); !st) {
-            return st;
-        }
-        if (const auto st = message.set_f_bool(true); !st) {
-            return st;
-        }
+        message.set_f_double(123.5);
+        message.set_f_float(12.25f);
+        message.set_f_int32(42);
+        message.set_f_int64(42000000000ll);
+        message.set_f_uint32(99u);
+        message.set_f_uint64(99000000000ull);
+        message.set_f_sint32(-17);
+        message.set_f_sint64(-17000000000ll);
+        message.set_f_fixed32(0x11223344u);
+        message.set_f_fixed64(0x1122334455667788ull);
+        message.set_f_sfixed32(-1234567);
+        message.set_f_sfixed64(-1234567890123ll);
+        message.set_f_bool(true);
         if (const auto st = message.set_f_string(view_of(string_bytes)); !st) {
             return st;
         }
@@ -324,9 +296,7 @@ namespace protocyte_smoke::fixture {
         if (const auto st = recursive->set_f_string(view_of(recursive_string)); !st) {
             return st;
         }
-        if (const auto st = recursive->set_f_int32(350); !st) {
-            return st;
-        }
+        recursive->set_f_int32(350);
         if (const auto st = populate_required_fixed_array(*recursive, ctx); !st) {
             return st;
         }
@@ -346,9 +316,7 @@ namespace protocyte_smoke::fixture {
         if (const auto st = message.mutable_colors().push_back(static_cast<int32_t>(Color::BLUE)); !st) {
             return st;
         }
-        if (const auto st = message.set_opt_int32(38); !st) {
-            return st;
-        }
+        message.set_opt_int32(38);
         if (const auto st = message.set_opt_string(view_of(optional_string)); !st) {
             return st;
         }

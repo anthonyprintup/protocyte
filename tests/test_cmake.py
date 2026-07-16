@@ -385,6 +385,18 @@ def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(
         r"nested\runtime",
         "nested//runtime",
         "nested/runtime/",
+        'nested/runtime"injected',
+        "nested/runtime<injected",
+        "nested/runtime>injected",
+        "nested/runtime|injected",
+        "nested/runtime?injected",
+        "nested/runtime*injected",
+        "nested/runtime;injected",
+        "nested/trailing.",
+        "nested/CON",
+        "nested/nul.hpp",
+        "nested/COM1",
+        "nested/lpt9.generated",
     ],
 )
 def test_cmake_virtual_directory_prefix_validator_rejects_unsafe_paths(

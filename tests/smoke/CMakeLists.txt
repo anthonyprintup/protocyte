@@ -264,14 +264,32 @@ protocyte_smoke_enable_std_format_if_available(protocyte_host_smoke)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
 target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain)
 
+add_library(protocyte_runtime_strict_compile OBJECT src/runtime_strict_compile.cpp)
+target_link_libraries(protocyte_runtime_strict_compile PRIVATE protocyte::runtime)
+target_compile_features(protocyte_runtime_strict_compile PRIVATE cxx_std_20)
+
+if(MSVC)
+    target_compile_options(protocyte_runtime_strict_compile PRIVATE /W4 /WX /permissive-)
+else()
+    target_compile_options(
+        protocyte_runtime_strict_compile
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -Wundef
+            -Werror
+    )
+endif()
+
 if(PROTOCYTE_SMOKE_REGENERATE)
     add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
 endif()
 
 if(MSVC)
-    target_compile_options(protocyte_host_smoke PRIVATE /W4 /permissive-)
+    target_compile_options(protocyte_host_smoke PRIVATE /W4 /WX /permissive-)
 else()
-    target_compile_options(protocyte_host_smoke PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(protocyte_host_smoke PRIVATE -Wall -Wextra -Wpedantic -Wundef -Werror)
 endif()
 
 if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)

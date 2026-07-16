@@ -577,6 +577,17 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
         "#if PROTOCYTE_ENABLE_STD_FORMAT\n#include <version>\n#if defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\n#include <format>\n#endif\n#endif"
         in runtime_header
     )
+    for feature in (
+        "STD_FORMAT",
+        "STD_STRING_VIEW",
+        "FMT_FORMAT",
+        "HOSTED_ALLOCATOR",
+        "REFLECTION",
+    ):
+        assert (
+            f"#ifndef PROTOCYTE_ENABLE_{feature}\n#define PROTOCYTE_ENABLE_{feature} 0\n#endif"
+            in runtime_header
+        )
     assert (
         "#if PROTOCYTE_ENABLE_STD_STRING_VIEW || PROTOCYTE_ENABLE_STD_FORMAT || PROTOCYTE_ENABLE_FMT_FORMAT\n#include <string_view>\n#endif"
         in runtime_header
@@ -584,6 +595,8 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW" not in runtime_header
     assert "#ifdef PROTOCYTE_ENABLE_STD_FORMAT" not in runtime_header
     assert "#ifdef PROTOCYTE_ENABLE_FMT_FORMAT" not in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR" not in runtime_header
+    assert "#if PROTOCYTE_ENABLE_HOSTED_ALLOCATOR" in runtime_header
     assert (
         "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept"
         in runtime_header
@@ -674,8 +687,8 @@ def test_runtime_discriminators_follow_payload_storage() -> None:
     runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
 
     result_body = runtime_header.split(
-        "template<class T, class E = Error> struct Result {", maxsplit=1
-    )[1].split("template<class E> struct Result<void, E> {", maxsplit=1)[0]
+        "template<class T, class E = Error> struct [[nodiscard]] Result {", maxsplit=1
+    )[1].split("template<class E> struct [[nodiscard]] Result<void, E> {", maxsplit=1)[0]
     result_storage = result_body.split("protected:", maxsplit=1)[1]
     assert ": value_ {}, ok_ {true}" in result_body
     assert ": error_ {unexpected_value.error()}, ok_ {false}" in result_body
@@ -684,7 +697,7 @@ def test_runtime_discriminators_follow_payload_storage() -> None:
     ) < result_storage.index("bool ok_;")
 
     void_result_body = runtime_header.split(
-        "template<class E> struct Result<void, E> {", maxsplit=1
+        "template<class E> struct [[nodiscard]] Result<void, E> {", maxsplit=1
     )[1].split("using Status = Result<void>;", maxsplit=1)[0]
     void_result_storage = void_result_body.split("protected:", maxsplit=1)[1]
     assert void_result_storage.index("Storage storage_;") < void_result_storage.index(
@@ -706,6 +719,13 @@ def test_runtime_discriminators_follow_payload_storage() -> None:
     assert fixed_bytes_storage.index("u8 bytes_[Max];") < fixed_bytes_storage.index(
         "bool has_ {};"
     )
+
+    array_storage = runtime_header.split(
+        "template<class T, usize Max> struct Array {", maxsplit=1
+    )[1].split("template<usize Max> using ByteArray = Array<u8, Max>;", maxsplit=1)[0]
+    assert array_storage.index(
+        "alignas(T) unsigned char storage_[sizeof(T) * Max];"
+    ) < array_storage.index("ContextStorage ctx_;")
 
 
 def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
@@ -737,6 +757,8 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "simple.protocyte.hpp" in files
     assert "simple.protocyte.cpp" in files
     assert "protocyte/runtime/runtime.hpp" in files
+    assert "#if PROTOCYTE_ENABLE_REFLECTION" in files["simple.protocyte.cpp"]
+    assert "#ifdef PROTOCYTE_ENABLE_REFLECTION" not in files["simple.protocyte.cpp"]
     assert "struct Sample;" in files["simple.protocyte.hpp"]
     assert files["simple.protocyte.hpp"].startswith(
         "#pragma once\n\n#ifndef PROTOCYTE_GENERATED_SIMPLE_PROTO_"
@@ -818,12 +840,21 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "I64 = 1u" in files["protocyte/runtime/runtime.hpp"]
     assert "LEN = 2u" in files["protocyte/runtime/runtime.hpp"]
     assert "using Status = Result<void>;" in files["protocyte/runtime/runtime.hpp"]
+    assert "template<class T, class E> struct [[nodiscard]] Result;" in files["protocyte/runtime/runtime.hpp"]
     assert (
-        "template<class T, class E = Error> struct Result {"
+        "template<class T, class E = Error> struct [[nodiscard]] Result {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "template<class E> struct Result<void, E> {"
+        "template<class T, class E> struct [[nodiscard]] Result<T &, E> {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "template<class E> struct [[nodiscard]] Result<void, E> {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "template<class E> struct [[nodiscard]] Result<void, E> {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert "using value_type = T;" in files["protocyte/runtime/runtime.hpp"]
@@ -1061,7 +1092,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "template<class T, class E> struct Result<T &, E> {"
+        "template<class T, class E> struct [[nodiscard]] Result<T &, E> {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1069,7 +1100,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "template<class T, class E> struct Result<T &&, E> {"
+        "template<class T, class E> struct [[nodiscard]] Result<T &&, E> {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -2058,7 +2089,10 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "ctx_{&ctx}" in header
     assert "items_{&ctx}" in header
     assert "samples_{&ctx}" in header
-    assert "::protocyte::Status set_id(const ::protocyte::i32 value) noexcept" in header
+    assert "static Sample create(Context& ctx) noexcept" in header
+    assert "static ::protocyte::Result<Sample> create" not in header
+    assert "void set_id(const ::protocyte::i32 value) noexcept" in header
+    assert "set_id(source.id());" in header
     assert "const auto tag = ::protocyte::read_tag(reader);" in header
     assert "const auto [field_number, wire_type] = *tag;" in header
     assert (
@@ -2096,7 +2130,7 @@ def test_generated_header_contains_expected_field_api() -> None:
         not in header
     )
     assert "for (const auto &packed_value_signed_samples : signed_samples_) {" in header
-    assert "if (const auto st = clone(*output); !st)" in header
+    assert "if (const auto st = clone(output); !st)" in header
     assert "copy_from(const Sample& source, Sample& staging_message)" in header
     assert "Sample staging_message{*ctx_};" in header
     assert "staging_message.copy_from_in_place_(source)" in header
@@ -2335,7 +2369,7 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
     assert (
         "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     )
-    assert "if (const auto st = clone(*output); !st) {" in header
+    assert "if (const auto st = clone(output); !st) {" in header
     assert (
         "::protocyte::Status clone(UltimateComplexMessage &output) const noexcept"
         in header
@@ -2488,7 +2522,7 @@ def test_field_collision_checks_only_emitted_accessors() -> None:
     )
     assert "void clear_values() noexcept" in header
     assert (
-        "::protocyte::Status set_set_values(const ::protocyte::i32 value) noexcept"
+        "void set_set_values(const ::protocyte::i32 value) noexcept"
         in header
     )
 
@@ -4287,7 +4321,7 @@ def test_generated_header_uses_real_source_for_map_only_copy() -> None:
     assert "if (this == &source) {" in header
     assert "const auto& map_source = source;" in header
     assert "mutable_items().copy_from(map_source.items())" in header
-    assert "if (const auto st = clone(*output); !st) {" in header
+    assert "if (const auto st = clone(output); !st) {" in header
 
 
 def test_rejects_invalid_hex_numeric_literals() -> None:
@@ -4756,7 +4790,7 @@ def test_generated_header_suffixes_shadow_prone_oneof_storage() -> None:
         "constexpr bool bool_value() const noexcept { return has_bool_value() ? value_.bool_value_ : false; }"
         in header
     )
-    assert "::protocyte::Status set_bool_value(const bool value) noexcept" in header
+    assert "void set_bool_value(const bool value) noexcept" in header
     assert (
         "constexpr ValueCase value_case() const noexcept { return value_case_; }"
         in header

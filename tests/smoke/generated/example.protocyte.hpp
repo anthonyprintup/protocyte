@@ -56,7 +56,7 @@ namespace test::ultimate {
         explicit UltimateComplexMessage_NestedLevel1_NestedLevel2(Context &ctx) noexcept:
             ctx_ {&ctx}, description_ {&ctx}, values_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_NestedLevel1_NestedLevel2 create(Context &ctx) noexcept {
             return UltimateComplexMessage_NestedLevel1_NestedLevel2 {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -96,13 +96,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2> clone() const noexcept {
             auto output = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_NestedLevel1_NestedLevel2 &output) const noexcept {
@@ -192,13 +189,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -415,7 +409,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_NestedLevel1(Context &ctx) noexcept: ctx_ {&ctx}, name_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_NestedLevel1> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_NestedLevel1 create(Context &ctx) noexcept {
             return UltimateComplexMessage_NestedLevel1 {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -451,13 +445,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_NestedLevel1> clone() const noexcept {
             auto output = UltimateComplexMessage_NestedLevel1::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_NestedLevel1 &output) const noexcept {
@@ -482,9 +473,7 @@ namespace test::ultimate {
             if (const auto st = set_name(source.name()); !st) {
                 return st;
             }
-            if (const auto st = set_id(source.id()); !st) {
-                return st;
-            }
+            set_id(source.id());
             if (source.has_inner()) {
                 const auto ensured_inner = ensure_inner();
                 if (!ensured_inner) {
@@ -534,10 +523,7 @@ namespace test::ultimate {
         void clear_name() noexcept { name_.clear(); }
 
         constexpr ::protocyte::i32 id() const noexcept { return id_; }
-        ::protocyte::Status set_id(const ::protocyte::i32 value) noexcept {
-            id_ = value;
-            return {};
-        }
+        void set_id(const ::protocyte::i32 value) noexcept { id_ = value; }
         constexpr void clear_id() noexcept { id_ = {}; }
 
         bool has_inner() const noexcept { return inner_.has_value(); }
@@ -559,13 +545,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_NestedLevel1::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -755,7 +738,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_RepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx}, values_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_RepeatedBytesHolder create(Context &ctx) noexcept {
             return UltimateComplexMessage_RepeatedBytesHolder {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -793,13 +776,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder> clone() const noexcept {
             auto output = UltimateComplexMessage_RepeatedBytesHolder::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_RepeatedBytesHolder &output) const noexcept {
@@ -836,13 +816,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_RepeatedBytesHolder::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -962,7 +939,7 @@ namespace test::ultimate {
         explicit UltimateComplexMessage_BoundedRepeatedBytesHolder(Context &ctx) noexcept:
             ctx_ {&ctx}, values_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_BoundedRepeatedBytesHolder create(Context &ctx) noexcept {
             return UltimateComplexMessage_BoundedRepeatedBytesHolder {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -1002,13 +979,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> clone() const noexcept {
             auto output = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_BoundedRepeatedBytesHolder &output) const noexcept {
@@ -1046,13 +1020,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -1173,7 +1144,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_FixedRepeatedBytesHolder(Context &ctx) noexcept: ctx_ {&ctx}, values_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_FixedRepeatedBytesHolder create(Context &ctx) noexcept {
             return UltimateComplexMessage_FixedRepeatedBytesHolder {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -1213,13 +1184,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> clone() const noexcept {
             auto output = UltimateComplexMessage_FixedRepeatedBytesHolder::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_FixedRepeatedBytesHolder &output) const noexcept {
@@ -1257,13 +1225,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_FixedRepeatedBytesHolder::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -1401,8 +1366,7 @@ namespace test::ultimate {
         explicit UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE(Context &ctx) noexcept:
             ctx_ {&ctx}, extreme_ {&ctx}, weird_map_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
-        create(Context &ctx) noexcept {
+        static UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE create(Context &ctx) noexcept {
             return UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -1494,13 +1458,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE> clone() const noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &output) const noexcept {
@@ -1532,9 +1493,7 @@ namespace test::ultimate {
             }
             switch (source.deep_oneof_case_) {
                 case Deep_oneofCase::val: {
-                    if (const auto st = set_val(source.val()); !st) {
-                        return st;
-                    }
+                    set_val(source.val());
                     break;
                 }
                 case Deep_oneofCase::text: {
@@ -1614,11 +1573,10 @@ namespace test::ultimate {
 
         constexpr bool has_val() const noexcept { return deep_oneof_case_ == Deep_oneofCase::val; }
         constexpr ::protocyte::i64 val() const noexcept { return has_val() ? deep_oneof_.val_ : 0; }
-        ::protocyte::Status set_val(const ::protocyte::i64 value) noexcept {
+        void set_val(const ::protocyte::i64 value) noexcept {
             clear_deep_oneof();
             new (&deep_oneof_.val_)::protocyte::i64 {value};
             deep_oneof_case_ = Deep_oneofCase::val;
-            return {};
         }
 
         constexpr bool has_text() const noexcept { return deep_oneof_case_ == Deep_oneofCase::text; }
@@ -1661,13 +1619,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -2171,9 +2126,7 @@ namespace test::ultimate {
             bounded_repeated_byte_array_ {&ctx},
             fixed_repeated_byte_array_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage> create(Context &ctx) noexcept {
-            return UltimateComplexMessage {ctx};
-        }
+        static UltimateComplexMessage create(Context &ctx) noexcept { return UltimateComplexMessage {ctx}; }
         Context *context() const noexcept { return ctx_; }
         UltimateComplexMessage(UltimateComplexMessage &&other) noexcept:
             ctx_ {other.ctx_},
@@ -2459,13 +2412,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage> clone() const noexcept {
             auto output = UltimateComplexMessage::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage &output) const noexcept {
@@ -2487,45 +2437,19 @@ namespace test::ultimate {
         }
 
         ::protocyte::Status copy_from_in_place_(const UltimateComplexMessage &source) noexcept {
-            if (const auto st = set_f_double(source.f_double()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_float(source.f_float()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_int32(source.f_int32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_int64(source.f_int64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_uint32(source.f_uint32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_uint64(source.f_uint64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sint32(source.f_sint32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sint64(source.f_sint64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_fixed32(source.f_fixed32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_fixed64(source.f_fixed64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sfixed32(source.f_sfixed32()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_sfixed64(source.f_sfixed64()); !st) {
-                return st;
-            }
-            if (const auto st = set_f_bool(source.f_bool()); !st) {
-                return st;
-            }
+            set_f_double(source.f_double());
+            set_f_float(source.f_float());
+            set_f_int32(source.f_int32());
+            set_f_int64(source.f_int64());
+            set_f_uint32(source.f_uint32());
+            set_f_uint64(source.f_uint64());
+            set_f_sint32(source.f_sint32());
+            set_f_sint64(source.f_sint64());
+            set_f_fixed32(source.f_fixed32());
+            set_f_fixed64(source.f_fixed64());
+            set_f_sfixed32(source.f_sfixed32());
+            set_f_sfixed64(source.f_sfixed64());
+            set_f_bool(source.f_bool());
             if (const auto st = set_f_string(source.f_string()); !st) {
                 return st;
             }
@@ -2588,9 +2512,7 @@ namespace test::ultimate {
                 return st;
             }
             if (source.has_opt_int32()) {
-                if (const auto st = set_opt_int32(source.opt_int32()); !st) {
-                    return st;
-                }
+                set_opt_int32(source.opt_int32());
             } else {
                 clear_opt_int32();
             }
@@ -2650,9 +2572,7 @@ namespace test::ultimate {
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    if (const auto st = set_oneof_int32(source.oneof_int32()); !st) {
-                        return st;
-                    }
+                    set_oneof_int32(source.oneof_int32());
                     break;
                 }
                 case Special_oneofCase::oneof_msg: {
@@ -2803,94 +2723,55 @@ namespace test::ultimate {
         }
 
         constexpr ::protocyte::f64 f_double() const noexcept { return f_double_; }
-        ::protocyte::Status set_f_double(const ::protocyte::f64 value) noexcept {
-            f_double_ = value;
-            return {};
-        }
+        void set_f_double(const ::protocyte::f64 value) noexcept { f_double_ = value; }
         constexpr void clear_f_double() noexcept { f_double_ = {}; }
 
         constexpr ::protocyte::f32 f_float() const noexcept { return f_float_; }
-        ::protocyte::Status set_f_float(const ::protocyte::f32 value) noexcept {
-            f_float_ = value;
-            return {};
-        }
+        void set_f_float(const ::protocyte::f32 value) noexcept { f_float_ = value; }
         constexpr void clear_f_float() noexcept { f_float_ = {}; }
 
         constexpr ::protocyte::i32 f_int32() const noexcept { return f_int32_; }
-        ::protocyte::Status set_f_int32(const ::protocyte::i32 value) noexcept {
-            f_int32_ = value;
-            return {};
-        }
+        void set_f_int32(const ::protocyte::i32 value) noexcept { f_int32_ = value; }
         constexpr void clear_f_int32() noexcept { f_int32_ = {}; }
 
         constexpr ::protocyte::i64 f_int64() const noexcept { return f_int64_; }
-        ::protocyte::Status set_f_int64(const ::protocyte::i64 value) noexcept {
-            f_int64_ = value;
-            return {};
-        }
+        void set_f_int64(const ::protocyte::i64 value) noexcept { f_int64_ = value; }
         constexpr void clear_f_int64() noexcept { f_int64_ = {}; }
 
         constexpr ::protocyte::u32 f_uint32() const noexcept { return f_uint32_; }
-        ::protocyte::Status set_f_uint32(const ::protocyte::u32 value) noexcept {
-            f_uint32_ = value;
-            return {};
-        }
+        void set_f_uint32(const ::protocyte::u32 value) noexcept { f_uint32_ = value; }
         constexpr void clear_f_uint32() noexcept { f_uint32_ = {}; }
 
         constexpr ::protocyte::u64 f_uint64() const noexcept { return f_uint64_; }
-        ::protocyte::Status set_f_uint64(const ::protocyte::u64 value) noexcept {
-            f_uint64_ = value;
-            return {};
-        }
+        void set_f_uint64(const ::protocyte::u64 value) noexcept { f_uint64_ = value; }
         constexpr void clear_f_uint64() noexcept { f_uint64_ = {}; }
 
         constexpr ::protocyte::i32 f_sint32() const noexcept { return f_sint32_; }
-        ::protocyte::Status set_f_sint32(const ::protocyte::i32 value) noexcept {
-            f_sint32_ = value;
-            return {};
-        }
+        void set_f_sint32(const ::protocyte::i32 value) noexcept { f_sint32_ = value; }
         constexpr void clear_f_sint32() noexcept { f_sint32_ = {}; }
 
         constexpr ::protocyte::i64 f_sint64() const noexcept { return f_sint64_; }
-        ::protocyte::Status set_f_sint64(const ::protocyte::i64 value) noexcept {
-            f_sint64_ = value;
-            return {};
-        }
+        void set_f_sint64(const ::protocyte::i64 value) noexcept { f_sint64_ = value; }
         constexpr void clear_f_sint64() noexcept { f_sint64_ = {}; }
 
         constexpr ::protocyte::u32 f_fixed32() const noexcept { return f_fixed32_; }
-        ::protocyte::Status set_f_fixed32(const ::protocyte::u32 value) noexcept {
-            f_fixed32_ = value;
-            return {};
-        }
+        void set_f_fixed32(const ::protocyte::u32 value) noexcept { f_fixed32_ = value; }
         constexpr void clear_f_fixed32() noexcept { f_fixed32_ = {}; }
 
         constexpr ::protocyte::u64 f_fixed64() const noexcept { return f_fixed64_; }
-        ::protocyte::Status set_f_fixed64(const ::protocyte::u64 value) noexcept {
-            f_fixed64_ = value;
-            return {};
-        }
+        void set_f_fixed64(const ::protocyte::u64 value) noexcept { f_fixed64_ = value; }
         constexpr void clear_f_fixed64() noexcept { f_fixed64_ = {}; }
 
         constexpr ::protocyte::i32 f_sfixed32() const noexcept { return f_sfixed32_; }
-        ::protocyte::Status set_f_sfixed32(const ::protocyte::i32 value) noexcept {
-            f_sfixed32_ = value;
-            return {};
-        }
+        void set_f_sfixed32(const ::protocyte::i32 value) noexcept { f_sfixed32_ = value; }
         constexpr void clear_f_sfixed32() noexcept { f_sfixed32_ = {}; }
 
         constexpr ::protocyte::i64 f_sfixed64() const noexcept { return f_sfixed64_; }
-        ::protocyte::Status set_f_sfixed64(const ::protocyte::i64 value) noexcept {
-            f_sfixed64_ = value;
-            return {};
-        }
+        void set_f_sfixed64(const ::protocyte::i64 value) noexcept { f_sfixed64_ = value; }
         constexpr void clear_f_sfixed64() noexcept { f_sfixed64_ = {}; }
 
         constexpr bool f_bool() const noexcept { return f_bool_; }
-        ::protocyte::Status set_f_bool(const bool value) noexcept {
-            f_bool_ = value;
-            return {};
-        }
+        void set_f_bool(const bool value) noexcept { f_bool_ = value; }
         constexpr void clear_f_bool() noexcept { f_bool_ = {}; }
 
         ::protocyte::StringView f_string() const noexcept { return f_string_.view(); }
@@ -3036,11 +2917,10 @@ namespace test::ultimate {
         constexpr ::protocyte::i32 oneof_int32() const noexcept {
             return has_oneof_int32() ? special_oneof_.oneof_int32_ : 0;
         }
-        ::protocyte::Status set_oneof_int32(const ::protocyte::i32 value) noexcept {
+        void set_oneof_int32(const ::protocyte::i32 value) noexcept {
             clear_special_oneof();
             new (&special_oneof_.oneof_int32_)::protocyte::i32 {value};
             special_oneof_case_ = Special_oneofCase::oneof_int32;
-            return {};
         }
 
         constexpr bool has_oneof_msg() const noexcept { return special_oneof_case_ == Special_oneofCase::oneof_msg; }
@@ -3320,10 +3200,9 @@ namespace test::ultimate {
 
         constexpr ::protocyte::i32 opt_int32() const noexcept { return opt_int32_; }
         constexpr bool has_opt_int32() const noexcept { return has_opt_int32_; }
-        ::protocyte::Status set_opt_int32(const ::protocyte::i32 value) noexcept {
+        void set_opt_int32(const ::protocyte::i32 value) noexcept {
             opt_int32_ = value;
             has_opt_int32_ = true;
-            return {};
         }
         constexpr void clear_opt_int32() noexcept {
             opt_int32_ = {};
@@ -3541,13 +3420,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -6364,7 +6240,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_LevelA(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_LevelA> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_LevelA create(Context &ctx) noexcept {
             return UltimateComplexMessage_LevelA {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -6400,13 +6276,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_LevelA> clone() const noexcept {
             auto output = UltimateComplexMessage_LevelA::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA &output) const noexcept {
@@ -6436,13 +6309,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage_LevelA> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -6513,7 +6383,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_LevelA_LevelB(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_LevelA_LevelB create(Context &ctx) noexcept {
             return UltimateComplexMessage_LevelA_LevelB {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -6549,13 +6419,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB> clone() const noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB &output) const noexcept {
@@ -6585,13 +6452,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -6662,7 +6526,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_LevelA_LevelB_LevelC(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_LevelA_LevelB_LevelC create(Context &ctx) noexcept {
             return UltimateComplexMessage_LevelA_LevelB_LevelC {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -6700,13 +6564,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC> clone() const noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC &output) const noexcept {
@@ -6737,13 +6598,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -6814,7 +6672,7 @@ namespace test::ultimate {
 
         explicit UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD> create(Context &ctx) noexcept {
+        static UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD create(Context &ctx) noexcept {
             return UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD {ctx};
         }
         Context *context() const noexcept { return ctx_; }
@@ -6854,13 +6712,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD> clone() const noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &output) const noexcept {
@@ -6891,13 +6746,10 @@ namespace test::ultimate {
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader> static ::protocyte::Status
@@ -6970,7 +6822,7 @@ namespace test::ultimate {
 
         explicit ExtraMessage(Context &ctx) noexcept: ctx_ {&ctx}, tag_ {&ctx} {}
 
-        static ::protocyte::Result<ExtraMessage> create(Context &ctx) noexcept { return ExtraMessage {ctx}; }
+        static ExtraMessage create(Context &ctx) noexcept { return ExtraMessage {ctx}; }
         Context *context() const noexcept { return ctx_; }
         ExtraMessage(ExtraMessage &&) noexcept = default;
         ExtraMessage &operator=(ExtraMessage &&) noexcept = default;
@@ -7003,13 +6855,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<ExtraMessage> clone() const noexcept {
             auto output = ExtraMessage::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(ExtraMessage &output) const noexcept {
@@ -7100,13 +6949,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<ExtraMessage> parse(Context &ctx, Reader &reader) noexcept {
             auto output = ExtraMessage::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -7272,9 +7118,7 @@ namespace test::ultimate {
 
         explicit CrossMessageConstants_Nested(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<CrossMessageConstants_Nested> create(Context &ctx) noexcept {
-            return CrossMessageConstants_Nested {ctx};
-        }
+        static CrossMessageConstants_Nested create(Context &ctx) noexcept { return CrossMessageConstants_Nested {ctx}; }
         Context *context() const noexcept { return ctx_; }
         CrossMessageConstants_Nested(CrossMessageConstants_Nested &&) noexcept = default;
         CrossMessageConstants_Nested &operator=(CrossMessageConstants_Nested &&) noexcept = default;
@@ -7308,13 +7152,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<CrossMessageConstants_Nested> clone() const noexcept {
             auto output = CrossMessageConstants_Nested::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(CrossMessageConstants_Nested &output) const noexcept {
@@ -7389,13 +7230,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<CrossMessageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossMessageConstants_Nested::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -7538,9 +7376,7 @@ namespace test::ultimate {
 
         explicit CrossMessageConstants(Context &ctx) noexcept: ctx_ {&ctx}, mirrored_values_ {&ctx} {}
 
-        static ::protocyte::Result<CrossMessageConstants> create(Context &ctx) noexcept {
-            return CrossMessageConstants {ctx};
-        }
+        static CrossMessageConstants create(Context &ctx) noexcept { return CrossMessageConstants {ctx}; }
         Context *context() const noexcept { return ctx_; }
         CrossMessageConstants(CrossMessageConstants &&) noexcept = default;
         CrossMessageConstants &operator=(CrossMessageConstants &&) noexcept = default;
@@ -7574,13 +7410,10 @@ namespace test::ultimate {
 
         ::protocyte::Result<CrossMessageConstants> clone() const noexcept {
             auto output = CrossMessageConstants::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(CrossMessageConstants &output) const noexcept {
@@ -7688,13 +7521,10 @@ namespace test::ultimate {
         template<typename Reader>
         static ::protocyte::Result<CrossMessageConstants> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossMessageConstants::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>

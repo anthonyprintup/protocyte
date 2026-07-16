@@ -23,9 +23,7 @@ namespace test::crosspkg {
 
         explicit CrossPackageConstants_Nested(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<CrossPackageConstants_Nested> create(Context &ctx) noexcept {
-            return CrossPackageConstants_Nested {ctx};
-        }
+        static CrossPackageConstants_Nested create(Context &ctx) noexcept { return CrossPackageConstants_Nested {ctx}; }
         Context *context() const noexcept { return ctx_; }
         CrossPackageConstants_Nested(CrossPackageConstants_Nested &&) noexcept = default;
         CrossPackageConstants_Nested &operator=(CrossPackageConstants_Nested &&) noexcept = default;
@@ -59,13 +57,10 @@ namespace test::crosspkg {
 
         ::protocyte::Result<CrossPackageConstants_Nested> clone() const noexcept {
             auto output = CrossPackageConstants_Nested::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(CrossPackageConstants_Nested &output) const noexcept {
@@ -140,13 +135,10 @@ namespace test::crosspkg {
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossPackageConstants_Nested::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
@@ -290,9 +282,7 @@ namespace test::crosspkg {
 
         explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx}, remote_values_ {&ctx} {}
 
-        static ::protocyte::Result<CrossPackageConstants> create(Context &ctx) noexcept {
-            return CrossPackageConstants {ctx};
-        }
+        static CrossPackageConstants create(Context &ctx) noexcept { return CrossPackageConstants {ctx}; }
         Context *context() const noexcept { return ctx_; }
         CrossPackageConstants(CrossPackageConstants &&) noexcept = default;
         CrossPackageConstants &operator=(CrossPackageConstants &&) noexcept = default;
@@ -326,13 +316,10 @@ namespace test::crosspkg {
 
         ::protocyte::Result<CrossPackageConstants> clone() const noexcept {
             auto output = CrossPackageConstants::create(*ctx_);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = clone(*output); !st) {
+            if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         ::protocyte::Status clone(CrossPackageConstants &output) const noexcept {
@@ -440,13 +427,10 @@ namespace test::crosspkg {
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossPackageConstants::create(ctx);
-            if (!output) {
-                return output;
-            }
-            if (const auto st = parse(ctx, reader, *output); !st) {
+            if (const auto st = parse(ctx, reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return output;
+            return ::protocyte::move(output);
         }
 
         template<typename Reader>
