@@ -244,6 +244,13 @@ option/type resolution; unreferenced runtime descriptors stay dependency-only,
 while referenced runtime message/enum descriptors are generated when selected
 files need their generated types.
 
+Descriptors that Protocyte cannot generate, such as files with unsupported
+message-scoped extension declarations, may remain dependency-only when no
+generated field uses their types. If a selected field references a message or
+enum from such a file, `DISCOVER` fails immediately and identifies the field,
+type, descriptor, and unsupported declaration instead of emitting a header with
+an unavailable generated include.
+
 Formatter executable and config values in `OPTIONS` may use absolute Windows
 or POSIX paths. Generated include and runtime prefixes are not filesystem paths;
 they must use the normalized relative virtual-directory form documented below.
@@ -821,13 +828,35 @@ cannot report allocation failure.
 Common generated operations include:
 
 - `create(ctx)`
-- `parse(ctx, reader)`
+- `parse(ctx, reader)` and `parse(ctx, reader, output)`
 - `merge_from(reader)`
 - `serialize(writer)`
 - `encoded_size()`
-- `copy_from(other)`
-- `clone()`
+- `copy_from(source)` and `copy_from(source, staging_message)`
+- `clone()` and `clone(output)`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
+
+The convenience `copy_from(source)`, `clone()`, and `parse(ctx, reader)` forms
+may materialize one complete generated message in automatic storage. Their
+caller-supplied overloads avoid that full-message stack temporary:
+
+```cpp
+demo::Sample<> staging_message{ctx};
+if (const auto st = destination.copy_from(source, staging_message); !st) {
+    // destination is unchanged
+}
+
+demo::Sample<> cloned{ctx};
+auto clone_status = source.clone(cloned);
+```
+
+`staging_message` is consumed as transactional working state and is valid but
+moved-from after success. It must not alias either copy operand. `clone(output)`
+and `parse(ctx, reader, output)` reset and directly populate `output`; on
+failure, `output` is reset to an empty message bound to the requested context.
+These overloads do not allocate the outer message object. Dynamic strings,
+bytes, vectors, maps, and boxed messages still allocate through `Config` and
+its caller-supplied context.
 
 ### Parse Resource Limits
 

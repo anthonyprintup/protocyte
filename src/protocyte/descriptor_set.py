@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
 from google.protobuf import descriptor_pb2
@@ -13,6 +14,12 @@ from protocyte.extensions import is_custom_option_extension
 
 _RUNTIME_PREFIX = "google/protobuf/"
 _INTERNAL_DESCRIPTOR_FILES = {"protocyte/options.proto"}
+
+
+@dataclass(frozen=True)
+class _TypeReference:
+    type_name: str
+    field_path: str
 
 
 def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
@@ -74,17 +81,19 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
         if not name.startswith(_RUNTIME_PREFIX) and _is_initial_discoverable_target(file)
     }
     type_files = _index_declared_types(files.values())
-    stack = list(selected)
+    stack = sorted(selected, reverse=True)
     while stack:
         file = files[stack.pop()]
-        for type_name in _referenced_type_names(file):
-            referenced = type_files.get(_normalize_type_name(type_name))
-            if (
-                referenced is None
-                or referenced in selected
-                or not _is_referenced_type_discoverable(files[referenced])
-            ):
+        for reference in _referenced_types(file):
+            referenced = type_files.get(_normalize_type_name(reference.type_name))
+            if referenced is None or referenced in selected:
                 continue
+            blocker = _referenced_type_generation_blocker(files[referenced])
+            if blocker is not None:
+                raise ProtocyteError(
+                    f"{file.name}: field {reference.field_path} references type {reference.type_name} "
+                    f"from {referenced}, but {referenced} cannot be generated because {blocker}"
+                )
             selected.add(referenced)
             stack.append(referenced)
 
@@ -101,7 +110,18 @@ def _is_initial_discoverable_target(file: descriptor_pb2.FileDescriptorProto) ->
 
 
 def _is_referenced_type_discoverable(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return file.name not in _INTERNAL_DESCRIPTOR_FILES and not _declares_unsupported_message_scoped_extensions(file)
+    return _referenced_type_generation_blocker(file) is None
+
+
+def _referenced_type_generation_blocker(file: descriptor_pb2.FileDescriptorProto) -> str | None:
+    if file.name in _INTERNAL_DESCRIPTOR_FILES:
+        return "it is reserved for Protocyte generator internals"
+    for extension, scope in _extension_declarations(file):
+        if scope is not None and not is_custom_option_extension(extension):
+            return (
+                f"message {scope.removeprefix('.')} declares unsupported extension {extension.name}"
+            )
+    return None
 
 
 def _is_pure_custom_option_definition(file: descriptor_pb2.FileDescriptorProto) -> bool:
@@ -214,16 +234,6 @@ def _is_extension_helper_type(type_name: str, helper_roots: set[str]) -> bool:
     return any(type_name == root or type_name.startswith(f"{root}.") for root in helper_roots)
 
 
-def _declares_unsupported_message_scoped_extensions(file: descriptor_pb2.FileDescriptorProto) -> bool:
-    return any(_message_declares_unsupported_extensions(message) for message in file.message_type)
-
-
-def _message_declares_unsupported_extensions(message: descriptor_pb2.DescriptorProto) -> bool:
-    if any(not is_custom_option_extension(extension) for extension in message.extension):
-        return True
-    return any(_message_declares_unsupported_extensions(nested) for nested in message.nested_type)
-
-
 def _declared_type_names(file: descriptor_pb2.FileDescriptorProto) -> Iterable[str]:
     package = tuple(part for part in file.package.split(".") if part)
     for message in file.message_type:
@@ -279,17 +289,21 @@ def _message_type_names(
         yield _fully_qualified_name((*path, enum.name))
 
 
-def _referenced_type_names(file: descriptor_pb2.FileDescriptorProto) -> Iterable[str]:
+def _referenced_types(file: descriptor_pb2.FileDescriptorProto) -> Iterable[_TypeReference]:
+    package = tuple(part for part in file.package.split(".") if part)
     for message in file.message_type:
-        yield from _message_referenced_type_names(message)
+        yield from _message_referenced_types(message, (*package, message.name))
 
 
-def _message_referenced_type_names(
+def _message_referenced_types(
     message: descriptor_pb2.DescriptorProto,
-) -> Iterable[str]:
-    yield from _message_direct_referenced_type_names(message)
+    path: tuple[str, ...],
+) -> Iterable[_TypeReference]:
+    for field in message.field:
+        if field.type_name:
+            yield _TypeReference(field.type_name, ".".join((*path, field.name)))
     for nested in message.nested_type:
-        yield from _message_referenced_type_names(nested)
+        yield from _message_referenced_types(nested, (*path, nested.name))
 
 
 def _message_direct_referenced_type_names(

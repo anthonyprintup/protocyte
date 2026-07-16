@@ -32,26 +32,68 @@ namespace test::crosspkg {
         CrossPackageConstants_Nested(const CrossPackageConstants_Nested &) = delete;
         CrossPackageConstants_Nested &operator=(const CrossPackageConstants_Nested &) = delete;
 
-        ::protocyte::Status copy_from(const CrossPackageConstants_Nested &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const CrossPackageConstants_Nested &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_nested_bytes(other.nested_bytes()); !st) {
+            CrossPackageConstants_Nested staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const CrossPackageConstants_Nested &source,
+                                      CrossPackageConstants_Nested &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<CrossPackageConstants_Nested> clone() const noexcept {
+            auto output = CrossPackageConstants_Nested::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(CrossPackageConstants_Nested &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<CrossPackageConstants_Nested> clone() const noexcept {
-            auto out = CrossPackageConstants_Nested::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(CrossPackageConstants_Nested &value, Context &ctx) noexcept {
+            value.~CrossPackageConstants_Nested();
+            new (&value) CrossPackageConstants_Nested {ctx};
         }
+
+        ::protocyte::Status copy_from_in_place_(const CrossPackageConstants_Nested &source) noexcept {
+            if (const auto st = set_nested_bytes(source.nested_bytes()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         ::protocyte::Span<const ::protocyte::u8> nested_bytes() const noexcept { return nested_bytes_.view(); }
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
@@ -97,14 +139,24 @@ namespace test::crosspkg {
 
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = CrossPackageConstants_Nested::create(ctx);
-            if (!out) {
-                return out;
+            auto output = CrossPackageConstants_Nested::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, CrossPackageConstants_Nested &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -247,22 +299,73 @@ namespace test::crosspkg {
         CrossPackageConstants(const CrossPackageConstants &) = delete;
         CrossPackageConstants &operator=(const CrossPackageConstants &) = delete;
 
-        ::protocyte::Status copy_from(const CrossPackageConstants &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const CrossPackageConstants &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_remote_bytes(other.remote_bytes()); !st) {
+            CrossPackageConstants staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const CrossPackageConstants &source,
+                                      CrossPackageConstants &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = mutable_remote_values().copy_from(other.remote_values()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<CrossPackageConstants> clone() const noexcept {
+            auto output = CrossPackageConstants::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(CrossPackageConstants &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
-            if (other.has_nested()) {
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(CrossPackageConstants &value, Context &ctx) noexcept {
+            value.~CrossPackageConstants();
+            new (&value) CrossPackageConstants {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const CrossPackageConstants &source) noexcept {
+            if (const auto st = set_remote_bytes(source.remote_bytes()); !st) {
+                return st;
+            }
+            if (const auto st = mutable_remote_values().copy_from(source.remote_values()); !st) {
+                return st;
+            }
+            if (source.has_nested()) {
                 const auto ensured_nested = ensure_nested();
                 if (!ensured_nested) {
                     return ensured_nested.status();
                 }
-                if (const auto st = ensured_nested->copy_from(*other.nested()); !st) {
+                if (const auto st = ensured_nested->copy_from(*source.nested()); !st) {
                     return st;
                 }
             } else {
@@ -271,16 +374,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        ::protocyte::Result<CrossPackageConstants> clone() const noexcept {
-            auto out = CrossPackageConstants::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         ::protocyte::Span<const ::protocyte::u8> remote_bytes() const noexcept { return remote_bytes_.view(); }
         ::protocyte::usize remote_bytes_size() const noexcept { return remote_bytes_.size(); }
@@ -345,14 +439,24 @@ namespace test::crosspkg {
 
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = CrossPackageConstants::create(ctx);
-            if (!out) {
-                return out;
+            auto output = CrossPackageConstants::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, CrossPackageConstants &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {

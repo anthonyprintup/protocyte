@@ -190,12 +190,55 @@ def _file_with_nested_extension() -> descriptor_pb2.FileDescriptorProto:
     file.syntax = "proto2"
     message = file.message_type.add()
     message.name = "Owner"
+    extension_range = message.extension_range.add()
+    extension_range.start = 100
+    extension_range.end = 101
     extension = message.extension.add()
     extension.name = "legacy_marker"
     extension.number = 100
     extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
     extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
     extension.extendee = ".custom.Owner"
+    return file
+
+
+def _file_with_nested_extension_and_public_types() -> descriptor_pb2.FileDescriptorProto:
+    file = _file_with_nested_extension()
+    payload = file.message_type.add()
+    payload.name = "PublicPayload"
+    identifier = payload.field.add()
+    identifier.name = "id"
+    identifier.number = 1
+    identifier.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    identifier.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+
+    state = file.enum_type.add()
+    state.name = "PublicState"
+    unknown = state.value.add()
+    unknown.name = "PUBLIC_STATE_UNKNOWN"
+    unknown.number = 0
+    ready = state.value.add()
+    ready.name = "PUBLIC_STATE_READY"
+    ready.number = 1
+    return file
+
+
+def _file_with_type_reference(
+    name: str,
+    dependency: str,
+    *,
+    field_name: str,
+    field_type: int,
+    type_name: str,
+) -> descriptor_pb2.FileDescriptorProto:
+    file = _file(name, dependency)
+    file.package = "api"
+    field = file.message_type[0].field.add()
+    field.name = field_name
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    field.type = field_type
+    field.type_name = type_name
     return file
 
 
@@ -266,6 +309,35 @@ def test_plugin_entrypoint_dispatches_descriptor_set_commands(
 
     assert plugin_main(["descriptor-set", "list", str(descriptor_set)]) == 0
     assert capsys.readouterr().out.strip() == "api/demo.proto"
+
+
+def test_plugin_entrypoint_reports_blocked_discovered_type_dependency(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    descriptor_set = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        descriptor_set,
+        _file_with_nested_extension_and_public_types(),
+        _file_with_type_reference(
+            "api/request.proto",
+            "custom/nested_options.proto",
+            field_name="payload",
+            field_type=descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
+            type_name=".custom.PublicPayload",
+        ),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        plugin_main(["descriptor-set", "list", str(descriptor_set)])
+
+    assert exc_info.value.code == 1
+    assert capsys.readouterr().err.strip() == (
+        "protocyte: api/request.proto: field api.Sample.payload references type "
+        ".custom.PublicPayload from custom/nested_options.proto, but "
+        "custom/nested_options.proto cannot be generated because message custom.Owner "
+        "declares unsupported extension legacy_marker"
+    )
 
 
 def test_load_descriptor_set_reports_invalid_bytes(tmp_path: Path) -> None:
@@ -507,3 +579,73 @@ def test_discover_files_skips_message_scoped_extension_descriptors(tmp_path: Pat
     )
 
     assert discover_files(load_descriptor_set(path)) == ["api/request.proto"]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_type", "type_name"),
+    [
+        (
+            "payload",
+            descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
+            ".custom.PublicPayload",
+        ),
+        (
+            "state",
+            descriptor_pb2.FieldDescriptorProto.TYPE_ENUM,
+            ".custom.PublicState",
+        ),
+    ],
+)
+def test_discover_files_rejects_referenced_types_from_message_scoped_extension_descriptors(
+    tmp_path: Path,
+    field_name: str,
+    field_type: int,
+    type_name: str,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(
+        path,
+        _file_with_nested_extension_and_public_types(),
+        _file_with_type_reference(
+            "api/request.proto",
+            "custom/nested_options.proto",
+            field_name=field_name,
+            field_type=field_type,
+            type_name=type_name,
+        ),
+    )
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    assert str(exc_info.value) == (
+        f"api/request.proto: field api.Sample.{field_name} references type {type_name} "
+        "from custom/nested_options.proto, but custom/nested_options.proto cannot be generated "
+        "because message custom.Owner declares unsupported extension legacy_marker"
+    )
+
+
+def test_discover_files_rejects_referenced_types_from_internal_descriptors(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    internal = _file("protocyte/options.proto")
+    internal.package = "protocyte"
+    _write_descriptor_set(
+        path,
+        internal,
+        _file_with_type_reference(
+            "api/request.proto",
+            "protocyte/options.proto",
+            field_name="options",
+            field_type=descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
+            type_name=".protocyte.Sample",
+        ),
+    )
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    assert str(exc_info.value) == (
+        "api/request.proto: field api.Sample.options references type .protocyte.Sample "
+        "from protocyte/options.proto, but protocyte/options.proto cannot be generated because "
+        "it is reserved for Protocyte generator internals"
+    )

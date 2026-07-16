@@ -504,6 +504,8 @@ def _reserve_message_function_cpp_names(
         ("create", "generated create function"),
         ("context", "generated context accessor"),
         ("copy_from", "generated copy function"),
+        ("copy_from_in_place_", "generated in-place copy helper"),
+        ("reset_for_reuse_", "generated message reset helper"),
         ("clone", "generated clone function"),
         ("parse", "generated parse function"),
         ("merge_from", "generated merge function"),
@@ -563,8 +565,13 @@ def _reserve_message_function_parameter_cpp_names(
         function(f"{message.cpp_name} move constructor", "other")
         function("operator= move", "other")
         function("destroy_at_", "value")
-    function("copy_from", "other")
+    function("copy_from", "source")
+    function("copy_from with staging", "source", "staging_message")
+    function("copy_from_in_place_", "source")
+    function("reset_for_reuse_", "value", "ctx")
+    function("clone with output", "output")
     function("parse", "ctx", "reader")
+    function("parse with output", "ctx", "reader", "output")
     function("merge_from", "reader")
     function("merge_partial_from", "reader")
     if message.fields:
@@ -1130,27 +1137,90 @@ def _emit_clone_api(
         item.kind == "map" for item in non_oneof_fields
     )
     w.line(
-        f"::protocyte::Status copy_from(const {message.cpp_name}& other) noexcept {{"
+        f"::protocyte::Status copy_from(const {message.cpp_name}& source) noexcept {{"
+    )
+    with w.indent():
+        w.line("if (this == &source) { return {}; }")
+        w.line(f"{message.cpp_name} staging_message{{*ctx_}};")
+        w.line("return copy_from(source, staging_message);")
+    w.line("}")
+    w.line()
+    w.line(
+        f"::protocyte::Status copy_from(const {message.cpp_name}& source, {message.cpp_name}& staging_message) noexcept {{"
+    )
+    with w.indent():
+        w.line("if (this == &source) { return {}; }")
+        w.line("if (this == &staging_message || &source == &staging_message) {")
+        with w.indent():
+            w.line(
+                "return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});"
+            )
+        w.line("}")
+        w.line("reset_for_reuse_(staging_message, *ctx_);")
+        w.line("if (const auto st = staging_message.copy_from_in_place_(source); !st) {")
+        with w.indent():
+            w.line("reset_for_reuse_(staging_message, *ctx_);")
+            w.line("return st;")
+        w.line("}")
+        w.line("*this = ::protocyte::move(staging_message);")
+        w.line("return {};")
+    w.line("}")
+    w.line()
+    w.line(f"::protocyte::Result<{message.cpp_name}> clone() const noexcept {{")
+    with w.indent():
+        w.line(f"auto output = {message.cpp_name}::create(*ctx_);")
+        w.line("if (!output) { return output; }")
+        w.line(
+            "if (const auto st = clone(*output); !st) { return ::protocyte::unexpected(st.error()); }"
+        )
+        w.line("return output;")
+    w.line("}")
+    w.line()
+    w.line(
+        f"::protocyte::Status clone({message.cpp_name}& output) const noexcept {{"
+    )
+    with w.indent():
+        w.line("if (this == &output) { return {}; }")
+        w.line("reset_for_reuse_(output, *ctx_);")
+        w.line("if (const auto st = output.copy_from_in_place_(*this); !st) {")
+        with w.indent():
+            w.line("reset_for_reuse_(output, *ctx_);")
+            w.line("return st;")
+        w.line("}")
+        w.line("return {};")
+    w.line("}")
+    w.line()
+    w.line("protected:")
+    w.line(
+        f"static void reset_for_reuse_({message.cpp_name}& value, Context& ctx) noexcept {{"
+    )
+    with w.indent():
+        w.line(f"value.~{message.cpp_name}();")
+        w.line(f"new (&value) {message.cpp_name}{{ctx}};")
+    w.line("}")
+    w.line()
+    in_place_source = "source" if message.fields else "/* source */"
+    w.line(
+        f"::protocyte::Status copy_from_in_place_(const {message.cpp_name}& {in_place_source}) noexcept {{"
     )
     w.push()
-    w.line("if (this == &other) { return {}; }")
     if map_only:
-        w.line("const auto& source = other;")
+        w.line("const auto& map_source = source;")
     for item in message.fields:
         if item.oneof_name is not None:
             continue
         if item.fixed_bytes:
-            w.line(f"if (other.has_{item.cpp_name}()) {{")
+            w.line(f"if (source.has_{item.cpp_name}()) {{")
             w.push()
             w.line(
-                f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                f"if (const auto st = set_{item.cpp_name}(source.{item.cpp_name}()); !st) {{ return st; }}"
             )
             w.pop()
             w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
             continue
         if item.kind == "map":
             _emit_copy_map_field(
-                w, item, options, source="source" if map_only else "other"
+                w, item, options, source="map_source" if map_only else "source"
             )
             continue
         if item.repeated_array:
@@ -1161,65 +1231,56 @@ def _emit_clone_api(
             continue
         if item.kind in {"string", "bytes"}:
             if _has_presence_flag(item):
-                w.line(f"if (other.has_{item.cpp_name}()) {{")
+                w.line(f"if (source.has_{item.cpp_name}()) {{")
                 w.push()
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                    f"if (const auto st = set_{item.cpp_name}(source.{item.cpp_name}()); !st) {{ return st; }}"
                 )
                 w.pop()
                 w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
             else:
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                    f"if (const auto st = set_{item.cpp_name}(source.{item.cpp_name}()); !st) {{ return st; }}"
                 )
         elif item.kind == "message":
-            w.line(f"if (other.has_{item.cpp_name}()) {{")
+            w.line(f"if (source.has_{item.cpp_name}()) {{")
             w.push()
-            _emit_copy_message_from_pointer(w, item, f"other.{item.cpp_name}()")
+            _emit_copy_message_from_pointer(w, item, f"source.{item.cpp_name}()")
             w.pop()
             w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
         elif item.kind == "enum":
             if _has_presence_flag(item):
-                w.line(f"if (other.has_{item.cpp_name}()) {{")
+                w.line(f"if (source.has_{item.cpp_name}()) {{")
                 w.push()
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}_raw(other.{item.cpp_name}_raw()); !st) {{ return st; }}"
+                    f"if (const auto st = set_{item.cpp_name}_raw(source.{item.cpp_name}_raw()); !st) {{ return st; }}"
                 )
                 w.pop()
                 w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
             else:
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}_raw(other.{item.cpp_name}_raw()); !st) {{ return st; }}"
+                    f"if (const auto st = set_{item.cpp_name}_raw(source.{item.cpp_name}_raw()); !st) {{ return st; }}"
                 )
         elif not item.repeated and item.kind != "map":
             if _has_presence_flag(item):
-                w.line(f"if (other.has_{item.cpp_name}()) {{")
+                w.line(f"if (source.has_{item.cpp_name}()) {{")
                 w.push()
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                    f"if (const auto st = set_{item.cpp_name}(source.{item.cpp_name}()); !st) {{ return st; }}"
                 )
                 w.pop()
                 w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
             else:
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                    f"if (const auto st = set_{item.cpp_name}(source.{item.cpp_name}()); !st) {{ return st; }}"
                 )
     for oneof in message.oneofs:
-        _emit_copy_oneof_from_other(w, oneof, options, source="other")
+        _emit_copy_oneof_from_other(w, oneof, options, source="source")
     w.line("return {};")
     w.pop()
     w.line("}")
     w.line()
-    w.line(f"::protocyte::Result<{message.cpp_name}> clone() const noexcept {{")
-    w.push()
-    w.line(f"auto out = {message.cpp_name}::create(*ctx_);")
-    w.line("if (!out) { return out; }")
-    w.line(
-        "if (const auto st = out->copy_from(*this); !st) { return ::protocyte::unexpected(st.error()); }"
-    )
-    w.line("return out;")
-    w.pop()
-    w.line("}")
+    w.line("public:")
     w.line()
 
 
@@ -1227,7 +1288,7 @@ def _emit_copy_repeated_field(
     w: CppWriter, item: FieldModel, options: GeneratorOptions
 ) -> None:
     del options
-    source = f"other.{item.cpp_name}()"
+    source = f"source.{item.cpp_name}()"
     w.line(
         f"if (const auto st = mutable_{item.cpp_name}().copy_from({source}); !st) {{ return st; }}"
     )
@@ -1814,12 +1875,26 @@ def _emit_wire_api(
         f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, Reader& reader) noexcept {{"
     )
     with w.indent():
-        w.line(f"auto out = {message.cpp_name}::create(ctx);")
-        w.line("if (!out) { return out; }")
+        w.line(f"auto output = {message.cpp_name}::create(ctx);")
+        w.line("if (!output) { return output; }")
         w.line(
-            "if (const auto st = out->merge_from(reader); !st) { return ::protocyte::unexpected(st.error()); }"
+            "if (const auto st = parse(ctx, reader, *output); !st) { return ::protocyte::unexpected(st.error()); }"
         )
-        w.line("return out;")
+        w.line("return output;")
+    w.line("}")
+    w.line()
+    w.line("template <typename Reader>")
+    w.line(
+        f"static ::protocyte::Status parse(Context& ctx, Reader& reader, {message.cpp_name}& output) noexcept {{"
+    )
+    with w.indent():
+        w.line("reset_for_reuse_(output, ctx);")
+        w.line("if (const auto st = output.merge_from(reader); !st) {")
+        with w.indent():
+            w.line("reset_for_reuse_(output, ctx);")
+            w.line("return st;")
+        w.line("}")
+        w.line("return {};")
     w.line("}")
     w.line()
     w.line("template <typename Reader>")
@@ -1881,6 +1956,7 @@ def _emit_wire_api(
         _emit_fixed_array_validation(w, message)
         _emit_closed_enum_validation(w, message)
         _emit_required_validation(w, message)
+        _emit_string_validation(w, message)
         _emit_nested_validation(w, message)
         w.line("return {};")
     w.line("}")
@@ -2007,6 +2083,59 @@ def _emit_closed_enum_validation(
             w.line("}")
             continue
         _emit_closed_enum_reject(w, item, condition)
+
+
+def _emit_string_validation_reject(
+    w: CppWriter, item: FieldModel, value_expr: str
+) -> None:
+    w.line(f"if (const auto st = {value_expr}.validate(); !st) {{")
+    with w.indent():
+        w.line(
+            "return ::protocyte::unexpected("
+            f"st.error().code, st.error().offset, {_field_number_u32(item)});"
+        )
+    w.line("}")
+
+
+def _emit_string_validation(w: CppWriter, message: MessageModel) -> None:
+    for item in sorted(message.fields, key=lambda f: f.number):
+        if item.kind == "map":
+            assert item.map_key is not None and item.map_value is not None
+            string_members = [
+                member
+                for member in (item.map_key, item.map_value)
+                if member.kind == "string"
+            ]
+            if not string_members:
+                continue
+            entry_name = f"{item.cpp_name}_entry"
+            w.line(f"for (const auto &{entry_name} : {_member(item)}) {{")
+            with w.indent():
+                for member in string_members:
+                    _emit_string_validation_reject(
+                        w, item, f"{entry_name}.{member.cpp_name}"
+                    )
+            w.line("}")
+            continue
+
+        if item.kind != "string":
+            continue
+        if item.repeated:
+            value_name = f"{item.cpp_name}_value"
+            w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
+            with w.indent():
+                _emit_string_validation_reject(w, item, value_name)
+            w.line("}")
+            continue
+        if item.oneof_name is not None:
+            case_member = _oneof_case_member(item.oneof_name)
+            case_type = _oneof_case_type(item.oneof_name)
+            w.line(f"if ({case_member} == {case_type}::{item.cpp_name}) {{")
+            with w.indent():
+                _emit_string_validation_reject(w, item, _member(item))
+            w.line("}")
+            continue
+        _emit_string_validation_reject(w, item, _member(item))
 
 
 def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:

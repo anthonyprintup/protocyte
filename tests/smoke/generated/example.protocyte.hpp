@@ -69,32 +69,75 @@ namespace test::ultimate {
         UltimateComplexMessage_NestedLevel1_NestedLevel2 &
         operator=(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_description(other.description()); !st) {
+            UltimateComplexMessage_NestedLevel1_NestedLevel2 staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &source,
+                                      UltimateComplexMessage_NestedLevel1_NestedLevel2 &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = mutable_values().copy_from(other.values()); !st) {
-                return st;
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2> clone() const noexcept {
+            auto output = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(*ctx_);
+            if (!output) {
+                return output;
             }
-            if (const auto st = set_mode_raw(other.mode_raw()); !st) {
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage_NestedLevel1_NestedLevel2 &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2> clone() const noexcept {
-            auto out = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_NestedLevel1_NestedLevel2 &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_NestedLevel1_NestedLevel2();
+            new (&value) UltimateComplexMessage_NestedLevel1_NestedLevel2 {ctx};
         }
+
+        ::protocyte::Status
+        copy_from_in_place_(const UltimateComplexMessage_NestedLevel1_NestedLevel2 &source) noexcept {
+            if (const auto st = set_description(source.description()); !st) {
+                return st;
+            }
+            if (const auto st = mutable_values().copy_from(source.values()); !st) {
+                return st;
+            }
+            if (const auto st = set_mode_raw(source.mode_raw()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         ::protocyte::StringView description() const noexcept { return description_.view(); }
         typename Config::String &mutable_description() noexcept { return description_; }
@@ -148,14 +191,24 @@ namespace test::ultimate {
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_NestedLevel1_NestedLevel2 &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -335,7 +388,13 @@ namespace test::ultimate {
             return total;
         }
 
-        ::protocyte::Status validate() const noexcept { return {}; }
+        ::protocyte::Status validate() const noexcept {
+            if (const auto st = description_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::description));
+            }
+            return {};
+        }
     protected:
         Context *ctx_;
         typename Config::String description_;
@@ -365,22 +424,73 @@ namespace test::ultimate {
         UltimateComplexMessage_NestedLevel1(const UltimateComplexMessage_NestedLevel1 &) = delete;
         UltimateComplexMessage_NestedLevel1 &operator=(const UltimateComplexMessage_NestedLevel1 &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1 &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1 &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_name(other.name()); !st) {
+            UltimateComplexMessage_NestedLevel1 staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_NestedLevel1 &source,
+                                      UltimateComplexMessage_NestedLevel1 &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = set_id(other.id()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_NestedLevel1> clone() const noexcept {
+            auto output = UltimateComplexMessage_NestedLevel1::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage_NestedLevel1 &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
-            if (other.has_inner()) {
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_NestedLevel1 &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_NestedLevel1();
+            new (&value) UltimateComplexMessage_NestedLevel1 {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const UltimateComplexMessage_NestedLevel1 &source) noexcept {
+            if (const auto st = set_name(source.name()); !st) {
+                return st;
+            }
+            if (const auto st = set_id(source.id()); !st) {
+                return st;
+            }
+            if (source.has_inner()) {
                 const auto ensured_inner = ensure_inner();
                 if (!ensured_inner) {
                     return ensured_inner.status();
                 }
-                if (const auto st = ensured_inner->copy_from(*other.inner()); !st) {
+                if (const auto st = ensured_inner->copy_from(*source.inner()); !st) {
                     return st;
                 }
             } else {
@@ -389,16 +499,7 @@ namespace test::ultimate {
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage_NestedLevel1> clone() const noexcept {
-            auto out = UltimateComplexMessage_NestedLevel1::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         ::protocyte::StringView name() const noexcept { return name_.view(); }
         typename Config::String &mutable_name() noexcept { return name_; }
@@ -457,14 +558,24 @@ namespace test::ultimate {
 
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_NestedLevel1::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_NestedLevel1::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_NestedLevel1 &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -617,6 +728,10 @@ namespace test::ultimate {
         }
 
         ::protocyte::Status validate() const noexcept {
+            if (const auto st = name_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::name));
+            }
             if (inner_.has_value()) {
                 if (const auto st = inner_->validate(); !st) {
                     return st;
@@ -651,26 +766,68 @@ namespace test::ultimate {
         UltimateComplexMessage_RepeatedBytesHolder &
         operator=(const UltimateComplexMessage_RepeatedBytesHolder &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_RepeatedBytesHolder &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_RepeatedBytesHolder &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+            UltimateComplexMessage_RepeatedBytesHolder staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_RepeatedBytesHolder &source,
+                                      UltimateComplexMessage_RepeatedBytesHolder &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder> clone() const noexcept {
+            auto output = UltimateComplexMessage_RepeatedBytesHolder::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage_RepeatedBytesHolder &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder> clone() const noexcept {
-            auto out = UltimateComplexMessage_RepeatedBytesHolder::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_RepeatedBytesHolder &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_RepeatedBytesHolder();
+            new (&value) UltimateComplexMessage_RepeatedBytesHolder {ctx};
         }
+
+        ::protocyte::Status copy_from_in_place_(const UltimateComplexMessage_RepeatedBytesHolder &source) noexcept {
+            if (const auto st = mutable_values().copy_from(source.values()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         const typename Config::template Vector<typename Config::Bytes> &values() const noexcept { return values_; }
         typename Config::template Vector<typename Config::Bytes> &mutable_values() noexcept { return values_; }
@@ -678,14 +835,24 @@ namespace test::ultimate {
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_RepeatedBytesHolder::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_RepeatedBytesHolder::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_RepeatedBytesHolder &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -808,26 +975,69 @@ namespace test::ultimate {
         UltimateComplexMessage_BoundedRepeatedBytesHolder &
         operator=(const UltimateComplexMessage_BoundedRepeatedBytesHolder &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_BoundedRepeatedBytesHolder &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_BoundedRepeatedBytesHolder &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+            UltimateComplexMessage_BoundedRepeatedBytesHolder staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_BoundedRepeatedBytesHolder &source,
+                                      UltimateComplexMessage_BoundedRepeatedBytesHolder &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> clone() const noexcept {
+            auto output = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage_BoundedRepeatedBytesHolder &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> clone() const noexcept {
-            auto out = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_BoundedRepeatedBytesHolder &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_BoundedRepeatedBytesHolder();
+            new (&value) UltimateComplexMessage_BoundedRepeatedBytesHolder {ctx};
         }
+
+        ::protocyte::Status
+        copy_from_in_place_(const UltimateComplexMessage_BoundedRepeatedBytesHolder &source) noexcept {
+            if (const auto st = mutable_values().copy_from(source.values()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         const ::protocyte::Array<typename Config::Bytes, 3u> &values() const noexcept { return values_; }
         ::protocyte::Array<typename Config::Bytes, 3u> &mutable_values() noexcept { return values_; }
@@ -835,14 +1045,24 @@ namespace test::ultimate {
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_BoundedRepeatedBytesHolder &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -966,26 +1186,69 @@ namespace test::ultimate {
         UltimateComplexMessage_FixedRepeatedBytesHolder &
         operator=(const UltimateComplexMessage_FixedRepeatedBytesHolder &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_FixedRepeatedBytesHolder &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_FixedRepeatedBytesHolder &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = mutable_values().copy_from(other.values()); !st) {
+            UltimateComplexMessage_FixedRepeatedBytesHolder staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_FixedRepeatedBytesHolder &source,
+                                      UltimateComplexMessage_FixedRepeatedBytesHolder &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> clone() const noexcept {
+            auto output = UltimateComplexMessage_FixedRepeatedBytesHolder::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage_FixedRepeatedBytesHolder &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> clone() const noexcept {
-            auto out = UltimateComplexMessage_FixedRepeatedBytesHolder::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_FixedRepeatedBytesHolder &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_FixedRepeatedBytesHolder();
+            new (&value) UltimateComplexMessage_FixedRepeatedBytesHolder {ctx};
         }
+
+        ::protocyte::Status
+        copy_from_in_place_(const UltimateComplexMessage_FixedRepeatedBytesHolder &source) noexcept {
+            if (const auto st = mutable_values().copy_from(source.values()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         const ::protocyte::Array<typename Config::Bytes, 3u> &values() const noexcept { return values_; }
         ::protocyte::Array<typename Config::Bytes, 3u> &mutable_values() noexcept { return values_; }
@@ -993,14 +1256,24 @@ namespace test::ultimate {
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_FixedRepeatedBytesHolder::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_FixedRepeatedBytesHolder::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_FixedRepeatedBytesHolder &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -1192,25 +1465,80 @@ namespace test::ultimate {
 
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status
+        copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_extreme(other.extreme()); !st) {
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status
+        copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &source,
+                  UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = mutable_weird_map().copy_from(other.weird_map()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE> clone() const noexcept {
+            auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
-            switch (other.deep_oneof_case_) {
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &value,
+                                     Context &ctx) noexcept {
+            value.~UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE();
+            new (&value) UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE {ctx};
+        }
+
+        ::protocyte::Status
+        copy_from_in_place_(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &source) noexcept {
+            if (const auto st = set_extreme(source.extreme()); !st) {
+                return st;
+            }
+            if (const auto st = mutable_weird_map().copy_from(source.weird_map()); !st) {
+                return st;
+            }
+            switch (source.deep_oneof_case_) {
                 case Deep_oneofCase::val: {
-                    if (const auto st = set_val(other.val()); !st) {
+                    if (const auto st = set_val(source.val()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Deep_oneofCase::text: {
-                    if (const auto st = set_text(other.text()); !st) {
+                    if (const auto st = set_text(source.text()); !st) {
                         return st;
                     }
                     break;
@@ -1224,16 +1552,7 @@ namespace test::ultimate {
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE> clone() const noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         constexpr Deep_oneofCase deep_oneof_case() const noexcept { return deep_oneof_case_; }
         void clear_deep_oneof() noexcept {
@@ -1341,14 +1660,25 @@ namespace test::ultimate {
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader,
+                                         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -1631,7 +1961,25 @@ namespace test::ultimate {
             return total;
         }
 
-        ::protocyte::Status validate() const noexcept { return {}; }
+        ::protocyte::Status validate() const noexcept {
+            if (const auto st = extreme_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::extreme));
+            }
+            for (const auto &weird_map_entry : weird_map_) {
+                if (const auto st = weird_map_entry.value.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::weird_map));
+                }
+            }
+            if (deep_oneof_case_ == Deep_oneofCase::text) {
+                if (const auto st = deep_oneof_.text_.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::text));
+                }
+            }
+            return {};
+        }
     protected:
         Context *ctx_;
         typename Config::String extreme_;
@@ -2084,173 +2432,225 @@ namespace test::ultimate {
 
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_f_double(other.f_double()); !st) {
+            UltimateComplexMessage staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage &source,
+                                      UltimateComplexMessage &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = set_f_float(other.f_float()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<UltimateComplexMessage> clone() const noexcept {
+            auto output = UltimateComplexMessage::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(UltimateComplexMessage &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
-            if (const auto st = set_f_int32(other.f_int32()); !st) {
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage();
+            new (&value) UltimateComplexMessage {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const UltimateComplexMessage &source) noexcept {
+            if (const auto st = set_f_double(source.f_double()); !st) {
                 return st;
             }
-            if (const auto st = set_f_int64(other.f_int64()); !st) {
+            if (const auto st = set_f_float(source.f_float()); !st) {
                 return st;
             }
-            if (const auto st = set_f_uint32(other.f_uint32()); !st) {
+            if (const auto st = set_f_int32(source.f_int32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_uint64(other.f_uint64()); !st) {
+            if (const auto st = set_f_int64(source.f_int64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sint32(other.f_sint32()); !st) {
+            if (const auto st = set_f_uint32(source.f_uint32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sint64(other.f_sint64()); !st) {
+            if (const auto st = set_f_uint64(source.f_uint64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_fixed32(other.f_fixed32()); !st) {
+            if (const auto st = set_f_sint32(source.f_sint32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_fixed64(other.f_fixed64()); !st) {
+            if (const auto st = set_f_sint64(source.f_sint64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sfixed32(other.f_sfixed32()); !st) {
+            if (const auto st = set_f_fixed32(source.f_fixed32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sfixed64(other.f_sfixed64()); !st) {
+            if (const auto st = set_f_fixed64(source.f_fixed64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_bool(other.f_bool()); !st) {
+            if (const auto st = set_f_sfixed32(source.f_sfixed32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_string(other.f_string()); !st) {
+            if (const auto st = set_f_sfixed64(source.f_sfixed64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_bytes(other.f_bytes()); !st) {
+            if (const auto st = set_f_bool(source.f_bool()); !st) {
                 return st;
             }
-            if (const auto st = mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked()); !st) {
+            if (const auto st = set_f_string(source.f_string()); !st) {
                 return st;
             }
-            if (const auto st = mutable_r_int32_packed().copy_from(other.r_int32_packed()); !st) {
+            if (const auto st = set_f_bytes(source.f_bytes()); !st) {
                 return st;
             }
-            if (const auto st = mutable_r_double().copy_from(other.r_double()); !st) {
+            if (const auto st = mutable_r_int32_unpacked().copy_from(source.r_int32_unpacked()); !st) {
                 return st;
             }
-            if (const auto st = set_color_raw(other.color_raw()); !st) {
+            if (const auto st = mutable_r_int32_packed().copy_from(source.r_int32_packed()); !st) {
                 return st;
             }
-            if (other.has_nested1()) {
+            if (const auto st = mutable_r_double().copy_from(source.r_double()); !st) {
+                return st;
+            }
+            if (const auto st = set_color_raw(source.color_raw()); !st) {
+                return st;
+            }
+            if (source.has_nested1()) {
                 const auto ensured_nested1 = ensure_nested1();
                 if (!ensured_nested1) {
                     return ensured_nested1.status();
                 }
-                if (const auto st = ensured_nested1->copy_from(*other.nested1()); !st) {
+                if (const auto st = ensured_nested1->copy_from(*source.nested1()); !st) {
                     return st;
                 }
             } else {
                 clear_nested1();
             }
-            if (const auto st = mutable_map_str_int32().copy_from(other.map_str_int32()); !st) {
+            if (const auto st = mutable_map_str_int32().copy_from(source.map_str_int32()); !st) {
                 return st;
             }
-            if (const auto st = mutable_map_int32_str().copy_from(other.map_int32_str()); !st) {
+            if (const auto st = mutable_map_int32_str().copy_from(source.map_int32_str()); !st) {
                 return st;
             }
-            if (const auto st = mutable_map_bool_bytes().copy_from(other.map_bool_bytes()); !st) {
+            if (const auto st = mutable_map_bool_bytes().copy_from(source.map_bool_bytes()); !st) {
                 return st;
             }
-            if (const auto st = mutable_map_uint64_msg().copy_from(other.map_uint64_msg()); !st) {
+            if (const auto st = mutable_map_uint64_msg().copy_from(source.map_uint64_msg()); !st) {
                 return st;
             }
-            if (const auto st = mutable_very_nested_map().copy_from(other.very_nested_map()); !st) {
+            if (const auto st = mutable_very_nested_map().copy_from(source.very_nested_map()); !st) {
                 return st;
             }
-            if (other.has_recursive_self()) {
+            if (source.has_recursive_self()) {
                 const auto ensured_recursive_self = ensure_recursive_self();
                 if (!ensured_recursive_self) {
                     return ensured_recursive_self.status();
                 }
-                if (const auto st = ensured_recursive_self->copy_from(*other.recursive_self()); !st) {
+                if (const auto st = ensured_recursive_self->copy_from(*source.recursive_self()); !st) {
                     return st;
                 }
             } else {
                 clear_recursive_self();
             }
-            if (const auto st = mutable_lots_of_nested().copy_from(other.lots_of_nested()); !st) {
+            if (const auto st = mutable_lots_of_nested().copy_from(source.lots_of_nested()); !st) {
                 return st;
             }
-            if (const auto st = mutable_colors().copy_from(other.colors()); !st) {
+            if (const auto st = mutable_colors().copy_from(source.colors()); !st) {
                 return st;
             }
-            if (other.has_opt_int32()) {
-                if (const auto st = set_opt_int32(other.opt_int32()); !st) {
+            if (source.has_opt_int32()) {
+                if (const auto st = set_opt_int32(source.opt_int32()); !st) {
                     return st;
                 }
             } else {
                 clear_opt_int32();
             }
-            if (other.has_opt_string()) {
-                if (const auto st = set_opt_string(other.opt_string()); !st) {
+            if (source.has_opt_string()) {
+                if (const auto st = set_opt_string(source.opt_string()); !st) {
                     return st;
                 }
             } else {
                 clear_opt_string();
             }
-            if (other.has_extreme_nesting()) {
+            if (source.has_extreme_nesting()) {
                 const auto ensured_extreme_nesting = ensure_extreme_nesting();
                 if (!ensured_extreme_nesting) {
                     return ensured_extreme_nesting.status();
                 }
-                if (const auto st = ensured_extreme_nesting->copy_from(*other.extreme_nesting()); !st) {
+                if (const auto st = ensured_extreme_nesting->copy_from(*source.extreme_nesting()); !st) {
                     return st;
                 }
             } else {
                 clear_extreme_nesting();
             }
-            if (other.has_sha256()) {
-                if (const auto st = set_sha256(other.sha256()); !st) {
+            if (source.has_sha256()) {
+                if (const auto st = set_sha256(source.sha256()); !st) {
                     return st;
                 }
             } else {
                 clear_sha256();
             }
-            if (const auto st = mutable_integer_array().copy_from(other.integer_array()); !st) {
+            if (const auto st = mutable_integer_array().copy_from(source.integer_array()); !st) {
                 return st;
             }
-            if (const auto st = set_byte_array(other.byte_array()); !st) {
+            if (const auto st = set_byte_array(source.byte_array()); !st) {
                 return st;
             }
-            if (const auto st = mutable_fixed_integer_array().copy_from(other.fixed_integer_array()); !st) {
+            if (const auto st = mutable_fixed_integer_array().copy_from(source.fixed_integer_array()); !st) {
                 return st;
             }
-            if (const auto st = set_float_expr_array(other.float_expr_array()); !st) {
+            if (const auto st = set_float_expr_array(source.float_expr_array()); !st) {
                 return st;
             }
-            if (const auto st = mutable_repeated_byte_array().copy_from(other.repeated_byte_array()); !st) {
+            if (const auto st = mutable_repeated_byte_array().copy_from(source.repeated_byte_array()); !st) {
                 return st;
             }
-            if (const auto st = mutable_bounded_repeated_byte_array().copy_from(other.bounded_repeated_byte_array());
+            if (const auto st = mutable_bounded_repeated_byte_array().copy_from(source.bounded_repeated_byte_array());
                 !st) {
                 return st;
             }
-            if (const auto st = mutable_fixed_repeated_byte_array().copy_from(other.fixed_repeated_byte_array()); !st) {
+            if (const auto st = mutable_fixed_repeated_byte_array().copy_from(source.fixed_repeated_byte_array());
+                !st) {
                 return st;
             }
-            switch (other.special_oneof_case_) {
+            switch (source.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    if (const auto st = set_oneof_string(other.oneof_string()); !st) {
+                    if (const auto st = set_oneof_string(source.oneof_string()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    if (const auto st = set_oneof_int32(other.oneof_int32()); !st) {
+                    if (const auto st = set_oneof_int32(source.oneof_int32()); !st) {
                         return st;
                     }
                     break;
@@ -2260,13 +2660,13 @@ namespace test::ultimate {
                     if (!ensured_oneof_msg) {
                         return ensured_oneof_msg.status();
                     }
-                    if (const auto st = ensured_oneof_msg->copy_from(*other.oneof_msg()); !st) {
+                    if (const auto st = ensured_oneof_msg->copy_from(*source.oneof_msg()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    if (const auto st = set_oneof_bytes(other.oneof_bytes()); !st) {
+                    if (const auto st = set_oneof_bytes(source.oneof_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -2277,21 +2677,21 @@ namespace test::ultimate {
                     break;
                 }
             }
-            switch (other.crazy_bytes_oneof_case_) {
+            switch (source.crazy_bytes_oneof_case_) {
                 case Crazy_bytes_oneofCase::crazy_plain_bytes: {
-                    if (const auto st = set_crazy_plain_bytes(other.crazy_plain_bytes()); !st) {
+                    if (const auto st = set_crazy_plain_bytes(source.crazy_plain_bytes()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_bounded_bytes: {
-                    if (const auto st = set_crazy_bounded_bytes(other.crazy_bounded_bytes()); !st) {
+                    if (const auto st = set_crazy_bounded_bytes(source.crazy_bounded_bytes()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Crazy_bytes_oneofCase::crazy_fixed_bytes: {
-                    if (const auto st = set_crazy_fixed_bytes(other.crazy_fixed_bytes()); !st) {
+                    if (const auto st = set_crazy_fixed_bytes(source.crazy_fixed_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -2301,7 +2701,7 @@ namespace test::ultimate {
                     if (!ensured_crazy_repeated_bytes) {
                         return ensured_crazy_repeated_bytes.status();
                     }
-                    if (const auto st = ensured_crazy_repeated_bytes->copy_from(*other.crazy_repeated_bytes()); !st) {
+                    if (const auto st = ensured_crazy_repeated_bytes->copy_from(*source.crazy_repeated_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -2312,7 +2712,7 @@ namespace test::ultimate {
                         return ensured_crazy_bounded_repeated_bytes.status();
                     }
                     if (const auto st =
-                            ensured_crazy_bounded_repeated_bytes->copy_from(*other.crazy_bounded_repeated_bytes());
+                            ensured_crazy_bounded_repeated_bytes->copy_from(*source.crazy_bounded_repeated_bytes());
                         !st) {
                         return st;
                     }
@@ -2324,7 +2724,7 @@ namespace test::ultimate {
                         return ensured_crazy_fixed_repeated_bytes.status();
                     }
                     if (const auto st =
-                            ensured_crazy_fixed_repeated_bytes->copy_from(*other.crazy_fixed_repeated_bytes());
+                            ensured_crazy_fixed_repeated_bytes->copy_from(*source.crazy_fixed_repeated_bytes());
                         !st) {
                         return st;
                     }
@@ -2339,16 +2739,7 @@ namespace test::ultimate {
             return {};
         }
 
-        ::protocyte::Result<UltimateComplexMessage> clone() const noexcept {
-            auto out = UltimateComplexMessage::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         constexpr Special_oneofCase special_oneof_case() const noexcept { return special_oneof_case_; }
         void clear_special_oneof() noexcept {
@@ -3149,14 +3540,24 @@ namespace test::ultimate {
 
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, UltimateComplexMessage &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -5793,6 +6194,38 @@ namespace test::ultimate {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::fixed_repeated_byte_array));
             }
+            if (const auto st = f_string_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::f_string));
+            }
+            if (special_oneof_case_ == Special_oneofCase::oneof_string) {
+                if (const auto st = special_oneof_.oneof_string_.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::oneof_string));
+                }
+            }
+            for (const auto &map_str_int32_entry : map_str_int32_) {
+                if (const auto st = map_str_int32_entry.key.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::map_str_int32));
+                }
+            }
+            for (const auto &map_int32_str_entry : map_int32_str_) {
+                if (const auto st = map_int32_str_entry.value.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::map_int32_str));
+                }
+            }
+            for (const auto &very_nested_map_entry : very_nested_map_) {
+                if (const auto st = very_nested_map_entry.key.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::very_nested_map));
+                }
+            }
+            if (const auto st = opt_string_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::opt_string));
+            }
             if (nested1_.has_value()) {
                 if (const auto st = nested1_->validate(); !st) {
                     return st;
@@ -5940,34 +6373,86 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA(const UltimateComplexMessage_LevelA &) = delete;
         UltimateComplexMessage_LevelA &operator=(const UltimateComplexMessage_LevelA &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA &source) noexcept {
+            if (this == &source) {
                 return {};
             }
+            UltimateComplexMessage_LevelA staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA &source,
+                                      UltimateComplexMessage_LevelA &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
             return {};
         }
 
         ::protocyte::Result<UltimateComplexMessage_LevelA> clone() const noexcept {
-            auto out = UltimateComplexMessage_LevelA::create(*ctx_);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA::create(*ctx_);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->copy_from(*this); !st) {
+            if (const auto st = clone(*output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
         }
+
+        ::protocyte::Status clone(UltimateComplexMessage_LevelA &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_LevelA &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_LevelA();
+            new (&value) UltimateComplexMessage_LevelA {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const UltimateComplexMessage_LevelA & /* source */) noexcept {
+            return {};
+        }
+
+    public:
 
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage_LevelA> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_LevelA::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, UltimateComplexMessage_LevelA &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -6037,34 +6522,86 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA_LevelB(const UltimateComplexMessage_LevelA_LevelB &) = delete;
         UltimateComplexMessage_LevelA_LevelB &operator=(const UltimateComplexMessage_LevelA_LevelB &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB &source) noexcept {
+            if (this == &source) {
                 return {};
             }
+            UltimateComplexMessage_LevelA_LevelB staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB &source,
+                                      UltimateComplexMessage_LevelA_LevelB &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
             return {};
         }
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB> clone() const noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB::create(*ctx_);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB::create(*ctx_);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->copy_from(*this); !st) {
+            if (const auto st = clone(*output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
         }
+
+        ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_LevelA_LevelB &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_LevelA_LevelB();
+            new (&value) UltimateComplexMessage_LevelA_LevelB {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const UltimateComplexMessage_LevelA_LevelB & /* source */) noexcept {
+            return {};
+        }
+
+    public:
 
         template<typename Reader>
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_LevelA_LevelB &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -6136,34 +6673,87 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA_LevelB_LevelC &
         operator=(const UltimateComplexMessage_LevelA_LevelB_LevelC &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC &source) noexcept {
+            if (this == &source) {
                 return {};
             }
+            UltimateComplexMessage_LevelA_LevelB_LevelC staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC &source,
+                                      UltimateComplexMessage_LevelA_LevelB_LevelC &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
             return {};
         }
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC> clone() const noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB_LevelC::create(*ctx_);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB_LevelC::create(*ctx_);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->copy_from(*this); !st) {
+            if (const auto st = clone(*output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
         }
+
+        ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_LevelA_LevelB_LevelC &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_LevelA_LevelB_LevelC();
+            new (&value) UltimateComplexMessage_LevelA_LevelB_LevelC {ctx};
+        }
+
+        ::protocyte::Status
+        copy_from_in_place_(const UltimateComplexMessage_LevelA_LevelB_LevelC & /* source */) noexcept {
+            return {};
+        }
+
+    public:
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB_LevelC::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB_LevelC::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_LevelA_LevelB_LevelC &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -6237,34 +6827,87 @@ namespace test::ultimate {
         UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &
         operator=(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &) = delete;
 
-        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &source) noexcept {
+            if (this == &source) {
                 return {};
             }
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &source,
+                                      UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
             return {};
         }
 
         ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD> clone() const noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(*ctx_);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(*ctx_);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->copy_from(*this); !st) {
+            if (const auto st = clone(*output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
         }
+
+        ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &value, Context &ctx) noexcept {
+            value.~UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD();
+            new (&value) UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD {ctx};
+        }
+
+        ::protocyte::Status
+        copy_from_in_place_(const UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD & /* source */) noexcept {
+            return {};
+        }
+
+    public:
 
         template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto out = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(ctx);
-            if (!out) {
-                return out;
+            auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader> static ::protocyte::Status
+        parse(Context &ctx, Reader &reader, UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -6334,19 +6977,69 @@ namespace test::ultimate {
         ExtraMessage(const ExtraMessage &) = delete;
         ExtraMessage &operator=(const ExtraMessage &) = delete;
 
-        ::protocyte::Status copy_from(const ExtraMessage &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const ExtraMessage &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_tag(other.tag()); !st) {
+            ExtraMessage staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const ExtraMessage &source, ExtraMessage &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (other.has_ref()) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<ExtraMessage> clone() const noexcept {
+            auto output = ExtraMessage::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(ExtraMessage &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(ExtraMessage &value, Context &ctx) noexcept {
+            value.~ExtraMessage();
+            new (&value) ExtraMessage {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const ExtraMessage &source) noexcept {
+            if (const auto st = set_tag(source.tag()); !st) {
+                return st;
+            }
+            if (source.has_ref()) {
                 const auto ensured_ref = ensure_ref();
                 if (!ensured_ref) {
                     return ensured_ref.status();
                 }
-                if (const auto st = ensured_ref->copy_from(*other.ref()); !st) {
+                if (const auto st = ensured_ref->copy_from(*source.ref()); !st) {
                     return st;
                 }
             } else {
@@ -6355,16 +7048,7 @@ namespace test::ultimate {
             return {};
         }
 
-        ::protocyte::Result<ExtraMessage> clone() const noexcept {
-            auto out = ExtraMessage::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         ::protocyte::StringView tag() const noexcept { return tag_.view(); }
         typename Config::String &mutable_tag() noexcept { return tag_; }
@@ -6415,14 +7099,24 @@ namespace test::ultimate {
 
         template<typename Reader>
         static ::protocyte::Result<ExtraMessage> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = ExtraMessage::create(ctx);
-            if (!out) {
-                return out;
+            auto output = ExtraMessage::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, ExtraMessage &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -6551,6 +7245,10 @@ namespace test::ultimate {
         }
 
         ::protocyte::Status validate() const noexcept {
+            if (const auto st = tag_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::tag));
+            }
             if (ref_.has_value()) {
                 if (const auto st = ref_->validate(); !st) {
                     return st;
@@ -6583,26 +7281,68 @@ namespace test::ultimate {
         CrossMessageConstants_Nested(const CrossMessageConstants_Nested &) = delete;
         CrossMessageConstants_Nested &operator=(const CrossMessageConstants_Nested &) = delete;
 
-        ::protocyte::Status copy_from(const CrossMessageConstants_Nested &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const CrossMessageConstants_Nested &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_nested_bytes(other.nested_bytes()); !st) {
+            CrossMessageConstants_Nested staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const CrossMessageConstants_Nested &source,
+                                      CrossMessageConstants_Nested &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<CrossMessageConstants_Nested> clone() const noexcept {
+            auto output = CrossMessageConstants_Nested::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(CrossMessageConstants_Nested &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<CrossMessageConstants_Nested> clone() const noexcept {
-            auto out = CrossMessageConstants_Nested::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(CrossMessageConstants_Nested &value, Context &ctx) noexcept {
+            value.~CrossMessageConstants_Nested();
+            new (&value) CrossMessageConstants_Nested {ctx};
         }
+
+        ::protocyte::Status copy_from_in_place_(const CrossMessageConstants_Nested &source) noexcept {
+            if (const auto st = set_nested_bytes(source.nested_bytes()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         ::protocyte::Span<const ::protocyte::u8> nested_bytes() const noexcept { return nested_bytes_.view(); }
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
@@ -6648,14 +7388,24 @@ namespace test::ultimate {
 
         template<typename Reader>
         static ::protocyte::Result<CrossMessageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = CrossMessageConstants_Nested::create(ctx);
-            if (!out) {
-                return out;
+            auto output = CrossMessageConstants_Nested::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, CrossMessageConstants_Nested &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -6797,22 +7547,73 @@ namespace test::ultimate {
         CrossMessageConstants(const CrossMessageConstants &) = delete;
         CrossMessageConstants &operator=(const CrossMessageConstants &) = delete;
 
-        ::protocyte::Status copy_from(const CrossMessageConstants &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const CrossMessageConstants &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_external_bytes(other.external_bytes()); !st) {
+            CrossMessageConstants staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const CrossMessageConstants &source,
+                                      CrossMessageConstants &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = mutable_mirrored_values().copy_from(other.mirrored_values()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<CrossMessageConstants> clone() const noexcept {
+            auto output = CrossMessageConstants::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(CrossMessageConstants &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
-            if (other.has_nested()) {
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(CrossMessageConstants &value, Context &ctx) noexcept {
+            value.~CrossMessageConstants();
+            new (&value) CrossMessageConstants {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const CrossMessageConstants &source) noexcept {
+            if (const auto st = set_external_bytes(source.external_bytes()); !st) {
+                return st;
+            }
+            if (const auto st = mutable_mirrored_values().copy_from(source.mirrored_values()); !st) {
+                return st;
+            }
+            if (source.has_nested()) {
                 const auto ensured_nested = ensure_nested();
                 if (!ensured_nested) {
                     return ensured_nested.status();
                 }
-                if (const auto st = ensured_nested->copy_from(*other.nested()); !st) {
+                if (const auto st = ensured_nested->copy_from(*source.nested()); !st) {
                     return st;
                 }
             } else {
@@ -6821,16 +7622,7 @@ namespace test::ultimate {
             return {};
         }
 
-        ::protocyte::Result<CrossMessageConstants> clone() const noexcept {
-            auto out = CrossMessageConstants::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         ::protocyte::Span<const ::protocyte::u8> external_bytes() const noexcept { return external_bytes_.view(); }
         ::protocyte::usize external_bytes_size() const noexcept { return external_bytes_.size(); }
@@ -6895,14 +7687,24 @@ namespace test::ultimate {
 
         template<typename Reader>
         static ::protocyte::Result<CrossMessageConstants> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = CrossMessageConstants::create(ctx);
-            if (!out) {
-                return out;
+            auto output = CrossMessageConstants::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, CrossMessageConstants &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {

@@ -34,29 +34,71 @@ namespace protocyte_smoke::test::compat {
         EncodingMatrix_Inner(const EncodingMatrix_Inner &) = delete;
         EncodingMatrix_Inner &operator=(const EncodingMatrix_Inner &) = delete;
 
-        ::protocyte::Status copy_from(const EncodingMatrix_Inner &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const EncodingMatrix_Inner &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_value(other.value()); !st) {
+            EncodingMatrix_Inner staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const EncodingMatrix_Inner &source,
+                                      EncodingMatrix_Inner &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = set_label(other.label()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<EncodingMatrix_Inner> clone() const noexcept {
+            auto output = EncodingMatrix_Inner::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(EncodingMatrix_Inner &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<EncodingMatrix_Inner> clone() const noexcept {
-            auto out = EncodingMatrix_Inner::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(EncodingMatrix_Inner &value, Context &ctx) noexcept {
+            value.~EncodingMatrix_Inner();
+            new (&value) EncodingMatrix_Inner {ctx};
         }
+
+        ::protocyte::Status copy_from_in_place_(const EncodingMatrix_Inner &source) noexcept {
+            if (const auto st = set_value(source.value()); !st) {
+                return st;
+            }
+            if (const auto st = set_label(source.label()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         constexpr ::protocyte::i32 value() const noexcept { return value_; }
         ::protocyte::Status set_value(const ::protocyte::i32 value) noexcept {
@@ -99,14 +141,24 @@ namespace protocyte_smoke::test::compat {
 
         template<typename Reader>
         static ::protocyte::Result<EncodingMatrix_Inner> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = EncodingMatrix_Inner::create(ctx);
-            if (!out) {
-                return out;
+            auto output = EncodingMatrix_Inner::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, EncodingMatrix_Inner &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -218,7 +270,13 @@ namespace protocyte_smoke::test::compat {
             return total;
         }
 
-        ::protocyte::Status validate() const noexcept { return {}; }
+        ::protocyte::Status validate() const noexcept {
+            if (const auto st = label_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::label));
+            }
+            return {};
+        }
     protected:
         Context *ctx_;
         ::protocyte::i32 value_ {};
@@ -413,107 +471,157 @@ namespace protocyte_smoke::test::compat {
 
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
-        ::protocyte::Status copy_from(const EncodingMatrix &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const EncodingMatrix &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (const auto st = set_f_int32(other.f_int32()); !st) {
+            EncodingMatrix staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const EncodingMatrix &source, EncodingMatrix &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
                 return st;
             }
-            if (const auto st = set_f_int64(other.f_int64()); !st) {
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<EncodingMatrix> clone() const noexcept {
+            auto output = EncodingMatrix::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(EncodingMatrix &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
-            if (const auto st = set_f_uint32(other.f_uint32()); !st) {
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(EncodingMatrix &value, Context &ctx) noexcept {
+            value.~EncodingMatrix();
+            new (&value) EncodingMatrix {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const EncodingMatrix &source) noexcept {
+            if (const auto st = set_f_int32(source.f_int32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_uint64(other.f_uint64()); !st) {
+            if (const auto st = set_f_int64(source.f_int64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sint32(other.f_sint32()); !st) {
+            if (const auto st = set_f_uint32(source.f_uint32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sint64(other.f_sint64()); !st) {
+            if (const auto st = set_f_uint64(source.f_uint64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_bool(other.f_bool()); !st) {
+            if (const auto st = set_f_sint32(source.f_sint32()); !st) {
                 return st;
             }
-            if (const auto st = set_mode_raw(other.mode_raw()); !st) {
+            if (const auto st = set_f_sint64(source.f_sint64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_fixed32(other.f_fixed32()); !st) {
+            if (const auto st = set_f_bool(source.f_bool()); !st) {
                 return st;
             }
-            if (const auto st = set_f_fixed64(other.f_fixed64()); !st) {
+            if (const auto st = set_mode_raw(source.mode_raw()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sfixed32(other.f_sfixed32()); !st) {
+            if (const auto st = set_f_fixed32(source.f_fixed32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_sfixed64(other.f_sfixed64()); !st) {
+            if (const auto st = set_f_fixed64(source.f_fixed64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_float(other.f_float()); !st) {
+            if (const auto st = set_f_sfixed32(source.f_sfixed32()); !st) {
                 return st;
             }
-            if (const auto st = set_f_double(other.f_double()); !st) {
+            if (const auto st = set_f_sfixed64(source.f_sfixed64()); !st) {
                 return st;
             }
-            if (const auto st = set_f_string(other.f_string()); !st) {
+            if (const auto st = set_f_float(source.f_float()); !st) {
                 return st;
             }
-            if (const auto st = set_f_bytes(other.f_bytes()); !st) {
+            if (const auto st = set_f_double(source.f_double()); !st) {
                 return st;
             }
-            if (other.has_nested()) {
+            if (const auto st = set_f_string(source.f_string()); !st) {
+                return st;
+            }
+            if (const auto st = set_f_bytes(source.f_bytes()); !st) {
+                return st;
+            }
+            if (source.has_nested()) {
                 const auto ensured_nested = ensure_nested();
                 if (!ensured_nested) {
                     return ensured_nested.status();
                 }
-                if (const auto st = ensured_nested->copy_from(*other.nested()); !st) {
+                if (const auto st = ensured_nested->copy_from(*source.nested()); !st) {
                     return st;
                 }
             } else {
                 clear_nested();
             }
-            if (const auto st = mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked()); !st) {
+            if (const auto st = mutable_r_int32_unpacked().copy_from(source.r_int32_unpacked()); !st) {
                 return st;
             }
-            if (const auto st = mutable_r_int32_packed().copy_from(other.r_int32_packed()); !st) {
+            if (const auto st = mutable_r_int32_packed().copy_from(source.r_int32_packed()); !st) {
                 return st;
             }
-            if (const auto st = mutable_r_double().copy_from(other.r_double()); !st) {
+            if (const auto st = mutable_r_double().copy_from(source.r_double()); !st) {
                 return st;
             }
-            if (other.has_opt_int32()) {
-                if (const auto st = set_opt_int32(other.opt_int32()); !st) {
+            if (source.has_opt_int32()) {
+                if (const auto st = set_opt_int32(source.opt_int32()); !st) {
                     return st;
                 }
             } else {
                 clear_opt_int32();
             }
-            if (other.has_opt_string()) {
-                if (const auto st = set_opt_string(other.opt_string()); !st) {
+            if (source.has_opt_string()) {
+                if (const auto st = set_opt_string(source.opt_string()); !st) {
                     return st;
                 }
             } else {
                 clear_opt_string();
             }
-            if (const auto st = mutable_map_str_int32().copy_from(other.map_str_int32()); !st) {
+            if (const auto st = mutable_map_str_int32().copy_from(source.map_str_int32()); !st) {
                 return st;
             }
-            if (const auto st = mutable_map_int32_str().copy_from(other.map_int32_str()); !st) {
+            if (const auto st = mutable_map_int32_str().copy_from(source.map_int32_str()); !st) {
                 return st;
             }
-            switch (other.special_oneof_case_) {
+            switch (source.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
-                    if (const auto st = set_oneof_string(other.oneof_string()); !st) {
+                    if (const auto st = set_oneof_string(source.oneof_string()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Special_oneofCase::oneof_int32: {
-                    if (const auto st = set_oneof_int32(other.oneof_int32()); !st) {
+                    if (const auto st = set_oneof_int32(source.oneof_int32()); !st) {
                         return st;
                     }
                     break;
@@ -523,13 +631,13 @@ namespace protocyte_smoke::test::compat {
                     if (!ensured_oneof_nested) {
                         return ensured_oneof_nested.status();
                     }
-                    if (const auto st = ensured_oneof_nested->copy_from(*other.oneof_nested()); !st) {
+                    if (const auto st = ensured_oneof_nested->copy_from(*source.oneof_nested()); !st) {
                         return st;
                     }
                     break;
                 }
                 case Special_oneofCase::oneof_bytes: {
-                    if (const auto st = set_oneof_bytes(other.oneof_bytes()); !st) {
+                    if (const auto st = set_oneof_bytes(source.oneof_bytes()); !st) {
                         return st;
                     }
                     break;
@@ -543,16 +651,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
 
-        ::protocyte::Result<EncodingMatrix> clone() const noexcept {
-            auto out = EncodingMatrix::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         constexpr Special_oneofCase special_oneof_case() const noexcept { return special_oneof_case_; }
         void clear_special_oneof() noexcept {
@@ -940,14 +1039,24 @@ namespace protocyte_smoke::test::compat {
 
         template<typename Reader>
         static ::protocyte::Result<EncodingMatrix> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = EncodingMatrix::create(ctx);
-            if (!out) {
-                return out;
+            auto output = EncodingMatrix::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, EncodingMatrix &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -2139,6 +2248,32 @@ namespace protocyte_smoke::test::compat {
         }
 
         ::protocyte::Status validate() const noexcept {
+            if (const auto st = f_string_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::f_string));
+            }
+            if (special_oneof_case_ == Special_oneofCase::oneof_string) {
+                if (const auto st = special_oneof_.oneof_string_.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::oneof_string));
+                }
+            }
+            if (const auto st = opt_string_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::opt_string));
+            }
+            for (const auto &map_str_int32_entry : map_str_int32_) {
+                if (const auto st = map_str_int32_entry.key.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::map_str_int32));
+                }
+            }
+            for (const auto &map_int32_str_entry : map_int32_str_) {
+                if (const auto st = map_int32_str_entry.value.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::map_int32_str));
+                }
+            }
             if (nested_.has_value()) {
                 if (const auto st = nested_->validate(); !st) {
                     return st;

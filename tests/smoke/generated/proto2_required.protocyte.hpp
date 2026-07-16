@@ -34,19 +34,69 @@ namespace test::required {
         RequiredChild(const RequiredChild &) = delete;
         RequiredChild &operator=(const RequiredChild &) = delete;
 
-        ::protocyte::Status copy_from(const RequiredChild &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const RequiredChild &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (other.has_id()) {
-                if (const auto st = set_id(other.id()); !st) {
+            RequiredChild staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const RequiredChild &source, RequiredChild &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<RequiredChild> clone() const noexcept {
+            auto output = RequiredChild::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(RequiredChild &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(RequiredChild &value, Context &ctx) noexcept {
+            value.~RequiredChild();
+            new (&value) RequiredChild {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const RequiredChild &source) noexcept {
+            if (source.has_id()) {
+                if (const auto st = set_id(source.id()); !st) {
                     return st;
                 }
             } else {
                 clear_id();
             }
-            if (other.has_note()) {
-                if (const auto st = set_note(other.note()); !st) {
+            if (source.has_note()) {
+                if (const auto st = set_note(source.note()); !st) {
                     return st;
                 }
             } else {
@@ -55,16 +105,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Result<RequiredChild> clone() const noexcept {
-            auto out = RequiredChild::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         constexpr ::protocyte::i32 id() const noexcept { return id_; }
         constexpr bool has_id() const noexcept { return has_id_; }
@@ -121,14 +162,24 @@ namespace test::required {
 
         template<typename Reader>
         static ::protocyte::Result<RequiredChild> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = RequiredChild::create(ctx);
-            if (!out) {
-                return out;
+            auto output = RequiredChild::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, RequiredChild &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -247,6 +298,10 @@ namespace test::required {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
                                                static_cast<::protocyte::u32>(FieldNumber::id));
             }
+            if (const auto st = note_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::note));
+            }
             return {};
         }
     protected:
@@ -273,37 +328,78 @@ namespace test::required {
         RequiredParent(const RequiredParent &) = delete;
         RequiredParent &operator=(const RequiredParent &) = delete;
 
-        ::protocyte::Status copy_from(const RequiredParent &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const RequiredParent &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (other.has_child()) {
-                const auto ensured_child = ensure_child();
-                if (!ensured_child) {
-                    return ensured_child.status();
-                }
-                if (const auto st = ensured_child->copy_from(*other.child()); !st) {
-                    return st;
-                }
-            } else {
-                clear_child();
+            RequiredParent staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const RequiredParent &source, RequiredParent &staging_message) noexcept {
+            if (this == &source) {
+                return {};
             }
-            if (const auto st = mutable_children().copy_from(other.children()); !st) {
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<RequiredParent> clone() const noexcept {
+            auto output = RequiredParent::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(RequiredParent &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
                 return st;
             }
             return {};
         }
 
-        ::protocyte::Result<RequiredParent> clone() const noexcept {
-            auto out = RequiredParent::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
+    protected:
+        static void reset_for_reuse_(RequiredParent &value, Context &ctx) noexcept {
+            value.~RequiredParent();
+            new (&value) RequiredParent {ctx};
         }
+
+        ::protocyte::Status copy_from_in_place_(const RequiredParent &source) noexcept {
+            if (source.has_child()) {
+                const auto ensured_child = ensure_child();
+                if (!ensured_child) {
+                    return ensured_child.status();
+                }
+                if (const auto st = ensured_child->copy_from(*source.child()); !st) {
+                    return st;
+                }
+            } else {
+                clear_child();
+            }
+            if (const auto st = mutable_children().copy_from(source.children()); !st) {
+                return st;
+            }
+            return {};
+        }
+
+    public:
 
         bool has_child() const noexcept { return child_.has_value(); }
         const ::test::required::RequiredChild<Config> *child() const noexcept {
@@ -330,14 +426,24 @@ namespace test::required {
 
         template<typename Reader>
         static ::protocyte::Result<RequiredParent> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = RequiredParent::create(ctx);
-            if (!out) {
-                return out;
+            auto output = RequiredParent::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, RequiredParent &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -513,19 +619,70 @@ namespace test::required {
         Proto2ArrayDefaults(const Proto2ArrayDefaults &) = delete;
         Proto2ArrayDefaults &operator=(const Proto2ArrayDefaults &) = delete;
 
-        ::protocyte::Status copy_from(const Proto2ArrayDefaults &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const Proto2ArrayDefaults &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (other.has_bounded_bytes()) {
-                if (const auto st = set_bounded_bytes(other.bounded_bytes()); !st) {
+            Proto2ArrayDefaults staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const Proto2ArrayDefaults &source,
+                                      Proto2ArrayDefaults &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<Proto2ArrayDefaults> clone() const noexcept {
+            auto output = Proto2ArrayDefaults::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(Proto2ArrayDefaults &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(Proto2ArrayDefaults &value, Context &ctx) noexcept {
+            value.~Proto2ArrayDefaults();
+            new (&value) Proto2ArrayDefaults {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const Proto2ArrayDefaults &source) noexcept {
+            if (source.has_bounded_bytes()) {
+                if (const auto st = set_bounded_bytes(source.bounded_bytes()); !st) {
                     return st;
                 }
             } else {
                 clear_bounded_bytes();
             }
-            if (other.has_fixed_bytes()) {
-                if (const auto st = set_fixed_bytes(other.fixed_bytes()); !st) {
+            if (source.has_fixed_bytes()) {
+                if (const auto st = set_fixed_bytes(source.fixed_bytes()); !st) {
                     return st;
                 }
             } else {
@@ -534,16 +691,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Result<Proto2ArrayDefaults> clone() const noexcept {
-            auto out = Proto2ArrayDefaults::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         ::protocyte::Span<const ::protocyte::u8> bounded_bytes() const noexcept {
             return has_bounded_bytes_ ?
@@ -665,14 +813,24 @@ namespace test::required {
 
         template<typename Reader>
         static ::protocyte::Result<Proto2ArrayDefaults> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = Proto2ArrayDefaults::create(ctx);
-            if (!out) {
-                return out;
+            auto output = Proto2ArrayDefaults::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, Proto2ArrayDefaults &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -875,124 +1033,175 @@ namespace test::required {
         Proto2DefaultValues(const Proto2DefaultValues &) = delete;
         Proto2DefaultValues &operator=(const Proto2DefaultValues &) = delete;
 
-        ::protocyte::Status copy_from(const Proto2DefaultValues &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const Proto2DefaultValues &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            if (other.has_double_value()) {
-                if (const auto st = set_double_value(other.double_value()); !st) {
+            Proto2DefaultValues staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const Proto2DefaultValues &source,
+                                      Proto2DefaultValues &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<Proto2DefaultValues> clone() const noexcept {
+            auto output = Proto2DefaultValues::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(Proto2DefaultValues &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(Proto2DefaultValues &value, Context &ctx) noexcept {
+            value.~Proto2DefaultValues();
+            new (&value) Proto2DefaultValues {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const Proto2DefaultValues &source) noexcept {
+            if (source.has_double_value()) {
+                if (const auto st = set_double_value(source.double_value()); !st) {
                     return st;
                 }
             } else {
                 clear_double_value();
             }
-            if (other.has_float_value()) {
-                if (const auto st = set_float_value(other.float_value()); !st) {
+            if (source.has_float_value()) {
+                if (const auto st = set_float_value(source.float_value()); !st) {
                     return st;
                 }
             } else {
                 clear_float_value();
             }
-            if (other.has_int64_value()) {
-                if (const auto st = set_int64_value(other.int64_value()); !st) {
+            if (source.has_int64_value()) {
+                if (const auto st = set_int64_value(source.int64_value()); !st) {
                     return st;
                 }
             } else {
                 clear_int64_value();
             }
-            if (other.has_uint64_value()) {
-                if (const auto st = set_uint64_value(other.uint64_value()); !st) {
+            if (source.has_uint64_value()) {
+                if (const auto st = set_uint64_value(source.uint64_value()); !st) {
                     return st;
                 }
             } else {
                 clear_uint64_value();
             }
-            if (other.has_int32_value()) {
-                if (const auto st = set_int32_value(other.int32_value()); !st) {
+            if (source.has_int32_value()) {
+                if (const auto st = set_int32_value(source.int32_value()); !st) {
                     return st;
                 }
             } else {
                 clear_int32_value();
             }
-            if (other.has_fixed64_value()) {
-                if (const auto st = set_fixed64_value(other.fixed64_value()); !st) {
+            if (source.has_fixed64_value()) {
+                if (const auto st = set_fixed64_value(source.fixed64_value()); !st) {
                     return st;
                 }
             } else {
                 clear_fixed64_value();
             }
-            if (other.has_fixed32_value()) {
-                if (const auto st = set_fixed32_value(other.fixed32_value()); !st) {
+            if (source.has_fixed32_value()) {
+                if (const auto st = set_fixed32_value(source.fixed32_value()); !st) {
                     return st;
                 }
             } else {
                 clear_fixed32_value();
             }
-            if (other.has_bool_value()) {
-                if (const auto st = set_bool_value(other.bool_value()); !st) {
+            if (source.has_bool_value()) {
+                if (const auto st = set_bool_value(source.bool_value()); !st) {
                     return st;
                 }
             } else {
                 clear_bool_value();
             }
-            if (other.has_string_value()) {
-                if (const auto st = set_string_value(other.string_value()); !st) {
+            if (source.has_string_value()) {
+                if (const auto st = set_string_value(source.string_value()); !st) {
                     return st;
                 }
             } else {
                 clear_string_value();
             }
-            if (other.has_bytes_value()) {
-                if (const auto st = set_bytes_value(other.bytes_value()); !st) {
+            if (source.has_bytes_value()) {
+                if (const auto st = set_bytes_value(source.bytes_value()); !st) {
                     return st;
                 }
             } else {
                 clear_bytes_value();
             }
-            if (other.has_uint32_value()) {
-                if (const auto st = set_uint32_value(other.uint32_value()); !st) {
+            if (source.has_uint32_value()) {
+                if (const auto st = set_uint32_value(source.uint32_value()); !st) {
                     return st;
                 }
             } else {
                 clear_uint32_value();
             }
-            if (other.has_enum_value()) {
-                if (const auto st = set_enum_value_raw(other.enum_value_raw()); !st) {
+            if (source.has_enum_value()) {
+                if (const auto st = set_enum_value_raw(source.enum_value_raw()); !st) {
                     return st;
                 }
             } else {
                 clear_enum_value();
             }
-            if (other.has_sfixed32_value()) {
-                if (const auto st = set_sfixed32_value(other.sfixed32_value()); !st) {
+            if (source.has_sfixed32_value()) {
+                if (const auto st = set_sfixed32_value(source.sfixed32_value()); !st) {
                     return st;
                 }
             } else {
                 clear_sfixed32_value();
             }
-            if (other.has_sfixed64_value()) {
-                if (const auto st = set_sfixed64_value(other.sfixed64_value()); !st) {
+            if (source.has_sfixed64_value()) {
+                if (const auto st = set_sfixed64_value(source.sfixed64_value()); !st) {
                     return st;
                 }
             } else {
                 clear_sfixed64_value();
             }
-            if (other.has_sint32_value()) {
-                if (const auto st = set_sint32_value(other.sint32_value()); !st) {
+            if (source.has_sint32_value()) {
+                if (const auto st = set_sint32_value(source.sint32_value()); !st) {
                     return st;
                 }
             } else {
                 clear_sint32_value();
             }
-            if (other.has_sint64_value()) {
-                if (const auto st = set_sint64_value(other.sint64_value()); !st) {
+            if (source.has_sint64_value()) {
+                if (const auto st = set_sint64_value(source.sint64_value()); !st) {
                     return st;
                 }
             } else {
                 clear_sint64_value();
             }
-            if (other.has_implicit_enum_value()) {
-                if (const auto st = set_implicit_enum_value_raw(other.implicit_enum_value_raw()); !st) {
+            if (source.has_implicit_enum_value()) {
+                if (const auto st = set_implicit_enum_value_raw(source.implicit_enum_value_raw()); !st) {
                     return st;
                 }
             } else {
@@ -1001,16 +1210,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Result<Proto2DefaultValues> clone() const noexcept {
-            auto out = Proto2DefaultValues::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         constexpr ::protocyte::f64 double_value() const noexcept { return has_double_value_ ? double_value_ : 1.5; }
         constexpr bool has_double_value() const noexcept { return has_double_value_; }
@@ -1304,14 +1504,24 @@ namespace test::required {
 
         template<typename Reader>
         static ::protocyte::Result<Proto2DefaultValues> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = Proto2DefaultValues::create(ctx);
-            if (!out) {
-                return out;
+            auto output = Proto2DefaultValues::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, Proto2DefaultValues &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -1828,6 +2038,10 @@ namespace test::required {
                                                    static_cast<::protocyte::u32>(FieldNumber::implicit_enum_value));
                 }
             }
+            if (const auto st = string_value_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                               static_cast<::protocyte::u32>(FieldNumber::string_value));
+            }
             return {};
         }
     protected:
@@ -1925,13 +2139,64 @@ namespace test::required {
 
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
-        ::protocyte::Status copy_from(const OneofShadowingValue &other) noexcept {
-            if (this == &other) {
+        ::protocyte::Status copy_from(const OneofShadowingValue &source) noexcept {
+            if (this == &source) {
                 return {};
             }
-            switch (other.value_case_) {
+            OneofShadowingValue staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const OneofShadowingValue &source,
+                                      OneofShadowingValue &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<OneofShadowingValue> clone() const noexcept {
+            auto output = OneofShadowingValue::create(*ctx_);
+            if (!output) {
+                return output;
+            }
+            if (const auto st = clone(*output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(OneofShadowingValue &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            reset_for_reuse_(output, *ctx_);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *ctx_);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(OneofShadowingValue &value, Context &ctx) noexcept {
+            value.~OneofShadowingValue();
+            new (&value) OneofShadowingValue {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const OneofShadowingValue &source) noexcept {
+            switch (source.value_case_) {
                 case ValueCase::bool_value: {
-                    if (const auto st = set_bool_value(other.bool_value()); !st) {
+                    if (const auto st = set_bool_value(source.bool_value()); !st) {
                         return st;
                     }
                     break;
@@ -1945,16 +2210,7 @@ namespace test::required {
             return {};
         }
 
-        ::protocyte::Result<OneofShadowingValue> clone() const noexcept {
-            auto out = OneofShadowingValue::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
-                return ::protocyte::unexpected(st.error());
-            }
-            return out;
-        }
+    public:
 
         constexpr ValueCase value_case() const noexcept { return value_case_; }
         void clear_value() noexcept {
@@ -1981,14 +2237,24 @@ namespace test::required {
 
         template<typename Reader>
         static ::protocyte::Result<OneofShadowingValue> parse(Context &ctx, Reader &reader) noexcept {
-            auto out = OneofShadowingValue::create(ctx);
-            if (!out) {
-                return out;
+            auto output = OneofShadowingValue::create(ctx);
+            if (!output) {
+                return output;
             }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = parse(ctx, reader, *output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return output;
+        }
+
+        template<typename Reader>
+        static ::protocyte::Status parse(Context &ctx, Reader &reader, OneofShadowingValue &output) noexcept {
+            reset_for_reuse_(output, ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, ctx);
+                return st;
+            }
+            return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {

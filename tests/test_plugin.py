@@ -2096,7 +2096,18 @@ def test_generated_header_contains_expected_field_api() -> None:
         not in header
     )
     assert "for (const auto &packed_value_signed_samples : signed_samples_) {" in header
-    assert "if (const auto st = out->copy_from(*this); !st)" in header
+    assert "if (const auto st = clone(*output); !st)" in header
+    assert "copy_from(const Sample& source, Sample& staging_message)" in header
+    assert "Sample staging_message{*ctx_};" in header
+    assert "staging_message.copy_from_in_place_(source)" in header
+    assert "*this = ::protocyte::move(staging_message);" in header
+    assert "::protocyte::Status clone(Sample& output) const noexcept" in header
+    assert "output.copy_from_in_place_(*this)" in header
+    assert (
+        "static ::protocyte::Status parse(Context& ctx, Reader& reader, Sample& output) noexcept"
+        in header
+    )
+    assert "if (const auto st = output.merge_from(reader); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
     assert "enum struct FieldNumber : ::protocyte::u32 {" in header
     assert "id = 1u," in header
@@ -2181,9 +2192,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "case 2u: {" in header
     assert "*ctx_, entry_reader, 2u," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
-    assert "mutable_items().copy_from(other.items())" in header
-    assert "mutable_samples().copy_from(other.samples())" in header
-    assert "mutable_message_items().copy_from(other.message_items())" in header
+    assert "mutable_items().copy_from(source.items())" in header
+    assert "mutable_samples().copy_from(source.samples())" in header
+    assert "mutable_message_items().copy_from(source.message_items())" in header
     assert "const auto packed_reserve_samples = *len / 4u;" not in header
     assert "packed_samples_values.reserve(packed_reserve_samples)" not in header
     signed_reserve_index = header.index(
@@ -2206,6 +2217,96 @@ def test_generated_header_contains_expected_field_api() -> None:
     )
 
 
+def test_generated_validation_checks_every_string_storage_shape() -> None:
+    source = descriptor_pb2.FileDescriptorProto()
+    source.name = "string_validation.proto"
+    source.package = "demo"
+    source.syntax = "proto3"
+
+    message = source.message_type.add()
+    message.name = "StringFields"
+
+    field = message.field.add()
+    field.name = "name"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+
+    field = message.field.add()
+    field.name = "aliases"
+    field.number = 2
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_STRING
+
+    message.oneof_decl.add().name = "choice"
+    field = message.field.add()
+    field.name = "choice_text"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field.oneof_index = 0
+
+    entry = message.nested_type.add()
+    entry.name = "LabelsEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_STRING
+
+    field = message.field.add()
+    field.name = "labels"
+    field.number = 4
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.StringFields.LabelsEntry"
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append(source.name)
+    request.proto_file.append(source)
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(
+        file.content
+        for file in response.file
+        if file.name == "string_validation.protocyte.hpp"
+    )
+    assert "if (const auto st = name_.validate(); !st) {" in header
+    assert (
+        "st.error().code, st.error().offset, "
+        "static_cast<::protocyte::u32>(FieldNumber::name)"
+    ) in header
+    assert "for (const auto &aliases_value : aliases_) {" in header
+    assert "if (const auto st = aliases_value.validate(); !st) {" in header
+    assert (
+        "st.error().code, st.error().offset, "
+        "static_cast<::protocyte::u32>(FieldNumber::aliases)"
+    ) in header
+    assert "if (choice_case_ == ChoiceCase::choice_text) {" in header
+    assert "if (const auto st = choice_.choice_text_.validate(); !st) {" in header
+    assert (
+        "st.error().code, st.error().offset, "
+        "static_cast<::protocyte::u32>(FieldNumber::choice_text)"
+    ) in header
+    assert "for (const auto &labels_entry : labels_) {" in header
+    assert "if (const auto st = labels_entry.key.validate(); !st) {" in header
+    assert "if (const auto st = labels_entry.value.validate(); !st) {" in header
+    assert (
+        header.count(
+            "st.error().code, st.error().offset, "
+            "static_cast<::protocyte::u32>(FieldNumber::labels)"
+        )
+        == 2
+    )
+
+
 def test_checked_smoke_output_reflects_copy_propagation() -> None:
     header = (
         Path(__file__).resolve().parents[1]
@@ -2222,17 +2323,23 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
         / "cross_package.protocyte.hpp"
     ).read_text(encoding="utf-8")
 
-    assert "copy_from(const UltimateComplexMessage &other) noexcept" in header
-    assert "if (this == &other) {" in header
-    assert "mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked())" in header
-    assert "mutable_r_int32_packed().copy_from(other.r_int32_packed())" in header
-    assert "mutable_r_double().copy_from(other.r_double())" in header
-    assert "mutable_map_str_int32().copy_from(other.map_str_int32())" in header
-    assert "mutable_map_uint64_msg().copy_from(other.map_uint64_msg())" in header
+    assert "copy_from(const UltimateComplexMessage &source) noexcept" in header
+    assert "copy_from(const UltimateComplexMessage &source," in header
+    assert "UltimateComplexMessage &staging_message) noexcept" in header
+    assert "if (this == &source) {" in header
+    assert "mutable_r_int32_unpacked().copy_from(source.r_int32_unpacked())" in header
+    assert "mutable_r_int32_packed().copy_from(source.r_int32_packed())" in header
+    assert "mutable_r_double().copy_from(source.r_double())" in header
+    assert "mutable_map_str_int32().copy_from(source.map_str_int32())" in header
+    assert "mutable_map_uint64_msg().copy_from(source.map_uint64_msg())" in header
     assert (
         "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     )
-    assert "if (const auto st = out->copy_from(*this); !st) {" in header
+    assert "if (const auto st = clone(*output); !st) {" in header
+    assert (
+        "::protocyte::Status clone(UltimateComplexMessage &output) const noexcept"
+        in header
+    )
     assert (
         "return has_recursive_self() ? recursive_self_.operator->() : nullptr;"
         in header
@@ -3996,12 +4103,12 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     header = files["arrays.protocyte.hpp"]
     runtime_header = files["protocyte/runtime/runtime.hpp"]
 
-    assert "if (other.has_digest()) {" in header
-    assert "set_digest(other.digest())" in header
-    assert "set_blob(other.blob())" in header
-    assert "set_hex_blob(other.hex_blob())" in header
+    assert "if (source.has_digest()) {" in header
+    assert "set_digest(source.digest())" in header
+    assert "set_blob(source.blob())" in header
+    assert "set_hex_blob(source.hex_blob())" in header
     assert "values_{&ctx}" in header
-    assert "mutable_values().copy_from(other.values())" in header
+    assert "mutable_values().copy_from(source.values())" in header
     assert "Array(Array &&other) noexcept" in runtime_header
     assert "Array &operator=(Array &&other) noexcept" in runtime_header
     assert "Status copy_from(const Array &other) noexcept" in runtime_header
@@ -4137,21 +4244,22 @@ def test_generated_header_copies_oneof_state() -> None:
         item.content for item in response.file if item.name == "oneof.protocyte.hpp"
     )
 
-    assert "if (this == &other) {" in header
+    assert "if (this == &source) {" in header
     assert "return {};" in header
-    assert "switch (other.choice_case_) {" in header
+    assert "switch (source.choice_case_) {" in header
     assert "case ChoiceCase::text: {" in header
-    assert "if (const auto st = set_text(other.text()); !st) {" in header
+    assert "if (const auto st = set_text(source.text()); !st) {" in header
     assert "return st;" in header
     assert "const auto ensured_inner = ensure_inner();" in header
     assert "if (!ensured_inner) { return ensured_inner.status(); }" in header
     assert (
-        "if (const auto st = ensured_inner->copy_from(*other.inner()); !st) {" in header
+        "if (const auto st = ensured_inner->copy_from(*source.inner()); !st) {"
+        in header
     )
     assert "clear_choice();" in header
 
 
-def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
+def test_generated_header_uses_source_for_repeated_array_only_copy() -> None:
     response = generate_response(_repeated_array_only_request())
 
     assert not response.error
@@ -4161,13 +4269,13 @@ def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
         if item.name == "repeated_array_only.protocyte.hpp"
     )
 
-    assert "copy_from(const OnlyArrays& other) noexcept" in header
-    assert "if (this == &other) {" in header
+    assert "copy_from(const OnlyArrays& source) noexcept" in header
+    assert "if (this == &source) {" in header
     assert "return {};" in header
-    assert "mutable_values().copy_from(other.values())" in header
+    assert "mutable_values().copy_from(source.values())" in header
 
 
-def test_generated_header_uses_real_other_for_map_only_copy() -> None:
+def test_generated_header_uses_real_source_for_map_only_copy() -> None:
     response = generate_response(_map_only_request())
 
     assert not response.error
@@ -4175,11 +4283,11 @@ def test_generated_header_uses_real_other_for_map_only_copy() -> None:
         item.content for item in response.file if item.name == "map_only.protocyte.hpp"
     )
 
-    assert "copy_from(const OnlyMaps& other) noexcept" in header
-    assert "if (this == &other) {" in header
-    assert "const auto& source = other;" in header
-    assert "mutable_items().copy_from(source.items())" in header
-    assert "if (const auto st = out->copy_from(*this); !st) {" in header
+    assert "copy_from(const OnlyMaps& source) noexcept" in header
+    assert "if (this == &source) {" in header
+    assert "const auto& map_source = source;" in header
+    assert "mutable_items().copy_from(map_source.items())" in header
+    assert "if (const auto st = clone(*output); !st) {" in header
 
 
 def test_rejects_invalid_hex_numeric_literals() -> None:

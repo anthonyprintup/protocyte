@@ -703,6 +703,30 @@ namespace {
         REQUIRE(error.code == expected);
     }
 
+    void overwrite_with_invalid_utf8(Config::String &value) {
+        require_success(value.resize_for_overwrite(1u));
+        auto bytes = value.mutable_view_for_overwrite();
+        REQUIRE(bytes.size() == 1u);
+        bytes[0] = 0xffu;
+    }
+
+    template<class TMessage> void require_invalid_utf8(const TMessage &message, const protocyte::u32 field_number) {
+        const auto validation = message.validate();
+        require_failure(validation, protocyte::ErrorCode::invalid_utf8);
+        CHECK(validation.error().field_number == field_number);
+
+        const auto size = message.encoded_size();
+        require_failure(size, protocyte::ErrorCode::invalid_utf8);
+        CHECK(size.error().field_number == field_number);
+
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        const auto serialization = message.serialize(writer);
+        require_failure(serialization, protocyte::ErrorCode::invalid_utf8);
+        CHECK(serialization.error().field_number == field_number);
+        CHECK(writer.position() == 0u);
+    }
+
     void assign_string(Config::String &out, protocyte::Span<const protocyte::u8> view) {
         require_success(protocyte_smoke::fixture::assign_string(out, view));
     }
@@ -1907,6 +1931,106 @@ TEST_CASE("UltimateComplexMessage round-trips", "[smoke][roundtrip]") {
     round_trip_and_check(message, ctx);
 }
 
+TEST_CASE("generated message staging overloads control full-object storage", "[smoke][copy][storage]") {
+    SECTION("copy_from commits caller-staged copies transactionally") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        require_success(source.set_f_int32(42));
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        auto destination_ctx = make_context();
+        Message destination(destination_ctx);
+        require_success(destination.set_f_int32(7));
+        Message staging_message(destination_ctx);
+
+        require_success(destination.copy_from(source, staging_message));
+        CHECK(destination.f_int32() == 42);
+        CHECK(view_equal(destination.f_string(), view_of(string_bytes)));
+    }
+
+    SECTION("copy_from preserves the destination when staging allocation fails") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        require_success(source.set_f_int32(42));
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto destination_ctx = make_context();
+        Message destination(destination_ctx);
+        require_success(destination.set_f_int32(7));
+        Message staging_message(destination_ctx);
+        destination_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+
+        require_failure(destination.copy_from(source, staging_message), protocyte::ErrorCode::no_memory);
+        CHECK(destination.f_int32() == 7);
+        CHECK(destination.f_string().empty());
+        CHECK(staging_message.f_int32() == 0);
+        CHECK(staging_message.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
+
+    SECTION("copy_from convenience overload is also transactional") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        require_success(source.set_f_int32(42));
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto destination_ctx = make_context();
+        Message destination(destination_ctx);
+        require_success(destination.set_f_int32(7));
+        destination_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+        CHECK(destination.f_int32() == 7);
+        CHECK(destination.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
+
+    SECTION("copy_from rejects aliased staging messages") {
+        auto ctx = make_context();
+        Message source(ctx);
+        Message destination(ctx);
+        require_success(source.set_f_int32(42));
+        require_success(destination.set_f_int32(7));
+
+        require_failure(destination.copy_from(source, destination), protocyte::ErrorCode::invalid_argument);
+        require_failure(destination.copy_from(source, source), protocyte::ErrorCode::invalid_argument);
+        CHECK(destination.f_int32() == 7);
+        CHECK(source.f_int32() == 42);
+    }
+
+    SECTION("clone writes directly into caller-owned output") {
+        auto ctx = make_context();
+        Message source(ctx);
+        require_success(source.set_f_int32(42));
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        Message output(ctx);
+        require_success(output.set_f_int32(7));
+        require_success(source.clone(output));
+        CHECK(output.f_int32() == 42);
+        CHECK(view_equal(output.f_string(), view_of(string_bytes)));
+    }
+
+    SECTION("parse writes directly into caller-owned output") {
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_int32_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_int32), 42));
+        require_success(protocyte::write_string_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
+                                                      view_of(string_bytes)));
+
+        auto ctx = make_context();
+        Message output(ctx);
+        require_success(output.set_f_int32(7));
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_success(Message::parse(ctx, reader, output));
+        CHECK(reader.eof());
+        CHECK(output.f_int32() == 42);
+        CHECK(view_equal(output.f_string(), view_of(string_bytes)));
+    }
+}
+
 TEST_CASE("UltimateComplexMessage oneofs merge correctly", "[smoke][oneof]") {
     auto ctx = make_context();
     check_oneof_alternatives(ctx);
@@ -2231,6 +2355,35 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
             }
         }
         CHECK(saw_entry);
+    }
+}
+
+TEST_CASE("message validation rejects invalid UTF-8 introduced by mutable access", "[smoke][utf8]") {
+    auto ctx = make_context();
+
+    SECTION("singular string") {
+        Message message(ctx);
+        overwrite_with_invalid_utf8(message.mutable_f_string());
+
+        require_invalid_utf8(message, static_cast<protocyte::u32>(Message::FieldNumber::f_string));
+    }
+
+    SECTION("map string key") {
+        Message message(ctx);
+        Config::String key {&ctx};
+        overwrite_with_invalid_utf8(key);
+        require_success(message.mutable_map_str_int32().insert_or_assign(protocyte::move(key), protocyte::i32 {301}));
+
+        require_invalid_utf8(message, static_cast<protocyte::u32>(Message::FieldNumber::map_str_int32));
+    }
+
+    SECTION("map string value") {
+        Message message(ctx);
+        Config::String value {&ctx};
+        overwrite_with_invalid_utf8(value);
+        require_success(message.mutable_map_int32_str().insert_or_assign(protocyte::i32 {302}, protocyte::move(value)));
+
+        require_invalid_utf8(message, static_cast<protocyte::u32>(Message::FieldNumber::map_int32_str));
     }
 }
 
