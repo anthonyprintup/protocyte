@@ -24,6 +24,11 @@ enum Proto2DefaultMode {
   PROTO2_DEFAULT_MODE_READY = 9;
 }
 
+enum Proto2MapMode {
+  PROTO2_MAP_MODE_UNKNOWN = 0;
+  PROTO2_MAP_MODE_READY = 9;
+}
+
 message Proto2DefaultValues {
   optional double double_value = 1 [default = 1.5];
   optional float float_value = 2 [default = -2.25];
@@ -42,6 +47,8 @@ message Proto2DefaultValues {
   optional sint32 sint32_value = 15 [default = -23456];
   optional sint64 sint64_value = 16 [default = -123456789012];
   optional Proto2DefaultMode implicit_enum_value = 17;
+  repeated Proto2DefaultMode enum_values = 18 [packed = true];
+  map<string, Proto2MapMode> enum_by_name = 19;
 }
 
 message OneofShadowingValue {

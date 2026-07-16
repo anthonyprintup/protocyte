@@ -847,6 +847,63 @@ Common generated operations include:
 - `clone()` and `clone(output)`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
 
+### Unknown Fields
+
+Unknown-field preservation is compile-time configurable and disabled by
+default. Enable it on a config used to instantiate generated messages:
+
+```cpp
+struct ForwardCompatibleConfig : protocyte::DefaultConfig {
+    static constexpr bool preserve_unknown_fields = true;
+};
+
+using Sample = demo::Sample<ForwardCompatibleConfig>;
+```
+
+This is useful for a proxy built against an older schema: it can parse a
+message produced by a newer service, change a field it understands, and
+forward the message without deleting fields introduced by that newer service.
+
+When enabled, each message keeps unknown occurrences in encounter order as
+canonical protobuf wire bytes. Generated messages expose
+`unknown_fields()`, `unknown_field_count()`, `unknown_field_bytes()`, and
+`clear_unknown_fields()`. `UnknownFieldRange::field(index)` and iteration
+provide lazy `UnknownFieldView` values with `field_number()`, `wire_type()`,
+`tag()`, protobuf-style `type()`, `varint()`, `fixed32()`, `fixed64()`,
+`length_delimited()`, and `group()` accessors:
+
+```cpp
+for (const auto field : message.unknown_fields()) {
+    if (field.wire_type() == protocyte::WireType::VARINT) {
+        const auto value = field.varint();
+        // value is Result<uint64_t>
+    }
+}
+```
+
+`mutable_unknown_fields()` is available only when preservation is enabled. It
+returns a typed façade supporting `add_*`, `replace_*`, `erase`,
+`delete_subrange`, `delete_by_number`, `merge_from`, and `clear`; writable raw
+bytes are intentionally not exposed. Mutations and individual parse captures
+roll back on allocation, input, recursion, or size-limit failure. Raw encoded
+ranges passed to `merge_from` or `add_group` are validated against the
+destination context's recursion policy and canonicalized before commit.
+
+Unknown fields serialize after known fields. Their relative encounter order is
+retained, but parsing and serialization canonicalize tags and scalar values, so
+this API does not promise byte-identical forwarding. Unknown fields and
+incompatible wire types inside map-entry messages are discarded while the
+remaining key and value are materialized. An undeclared closed-enum map value
+instead preserves the complete outer map occurrence as unknown and does not
+insert the entry, matching protobuf's native map representation.
+
+The disabled storage specialization is empty and generated messages apply
+`PROTOCYTE_NO_UNIQUE_ADDRESS` (`[[msvc::no_unique_address]]` on MSVC and
+`[[no_unique_address]]` elsewhere), so the default policy adds no message
+object footprint. Enabling preservation uses `Config::Vector<u8>` and is
+bounded independently by `Limits::max_unknown_field_bytes`, including copies
+between messages with different contexts.
+
 ### Caller-Controlled Message Storage
 
 Copying, cloning, and parsing each have a convenience form and a
@@ -912,6 +969,10 @@ application resource policy:
   including individual elements of repeated bytes fields. Singular inline
   `bytes` fields using `protocyte.array` instead use their schema-declared
   bound, or exact extent with `fixed: true`.
+- `max_unknown_field_bytes` defaults to `0x7fffffff` and bounds canonical
+  unknown-field bytes retained by each message when
+  `Config::preserve_unknown_fields` is enabled. The limit is separate from
+  `max_string_bytes`, while all input still counts against `max_total_bytes`.
 - `max_repeated_elements` and `max_map_entries` default to `0x7fffffff` and
   count decoded occurrences across the complete top-level call. Packed chunks,
   expanded values, nested messages, and duplicate map keys share their

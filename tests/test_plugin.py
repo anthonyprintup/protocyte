@@ -1666,6 +1666,11 @@ def test_generates_closed_enum_validation_for_proto2_enums() -> None:
     assert (
         "explicit_oneof_choice_value != 5 && explicit_oneof_choice_value != 9" in header
     )
+    assert "packed_implicit_choices_unknown_fields" in header
+    assert "merged_implicit_choices_unknown_fields" in header
+    assert "::protocyte::prepare_unknown_field_merge<Config>" in header
+    assert "staged_choices_by_name_entry" in header
+    assert "entry_is_unknown = false;" in header
 
 
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
@@ -4809,6 +4814,7 @@ def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
     field_number_scope = registry.scope("demo.Carrier::FieldNumber")
 
     assert class_scope.owner("ctx_") == "generated context storage"
+    assert class_scope.owner("unknown_fields_") == "generated unknown field storage"
     assert class_scope.owner("choice_") == "oneof choice storage"
     assert class_scope.owner("choice_case_") == "oneof choice case storage"
     assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
@@ -4991,7 +4997,7 @@ def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
     ) < ensure_body.index("choice_case_ = ChoiceCase::child;")
 
 
-def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
+def test_empty_message_accounts_for_unknown_fields() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("empty.proto")
     request.proto_file.append(_empty_file())
@@ -5003,15 +5009,43 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
         file.content for file in response.file if file.name == "empty.protocyte.hpp"
     )
 
-    assert (
-        "::protocyte::Status serialize(Writer& /* writer */) const noexcept {" in header
-    )
+    assert "::protocyte::Status serialize(Writer& writer) const noexcept {" in header
+    assert "const auto unknown_bytes = unknown_fields_.bytes();" in header
     assert (
         "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {"
         in header
     )
-    assert "::protocyte::usize total {};" not in header
-    assert "return ::protocyte::usize {};" in header
+    assert "::protocyte::usize total {};" in header
+    assert (
+        "::protocyte::checked_add(total, unknown_fields_.size())" in header
+    )
+    assert "return *total_with_unknown;" in header
+
+
+def test_generated_message_exposes_opt_in_unknown_field_api() -> None:
+    response = generate_response(_basic_request())
+
+    assert not response.error
+    header = next(
+        file.content for file in response.file if file.name == "simple.protocyte.hpp"
+    )
+
+    assert "::protocyte::UnknownFieldRange unknown_fields() const noexcept" in header
+    assert "::protocyte::usize unknown_field_count() const noexcept" in header
+    assert "unknown_field_bytes() const noexcept" in header
+    assert "void clear_unknown_fields() noexcept" in header
+    assert "::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields()" in header
+    assert "requires(::protocyte::preserve_unknown_fields_v<Config>)" in header
+    assert (
+        "PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;"
+        in header
+    )
+    assert "::protocyte::read_unknown_field<Config>" in header
+    assert "if constexpr (::protocyte::preserve_unknown_fields_v<Config>)" in header
+    assert "ctx_->limits.max_recursion_depth" in header
+    assert "ctx_->limits.max_unknown_field_bytes" in header
+    assert "staged_items_entry" not in header
+    assert "staged_message_items_entry" not in header
 
 
 def test_generated_encoded_size_omits_redundant_uint64_varint_casts() -> None:
@@ -6638,6 +6672,15 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     value.name = "DEFAULT_CHOICE_READY"
     value.number = 9
 
+    enum = file.enum_type.add()
+    enum.name = "MapChoice"
+    value = enum.value.add()
+    value.name = "MAP_CHOICE_UNKNOWN"
+    value.number = 0
+    value = enum.value.add()
+    value.name = "MAP_CHOICE_READY"
+    value.number = 9
+
     nested = file.message_type.add()
     nested.name = "Nested"
     field = nested.field.add()
@@ -6758,6 +6801,28 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     field.label = F.LABEL_REQUIRED
     field.type = F.TYPE_INT32
     field.default_value = "17"
+
+    entry = message.nested_type.add()
+    entry.name = "ChoicesByNameEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_ENUM
+    value.type_name = ".defaults.MapChoice"
+
+    field = message.field.add()
+    field.name = "choices_by_name"
+    field.number = 16
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".defaults.Defaults.ChoicesByNameEntry"
 
     return file
 

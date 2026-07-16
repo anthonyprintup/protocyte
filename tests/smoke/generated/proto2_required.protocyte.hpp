@@ -12,6 +12,11 @@ namespace test::required {
         PROTO2_DEFAULT_MODE_READY = 9,
     };
 
+    enum struct Proto2MapMode : ::protocyte::i32 {
+        PROTO2_MAP_MODE_UNKNOWN = 0,
+        PROTO2_MAP_MODE_READY = 9,
+    };
+
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredChild;
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredParent;
     template<typename Config = ::protocyte::DefaultConfig> struct Proto2ArrayDefaults;
@@ -25,7 +30,7 @@ namespace test::required {
             note = 2u,
         };
 
-        explicit RequiredChild(Context &ctx) noexcept: ctx_ {&ctx}, note_ {&ctx} {}
+        explicit RequiredChild(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx}, note_ {&ctx} {}
 
         static RequiredChild create(Context &ctx) noexcept { return RequiredChild {ctx}; }
         Context *context() const noexcept { return ctx_; }
@@ -97,10 +102,31 @@ namespace test::required {
             } else {
                 clear_note();
             }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
             return {};
         }
 
     public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
 
         constexpr ::protocyte::i32 id() const noexcept { return id_; }
         constexpr bool has_id() const noexcept { return has_id_; }
@@ -204,6 +230,22 @@ namespace test::required {
                 const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::id: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_id = ::protocyte::read_int32_field(reader, wire_type, field_number);
                         if (!decoded_id) {
                             return decoded_id.status();
@@ -213,6 +255,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::note: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         if (const auto st =
                                 ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type, field_number, note_);
                             !st) {
@@ -222,9 +280,17 @@ namespace test::required {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
-                            !st) {
-                            return st;
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
                         }
                         break;
                     }
@@ -250,6 +316,14 @@ namespace test::required {
                         writer, static_cast<::protocyte::u32>(FieldNumber::note), note_.view());
                     !st) {
                     return st;
+                }
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
                 }
             }
             return {};
@@ -281,7 +355,11 @@ namespace test::required {
                 }
                 total = *st_size;
             }
-            return total;
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
         }
 
         ::protocyte::Status validate() const noexcept {
@@ -297,6 +375,7 @@ namespace test::required {
         }
     protected:
         Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
         ::protocyte::i32 id_ {};
         bool has_id_ {};
         typename Config::String note_;
@@ -310,7 +389,7 @@ namespace test::required {
             children = 2u,
         };
 
-        explicit RequiredParent(Context &ctx) noexcept: ctx_ {&ctx}, children_ {&ctx} {}
+        explicit RequiredParent(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx}, children_ {&ctx} {}
 
         static RequiredParent create(Context &ctx) noexcept { return RequiredParent {ctx}; }
         Context *context() const noexcept { return ctx_; }
@@ -384,10 +463,31 @@ namespace test::required {
             if (const auto st = mutable_children().copy_from(source.children()); !st) {
                 return st;
             }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
             return {};
         }
 
     public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
 
         bool has_child() const noexcept { return child_.has_value(); }
         const ::test::required::RequiredChild<Config> *child() const noexcept {
@@ -463,6 +563,22 @@ namespace test::required {
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::child: {
                         if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
+                        if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
@@ -484,6 +600,22 @@ namespace test::required {
                     }
                     case FieldNumber::children: {
                         if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
+                        if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
@@ -502,9 +634,17 @@ namespace test::required {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
-                            !st) {
-                            return st;
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
                         }
                         break;
                     }
@@ -530,6 +670,14 @@ namespace test::required {
                         writer, static_cast<::protocyte::u32>(FieldNumber::children), children_value);
                     !st) {
                     return st;
+                }
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
                 }
             }
             return {};
@@ -564,7 +712,11 @@ namespace test::required {
                 }
                 total = *st_size;
             }
-            return total;
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
         }
 
         ::protocyte::Status validate() const noexcept {
@@ -582,6 +734,7 @@ namespace test::required {
         }
     protected:
         Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
         typename Config::template Optional<::test::required::RequiredChild<Config>> child_;
         typename Config::template Vector<::test::required::RequiredChild<Config>> children_;
     };
@@ -593,7 +746,7 @@ namespace test::required {
             fixed_bytes = 2u,
         };
 
-        explicit Proto2ArrayDefaults(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit Proto2ArrayDefaults(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
         static Proto2ArrayDefaults create(Context &ctx) noexcept { return Proto2ArrayDefaults {ctx}; }
         Context *context() const noexcept { return ctx_; }
@@ -668,10 +821,31 @@ namespace test::required {
             } else {
                 clear_fixed_bytes();
             }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
             return {};
         }
 
     public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
 
         ::protocyte::Span<const ::protocyte::u8> bounded_bytes() const noexcept {
             return has_bounded_bytes_ ?
@@ -815,6 +989,22 @@ namespace test::required {
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::bounded_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
+                        if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
@@ -843,6 +1033,22 @@ namespace test::required {
                     }
                     case FieldNumber::fixed_bytes: {
                         if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
+                        if (wire_type != ::protocyte::WireType::LEN) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                            field_number);
                         }
@@ -869,9 +1075,17 @@ namespace test::required {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
-                            !st) {
-                            return st;
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
                         }
                         break;
                     }
@@ -897,6 +1111,14 @@ namespace test::required {
                         writer, static_cast<::protocyte::u32>(FieldNumber::fixed_bytes), fixed_bytes_.view());
                     !st) {
                     return st;
+                }
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
                 }
             }
             return {};
@@ -931,12 +1153,17 @@ namespace test::required {
                 }
                 total = *st_size;
             }
-            return total;
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
         }
 
         ::protocyte::Status validate() const noexcept { return {}; }
     protected:
         Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
         ::protocyte::ByteArray<8u> bounded_bytes_;
         bool has_bounded_bytes_ {};
         ::protocyte::FixedByteArray<3u> fixed_bytes_;
@@ -944,6 +1171,7 @@ namespace test::required {
 
     template<typename Config> struct Proto2DefaultValues {
         using Context = typename Config::Context;
+
         enum struct FieldNumber : ::protocyte::u32 {
             double_value = 1u,
             float_value = 2u,
@@ -962,9 +1190,17 @@ namespace test::required {
             sint32_value = 15u,
             sint64_value = 16u,
             implicit_enum_value = 17u,
+            enum_values = 18u,
+            enum_by_name = 19u,
         };
 
-        explicit Proto2DefaultValues(Context &ctx) noexcept: ctx_ {&ctx}, string_value_ {&ctx}, bytes_value_ {&ctx} {}
+        explicit Proto2DefaultValues(Context &ctx) noexcept:
+            ctx_ {&ctx},
+            unknown_fields_ {&ctx},
+            string_value_ {&ctx},
+            bytes_value_ {&ctx},
+            enum_values_ {&ctx},
+            enum_by_name_ {&ctx} {}
 
         static Proto2DefaultValues create(Context &ctx) noexcept { return Proto2DefaultValues {ctx}; }
         Context *context() const noexcept { return ctx_; }
@@ -1118,10 +1354,37 @@ namespace test::required {
             } else {
                 clear_implicit_enum_value();
             }
+            if (const auto st = mutable_enum_values().copy_from(source.enum_values()); !st) {
+                return st;
+            }
+            if (const auto st = mutable_enum_by_name().copy_from(source.enum_by_name()); !st) {
+                return st;
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
             return {};
         }
 
     public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
 
         constexpr ::protocyte::f64 double_value() const noexcept { return has_double_value_ ? double_value_ : 1.5; }
         constexpr bool has_double_value() const noexcept { return has_double_value_; }
@@ -1400,6 +1663,18 @@ namespace test::required {
             has_implicit_enum_value_ = false;
         }
 
+        const typename Config::template Vector<::protocyte::i32> &enum_values() const noexcept { return enum_values_; }
+        typename Config::template Vector<::protocyte::i32> &mutable_enum_values() noexcept { return enum_values_; }
+        void clear_enum_values() noexcept { enum_values_.clear(); }
+
+        const typename Config::template Map<typename Config::String, ::protocyte::i32> &enum_by_name() const noexcept {
+            return enum_by_name_;
+        }
+        typename Config::template Map<typename Config::String, ::protocyte::i32> &mutable_enum_by_name() noexcept {
+            return enum_by_name_;
+        }
+        void clear_enum_by_name() noexcept { enum_by_name_.clear(); }
+
         template<typename Reader>
         static ::protocyte::Result<Proto2DefaultValues> parse(Context &ctx, Reader &reader) noexcept {
             auto output = Proto2DefaultValues::create(ctx);
@@ -1450,6 +1725,22 @@ namespace test::required {
                 const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::double_value: {
+                        if (wire_type != ::protocyte::WireType::I64) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_double_value =
                             ::protocyte::read_double_field(reader, wire_type, field_number);
                         if (!decoded_double_value) {
@@ -1460,6 +1751,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::float_value: {
+                        if (wire_type != ::protocyte::WireType::I32) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_float_value = ::protocyte::read_float_field(reader, wire_type, field_number);
                         if (!decoded_float_value) {
                             return decoded_float_value.status();
@@ -1469,6 +1776,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::int64_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_int64_value = ::protocyte::read_int64_field(reader, wire_type, field_number);
                         if (!decoded_int64_value) {
                             return decoded_int64_value.status();
@@ -1478,6 +1801,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::uint64_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_uint64_value =
                             ::protocyte::read_uint64_field(reader, wire_type, field_number);
                         if (!decoded_uint64_value) {
@@ -1488,6 +1827,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::int32_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_int32_value = ::protocyte::read_int32_field(reader, wire_type, field_number);
                         if (!decoded_int32_value) {
                             return decoded_int32_value.status();
@@ -1497,6 +1852,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::fixed64_value: {
+                        if (wire_type != ::protocyte::WireType::I64) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_fixed64_value =
                             ::protocyte::read_fixed64_value_field(reader, wire_type, field_number);
                         if (!decoded_fixed64_value) {
@@ -1507,6 +1878,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::fixed32_value: {
+                        if (wire_type != ::protocyte::WireType::I32) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_fixed32_value =
                             ::protocyte::read_fixed32_value_field(reader, wire_type, field_number);
                         if (!decoded_fixed32_value) {
@@ -1517,6 +1904,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::bool_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_bool_value = ::protocyte::read_bool_field(reader, wire_type, field_number);
                         if (!decoded_bool_value) {
                             return decoded_bool_value.status();
@@ -1526,6 +1929,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::string_value: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type,
                                                                                    field_number, string_value_);
                             !st) {
@@ -1535,6 +1954,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::bytes_value: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         if (const auto st = ::protocyte::read_bytes_field<Config>(*ctx_, reader, wire_type,
                                                                                   field_number, bytes_value_);
                             !st) {
@@ -1544,6 +1979,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::uint32_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_uint32_value =
                             ::protocyte::read_uint32_field(reader, wire_type, field_number);
                         if (!decoded_uint32_value) {
@@ -1554,19 +2005,62 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::enum_value: {
-                        const auto decoded_enum_value = ::protocyte::read_enum_field(reader, wire_type, field_number);
-                        if (!decoded_enum_value) {
-                            return decoded_enum_value.status();
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
                         }
-                        const auto enum_value_value = *decoded_enum_value;
+                        const auto decoded_enum_value_raw = ::protocyte::read_varint(reader);
+                        if (!decoded_enum_value_raw) {
+                            return decoded_enum_value_raw.status();
+                        }
+                        const auto enum_value_value = static_cast<::protocyte::i32>(*decoded_enum_value_raw);
+                        bool enum_value_accepted {true};
                         if (enum_value_value != 5 && enum_value_value != 9) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {}, field_number);
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                auto unknown = mutable_unknown_fields();
+                                if (const auto st = unknown.add_varint(field_number, *decoded_enum_value_raw); !st) {
+                                    return st;
+                                }
+                            }
+                            enum_value_accepted = false;
+                        } else {
+                            enum_value_ = enum_value_value;
                         }
-                        enum_value_ = enum_value_value;
+                        if (!enum_value_accepted) {
+                            break;
+                        }
                         has_enum_value_ = true;
                         break;
                     }
                     case FieldNumber::sfixed32_value: {
+                        if (wire_type != ::protocyte::WireType::I32) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_sfixed32_value =
                             ::protocyte::read_sfixed32_field(reader, wire_type, field_number);
                         if (!decoded_sfixed32_value) {
@@ -1577,6 +2071,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::sfixed64_value: {
+                        if (wire_type != ::protocyte::WireType::I64) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_sfixed64_value =
                             ::protocyte::read_sfixed64_field(reader, wire_type, field_number);
                         if (!decoded_sfixed64_value) {
@@ -1587,6 +2097,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::sint32_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_sint32_value =
                             ::protocyte::read_sint32_field(reader, wire_type, field_number);
                         if (!decoded_sint32_value) {
@@ -1597,6 +2123,22 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::sint64_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         const auto decoded_sint64_value =
                             ::protocyte::read_sint64_field(reader, wire_type, field_number);
                         if (!decoded_sint64_value) {
@@ -1607,23 +2149,337 @@ namespace test::required {
                         break;
                     }
                     case FieldNumber::implicit_enum_value: {
-                        const auto decoded_implicit_enum_value =
-                            ::protocyte::read_enum_field(reader, wire_type, field_number);
-                        if (!decoded_implicit_enum_value) {
-                            return decoded_implicit_enum_value.status();
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
                         }
-                        const auto implicit_enum_value_value = *decoded_implicit_enum_value;
+                        const auto decoded_implicit_enum_value_raw = ::protocyte::read_varint(reader);
+                        if (!decoded_implicit_enum_value_raw) {
+                            return decoded_implicit_enum_value_raw.status();
+                        }
+                        const auto implicit_enum_value_value =
+                            static_cast<::protocyte::i32>(*decoded_implicit_enum_value_raw);
+                        bool implicit_enum_value_accepted {true};
                         if (implicit_enum_value_value != 5 && implicit_enum_value_value != 9) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {}, field_number);
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                auto unknown = mutable_unknown_fields();
+                                if (const auto st = unknown.add_varint(field_number, *decoded_implicit_enum_value_raw);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            implicit_enum_value_accepted = false;
+                        } else {
+                            implicit_enum_value_ = implicit_enum_value_value;
                         }
-                        implicit_enum_value_ = implicit_enum_value_value;
+                        if (!implicit_enum_value_accepted) {
+                            break;
+                        }
                         has_implicit_enum_value_ = true;
                         break;
                     }
-                    default: {
-                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
-                            !st) {
+                    case FieldNumber::enum_values: {
+                        if (wire_type != ::protocyte::WireType::VARINT && wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
+                        if (wire_type == ::protocyte::WireType::LEN) {
+                            auto len = ::protocyte::read_length_delimited_size(reader);
+                            if (!len) {
+                                return len.status();
+                            }
+                            if (const auto st = reader.can_read(*len); !st) {
+                                return st;
+                            }
+                            typename Config::template Vector<::protocyte::i32> packed_enum_values_values {ctx_};
+                            ::protocyte::UnknownFieldStorage<Config> packed_enum_values_unknown_fields {ctx_};
+                            ::protocyte::LimitedReader<Reader> packed {reader, *len};
+                            while (!packed.eof()) {
+                                if (const auto st = packed.consume_repeated_elements(1u, field_number); !st) {
+                                    return st;
+                                }
+                                ::protocyte::i32 value {};
+                                const auto decoded_enum_values_raw = ::protocyte::read_varint(packed);
+                                if (!decoded_enum_values_raw) {
+                                    return decoded_enum_values_raw.status();
+                                }
+                                const auto enum_values_value = static_cast<::protocyte::i32>(*decoded_enum_values_raw);
+                                bool enum_values_accepted {true};
+                                if (enum_values_value != 5 && enum_values_value != 9) {
+                                    if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                        ::protocyte::MutableUnknownFieldSet<Config> unknown {
+                                            *ctx_, packed_enum_values_unknown_fields};
+                                        if (const auto st = unknown.add_varint(field_number, *decoded_enum_values_raw);
+                                            !st) {
+                                            return st;
+                                        }
+                                    }
+                                    enum_values_accepted = false;
+                                } else {
+                                    value = enum_values_value;
+                                }
+                                if (!enum_values_accepted) {
+                                    continue;
+                                }
+                                if (const auto st = packed_enum_values_values.push_back(value); !st) {
+                                    return st;
+                                }
+                            }
+                            const auto packed_enum_values_values_prepared_size =
+                                ::protocyte::checked_add(enum_values_.size(), packed_enum_values_values.size());
+                            if (!packed_enum_values_values_prepared_size) {
+                                return packed_enum_values_values_prepared_size.status();
+                            }
+                            if (const auto st = enum_values_.reserve(*packed_enum_values_values_prepared_size); !st) {
+                                return st;
+                            }
+                            ::protocyte::UnknownFieldStorage<Config> merged_enum_values_unknown_fields {ctx_};
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (!packed_enum_values_unknown_fields.empty()) {
+                                    if (const auto st = ::protocyte::prepare_unknown_field_merge<Config>(
+                                            *ctx_, unknown_fields_, packed_enum_values_unknown_fields,
+                                            merged_enum_values_unknown_fields);
+                                        !st) {
+                                        return st;
+                                    }
+                                }
+                            }
+                            if (const auto st = enum_values_.append_trivial_range(packed_enum_values_values.data(),
+                                                                                  packed_enum_values_values.size());
+                                !st) {
+                                return st;
+                            }
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (!packed_enum_values_unknown_fields.empty()) {
+                                    unknown_fields_ = ::protocyte::move(merged_enum_values_unknown_fields);
+                                }
+                            }
+                            break;
+                        }
+                        if (const auto st = reader.consume_repeated_elements(1u, field_number); !st) {
                             return st;
+                        }
+                        ::protocyte::i32 value {};
+                        const auto decoded_enum_values_raw = ::protocyte::read_varint(reader);
+                        if (!decoded_enum_values_raw) {
+                            return decoded_enum_values_raw.status();
+                        }
+                        const auto enum_values_value = static_cast<::protocyte::i32>(*decoded_enum_values_raw);
+                        bool enum_values_accepted {true};
+                        if (enum_values_value != 5 && enum_values_value != 9) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                auto unknown = mutable_unknown_fields();
+                                if (const auto st = unknown.add_varint(field_number, *decoded_enum_values_raw); !st) {
+                                    return st;
+                                }
+                            }
+                            enum_values_accepted = false;
+                        } else {
+                            value = enum_values_value;
+                        }
+                        if (!enum_values_accepted) {
+                            break;
+                        }
+                        if (const auto st = enum_values_.push_back(value); !st) {
+                            return st;
+                        }
+                        break;
+                    }
+                    case FieldNumber::enum_by_name: {
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
+                        if (wire_type != ::protocyte::WireType::LEN) {
+                            return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                           field_number);
+                        }
+                        if (const auto st = reader.consume_map_entries(1u, field_number); !st) {
+                            return st;
+                        }
+                        typename Config::String key {ctx_};
+                        ::protocyte::i32 value {};
+                        bool entry_is_unknown {};
+                        const auto parse_enum_by_name_entry = [&](auto &entry_reader) noexcept -> ::protocyte::Status {
+                            while (!entry_reader.eof()) {
+                                const auto entry_tag = ::protocyte::read_tag(entry_reader);
+                                if (!entry_tag) {
+                                    return entry_tag.status();
+                                }
+                                const auto [entry_field, entry_wire] = *entry_tag;
+                                switch (entry_field) {
+                                    case 1u: {
+                                        if (entry_wire != ::protocyte::WireType::LEN) {
+                                            if (const auto st = ::protocyte::skip_field<Config>(
+                                                    *ctx_, entry_reader, entry_wire, entry_field);
+                                                !st) {
+                                                return st;
+                                            }
+                                            break;
+                                        }
+                                        if (const auto st = ::protocyte::read_string<Config>(*ctx_, entry_reader, key);
+                                            !st) {
+                                            return st;
+                                        }
+                                        break;
+                                    }
+                                    case 2u: {
+                                        if (entry_wire != ::protocyte::WireType::VARINT) {
+                                            if (const auto st = ::protocyte::skip_field<Config>(
+                                                    *ctx_, entry_reader, entry_wire, entry_field);
+                                                !st) {
+                                                return st;
+                                            }
+                                            break;
+                                        }
+                                        const auto decoded_value_enum = ::protocyte::read_enum(entry_reader);
+                                        if (!decoded_value_enum) {
+                                            return decoded_value_enum.status();
+                                        }
+                                        const auto value_enum_value = *decoded_value_enum;
+                                        if (value_enum_value != 0 && value_enum_value != 9) {
+                                            entry_is_unknown = true;
+                                        } else {
+                                            entry_is_unknown = false;
+                                            value = value_enum_value;
+                                        }
+                                        break;
+                                    }
+                                    default: {
+                                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader,
+                                                                                            entry_wire, entry_field);
+                                            !st) {
+                                            return st;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            return {};
+                        };
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            const auto entry_size = ::protocyte::read_length_delimited_size(reader);
+                            if (!entry_size) {
+                                return entry_size.status();
+                            }
+                            if (*entry_size > ctx_->limits.max_message_bytes) {
+                                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
+                                                               field_number);
+                            }
+                            if (const auto st = reader.can_read(*entry_size); !st) {
+                                return st;
+                            }
+                            if (const auto st =
+                                    ::protocyte::push_recursion<Config>(*ctx_, reader.position(), field_number);
+                                !st) {
+                                return st;
+                            }
+                            typename Config::template Vector<::protocyte::u8> staged_enum_by_name_entry {ctx_};
+                            if (const auto st = staged_enum_by_name_entry.resize_for_overwrite(*entry_size); !st) {
+                                ::protocyte::pop_recursion<Config>(*ctx_);
+                                return st;
+                            }
+                            if (const auto st =
+                                    reader.read(staged_enum_by_name_entry.data(), staged_enum_by_name_entry.size());
+                                !st) {
+                                ::protocyte::pop_recursion<Config>(*ctx_);
+                                return st;
+                            }
+                            ::protocyte::StagedReader<Reader> entry_reader {
+                                ::protocyte::Span<const ::protocyte::u8> {staged_enum_by_name_entry.data(),
+                                                                          staged_enum_by_name_entry.size()},
+                                reader};
+                            const auto entry_status = parse_enum_by_name_entry(entry_reader);
+                            ::protocyte::pop_recursion<Config>(*ctx_);
+                            if (!entry_status) {
+                                return entry_status;
+                            }
+                            if (entry_is_unknown) {
+                                auto unknown = mutable_unknown_fields();
+                                if (const auto st = unknown.add_length_delimited(
+                                        field_number,
+                                        ::protocyte::Span<const ::protocyte::u8> {staged_enum_by_name_entry.data(),
+                                                                                  staged_enum_by_name_entry.size()});
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto insert = enum_by_name_.insert_or_assign(::protocyte::move(key),
+                                                                                       ::protocyte::move(value));
+                                    !insert) {
+                                    return insert;
+                                }
+                            }
+                        } else {
+                            auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);
+                            if (!entry) {
+                                return entry.status();
+                            }
+                            auto &entry_reader = entry->reader();
+                            if (const auto st = parse_enum_by_name_entry(entry_reader); !st) {
+                                return st;
+                            }
+                            if (const auto st = entry->finish(); !st) {
+                                return st;
+                            }
+                            if (!entry_is_unknown) {
+                                if (const auto insert = enum_by_name_.insert_or_assign(::protocyte::move(key),
+                                                                                       ::protocyte::move(value));
+                                    !insert) {
+                                    return insert;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    default: {
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
                         }
                         break;
                     }
@@ -1754,6 +2610,79 @@ namespace test::required {
                         writer, static_cast<::protocyte::u32>(FieldNumber::implicit_enum_value), implicit_enum_value_);
                     !st) {
                     return st;
+                }
+            }
+            if (!enum_values_.empty()) {
+                ::protocyte::usize packed_size_enum_values {};
+                for (const auto &packed_value_enum_values : enum_values_) {
+                    const auto st_size = ::protocyte::add_size(
+                        packed_size_enum_values,
+                        ::protocyte::varint_size(static_cast<::protocyte::u64>(packed_value_enum_values)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    packed_size_enum_values = *st_size;
+                }
+                if (const auto st = ::protocyte::write_tag(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::enum_values), ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                if (const auto st =
+                        ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(packed_size_enum_values));
+                    !st) {
+                    return st;
+                }
+                for (const auto &packed_value_enum_values : enum_values_) {
+                    if (const auto st = ::protocyte::write_enum(writer, packed_value_enum_values); !st) {
+                        return st;
+                    }
+                }
+            }
+            for (const auto &entry : enum_by_name_) {
+                ::protocyte::usize entry_payload {};
+                {
+                    const auto field_size_key = ::protocyte::length_delimited_field_size(1u, entry.key.size());
+                    if (!field_size_key) {
+                        return field_size_key.status();
+                    }
+                    const auto st_size = ::protocyte::add_size(entry_payload, *field_size_key);
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
+                }
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(2u) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
+                    if (!st_size) {
+                        return st_size.status();
+                    }
+                    entry_payload = *st_size;
+                }
+                if (const auto st = ::protocyte::write_tag(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::enum_by_name), ::protocyte::WireType::LEN);
+                    !st) {
+                    return st;
+                }
+                if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(entry_payload));
+                    !st) {
+                    return st;
+                }
+                if (const auto st = ::protocyte::write_string_field(writer, 1u, entry.key.view()); !st) {
+                    return st;
+                }
+                if (const auto st = ::protocyte::write_enum_field(writer, 2u, entry.value); !st) {
+                    return st;
+                }
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
                 }
             }
             return {};
@@ -1917,7 +2846,66 @@ namespace test::required {
                 }
                 total = *st_size;
             }
-            return total;
+            if (!enum_values_.empty()) {
+                ::protocyte::usize packed_size_enum_values {};
+                for (const auto &enum_values_value : enum_values_) {
+                    const auto st_size = ::protocyte::add_size(
+                        packed_size_enum_values,
+                        ::protocyte::varint_size(static_cast<::protocyte::u64>(enum_values_value)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    packed_size_enum_values = *st_size;
+                }
+                const auto field_size_enum_values = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::enum_values), packed_size_enum_values);
+                if (!field_size_enum_values) {
+                    return ::protocyte::unexpected(field_size_enum_values.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_enum_values);
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
+                }
+                total = *st_size;
+            }
+            for (const auto &entry : enum_by_name_) {
+                ::protocyte::usize entry_payload {};
+                {
+                    const auto field_size_key = ::protocyte::length_delimited_field_size(1u, entry.key.size());
+                    if (!field_size_key) {
+                        return ::protocyte::unexpected(field_size_key.error());
+                    }
+                    const auto st_size = ::protocyte::add_size(entry_payload, *field_size_key);
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
+                }
+                {
+                    const auto st_size = ::protocyte::add_size(
+                        entry_payload, ::protocyte::tag_size(2u) +
+                                           ::protocyte::varint_size(static_cast<::protocyte::u64>(entry.value)));
+                    if (!st_size) {
+                        return ::protocyte::unexpected(st_size.error());
+                    }
+                    entry_payload = *st_size;
+                }
+                const auto field_size_enum_by_name = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::enum_by_name), entry_payload);
+                if (!field_size_enum_by_name) {
+                    return ::protocyte::unexpected(field_size_enum_by_name.error());
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_enum_by_name);
+                if (!st_size) {
+                    return ::protocyte::unexpected(st_size.error());
+                }
+                total = *st_size;
+            }
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
         }
 
         ::protocyte::Status validate() const noexcept {
@@ -1933,14 +2921,33 @@ namespace test::required {
                                                    static_cast<::protocyte::u32>(FieldNumber::implicit_enum_value));
                 }
             }
+            for (const auto enum_values_value : enum_values_) {
+                if (enum_values_value != 5 && enum_values_value != 9) {
+                    return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
+                                                   static_cast<::protocyte::u32>(FieldNumber::enum_values));
+                }
+            }
+            for (const auto &enum_by_name_entry : enum_by_name_) {
+                if (enum_by_name_entry.value != 0 && enum_by_name_entry.value != 9) {
+                    return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {},
+                                                   static_cast<::protocyte::u32>(FieldNumber::enum_by_name));
+                }
+            }
             if (const auto st = string_value_.validate(); !st) {
                 return ::protocyte::unexpected(st.error().code, st.error().offset,
                                                static_cast<::protocyte::u32>(FieldNumber::string_value));
+            }
+            for (const auto &enum_by_name_entry : enum_by_name_) {
+                if (const auto st = enum_by_name_entry.key.validate(); !st) {
+                    return ::protocyte::unexpected(st.error().code, st.error().offset,
+                                                   static_cast<::protocyte::u32>(FieldNumber::enum_by_name));
+                }
             }
             return {};
         }
     protected:
         Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
         ::protocyte::f64 double_value_ {};
         bool has_double_value_ {};
         ::protocyte::f32 float_value_ {};
@@ -1975,6 +2982,8 @@ namespace test::required {
         bool has_sint64_value_ {};
         ::protocyte::i32 implicit_enum_value_ {};
         bool has_implicit_enum_value_ {};
+        typename Config::template Vector<::protocyte::i32> enum_values_;
+        typename Config::template Map<typename Config::String, ::protocyte::i32> enum_by_name_;
     };
 
     template<typename Config> struct OneofShadowingValue {
@@ -1988,11 +2997,12 @@ namespace test::required {
             bool_value = 1u,
         };
 
-        explicit OneofShadowingValue(Context &ctx) noexcept: ctx_ {&ctx} {}
+        explicit OneofShadowingValue(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
         static OneofShadowingValue create(Context &ctx) noexcept { return OneofShadowingValue {ctx}; }
         Context *context() const noexcept { return ctx_; }
-        OneofShadowingValue(OneofShadowingValue &&other) noexcept: ctx_ {other.ctx_} {
+        OneofShadowingValue(OneofShadowingValue &&other) noexcept:
+            ctx_ {other.ctx_}, unknown_fields_ {::protocyte::move(other.unknown_fields_)} {
             switch (other.value_case_) {
                 case ValueCase::bool_value: {
                     new (&value_.bool_value_) bool {other.value_.bool_value_};
@@ -2012,6 +3022,7 @@ namespace test::required {
             }
             clear_value();
             ctx_ = other.ctx_;
+            unknown_fields_ = ::protocyte::move(other.unknown_fields_);
             switch (other.value_case_) {
                 case ValueCase::bool_value: {
                     new (&value_.bool_value_) bool {other.value_.bool_value_};
@@ -2095,10 +3106,31 @@ namespace test::required {
                     break;
                 }
             }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
             return {};
         }
 
     public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
 
         constexpr ValueCase value_case() const noexcept { return value_case_; }
         void clear_value() noexcept {
@@ -2172,6 +3204,22 @@ namespace test::required {
                 const auto [field_number, wire_type] = *tag;
                 switch (static_cast<FieldNumber>(field_number)) {
                     case FieldNumber::bool_value: {
+                        if (wire_type != ::protocyte::WireType::VARINT) {
+                            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                                if (const auto st = ::protocyte::read_unknown_field<Config>(
+                                        *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                    !st) {
+                                    return st;
+                                }
+                            } else {
+                                if (const auto st =
+                                        ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                    !st) {
+                                    return st;
+                                }
+                            }
+                            break;
+                        }
                         bool bool_value_value {};
                         {
                             const auto decoded_bool_value =
@@ -2187,9 +3235,17 @@ namespace test::required {
                         break;
                     }
                     default: {
-                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
-                            !st) {
-                            return st;
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
                         }
                         break;
                     }
@@ -2210,6 +3266,14 @@ namespace test::required {
                     return st;
                 }
             }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
+                }
+            }
             return {};
         }
 
@@ -2227,12 +3291,17 @@ namespace test::required {
                 }
                 total = *st_size;
             }
-            return total;
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
         }
 
         ::protocyte::Status validate() const noexcept { return {}; }
     protected:
         Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
         ValueCase value_case_ {ValueCase::none};
         union ValueStorage {
             ValueStorage() noexcept {}

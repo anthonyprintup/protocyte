@@ -458,6 +458,7 @@ def _build_message_cpp_name_registry(
 
     class_scope.reserve("Context", "generated context alias")
     class_scope.reserve("ctx_", "generated context storage")
+    class_scope.reserve("unknown_fields_", "generated unknown field storage")
     for enum in message.nested_enums:
         class_scope.reserve(
             cpp_identifier(enum.name),
@@ -503,6 +504,11 @@ def _reserve_message_function_cpp_names(
     for name, owner in (
         ("create", "generated create function"),
         ("context", "generated context accessor"),
+        ("unknown_fields", "generated unknown field accessor"),
+        ("unknown_field_count", "generated unknown field count accessor"),
+        ("unknown_field_bytes", "generated unknown field bytes accessor"),
+        ("clear_unknown_fields", "generated unknown field clear function"),
+        ("mutable_unknown_fields", "generated mutable unknown field accessor"),
         ("copy_from", "generated copy function"),
         ("copy_from_in_place_", "generated in-place copy helper"),
         ("reset_for_reuse_", "generated message reset helper"),
@@ -761,7 +767,7 @@ def _field_class_cpp_name_items(item: FieldModel) -> Iterator[tuple[str, str]]:
 
 
 def _message_visible_storage_names(message: MessageModel) -> set[str]:
-    names = {"ctx_"}
+    names = {"ctx_", "unknown_fields_"}
     for oneof in message.oneofs:
         names.add(_oneof_case_member(oneof.name))
         names.add(_oneof_storage_member(oneof.name))
@@ -920,6 +926,27 @@ def _emit_message(
             w.line("static void destroy_at_(T* value) noexcept { value->~T(); }")
             w.line()
         _emit_clone_api(w, message, options)
+        w.line(
+            "::protocyte::UnknownFieldRange unknown_fields() const noexcept { return ::protocyte::UnknownFieldRange{unknown_fields_.bytes(), ctx_->limits.max_recursion_depth}; }"
+        )
+        w.line(
+            "::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }"
+        )
+        w.line(
+            "::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept { return unknown_fields_.bytes(); }"
+        )
+        w.line("void clear_unknown_fields() noexcept { unknown_fields_.clear(); }")
+        w.line(
+            "::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept"
+        )
+        w.line("    requires(::protocyte::preserve_unknown_fields_v<Config>)")
+        w.line("{")
+        with w.indent():
+            w.line(
+                "return ::protocyte::MutableUnknownFieldSet<Config>{*ctx_, unknown_fields_};"
+            )
+        w.line("}")
+        w.line()
         for oneof in message.oneofs:
             lower = cpp_identifier(oneof.name)
             w.line(
@@ -951,6 +978,9 @@ def _emit_message(
         w.line("protected:")
         with w.indent():
             w.line("Context* ctx_;")
+            w.line(
+                "PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;"
+            )
             oneofs_by_name = {oneof.name: oneof for oneof in message.oneofs}
             emitted_oneofs: set[str] = set()
             for item in message.fields:
@@ -991,7 +1021,7 @@ def _emit_field_number_enum(w: CppWriter, message: MessageModel) -> None:
 
 
 def _emit_constructor_initializers(w: CppWriter, message: MessageModel) -> None:
-    initializers = ["ctx_{&ctx}"]
+    initializers = ["ctx_{&ctx}", "unknown_fields_{&ctx}"]
     for item in message.fields:
         if item.oneof_name is not None:
             continue
@@ -1041,6 +1071,7 @@ def _emit_special_members(
         for oneof in message.oneofs:
             w.line(f"clear_{cpp_identifier(oneof.name)}();")
         w.line("ctx_ = other.ctx_;")
+        w.line("unknown_fields_ = ::protocyte::move(other.unknown_fields_);")
         for item in message.fields:
             if item.oneof_name is not None:
                 continue
@@ -1057,7 +1088,10 @@ def _emit_special_members(
 
 
 def _emit_move_constructor_initializers(w: CppWriter, message: MessageModel) -> None:
-    initializers = ["ctx_{other.ctx_}"]
+    initializers = [
+        "ctx_{other.ctx_}",
+        "unknown_fields_{::protocyte::move(other.unknown_fields_)}",
+    ]
     for item in message.fields:
         if item.oneof_name is not None:
             continue
@@ -1196,7 +1230,7 @@ def _emit_clone_api(
         w.line(f"new (&value) {message.cpp_name}{{ctx}};")
     w.line("}")
     w.line()
-    in_place_source = "source" if message.fields else "/* source */"
+    in_place_source = "source"
     w.line(
         f"::protocyte::Status copy_from_in_place_(const {message.cpp_name}& {in_place_source}) noexcept {{"
     )
@@ -1269,6 +1303,12 @@ def _emit_clone_api(
                 w.line(f"set_{item.cpp_name}(source.{item.cpp_name}());")
     for oneof in message.oneofs:
         _emit_copy_oneof_from_other(w, oneof, options, source="source")
+    w.line("if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {")
+    with w.indent():
+        w.line(
+            "if (const auto st = unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes); !st) { return st; }"
+        )
+    w.line("}")
     w.line("return {};")
     w.pop()
     w.line("}")
@@ -1881,28 +1921,41 @@ def _emit_wire_api(
     w.line("}")
     w.line()
     w.line("public:")
-    writer_name = "writer" if message.fields else "/* writer */"
     w.line("template <typename Writer>")
-    w.line(f"::protocyte::Status serialize(Writer& {writer_name}) const noexcept {{")
+    w.line("::protocyte::Status serialize(Writer& writer) const noexcept {")
     with w.indent():
         w.line("if (const auto st = validate(); !st) { return st; }")
         for item in sorted(message.fields, key=lambda f: f.number):
             _emit_serialize_statement(w, item, options)
+        w.line("if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {")
+        with w.indent():
+            w.line("const auto unknown_bytes = unknown_fields_.bytes();")
+            w.line("if (!unknown_bytes.empty()) {")
+            with w.indent():
+                w.line(
+                    "if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) { return st; }"
+                )
+            w.line("}")
+        w.line("}")
         w.line("return {};")
     w.line("}")
     w.line()
     w.line("::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {")
     with w.indent():
+        w.line(
+            "if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }"
+        )
+        w.line("::protocyte::usize total {};")
         if message.fields:
-            w.line(
-                "if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }"
-            )
-            w.line("::protocyte::usize total {};")
             for item in sorted(message.fields, key=lambda f: f.number):
                 _emit_size_statement(w, item, options)
-            w.line("return total;")
-        else:
-            w.line("return ::protocyte::usize {};")
+        w.line(
+            "const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());"
+        )
+        w.line(
+            "if (!total_with_unknown) { return ::protocyte::unexpected(total_with_unknown.error()); }"
+        )
+        w.line("return *total_with_unknown;")
     w.line("}")
     w.line()
     w.line("::protocyte::Status validate() const noexcept {")
@@ -1913,6 +1966,20 @@ def _emit_wire_api(
         _emit_string_validation(w, message)
         _emit_nested_validation(w, message)
         w.line("return {};")
+    w.line("}")
+
+
+def _emit_unknown_field_handling(w: CppWriter) -> None:
+    w.line("if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {")
+    with w.indent():
+        w.line(
+            "if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type, field_number, unknown_fields_); !st) { return st; }"
+        )
+    w.line("} else {")
+    with w.indent():
+        w.line(
+            "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
+        )
     w.line("}")
 
 
@@ -1935,16 +2002,12 @@ def _emit_merge_fields_body(
                     w.line("}")
                 w.line("default: {")
                 with w.indent():
-                    w.line(
-                        "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
-                    )
+                    _emit_unknown_field_handling(w)
                     w.line("break;")
                 w.line("}")
             w.line("}")
         else:
-            w.line(
-                "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
-            )
+            _emit_unknown_field_handling(w)
     w.line("}")
     w.line("return {};")
 
@@ -2152,6 +2215,17 @@ def _packed_bulk_fixed_width_size(item: FieldModel) -> str | None:
 
 
 def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
+    allowed_wire_types = [_wire(item)]
+    if item.repeated and item.packable:
+        allowed_wire_types.append("::protocyte::WireType::LEN")
+    mismatch = " && ".join(
+        f"wire_type != {wire_type}" for wire_type in dict.fromkeys(allowed_wire_types)
+    )
+    w.line(f"if ({mismatch}) {{")
+    with w.indent():
+        _emit_unknown_field_handling(w)
+        w.line("break;")
+    w.line("}")
     if item.repeated and item.kind != "map":
         if item.packable:
             w.line("if (wire_type == ::protocyte::WireType::LEN) {")
@@ -2179,6 +2253,12 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                             f"if (const auto st = reader.consume_repeated_elements(*len / {width}, field_number); !st) {{ return st; }}"
                         )
                     _emit_repeated_storage_decl(w, item, packed_values_name, options)
+                    packed_unknown_name = None
+                    if item.enum_closed:
+                        packed_unknown_name = f"packed_{item.cpp_name}_unknown_fields"
+                        w.line(
+                            f"::protocyte::UnknownFieldStorage<Config> {packed_unknown_name}{{ctx_}};"
+                        )
                     if not item.repeated_array and width is not None:
                         reserve_name = f"packed_reserve_{item.cpp_name}"
                         w.line(f"const auto {reserve_name} = *len / {width};")
@@ -2195,9 +2275,43 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                             options,
                             target=packed_values_name,
                             consume_budget=width is None,
+                            unknown_storage=packed_unknown_name,
                         )
                     w.line("}")
+                    if packed_unknown_name is not None:
+                        _emit_prepare_repeated_values_commit(
+                            w, item, packed_values_name
+                        )
+                        merged_unknown_name = (
+                            f"merged_{item.cpp_name}_unknown_fields"
+                        )
+                        w.line(
+                            f"::protocyte::UnknownFieldStorage<Config> {merged_unknown_name}{{ctx_}};"
+                        )
+                        w.line(
+                            "if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {"
+                        )
+                        with w.indent():
+                            w.line(f"if (!{packed_unknown_name}.empty()) {{")
+                            with w.indent():
+                                w.line(
+                                    f"if (const auto st = ::protocyte::prepare_unknown_field_merge<Config>(*ctx_, unknown_fields_, {packed_unknown_name}, {merged_unknown_name}); !st) {{ return st; }}"
+                                )
+                            w.line("}")
+                        w.line("}")
                     _emit_commit_repeated_values(w, item, packed_values_name)
+                    if packed_unknown_name is not None:
+                        w.line(
+                            "if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {"
+                        )
+                        with w.indent():
+                            w.line(f"if (!{packed_unknown_name}.empty()) {{")
+                            with w.indent():
+                                w.line(
+                                    f"unknown_fields_ = ::protocyte::move({merged_unknown_name});"
+                                )
+                            w.line("}")
+                        w.line("}")
                     w.line("break;")
             w.line("}")
         if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
@@ -2229,6 +2343,7 @@ def _emit_read_repeated_value(
     checked: bool = False,
     target: str | None = None,
     consume_budget: bool = True,
+    unknown_storage: str | None = None,
 ) -> None:
     target = _member(item) if target is None else target
     if consume_budget:
@@ -2262,7 +2377,18 @@ def _emit_read_repeated_value(
         )
         return
     w.line(f"{_element_type(item, options)} value{{}};")
-    _emit_read_scalar(w, item, reader, "value", options, checked=checked)
+    accepted = _emit_read_scalar(
+        w,
+        item,
+        reader,
+        "value",
+        options,
+        checked=checked,
+        unknown_storage=unknown_storage,
+    )
+    if accepted is not None:
+        action = "continue" if reader == "packed" else "break"
+        w.line(f"if (!{accepted}) {{ {action}; }}")
     w.line(f"if (const auto st = {target}.push_back(value); !st) {{ return st; }}")
 
 
@@ -2274,6 +2400,29 @@ def _emit_repeated_storage_decl(
         w.line(f"{typ} {name}{{}};")
     else:
         w.line(f"{typ} {name}{{ctx_}};")
+
+
+def _emit_prepare_repeated_values_commit(
+    w: CppWriter, item: FieldModel, source: str
+) -> None:
+    prepared_size_name = f"{source}_prepared_size"
+    w.line(
+        f"const auto {prepared_size_name} = ::protocyte::checked_add({_member(item)}.size(), {source}.size());"
+    )
+    w.line(
+        f"if (!{prepared_size_name}) {{ return {prepared_size_name}.status(); }}"
+    )
+    if item.repeated_array:
+        w.line(f"if (*{prepared_size_name} > {_array_max_literal(item)}) {{")
+        with w.indent():
+            w.line(
+                "return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(), field_number);"
+            )
+        w.line("}")
+        return
+    w.line(
+        f"if (const auto st = {_member(item)}.reserve(*{prepared_size_name}); !st) {{ return st; }}"
+    )
 
 
 def _emit_commit_repeated_values(w: CppWriter, item: FieldModel, source: str) -> None:
@@ -2446,10 +2595,18 @@ def _emit_read_single_value(
     if item.oneof_name:
         value_name = f"{item.cpp_name}_value"
         w.line(f"{_field_type(item, options)} {value_name}{{}};")
-        _emit_read_scalar(w, item, reader, value_name, options, checked=True)
+        accepted = _emit_read_scalar(
+            w, item, reader, value_name, options, checked=True
+        )
+        if accepted is not None:
+            w.line(f"if (!{accepted}) {{ break; }}")
         _emit_commit_oneof_value(w, item, value_name, options)
         return
-    _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
+    accepted = _emit_read_scalar(
+        w, item, reader, _member(item), options, checked=True
+    )
+    if accepted is not None:
+        w.line(f"if (!{accepted}) {{ break; }}")
     if _has_presence_flag(item):
         w.line(f"has_{item.cpp_name}_ = true;")
 
@@ -2464,63 +2621,169 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
     w.line(
         "if (const auto st = reader.consume_map_entries(1u, field_number); !st) { return st; }"
     )
-    w.line(
-        "auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);"
-    )
-    w.line("if (!entry) { return entry.status(); }")
-    w.line("auto &entry_reader = entry->reader();")
     _emit_temp_decl(w, key, "key", options)
     _emit_temp_decl(w, value, "value", options)
-    w.line("while (!entry_reader.eof()) {")
+    w.line("bool entry_is_unknown{};")
+    parse_name = f"parse_{item.cpp_name}_entry"
+    w.line(
+        f"const auto {parse_name} = [&](auto& entry_reader) noexcept -> ::protocyte::Status {{"
+    )
     with w.indent():
-        w.line("const auto entry_tag = ::protocyte::read_tag(entry_reader);")
-        w.line("if (!entry_tag) { return entry_tag.status(); }")
-        w.line("const auto [entry_field, entry_wire] = *entry_tag;")
-        w.line("switch (entry_field) {")
+        w.line("while (!entry_reader.eof()) {")
         with w.indent():
-            w.line("case 1u: {")
+            w.line("const auto entry_tag = ::protocyte::read_tag(entry_reader);")
+            w.line("if (!entry_tag) { return entry_tag.status(); }")
+            w.line("const auto [entry_field, entry_wire] = *entry_tag;")
+            w.line("switch (entry_field) {")
             with w.indent():
-                w.line(
-                    f"if (entry_wire != {_wire(key)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), 1u); }}"
-                )
-                _emit_read_named_value(
-                    w,
-                    key,
-                    "entry_reader",
-                    "key",
-                    options,
-                    "1u",
-                )
-                w.line("break;")
-            w.line("}")
-            w.line("case 2u: {")
-            with w.indent():
-                w.line(
-                    f"if (entry_wire != {_wire(value)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), 2u); }}"
-                )
-                _emit_read_named_value(
-                    w,
-                    value,
-                    "entry_reader",
-                    "value",
-                    options,
-                    "2u",
-                )
-                w.line("break;")
-            w.line("}")
-            w.line("default: {")
-            with w.indent():
-                w.line(
-                    "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire, entry_field); !st) { return st; }"
-                )
-                w.line("break;")
+                w.line("case 1u: {")
+                with w.indent():
+                    w.line(f"if (entry_wire != {_wire(key)}) {{")
+                    with w.indent():
+                        w.line(
+                            "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire, entry_field); !st) { return st; }"
+                        )
+                        w.line("break;")
+                    w.line("}")
+                    _emit_read_map_member(
+                        w,
+                        key,
+                        "entry_reader",
+                        "key",
+                        options,
+                        "1u",
+                    )
+                    w.line("break;")
+                w.line("}")
+                w.line("case 2u: {")
+                with w.indent():
+                    w.line(f"if (entry_wire != {_wire(value)}) {{")
+                    with w.indent():
+                        w.line(
+                            "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire, entry_field); !st) { return st; }"
+                        )
+                        w.line("break;")
+                    w.line("}")
+                    _emit_read_map_member(
+                        w,
+                        value,
+                        "entry_reader",
+                        "value",
+                        options,
+                        "2u",
+                    )
+                    w.line("break;")
+                w.line("}")
+                w.line("default: {")
+                with w.indent():
+                    w.line(
+                        "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire, entry_field); !st) { return st; }"
+                    )
+                    w.line("break;")
+                w.line("}")
             w.line("}")
         w.line("}")
-    w.line("}")
-    w.line("if (const auto st = entry->finish(); !st) { return st; }")
-    w.line(
-        f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
-    )
+        w.line("return {};")
+    w.line("};")
+
+    def emit_normal_entry_parse() -> None:
+        w.line(
+            "auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);"
+        )
+        w.line("if (!entry) { return entry.status(); }")
+        w.line("auto& entry_reader = entry->reader();")
+        w.line(
+            f"if (const auto st = {parse_name}(entry_reader); !st) {{ return st; }}"
+        )
+        w.line("if (const auto st = entry->finish(); !st) { return st; }")
+        w.line("if (!entry_is_unknown) {")
+        with w.indent():
+            w.line(
+                f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
+            )
+        w.line("}")
+
+    if value.enum_closed:
+        w.line("if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {")
+        with w.indent():
+            staged_name = f"staged_{item.cpp_name}_entry"
+            w.line(
+                "const auto entry_size = ::protocyte::read_length_delimited_size(reader);"
+            )
+            w.line("if (!entry_size) { return entry_size.status(); }")
+            w.line("if (*entry_size > ctx_->limits.max_message_bytes) {")
+            with w.indent():
+                w.line(
+                    "return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(), field_number);"
+                )
+            w.line("}")
+            w.line(
+                "if (const auto st = reader.can_read(*entry_size); !st) { return st; }"
+            )
+            w.line(
+                "if (const auto st = ::protocyte::push_recursion<Config>(*ctx_, reader.position(), field_number); !st) { return st; }"
+            )
+            w.line(
+                f"typename Config::template Vector<::protocyte::u8> {staged_name}{{ctx_}};"
+            )
+            w.line(
+                f"if (const auto st = {staged_name}.resize_for_overwrite(*entry_size); !st) {{ ::protocyte::pop_recursion<Config>(*ctx_); return st; }}"
+            )
+            w.line(
+                f"if (const auto st = reader.read({staged_name}.data(), {staged_name}.size()); !st) {{ ::protocyte::pop_recursion<Config>(*ctx_); return st; }}"
+            )
+            w.line(
+                f"::protocyte::StagedReader<Reader> entry_reader{{::protocyte::Span<const ::protocyte::u8>{{{staged_name}.data(), {staged_name}.size()}}, reader}};"
+            )
+            w.line(f"const auto entry_status = {parse_name}(entry_reader);")
+            w.line("::protocyte::pop_recursion<Config>(*ctx_);")
+            w.line("if (!entry_status) { return entry_status; }")
+            w.line("if (entry_is_unknown) {")
+            with w.indent():
+                w.line("auto unknown = mutable_unknown_fields();")
+                w.line(
+                    f"if (const auto st = unknown.add_length_delimited(field_number, ::protocyte::Span<const ::protocyte::u8>{{{staged_name}.data(), {staged_name}.size()}}); !st) {{ return st; }}"
+                )
+            w.line("} else {")
+            with w.indent():
+                w.line(
+                    f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
+                )
+            w.line("}")
+        w.line("} else {")
+        with w.indent():
+            emit_normal_entry_parse()
+        w.line("}")
+    else:
+        emit_normal_entry_parse()
+
+
+def _emit_read_map_member(
+    w: CppWriter,
+    item: FieldModel,
+    reader: str,
+    target: str,
+    options: GeneratorOptions,
+    field_number: str,
+) -> None:
+    if item.enum_closed:
+        result_name = f"decoded_{target}_enum"
+        value_name = f"{target}_enum_value"
+        w.line(f"const auto {result_name} = ::protocyte::read_enum({reader});")
+        w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
+        w.line(f"const auto {value_name} = *{result_name};")
+        condition = _closed_enum_invalid_condition(item, value_name)
+        assert condition is not None
+        w.line(f"if ({condition}) {{")
+        with w.indent():
+            w.line("entry_is_unknown = true;")
+        w.line("} else {")
+        with w.indent():
+            w.line("entry_is_unknown = false;")
+            w.line(f"{target} = {value_name};")
+        w.line("}")
+        return
+    _emit_read_named_value(w, item, reader, target, options, field_number)
 
 
 def _emit_temp_decl(
@@ -2567,11 +2830,47 @@ def _emit_read_scalar(
     *,
     checked: bool = False,
     field_number_expr: str | None = None,
-) -> None:
+    unknown_storage: str | None = None,
+) -> str | None:
     del options
     helper = _scalar_read_helper(item, checked=checked)
     args = f"{reader}, wire_type, field_number" if checked else reader
     error_field_number = "field_number" if checked else field_number_expr
+    if item.enum_closed and field_number_expr is None:
+        raw_name = f"decoded_{item.cpp_name}_raw"
+        result_name = f"decoded_{item.cpp_name}"
+        value_name = f"{item.cpp_name}_value"
+        accepted_name = f"{item.cpp_name}_accepted"
+        w.line(f"const auto {raw_name} = ::protocyte::read_varint({reader});")
+        w.line(f"if (!{raw_name}) {{ return {raw_name}.status(); }}")
+        w.line(
+            f"const auto {value_name} = static_cast<::protocyte::i32>(*{raw_name});"
+        )
+        w.line(f"bool {accepted_name}{{true}};")
+        condition = _closed_enum_invalid_condition(item, value_name)
+        assert condition is not None
+        w.line(f"if ({condition}) {{")
+        with w.indent():
+            w.line(
+                "if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {"
+            )
+            with w.indent():
+                if unknown_storage is None:
+                    w.line("auto unknown = mutable_unknown_fields();")
+                else:
+                    w.line(
+                        f"::protocyte::MutableUnknownFieldSet<Config> unknown{{*ctx_, {unknown_storage}}};"
+                    )
+                w.line(
+                    f"if (const auto st = unknown.add_varint(field_number, *{raw_name}); !st) {{ return st; }}"
+                )
+            w.line("}")
+            w.line(f"{accepted_name} = false;")
+        w.line("} else {")
+        with w.indent():
+            w.line(f"{target} = {value_name};")
+        w.line("}")
+        return accepted_name
     if item.enum_closed:
         result_name = f"decoded_{item.cpp_name}"
         value_name = f"{item.cpp_name}_value"
@@ -2585,12 +2884,13 @@ def _emit_read_scalar(
             field_number=error_field_number,
         )
         w.line(f"{target} = {value_name};")
-        return
+        return None
     result_name = f"decoded_{item.cpp_name}"
     with w.local_decl(result_name):
         w.line(f"const auto {result_name} = ::protocyte::{helper}({args});")
         w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
         w.line(f"{target} = *{result_name};")
+    return None
 
 
 def _emit_serialize_statement(

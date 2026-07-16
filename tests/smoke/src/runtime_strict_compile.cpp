@@ -8,6 +8,19 @@ static_assert(PROTOCYTE_ENABLE_REFLECTION == 0);
 
 namespace {
 
+    struct DisabledUnknownStorageLayout {
+        void *context;
+        PROTOCYTE_NO_UNIQUE_ADDRESS protocyte::UnknownFieldStorage<protocyte::DefaultConfig> unknown_fields;
+    };
+
+    static_assert(!protocyte::preserve_unknown_fields_v<protocyte::DefaultConfig>);
+    static_assert(sizeof(DisabledUnknownStorageLayout) == sizeof(void *));
+    static_assert(static_cast<protocyte::u32>(protocyte::UnknownFieldView::Type::TYPE_VARINT) == 0u);
+    static_assert(static_cast<protocyte::u32>(protocyte::UnknownFieldView::Type::TYPE_FIXED32) == 1u);
+    static_assert(static_cast<protocyte::u32>(protocyte::UnknownFieldView::Type::TYPE_FIXED64) == 2u);
+    static_assert(static_cast<protocyte::u32>(protocyte::UnknownFieldView::Type::TYPE_LENGTH_DELIMITED) == 3u);
+    static_assert(static_cast<protocyte::u32>(protocyte::UnknownFieldView::Type::TYPE_GROUP) == 4u);
+
     struct alignas(32) AlignedValue {
         protocyte::u8 bytes[32];
     };

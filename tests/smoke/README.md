@@ -351,6 +351,15 @@ If you provide a non-default runtime `Config`, generated messages use:
 - `Config::Map<K, V>`, `Config::Box<T>`, `Config::Optional<T>`,
   `Config::Bytes`, and `Config::String` storage types.
 
+Unknown fields are discarded by default. Set
+`static constexpr bool preserve_unknown_fields = true` on the config to retain
+and inspect them. The enabled path stores canonical wire bytes in
+`Config::Vector<u8>` and observes `ctx.limits.max_unknown_field_bytes`; the
+disabled path adds no message object footprint. Hosted smoke coverage exercises
+typed mutation, self-aliasing views, canonical raw-range merges, recursion and
+byte limits, packed closed-enum atomicity, and protobuf-compatible map-entry
+unknown handling.
+
 For untrusted input, set the resource policy on `ctx.limits` before parsing.
 `max_total_bytes` and `max_recursion_depth` default to protobuf C++'s
 `INT_MAX` and `100` behavior. `max_repeated_elements` and `max_map_entries`

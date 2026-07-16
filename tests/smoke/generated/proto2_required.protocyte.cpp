@@ -46,6 +46,8 @@ namespace test::required {
             {"sint32_value", 15u, "scalar", false, true, false},
             {"sint64_value", 16u, "scalar", false, true, false},
             {"implicit_enum_value", 17u, "enum", false, true, false},
+            {"enum_values", 18u, "enum", true, false, true},
+            {"enum_by_name", 19u, "map", true, false, false},
         };
 
         static const FieldInfo OneofShadowingValue_fields[] = {
