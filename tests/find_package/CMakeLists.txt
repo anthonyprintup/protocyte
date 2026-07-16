@@ -48,6 +48,13 @@ add_executable(find_package_demo src/main.cpp)
 target_link_libraries(find_package_demo PRIVATE find_package_proto)
 target_compile_features(find_package_demo PRIVATE cxx_std_20)
 
+set(FIND_PACKAGE_INSTALL_MARKER "${CMAKE_CURRENT_BINARY_DIR}/find-package-consumer.txt")
+file(WRITE "${FIND_PACKAGE_INSTALL_MARKER}" "find_package consumer\n")
+install(
+    FILES "${FIND_PACKAGE_INSTALL_MARKER}"
+    DESTINATION "share/protocyte-integration"
+)
+
 if(MSVC)
     target_compile_options(find_package_demo PRIVATE /W4 /permissive-)
 else()

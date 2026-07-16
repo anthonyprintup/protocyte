@@ -119,6 +119,116 @@ def test_cmake_install_tree_contains_installable_python_project() -> None:
     assert 'DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"' in cmake
 
 
+def _configure_fetchcontent_install_fixture(
+    tmp_path: Path,
+    *,
+    protocyte_install: bool | None = None,
+) -> tuple[Path, Path]:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "consumer"
+    build_dir = tmp_path / "build"
+    prefix = tmp_path / "prefix"
+    source_dir.mkdir()
+    (source_dir / "consumer-marker.txt").write_text(
+        "consumer-owned install artifact\n",
+        encoding="utf-8",
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_install_isolation LANGUAGES CXX)",
+                "include(FetchContent)",
+                "FetchContent_Declare(",
+                "    protocyte",
+                f'    SOURCE_DIR "{repo_root.as_posix()}"',
+                ")",
+                "FetchContent_MakeAvailable(protocyte)",
+                "install(",
+                '    FILES "${CMAKE_CURRENT_SOURCE_DIR}/consumer-marker.txt"',
+                '    DESTINATION "share/consumer"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configure_command = ["cmake", "-S", str(source_dir), "-B", str(build_dir)]
+    if protocyte_install is not None:
+        configure_command.append(
+            f"-DPROTOCYTE_INSTALL={'ON' if protocyte_install else 'OFF'}"
+        )
+    subprocess.run(configure_command, check=True)
+    subprocess.run(
+        ["cmake", "--install", str(build_dir), "--prefix", str(prefix)],
+        check=True,
+    )
+    return build_dir, prefix
+
+
+def test_fetchcontent_excludes_protocyte_from_parent_install_by_default(
+    tmp_path: Path,
+) -> None:
+    build_dir, prefix = _configure_fetchcontent_install_fixture(tmp_path)
+
+    cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    assert "PROTOCYTE_INSTALL:BOOL=OFF" in cache
+    manifest = (build_dir / "install_manifest.txt").read_text(encoding="utf-8")
+    installed_files = [
+        Path(line).resolve()
+        for line in manifest.splitlines()
+        if line
+    ]
+    expected_marker = (prefix / "share/consumer/consumer-marker.txt").resolve()
+    assert installed_files == [expected_marker]
+    assert not (prefix / "include/protocyte").exists()
+    assert not any(prefix.rglob("protocyteConfig.cmake"))
+    assert not (prefix / "share/protocyte").exists()
+    generated_config = build_dir / "_deps/protocyte-build/cmake/protocyteConfig.cmake"
+    assert not generated_config.exists()
+
+
+def test_fetchcontent_can_explicitly_enable_protocyte_install(
+    tmp_path: Path,
+) -> None:
+    build_dir, prefix = _configure_fetchcontent_install_fixture(
+        tmp_path,
+        protocyte_install=True,
+    )
+
+    cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    assert "PROTOCYTE_INSTALL:BOOL=ON" in cache
+    assert (prefix / "share/consumer/consumer-marker.txt").is_file()
+    assert (prefix / "include/protocyte/runtime/runtime.hpp").is_file()
+    assert any(prefix.rglob("protocyteConfig.cmake"))
+    assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
+
+
+def test_protobuf_fallback_uses_parent_safe_function_scoped_defaults() -> None:
+    functions = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake"
+    ).read_text(encoding="utf-8")
+    fallback = functions.split("elseif(PROTOCYTE_FETCH_PROTOBUF)", 1)[1].split(
+        "FetchContent_MakeAvailable(protobuf)", 1
+    )[0]
+
+    assert "if(NOT DEFINED protobuf_INSTALL)" in fallback
+    assert "set(protobuf_INSTALL OFF)" in fallback
+    expected_defaults = {
+        "protobuf_BUILD_TESTS": "OFF",
+        "protobuf_BUILD_CONFORMANCE": "OFF",
+        "protobuf_BUILD_EXAMPLES": "OFF",
+        "protobuf_BUILD_PROTOBUF_BINARIES": "ON",
+        "protobuf_INSTALL": "OFF",
+    }
+    for option, default in expected_defaults.items():
+        assert f"if(NOT DEFINED {option})" in fallback
+        assert f"set({option} {default})" in fallback
+        assert f"set({option} {default} CACHE" not in fallback
+    assert " FORCE)" not in fallback
+
+
 def test_internal_cmake_settings_do_not_fall_back_to_variables(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cmake_script = tmp_path / "internal_settings.cmake"

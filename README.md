@@ -182,6 +182,16 @@ add_executable(demo main.cpp)
 target_link_libraries(demo PRIVATE demo::proto)
 ```
 
+When Protocyte is consumed through `FetchContent` or `add_subdirectory`,
+`PROTOCYTE_INSTALL` defaults to `OFF`. This keeps Protocyte's headers, Python
+project, and CMake package out of the parent project's install tree. A parent
+that intentionally packages Protocyte can opt in before making it available:
+
+```cmake
+set(PROTOCYTE_INSTALL ON)
+FetchContent_MakeAvailable(protocyte)
+```
+
 Non-runtime generator options can be forwarded through `OPTIONS`:
 
 ```cmake
@@ -247,6 +257,11 @@ targets are not already available, then exposes:
 
 The fallback protobuf revision is the exact commit recorded in
 `PROTOCYTE_PROTOBUF_GIT_TAG`, rather than a mutable branch or release tag.
+When this fallback owns the protobuf build, Protocyte supplies function-scoped
+defaults for protobuf's build options, including `protobuf_INSTALL=OFF`, so
+protobuf, Abseil, upb, utf8_range, and protoc do not leak into the consumer's
+install tree. Parent-defined protobuf option values remain authoritative and
+Protocyte does not force or persist them in the parent cache.
 
 `TARGET` must be a real CMake target name without `::`. `ALIAS` can use any
 valid alias target name; namespaced aliases like `demo::proto` are recommended
@@ -270,6 +285,9 @@ Install protocyte:
 cmake -S . -B build/protocyte
 cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
 ```
+
+`PROTOCYTE_INSTALL` defaults to `ON` when Protocyte is the top-level project,
+so this standalone installation path remains enabled without extra options.
 
 Minimal consumer setup:
 

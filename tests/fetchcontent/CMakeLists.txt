@@ -53,6 +53,13 @@ add_executable(fetchcontent_demo src/main.cpp)
 target_link_libraries(fetchcontent_demo PRIVATE fetchcontent::proto)
 target_compile_features(fetchcontent_demo PRIVATE cxx_std_20)
 
+set(FETCHCONTENT_INSTALL_MARKER "${CMAKE_CURRENT_BINARY_DIR}/fetchcontent-consumer.txt")
+file(WRITE "${FETCHCONTENT_INSTALL_MARKER}" "fetchcontent consumer\n")
+install(
+    FILES "${FETCHCONTENT_INSTALL_MARKER}"
+    DESTINATION "share/protocyte-integration"
+)
+
 if(MSVC)
     target_compile_options(fetchcontent_demo PRIVATE /W4 /permissive-)
 else()

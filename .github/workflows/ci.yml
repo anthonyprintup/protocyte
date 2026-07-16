@@ -200,6 +200,19 @@ jobs:
       - name: Run FetchContent integration test
         run: ctest --test-dir tests/fetchcontent/build --output-on-failure
 
+      - name: Install FetchContent consumer
+        run: >
+          cmake --install tests/fetchcontent/build
+          --prefix tests/fetchcontent/install
+
+      - name: Verify FetchContent install isolation
+        run: |
+          test -f tests/fetchcontent/install/share/protocyte-integration/fetchcontent-consumer.txt
+          test "$(wc -l < tests/fetchcontent/build/install_manifest.txt)" -eq 1
+          test ! -e tests/fetchcontent/install/include/protocyte
+          test ! -e tests/fetchcontent/install/lib/cmake/protocyte
+          test ! -e tests/fetchcontent/install/share/protocyte
+
   find-package-linux:
     name: Find Package Linux
     runs-on: ubuntu-latest

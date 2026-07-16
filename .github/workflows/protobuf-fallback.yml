@@ -40,3 +40,19 @@ jobs:
 
       - name: Run find_package fallback integration test
         run: ctest --test-dir tests/find_package/build --output-on-failure
+
+      - name: Install find_package fallback consumer
+        run: >
+          cmake --install tests/find_package/build
+          --prefix tests/find_package/install
+
+      - name: Verify fetched protobuf install isolation
+        run: |
+          test -f tests/find_package/install/share/protocyte-integration/find-package-consumer.txt
+          test "$(wc -l < tests/find_package/build/install_manifest.txt)" -eq 1
+          test ! -e tests/find_package/install/include/google/protobuf
+          test ! -e tests/find_package/install/include/absl
+          test ! -e tests/find_package/install/include/upb
+          test ! -e tests/find_package/install/include/utf8_range.h
+          test ! -e tests/find_package/install/lib/cmake/protobuf
+          test ! -e tests/find_package/install/bin/protoc

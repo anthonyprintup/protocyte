@@ -43,6 +43,11 @@ option(
     "Fetch protobuf when protobuf CMake targets are unavailable."
     ON
 )
+option(
+    PROTOCYTE_INSTALL
+    "Generate Protocyte install rules."
+    "${PROJECT_IS_TOP_LEVEL}"
+)
 set(
     PROTOCYTE_PROTOBUF_VERSION
     "34.1"
@@ -108,74 +113,76 @@ protocyte_configure_runtime_target(protocyte_runtime_hosted runtime_hosted)
 add_library(protocyte::runtime_hosted ALIAS protocyte_runtime_hosted)
 target_compile_definitions(protocyte_runtime_hosted INTERFACE PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
 
-configure_package_config_file(
-    "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfig.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
-    INSTALL_DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
-    NO_CHECK_REQUIRED_COMPONENTS_MACRO
-)
-if(PROTOCYTE_VERSION_IS_PRERELEASE)
-    configure_file(
-        "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfigVersionPrerelease.cmake.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
-        @ONLY
+if(PROTOCYTE_INSTALL)
+    configure_package_config_file(
+        "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfig.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
+        INSTALL_DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
+        NO_CHECK_REQUIRED_COMPONENTS_MACRO
     )
-else()
-    # Pre-1.0 releases intentionally make no compatibility guarantees. Revisit for 1.0.0.
-    write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
-        VERSION "${PROJECT_VERSION}"
-        COMPATIBILITY ExactVersion
+    if(PROTOCYTE_VERSION_IS_PRERELEASE)
+        configure_file(
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/protocyteConfigVersionPrerelease.cmake.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
+            @ONLY
+        )
+    else()
+        # Pre-1.0 releases intentionally make no compatibility guarantees. Revisit for 1.0.0.
+        write_basic_package_version_file(
+            "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
+            VERSION "${PROJECT_VERSION}"
+            COMPATIBILITY ExactVersion
+        )
+    endif()
+
+    install(
+        TARGETS
+            protocyte_runtime
+            protocyte_runtime_hosted
+        EXPORT protocyteTargets
+        FILE_SET HEADERS DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+    install(TARGETS protocyte_codegen EXPORT protocyteTargets)
+    install(
+        EXPORT protocyteTargets
+        NAMESPACE protocyte::
+        DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
+    )
+    install(
+        FILES
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"
+            "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
+            "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
+        DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
+    )
+    install(
+        FILES
+            "${CMAKE_CURRENT_LIST_DIR}/LICENSE"
+            "${CMAKE_CURRENT_LIST_DIR}/NOTICE"
+        DESTINATION "${CMAKE_INSTALL_DOCDIR}"
+    )
+    install(
+        DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/protocyte"
+        DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}/src"
+        FILES_MATCHING
+            PATTERN "*.py"
+            PATTERN "*.hpp"
+            PATTERN "*.proto"
+            PATTERN "__pycache__" EXCLUDE
+            PATTERN "*.pyc" EXCLUDE
+    )
+    install(
+        FILES
+            "${CMAKE_CURRENT_LIST_DIR}/pyproject.toml"
+            "${CMAKE_CURRENT_LIST_DIR}/protocyte-cmake-constraints.txt"
+            "${CMAKE_CURRENT_LIST_DIR}/LICENSE"
+            "${CMAKE_CURRENT_LIST_DIR}/NOTICE"
+        DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"
+    )
+    install(
+        DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/protocyte/proto/"
+        DESTINATION "${PROTOCYTE_INSTALL_PROTODIR}"
+        FILES_MATCHING
+            PATTERN "*.proto"
     )
 endif()
-
-install(
-    TARGETS
-        protocyte_runtime
-        protocyte_runtime_hosted
-    EXPORT protocyteTargets
-    FILE_SET HEADERS DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
-)
-install(TARGETS protocyte_codegen EXPORT protocyteTargets)
-install(
-    EXPORT protocyteTargets
-    NAMESPACE protocyte::
-    DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
-)
-install(
-    FILES
-        "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
-    DESTINATION "${PROTOCYTE_INSTALL_CMAKEDIR}"
-)
-install(
-    FILES
-        "${CMAKE_CURRENT_LIST_DIR}/LICENSE"
-        "${CMAKE_CURRENT_LIST_DIR}/NOTICE"
-    DESTINATION "${CMAKE_INSTALL_DOCDIR}"
-)
-install(
-    DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/protocyte"
-    DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}/src"
-    FILES_MATCHING
-        PATTERN "*.py"
-        PATTERN "*.hpp"
-        PATTERN "*.proto"
-        PATTERN "__pycache__" EXCLUDE
-        PATTERN "*.pyc" EXCLUDE
-)
-install(
-    FILES
-        "${CMAKE_CURRENT_LIST_DIR}/pyproject.toml"
-        "${CMAKE_CURRENT_LIST_DIR}/protocyte-cmake-constraints.txt"
-        "${CMAKE_CURRENT_LIST_DIR}/LICENSE"
-        "${CMAKE_CURRENT_LIST_DIR}/NOTICE"
-    DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"
-)
-install(
-    DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/protocyte/proto/"
-    DESTINATION "${PROTOCYTE_INSTALL_PROTODIR}"
-    FILES_MATCHING
-        PATTERN "*.proto"
-)
