@@ -417,7 +417,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         message(FATAL_ERROR "Protocyte is missing PROTOCYTE_PYTHON_ENV_ROOT")
     endif()
 
-    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
+    find_package(Python3 3.12 COMPONENTS Interpreter REQUIRED)
     _protocyte_python_environment_fingerprint(
         protocyte_python_fingerprint
         "${protocyte_python_project_root}"

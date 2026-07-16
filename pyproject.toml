@@ -1,7 +1,7 @@
 [project]
 name = "protocyte"
 dynamic = ["version"]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "protobuf>=6.30.0",
 ]

@@ -58,7 +58,7 @@ and regenerate checked outputs when updating.
 
 ## Usage
 
-Protocyte's Python package requires Python 3.14 or newer. That applies to
+Protocyte's Python package requires Python 3.12 or newer. That applies to
 local `uv sync` development, published wheel and sdist installs, and any CMake
 workflow that runs the plugin through `Python3_EXECUTABLE`.
 
@@ -121,10 +121,10 @@ Protocyte supports two CMake consumption modes:
 Published GitHub releases contain three different asset types:
 
 - `protocyte-X.Y.Z-py3-none-any.whl`: the Python wheel for
-  `protoc-gen-protocyte`. Install it into a Python 3.14+ environment when you
+  `protoc-gen-protocyte`. Install it into a Python 3.12+ environment when you
   want the plugin executable.
 - `protocyte-X.Y.Z.tar.gz`: the Python source distribution for the same plugin
-  package. It is also a Python 3.14+ artifact, not a CMake install tree.
+  package. It is also a Python 3.12+ artifact, not a CMake install tree.
 - `protocyte-X.Y.Z-cmake-prefix.tar.gz`: a preinstalled CMake prefix for
   `find_package(protocyte CONFIG REQUIRED)`. Unpack it and add the extracted
   directory to `CMAKE_PREFIX_PATH`.
@@ -132,7 +132,7 @@ Published GitHub releases contain three different asset types:
 The CMake prefix archive includes the CMake files, C++ runtime headers, and an
 installable copy of the protocyte Python generator project. It does not bundle
 Python itself. The first downstream configuration that needs code generation
-finds a local Python 3.14+ interpreter, creates a fingerprinted virtual
+finds a local Python 3.12+ interpreter, creates a fingerprinted virtual
 environment under the build tree, and installs protocyte and its Python
 dependencies there from the exact versions in the bundled CMake constraints
 file. The install is built from a writable staged copy, so it never modifies
@@ -331,7 +331,7 @@ The installed CMake package installs:
 - `protocyte/options.proto`
 
 The installed package does not embed Python or protobuf. Consumers that run
-code generation still need a working Python 3.14+ base interpreter. Protocyte
+code generation still need a working Python 3.12+ base interpreter. Protocyte
 installs its Python package and Python dependencies into an isolated directory
 under `PROTOCYTE_PYTHON_ENV_ROOT`; `protoc` and the C++ protobuf files remain
 caller-supplied unless the fetch fallback is enabled:

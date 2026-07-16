@@ -10,7 +10,7 @@ The smoke project in this repository is both:
 
 ## What You Need
 
-- Python 3.14 or newer.
+- Python 3.12 or newer.
 - A C++20-capable compiler.
 - CMake 3.24 or newer.
 - `protoc` from the Protocol Buffers project.
@@ -47,7 +47,7 @@ projects you should assume that `protoc` is an explicit tool dependency.
 
 Protocyte is a Python `protoc` plugin. `protoc` talks to it through the
 `protoc-gen-protocyte` executable script that the Python package installs.
-All of the Python packaging paths below require Python 3.14 or newer.
+All of the Python packaging paths below require Python 3.12 or newer.
 
 You have two normal ways to work with it.
 
@@ -96,7 +96,7 @@ not provide the CMake package used by `find_package(protocyte CONFIG REQUIRED)`.
 
 Published GitHub releases contain three different asset types:
 
-- `protocyte-X.Y.Z-py3-none-any.whl`: install this into Python 3.14+ when you
+- `protocyte-X.Y.Z-py3-none-any.whl`: install this into Python 3.12+ when you
   want the plugin executable.
 - `protocyte-X.Y.Z.tar.gz`: the Python source distribution for the same plugin
   package. This is not the CMake package.
@@ -132,7 +132,7 @@ Downstream consumers then configure with
 `-DCMAKE_PREFIX_PATH=C:\path\to\protocyte-prefix` and call
 `find_package(protocyte CONFIG REQUIRED)`.
 
-The installed package still expects a usable Python 3.14+ base interpreter at
+The installed package still expects a usable Python 3.12+ base interpreter at
 configure time. When code generation is first requested, it creates a
 fingerprinted virtual environment under `PROTOCYTE_PYTHON_ENV_ROOT` in the build
 tree and installs protocyte plus its pinned Python dependencies there from a
