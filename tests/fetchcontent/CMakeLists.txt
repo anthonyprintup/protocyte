@@ -22,6 +22,23 @@ protocyte_add_proto_library(
     HOSTED_ALLOCATOR
 )
 
+get_property(
+    protocyte_managed_plugin
+    GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE
+)
+if(NOT EXISTS "${protocyte_managed_plugin}")
+    message(FATAL_ERROR "FetchContent did not provision the managed Protocyte Python plugin")
+endif()
+cmake_path(
+    IS_PREFIX PROTOCYTE_PYTHON_ENV_ROOT
+    "${protocyte_managed_plugin}"
+    NORMALIZE
+    protocyte_plugin_is_managed
+)
+if(NOT protocyte_plugin_is_managed)
+    message(FATAL_ERROR "FetchContent plugin is outside PROTOCYTE_PYTHON_ENV_ROOT: ${protocyte_managed_plugin}")
+endif()
+
 if(NOT TARGET fetchcontent::proto)
     message(FATAL_ERROR "protocyte_add_proto_library did not create the requested alias target")
 endif()

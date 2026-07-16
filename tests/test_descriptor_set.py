@@ -4,6 +4,7 @@ import pytest
 from google.protobuf import descriptor_pb2
 from google.protobuf.compiler import plugin_pb2
 
+from protocyte import __version__
 from protocyte.descriptor_set import (
     discover_files,
     load_descriptor_set,
@@ -11,6 +12,7 @@ from protocyte.descriptor_set import (
     validate_virtual_file_name,
 )
 from protocyte.errors import ProtocyteError
+from protocyte.main import main as plugin_main
 from protocyte.plugin import generate_response
 
 
@@ -248,6 +250,22 @@ def _write_descriptor_set(path: Path, *files: descriptor_pb2.FileDescriptorProto
     descriptor_set = descriptor_pb2.FileDescriptorSet()
     descriptor_set.file.extend(files)
     path.write_bytes(descriptor_set.SerializeToString())
+
+
+def test_plugin_entrypoint_reports_version(capsys: pytest.CaptureFixture[str]) -> None:
+    assert plugin_main(["--version"]) == 0
+    assert capsys.readouterr().out.strip() == __version__
+
+
+def test_plugin_entrypoint_dispatches_descriptor_set_commands(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    descriptor_set = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(descriptor_set, _file("api/demo.proto"))
+
+    assert plugin_main(["descriptor-set", "list", str(descriptor_set)]) == 0
+    assert capsys.readouterr().out.strip() == "api/demo.proto"
 
 
 def test_load_descriptor_set_reports_invalid_bytes(tmp_path: Path) -> None:

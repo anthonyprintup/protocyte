@@ -185,14 +185,6 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          enable-cache: true
-
-      - name: Sync dependencies
-        run: uv sync --locked --group dev
-
       - name: Install prebuilt protoc
         id: protoc
         run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
@@ -200,7 +192,6 @@ jobs:
       - name: Configure FetchContent integration test
         run: >
           cmake -S tests/fetchcontent -B tests/fetchcontent/build
-          -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
           -DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}
 
       - name: Build FetchContent integration test
@@ -222,14 +213,6 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          enable-cache: true
-
-      - name: Sync dependencies
-        run: uv sync --locked --group dev
-
       - name: Install prebuilt protoc
         id: protoc
         run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
@@ -240,11 +223,57 @@ jobs:
       - name: Install protocyte package
         run: cmake --install build/protocyte-install --prefix build/protocyte-prefix
 
+      - name: Make installed prefix read-only
+        run: chmod -R a-w build/protocyte-prefix
+
       - name: Configure find_package integration test
         run: >
           cmake -S tests/find_package -B tests/find_package/build
           -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
-          -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
+          -DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}
+
+      - name: Build find_package integration test
+        run: cmake --build tests/find_package/build
+
+      - name: Run find_package integration test
+        run: ctest --test-dir tests/find_package/build --output-on-failure
+
+      - name: Verify provisioning did not modify the installed prefix
+        run: |
+          test ! -e build/protocyte-prefix/share/protocyte/python/build
+          test ! -e build/protocyte-prefix/share/protocyte/python/src/protocyte.egg-info
+
+  find-package-windows:
+    name: Find Package Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Configure protocyte install tree
+        run: cmake -S . -B build/protocyte-install -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Install protocyte package
+        run: cmake --install build/protocyte-install --prefix build/protocyte-prefix
+
+      - name: Configure find_package integration test
+        run: >
+          cmake -S tests/find_package -B tests/find_package/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
           -DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}
 
       - name: Build find_package integration test

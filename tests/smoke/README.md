@@ -125,19 +125,22 @@ cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
 That install prefix contains:
 
 - the `protocyte_generate(...)` CMake integration
-- the protocyte Python sources used by the plugin wrapper
+- an installable copy of the protocyte Python generator project and its pinned CMake constraints
 - `protocyte/options.proto`
 
 Downstream consumers then configure with
 `-DCMAKE_PREFIX_PATH=C:\path\to\protocyte-prefix` and call
 `find_package(protocyte CONFIG REQUIRED)`.
 
-The installed package still expects a usable `Python3_EXECUTABLE` at configure
-time, and that interpreter should be Python 3.14 or newer because the install
-tree ships the protocyte Python generator sources rather than bundling its own
-runtime. Protobuf is caller-supplied by default. If you want the installed
-package to fetch protobuf as a fallback, set `PROTOCYTE_FETCH_PROTOBUF=ON`
-before calling `find_package(protocyte CONFIG REQUIRED)`.
+The installed package still expects a usable Python 3.14+ base interpreter at
+configure time. When code generation is first requested, it creates a
+fingerprinted virtual environment under `PROTOCYTE_PYTHON_ENV_ROOT` in the build
+tree and installs protocyte plus its pinned Python dependencies there from a
+writable staged copy. The installed CMake prefix and global or user-site Python
+packages are not modified. Protobuf C++ files and `protoc` are caller-supplied
+by default. To fetch them as a fallback, set
+`PROTOCYTE_FETCH_PROTOBUF=ON` before calling
+`find_package(protocyte CONFIG REQUIRED)`.
 
 ## 3. Find `protocyte/options.proto`
 

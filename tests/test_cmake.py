@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,32 @@ def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
     return wrapper
 
 
+def _installed_protocyte_plugin() -> Path:
+    executable_name = (
+        "protoc-gen-protocyte.exe" if os.name == "nt" else "protoc-gen-protocyte"
+    )
+    plugin = Path(sys.executable).with_name(executable_name)
+    assert plugin.is_file(), f"installed Protocyte plugin is missing: {plugin}"
+    return plugin
+
+
+def _write_incompatible_protocyte_plugin(path: Path) -> Path:
+    if os.name == "nt":
+        plugin = path.with_suffix(".cmd")
+        plugin.write_text(
+            "@echo off\r\necho old plugin cannot discover 1>&2\r\nexit /b 4\r\n",
+            encoding="utf-8",
+        )
+    else:
+        plugin = path
+        plugin.write_text(
+            "#!/usr/bin/env sh\necho 'old plugin cannot discover' >&2\nexit 4\n",
+            encoding="utf-8",
+        )
+        plugin.chmod(0o755)
+    return plugin
+
+
 def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_config = (repo_root / "cmake" / "Protocyte.cmake").read_text(
@@ -70,29 +97,26 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in source_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in installed_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"' in source_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"' in installed_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_PROJECT_ROOT" in source_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_PROJECT_ROOT" in installed_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in source_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in installed_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in source_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in installed_config
+    assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
 
 
-def test_posix_wrapper_shell_quotes_single_quotes(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    cmake_script = tmp_path / "quote_test.cmake"
-    quoted_output = tmp_path / "quoted.txt"
-
-    cmake_script.write_text(
-        "\n".join(
-            [
-                "cmake_minimum_required(VERSION 3.24)",
-                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
-                '_protocyte_shell_single_quote(quoted "alpha\'beta")',
-                f'file(WRITE "{quoted_output.as_posix()}" "${{quoted}}")',
-                "",
-            ]
-        ),
-        encoding="utf-8",
+def test_cmake_install_tree_contains_installable_python_project() -> None:
+    cmake = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
+        encoding="utf-8"
     )
 
-    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
-
-    assert quoted_output.read_text(encoding="utf-8") == "'alpha'\"'\"'beta'"
+    assert 'DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}/src"' in cmake
+    assert '"${CMAKE_CURRENT_LIST_DIR}/pyproject.toml"' in cmake
+    assert '"${CMAKE_CURRENT_LIST_DIR}/protocyte-cmake-constraints.txt"' in cmake
+    assert 'DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"' in cmake
 
 
 def test_internal_cmake_settings_do_not_fall_back_to_variables(tmp_path: Path) -> None:
@@ -583,10 +607,9 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
     created_at.type_name = ".google.protobuf.Timestamp"
     descriptor_set.write_bytes(file_set.SerializeToString())
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    plugin = _installed_protocyte_plugin()
     protoc.parent.mkdir(parents=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -632,10 +655,9 @@ def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
     user.message_type.add().name = "Demo"
     descriptor_set.write_bytes(file_set.SerializeToString())
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    plugin = _installed_protocyte_plugin()
     protoc.parent.mkdir(parents=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -664,7 +686,9 @@ def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
 
-def test_descriptor_set_discover_preserves_existing_pythonpath(tmp_path: Path) -> None:
+def test_descriptor_set_discover_uses_explicit_plugin_environment(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -676,36 +700,30 @@ def test_descriptor_set_discover_preserves_existing_pythonpath(tmp_path: Path) -
     user.syntax = "proto3"
     user.message_type.add().name = "Demo"
     descriptor_set.write_bytes(file_set.SerializeToString())
-    pythonpath_dir = source_dir / "pythonpath"
-    pythonpath_dir.mkdir()
-    marker = build_dir / "pythonpath_seen.txt"
-    (pythonpath_dir / "sitecustomize.py").write_text(
-        "\n".join(
-            [
-                "from pathlib import Path",
-                "import sys",
-                f"protocyte_source_root = Path({str(repo_root / 'src')!r}).resolve()",
-                "has_protocyte_source = any(Path(entry).resolve() == protocyte_source_root for entry in sys.path if entry)",
-                "is_descriptor_set_discovery = any('descriptor_set' in arg for arg in sys.argv)",
-                "if has_protocyte_source and is_descriptor_set_discovery:",
-                f"    Path({str(marker)!r}).parent.mkdir(parents=True, exist_ok=True)",
-                f"    Path({str(marker)!r}).write_text('seen', encoding='utf-8')",
-                "",
-            ]
-        ),
-        encoding="utf-8",
+    clean_environment = tmp_path / "clean-python"
+    base_python = Path(getattr(sys, "_base_executable", sys.executable))
+    subprocess.run([str(base_python), "-m", "venv", str(clean_environment)], check=True)
+    clean_python = clean_environment / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
     )
+    missing_protobuf = subprocess.run(
+        [str(clean_python), "-c", "import google.protobuf"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing_protobuf.returncode != 0
+
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    plugin = _installed_protocyte_plugin()
     protoc.parent.mkdir(parents=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
                 "cmake_minimum_required(VERSION 3.24)",
-                "project(descriptor_set_discover_pythonpath LANGUAGES NONE)",
-                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                "project(descriptor_set_discover_plugin_environment LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{clean_python.as_posix()}")',
                 f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
                 f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
                 f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
@@ -721,13 +739,60 @@ def test_descriptor_set_discover_preserves_existing_pythonpath(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(pythonpath_dir)
-    subprocess.run(
-        ["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True, env=env
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+def test_descriptor_set_discover_reports_incompatible_explicit_plugin(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    protoc = source_dir / "tools" / "protoc"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    plugin = _write_incompatible_protocyte_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte"
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_discover_incompatible_plugin LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
     )
 
-    assert marker.read_text(encoding="utf-8") == "seen"
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Exit code: 4" in output
+    assert "old plugin cannot discover" in output
+    assert "supports the 'descriptor-set list' command" in output
 
 
 def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(
@@ -976,12 +1041,114 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
 
-def test_cmake_requires_python_314_for_codegen_wrapper() -> None:
-    functions = (
-        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake"
-    ).read_text(encoding="utf-8")
+def test_cmake_constraints_pin_the_private_environment() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    constraint_lines = [
+        line.strip()
+        for line in (repo_root / "protocyte-cmake-constraints.txt")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    constraints = dict(line.split("==", 1) for line in constraint_lines)
 
-    assert "find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)" in functions
+    assert set(constraints) == {"pip", "protobuf", "setuptools", "wheel"}
+    locked_packages = tomllib.loads(
+        (repo_root / "uv.lock").read_text(encoding="utf-8")
+    )["package"]
+    locked_protobuf = next(
+        package["version"]
+        for package in locked_packages
+        if package["name"] == "protobuf"
+    )
+    assert constraints["protobuf"] == locked_protobuf
+
+
+def test_cmake_fingerprint_inputs_trigger_automatic_reconfiguration(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    python_project = tmp_path / "python-project"
+    package_dir = python_project / "src" / "protocyte"
+    package_dir.mkdir(parents=True)
+    (python_project / "pyproject.toml").write_text(
+        '[project]\nname = "fingerprint-test"\nversion = "1.0"\n',
+        encoding="utf-8",
+    )
+    constraints = python_project / "protocyte-cmake-constraints.txt"
+    shutil.copy2(repo_root / "protocyte-cmake-constraints.txt", constraints)
+    package_file = package_dir / "main.py"
+    package_file.write_text("VALUE = 1\n", encoding="utf-8")
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    python_version = ".".join(str(part) for part in sys.version_info[:3])
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_fingerprint_reconfigure LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "_protocyte_python_environment_fingerprint(",
+                "    fingerprint",
+                f'    "{python_project.as_posix()}"',
+                f'    "{constraints.as_posix()}"',
+                f'    "{Path(sys.executable).as_posix()}"',
+                f'    "{python_version}"',
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/fingerprint.txt" "${fingerprint}")',
+                "add_custom_target(fingerprint_noop ALL)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    initial_fingerprint = (build_dir / "fingerprint.txt").read_text(encoding="utf-8")
+
+    package_file.write_text("VALUE = 2\n", encoding="utf-8")
+    subprocess.run(["cmake", "--build", str(build_dir)], check=True)
+
+    updated_fingerprint = (build_dir / "fingerprint.txt").read_text(encoding="utf-8")
+    assert updated_fingerprint != initial_fingerprint
+
+
+def test_cmake_provisioning_error_reports_the_failed_command(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "provisioning_error.cmake"
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "_protocyte_python_provisioning_error(",
+                '    "install the test package"',
+                '    "python -m pip install test-package"',
+                '    "17"',
+                '    "captured standard output"',
+                '    "captured standard error"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-P", str(cmake_script)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "python -m pip install test-package" in output
+    assert "Exit code: 17" in output
+    assert "captured standard output" in output
+    assert "captured standard error" in output
+    assert "PROTOCYTE_PLUGIN_EXECUTABLE" in output
 
 
 def test_smoke_cmake_gates_std_format_opt_in_on_compile_probe() -> None:

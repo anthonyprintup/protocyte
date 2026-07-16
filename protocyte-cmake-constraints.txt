@@ -1,0 +1,6 @@
+# Exact versions for Protocyte's private, CMake-managed Python environment.
+# Keep the protobuf pin aligned with uv.lock.
+pip==26.0.1
+protobuf==7.34.1
+setuptools==80.9.0
+wheel==0.45.1

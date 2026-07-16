@@ -157,13 +157,21 @@ install(
 )
 install(
     DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/protocyte"
-    DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"
+    DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}/src"
     FILES_MATCHING
         PATTERN "*.py"
         PATTERN "*.hpp"
-        PATTERN "proto" EXCLUDE
+        PATTERN "*.proto"
         PATTERN "__pycache__" EXCLUDE
         PATTERN "*.pyc" EXCLUDE
+)
+install(
+    FILES
+        "${CMAKE_CURRENT_LIST_DIR}/pyproject.toml"
+        "${CMAKE_CURRENT_LIST_DIR}/protocyte-cmake-constraints.txt"
+        "${CMAKE_CURRENT_LIST_DIR}/LICENSE"
+        "${CMAKE_CURRENT_LIST_DIR}/NOTICE"
+    DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"
 )
 install(
     DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src/protocyte/proto/"

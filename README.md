@@ -129,12 +129,26 @@ Published GitHub releases contain three different asset types:
   `find_package(protocyte CONFIG REQUIRED)`. Unpack it and add the extracted
   directory to `CMAKE_PREFIX_PATH`.
 
-The CMake prefix archive includes the CMake files, C++ runtime headers, and
-the protocyte Python generator sources, but it does not bundle Python itself.
-Any downstream build that calls `protocyte_generate(...)` or
-`protocyte_add_proto_library(...)` still needs a local Python 3.14+ interpreter
-available to CMake through `Python3_EXECUTABLE` or the normal `find_package(Python3)`
-search path.
+The CMake prefix archive includes the CMake files, C++ runtime headers, and an
+installable copy of the protocyte Python generator project. It does not bundle
+Python itself. The first downstream configuration that needs code generation
+finds a local Python 3.14+ interpreter, creates a fingerprinted virtual
+environment under the build tree, and installs protocyte and its Python
+dependencies there from the exact versions in the bundled CMake constraints
+file. The install is built from a writable staged copy, so it never modifies
+the CMake package prefix, installs packages globally, or changes the selected
+base interpreter.
+
+The initial configuration may access the configured Python package index.
+Subsequent configurations reuse the environment while the Python interpreter,
+protocyte sources, and package metadata remain unchanged. Set
+`PROTOCYTE_PYTHON_ENV_ROOT` before making protocyte available to choose another
+build-local environment directory. Set `PROTOCYTE_PLUGIN_EXECUTABLE` to a
+preinstalled plugin when dependency provisioning must be managed externally.
+The override must be version-compatible with the CMake package and support
+`--version` plus `descriptor-set list <file>`; descriptor-set `DISCOVER` uses
+that command so discovery and generation always run in the same Python
+environment.
 
 For prerelease tags `vX.Y.Z-rcN`, the Python packaging artifacts use the
 normalized version spelling `X.Y.ZrcN` in the wheel and sdist filenames,
@@ -287,13 +301,15 @@ The installed CMake package installs:
 
 - the `protocyte_add_proto_library(...)` and `protocyte_generate(...)` CMake integration
 - the exported `protocyte::codegen`, `protocyte::runtime`, and `protocyte::runtime_hosted` targets
-- the protocyte Python sources used by the plugin wrapper
+- an installable protocyte Python project and pinned constraints used to provision the managed plugin environment
 - the reusable C++ runtime headers and targets
 - `protocyte/options.proto`
 
 The installed package does not embed Python or protobuf. Consumers that run
-code generation still need a working Python 3.14+ interpreter, and they either
-need protobuf/protoc available already or they can opt into the fetch fallback:
+code generation still need a working Python 3.14+ base interpreter. Protocyte
+installs its Python package and Python dependencies into an isolated directory
+under `PROTOCYTE_PYTHON_ENV_ROOT`; `protoc` and the C++ protobuf files remain
+caller-supplied unless the fetch fallback is enabled:
 
 ```cmake
 set(PROTOCYTE_FETCH_PROTOBUF ON CACHE BOOL "" FORCE)
@@ -305,6 +321,8 @@ Public CMake variables exposed by the package:
 - `PROTOCYTE_PROTO_DIR`: the installed directory that contains `protocyte/options.proto`
 - `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
 - `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
+- `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments
+- `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning
 
 `protocyte_add_proto_library(...)` links generated code against
 `protocyte::runtime` by default, or `protocyte::runtime_hosted` when

@@ -3,11 +3,6 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 
-function(_protocyte_shell_single_quote out_var value)
-    string(REPLACE "'" "'\"'\"'" escaped "${value}")
-    set(${out_var} "'${escaped}'" PARENT_SCOPE)
-endfunction()
-
 function(_protocyte_encode_generator_parameter out_var value)
     if("${value}" STREQUAL "")
         set(${out_var} "" PARENT_SCOPE)
@@ -124,34 +119,42 @@ function(_protocyte_split_discovered_descriptor_names out_var discovered)
 endfunction()
 
 function(_protocyte_discover_descriptor_set out_var descriptor_set)
-    _protocyte_get_internal(protocyte_python_source_root PYTHON_SOURCE_ROOT)
-    if("${protocyte_python_source_root}" STREQUAL "")
-        message(FATAL_ERROR "protocyte is missing PROTOCYTE_PYTHON_SOURCE_ROOT")
-    endif()
     if(NOT EXISTS "${descriptor_set}")
         message(FATAL_ERROR "protocyte descriptor-set DISCOVER requires an existing file: ${descriptor_set}")
     endif()
-    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
-    set(protocyte_discovery_pythonpath "${protocyte_python_source_root}")
-    if(DEFINED ENV{PYTHONPATH} AND NOT "$ENV{PYTHONPATH}" STREQUAL "")
-        if(CMAKE_HOST_WIN32)
-            set(protocyte_pythonpath_separator ";")
-        else()
-            set(protocyte_pythonpath_separator ":")
-        endif()
-        set(protocyte_discovery_pythonpath "${protocyte_python_source_root}${protocyte_pythonpath_separator}$ENV{PYTHONPATH}")
+    _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
+    if("${protocyte_plugin_executable}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte descriptor discovery requires a prepared plugin executable")
     endif()
+
     execute_process(
         COMMAND
-            "${CMAKE_COMMAND}" -E env "PYTHONPATH=${protocyte_discovery_pythonpath}"
-            "${Python3_EXECUTABLE}" -m protocyte.descriptor_set list "${descriptor_set}"
+            "${protocyte_plugin_executable}" descriptor-set list "${descriptor_set}"
         OUTPUT_VARIABLE discovered
         ERROR_VARIABLE discover_error
         RESULT_VARIABLE discover_result
         OUTPUT_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 30
     )
-    if(NOT discover_result EQUAL 0)
-        message(FATAL_ERROR "failed to inspect descriptor set '${descriptor_set}': ${discover_error}")
+    if(NOT "${discover_result}" STREQUAL "0")
+        string(STRIP "${discovered}" discovered_output)
+        string(STRIP "${discover_error}" discover_error)
+        if(discovered_output STREQUAL "")
+            set(discovered_output "<no standard output>")
+        endif()
+        if(discover_error STREQUAL "")
+            set(discover_error "<no standard error>")
+        endif()
+        message(
+            FATAL_ERROR
+            "Failed to inspect descriptor set '${descriptor_set}'.\n\n"
+            "Command:\n  \"${protocyte_plugin_executable}\" descriptor-set list \"${descriptor_set}\"\n"
+            "Exit code: ${discover_result}\n\n"
+            "Standard output:\n${discovered_output}\n\n"
+            "Standard error:\n${discover_error}\n\n"
+            "PROTOCYTE_PLUGIN_EXECUTABLE overrides must point to a Protocyte plugin that supports "
+            "the 'descriptor-set list' command."
+        )
     endif()
     if(discovered STREQUAL "")
         set(${out_var} "" PARENT_SCOPE)
@@ -164,6 +167,382 @@ endfunction()
 function(_protocyte_get_internal out_var name)
     get_property(value GLOBAL PROPERTY "PROTOCYTE_INTERNAL_${name}")
     set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_python_environment_paths out_python out_plugin environment_dir)
+    if(CMAKE_HOST_WIN32)
+        set(python_executable "${environment_dir}/Scripts/python.exe")
+        set(plugin_executable "${environment_dir}/Scripts/protoc-gen-protocyte.exe")
+    else()
+        set(python_executable "${environment_dir}/bin/python")
+        set(plugin_executable "${environment_dir}/bin/protoc-gen-protocyte")
+    endif()
+
+    set(${out_python} "${python_executable}" PARENT_SCOPE)
+    set(${out_plugin} "${plugin_executable}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_python_environment_fingerprint
+    out_var
+    project_root
+    constraints_file
+    python_executable
+    python_version
+)
+    set(project_files "${project_root}/pyproject.toml" "${constraints_file}")
+    foreach(metadata_file IN ITEMS LICENSE NOTICE)
+        if(EXISTS "${project_root}/${metadata_file}")
+            list(APPEND project_files "${project_root}/${metadata_file}")
+        endif()
+    endforeach()
+    file(
+        GLOB_RECURSE package_files
+        LIST_DIRECTORIES FALSE
+        CONFIGURE_DEPENDS
+        "${project_root}/src/protocyte/*.py"
+        "${project_root}/src/protocyte/*.proto"
+        "${project_root}/src/protocyte/*.hpp"
+    )
+    list(APPEND project_files ${package_files})
+    list(REMOVE_DUPLICATES project_files)
+    list(SORT project_files)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${project_files})
+
+    set(fingerprint_material "python=${python_executable}\nversion=${python_version}")
+    foreach(project_file IN LISTS project_files)
+        if(NOT EXISTS "${project_file}")
+            message(FATAL_ERROR "Protocyte Python installation input does not exist: ${project_file}")
+        endif()
+        file(SHA256 "${project_file}" project_file_hash)
+        set(project_file_path "${project_file}")
+        cmake_path(
+            RELATIVE_PATH project_file_path
+            BASE_DIRECTORY "${project_root}"
+            OUTPUT_VARIABLE project_file_relative
+        )
+        string(APPEND fingerprint_material "\n${project_file_relative}=${project_file_hash}")
+    endforeach()
+
+    string(SHA256 fingerprint "${fingerprint_material}")
+    set(${out_var} "${fingerprint}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_stage_python_project source_root constraints_file destination)
+    file(MAKE_DIRECTORY "${destination}/src")
+    foreach(project_file IN ITEMS pyproject.toml LICENSE NOTICE)
+        if(EXISTS "${source_root}/${project_file}")
+            file(
+                COPY_FILE
+                "${source_root}/${project_file}"
+                "${destination}/${project_file}"
+                ONLY_IF_DIFFERENT
+            )
+        endif()
+    endforeach()
+    file(
+        COPY_FILE
+        "${constraints_file}"
+        "${destination}/protocyte-cmake-constraints.txt"
+        ONLY_IF_DIFFERENT
+    )
+    file(
+        COPY "${source_root}/src/protocyte"
+        DESTINATION "${destination}/src"
+        FILE_PERMISSIONS
+            OWNER_READ OWNER_WRITE
+            GROUP_READ
+            WORLD_READ
+        DIRECTORY_PERMISSIONS
+            OWNER_READ OWNER_WRITE OWNER_EXECUTE
+            GROUP_READ GROUP_EXECUTE
+            WORLD_READ WORLD_EXECUTE
+        FILES_MATCHING
+            PATTERN "*.py"
+            PATTERN "*.proto"
+            PATTERN "*.hpp"
+            PATTERN "__pycache__" EXCLUDE
+            PATTERN "*.pyc" EXCLUDE
+    )
+endfunction()
+
+function(
+    _protocyte_verify_python_environment
+    out_result
+    out_output
+    out_error
+    python_executable
+    plugin_executable
+    constraints_file
+)
+    if(NOT EXISTS "${python_executable}")
+        set(${out_result} "missing-python" PARENT_SCOPE)
+        set(${out_output} "" PARENT_SCOPE)
+        set(${out_error} "The managed Python executable does not exist: ${python_executable}" PARENT_SCOPE)
+        return()
+    endif()
+    if(NOT EXISTS "${plugin_executable}")
+        set(${out_result} "missing-entry-point" PARENT_SCOPE)
+        set(${out_output} "" PARENT_SCOPE)
+        set(${out_error} "The managed plugin entry point does not exist: ${plugin_executable}" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(verify_script [=[
+from importlib.metadata import version
+from pathlib import Path
+import sys
+
+requirements = [
+    line.strip()
+    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+expected = dict(requirement.split("==", 1) for requirement in requirements)
+mismatches = {
+    name: (wanted, version(name))
+    for name, wanted in expected.items()
+    if version(name) != wanted
+}
+if mismatches:
+    raise RuntimeError(f"managed Python package versions do not match constraints: {mismatches}")
+
+import google.protobuf
+import protocyte.main
+]=])
+    execute_process(
+        COMMAND "${python_executable}" -c "${verify_script}" "${constraints_file}"
+        RESULT_VARIABLE verify_result
+        OUTPUT_VARIABLE verify_output
+        ERROR_VARIABLE verify_error
+    )
+    if("${verify_result}" STREQUAL "0")
+        execute_process(
+            COMMAND "${python_executable}" -m pip check
+            RESULT_VARIABLE pip_check_result
+            OUTPUT_VARIABLE pip_check_output
+            ERROR_VARIABLE pip_check_error
+        )
+        string(APPEND verify_output "${pip_check_output}")
+        string(APPEND verify_error "${pip_check_error}")
+        if(NOT "${pip_check_result}" STREQUAL "0")
+            set(verify_result "${pip_check_result}")
+        endif()
+    endif()
+    if("${verify_result}" STREQUAL "0")
+        execute_process(
+            COMMAND "${plugin_executable}" --version
+            RESULT_VARIABLE plugin_verify_result
+            OUTPUT_VARIABLE plugin_verify_output
+            ERROR_VARIABLE plugin_verify_error
+        )
+        string(APPEND verify_output "${plugin_verify_output}")
+        string(APPEND verify_error "${plugin_verify_error}")
+        if(NOT "${plugin_verify_result}" STREQUAL "0")
+            set(verify_result "${plugin_verify_result}")
+        endif()
+    endif()
+
+    set(${out_result} "${verify_result}" PARENT_SCOPE)
+    set(${out_output} "${verify_output}" PARENT_SCOPE)
+    set(${out_error} "${verify_error}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_python_provisioning_error action command_text result output error)
+    string(STRIP "${output}" output)
+    string(STRIP "${error}" error)
+    if(output STREQUAL "")
+        set(output "<no standard output>")
+    endif()
+    if(error STREQUAL "")
+        set(error "<no standard error>")
+    endif()
+    message(
+        FATAL_ERROR
+        "Failed to ${action} for Protocyte's managed Python environment.\n\n"
+        "Command:\n  ${command_text}\n"
+        "Exit code: ${result}\n\n"
+        "Standard output:\n${output}\n\n"
+        "Standard error:\n${error}\n\n"
+        "To manage the Python tooling externally, set PROTOCYTE_PLUGIN_EXECUTABLE to a compatible "
+        "preinstalled Protocyte plugin before requesting code generation."
+    )
+endfunction()
+
+function(_protocyte_ensure_python_environment out_python out_plugin)
+    _protocyte_get_internal(cached_python MANAGED_PYTHON_EXECUTABLE)
+    _protocyte_get_internal(cached_plugin MANAGED_PLUGIN_EXECUTABLE)
+    if(EXISTS "${cached_python}" AND EXISTS "${cached_plugin}")
+        set(${out_python} "${cached_python}" PARENT_SCOPE)
+        set(${out_plugin} "${cached_plugin}" PARENT_SCOPE)
+        return()
+    endif()
+
+    _protocyte_get_internal(protocyte_python_project_root PYTHON_PROJECT_ROOT)
+    _protocyte_get_internal(protocyte_python_constraints PYTHON_CONSTRAINTS)
+    _protocyte_get_internal(protocyte_python_env_root PYTHON_ENV_ROOT)
+    if(NOT IS_DIRECTORY "${protocyte_python_project_root}")
+        message(FATAL_ERROR "Protocyte Python project root does not exist: ${protocyte_python_project_root}")
+    endif()
+    if(NOT EXISTS "${protocyte_python_project_root}/pyproject.toml")
+        message(FATAL_ERROR "Protocyte Python project root is missing pyproject.toml: ${protocyte_python_project_root}")
+    endif()
+    if(NOT EXISTS "${protocyte_python_constraints}")
+        message(FATAL_ERROR "Protocyte Python constraints file does not exist: ${protocyte_python_constraints}")
+    endif()
+    if("${protocyte_python_env_root}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte is missing PROTOCYTE_PYTHON_ENV_ROOT")
+    endif()
+
+    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
+    _protocyte_python_environment_fingerprint(
+        protocyte_python_fingerprint
+        "${protocyte_python_project_root}"
+        "${protocyte_python_constraints}"
+        "${Python3_EXECUTABLE}"
+        "${Python3_VERSION}"
+    )
+    string(SUBSTRING "${protocyte_python_fingerprint}" 0 16 protocyte_python_fingerprint_short)
+    set(protocyte_python_environment "${protocyte_python_env_root}/${protocyte_python_fingerprint_short}")
+    set(protocyte_python_ready "${protocyte_python_environment}/.protocyte-ready")
+    _protocyte_python_environment_paths(
+        protocyte_python_executable
+        protocyte_plugin_executable
+        "${protocyte_python_environment}"
+    )
+
+    set(protocyte_python_needs_provisioning TRUE)
+    if(
+        EXISTS "${protocyte_python_ready}"
+        AND EXISTS "${protocyte_python_executable}"
+        AND EXISTS "${protocyte_plugin_executable}"
+    )
+        file(READ "${protocyte_python_ready}" cached_fingerprint)
+        string(STRIP "${cached_fingerprint}" cached_fingerprint)
+        if(cached_fingerprint STREQUAL protocyte_python_fingerprint)
+            _protocyte_verify_python_environment(
+                cached_verify_result
+                cached_verify_output
+                cached_verify_error
+                "${protocyte_python_executable}"
+                "${protocyte_plugin_executable}"
+                "${protocyte_python_constraints}"
+            )
+            if("${cached_verify_result}" STREQUAL "0")
+                set(protocyte_python_needs_provisioning FALSE)
+            endif()
+        endif()
+    endif()
+
+    if(protocyte_python_needs_provisioning)
+        message(STATUS "Provisioning Protocyte Python environment: ${protocyte_python_environment}")
+        file(MAKE_DIRECTORY "${protocyte_python_env_root}")
+
+        set(venv_arguments -m venv)
+        if(IS_DIRECTORY "${protocyte_python_environment}")
+            list(APPEND venv_arguments --clear)
+        endif()
+        list(APPEND venv_arguments "${protocyte_python_environment}")
+        execute_process(
+            COMMAND "${Python3_EXECUTABLE}" ${venv_arguments}
+            RESULT_VARIABLE venv_result
+            OUTPUT_VARIABLE venv_output
+            ERROR_VARIABLE venv_error
+            TIMEOUT 120
+        )
+        if(NOT "${venv_result}" STREQUAL "0")
+            string(JOIN " " venv_command ${venv_arguments})
+            _protocyte_python_provisioning_error(
+                "create the virtual environment; ensure the selected Python provides venv and ensurepip"
+                "\"${Python3_EXECUTABLE}\" ${venv_command}"
+                "${venv_result}"
+                "${venv_output}"
+                "${venv_error}"
+            )
+        endif()
+
+        set(protocyte_staged_project "${protocyte_python_environment}/project")
+        set(protocyte_staged_constraints "${protocyte_staged_project}/protocyte-cmake-constraints.txt")
+        _protocyte_stage_python_project(
+            "${protocyte_python_project_root}"
+            "${protocyte_python_constraints}"
+            "${protocyte_staged_project}"
+        )
+
+        execute_process(
+            COMMAND
+                "${protocyte_python_executable}" -m pip install
+                --disable-pip-version-check
+                --no-input
+                --upgrade
+                --force-reinstall
+                --constraint "${protocyte_staged_constraints}"
+                pip setuptools wheel
+            RESULT_VARIABLE bootstrap_result
+            OUTPUT_VARIABLE bootstrap_output
+            ERROR_VARIABLE bootstrap_error
+            TIMEOUT 300
+        )
+        if(NOT "${bootstrap_result}" STREQUAL "0")
+            _protocyte_python_provisioning_error(
+                "install Protocyte's pinned Python build tools"
+                "\"${protocyte_python_executable}\" -m pip install --disable-pip-version-check --no-input --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" pip setuptools wheel"
+                "${bootstrap_result}"
+                "${bootstrap_output}"
+                "${bootstrap_error}"
+            )
+        endif()
+
+        execute_process(
+            COMMAND
+                "${protocyte_python_executable}" -m pip install
+                --disable-pip-version-check
+                --no-input
+                --no-build-isolation
+                --upgrade
+                --force-reinstall
+                --constraint "${protocyte_staged_constraints}"
+                "${protocyte_staged_project}"
+            RESULT_VARIABLE install_result
+            OUTPUT_VARIABLE install_output
+            ERROR_VARIABLE install_error
+            TIMEOUT 300
+        )
+        if(NOT "${install_result}" STREQUAL "0")
+            _protocyte_python_provisioning_error(
+                "install Protocyte and its Python dependencies"
+                "\"${protocyte_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" \"${protocyte_staged_project}\""
+                "${install_result}"
+                "${install_output}"
+                "${install_error}"
+            )
+        endif()
+
+        _protocyte_verify_python_environment(
+            verify_result
+            verify_output
+            verify_error
+            "${protocyte_python_executable}"
+            "${protocyte_plugin_executable}"
+            "${protocyte_python_constraints}"
+        )
+        if(NOT "${verify_result}" STREQUAL "0")
+            _protocyte_python_provisioning_error(
+                "verify the installed Protocyte plugin"
+                "\"${protocyte_plugin_executable}\" --version"
+                "${verify_result}"
+                "${verify_output}"
+                "${verify_error}"
+            )
+        endif()
+
+        file(WRITE "${protocyte_python_ready}" "${protocyte_python_fingerprint}\n")
+    endif()
+
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PYTHON_EXECUTABLE "${protocyte_python_executable}")
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE "${protocyte_plugin_executable}")
+    set(${out_python} "${protocyte_python_executable}" PARENT_SCOPE)
+    set(${out_plugin} "${protocyte_plugin_executable}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_set_protobuf_import_dir candidate_dir)
@@ -243,43 +622,26 @@ function(_protocyte_resolve_protobuf_import_dir)
     endif()
 endfunction()
 
-function(_protocyte_write_plugin_wrapper)
-    if(DEFINED PROTOCYTE_PLUGIN_EXECUTABLE)
+function(_protocyte_prepare_plugin)
+    _protocyte_get_internal(protocyte_prepared_plugin PLUGIN_EXECUTABLE)
+    if(NOT "${protocyte_prepared_plugin}" STREQUAL "")
         return()
     endif()
 
-    _protocyte_get_internal(protocyte_python_source_root PYTHON_SOURCE_ROOT)
-    if("${protocyte_python_source_root}" STREQUAL "")
-        message(FATAL_ERROR "protocyte is missing PROTOCYTE_PYTHON_SOURCE_ROOT")
+    if(DEFINED CACHE{PROTOCYTE_PLUGIN_EXECUTABLE})
+        get_property(protocyte_plugin_help CACHE PROTOCYTE_PLUGIN_EXECUTABLE PROPERTY HELPSTRING)
+        if(protocyte_plugin_help STREQUAL "protocyte protoc plugin wrapper")
+            unset(PROTOCYTE_PLUGIN_EXECUTABLE CACHE)
+        endif()
     endif()
 
-    find_package(Python3 3.14 COMPONENTS Interpreter REQUIRED)
-
-    if(WIN32)
-        set(wrapper "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte.cmd")
-        file(WRITE "${wrapper}"
-            "@echo off\r\n"
-            "set \"PYTHONPATH=${protocyte_python_source_root};%PYTHONPATH%\"\r\n"
-            "\"${Python3_EXECUTABLE}\" -m protocyte.main\r\n"
-        )
+    if(DEFINED PROTOCYTE_PLUGIN_EXECUTABLE AND NOT "${PROTOCYTE_PLUGIN_EXECUTABLE}" STREQUAL "")
+        set(protocyte_plugin_executable "${PROTOCYTE_PLUGIN_EXECUTABLE}")
     else()
-        set(wrapper "${CMAKE_CURRENT_BINARY_DIR}/protoc-gen-protocyte")
-        _protocyte_shell_single_quote(protocyte_python_source_root_shell "${protocyte_python_source_root}")
-        _protocyte_shell_single_quote(python3_executable_shell "${Python3_EXECUTABLE}")
-        file(WRITE "${wrapper}"
-            "#!/usr/bin/env sh\n"
-            "PYTHONPATH=${protocyte_python_source_root_shell}:$PYTHONPATH exec ${python3_executable_shell} -m protocyte.main\n"
-        )
-        file(
-            CHMOD "${wrapper}"
-            PERMISSIONS
-            OWNER_READ OWNER_WRITE OWNER_EXECUTE
-            GROUP_READ GROUP_EXECUTE
-            WORLD_READ WORLD_EXECUTE
-        )
+        _protocyte_ensure_python_environment(protocyte_python_executable protocyte_plugin_executable)
     endif()
 
-    set(PROTOCYTE_PLUGIN_EXECUTABLE "${wrapper}" CACHE INTERNAL "protocyte protoc plugin wrapper")
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${protocyte_plugin_executable}")
 endfunction()
 
 function(_protocyte_ensure_protobuf)
@@ -333,7 +695,7 @@ function(_protocyte_ensure_protobuf)
 endfunction()
 
 function(protocyte_setup_codegen)
-    _protocyte_write_plugin_wrapper()
+    _protocyte_prepare_plugin()
     _protocyte_ensure_protobuf()
 endfunction()
 
@@ -416,6 +778,10 @@ function(protocyte_generate)
     _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
     _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
     _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
+    _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
+    if("${protocyte_plugin_executable}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte code generation plugin was not prepared")
+    endif()
 
     set(normalized_proto_files)
     if(PROTOCYTE_DESCRIPTOR_SET)
@@ -553,7 +919,7 @@ function(protocyte_generate)
         COMMAND "${PROTOCYTE_PROTOC_EXECUTABLE}"
             ${protoc_descriptor_args}
             ${protoc_proto_paths}
-            "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN_EXECUTABLE}"
+            "--plugin=protoc-gen-protocyte=${protocyte_plugin_executable}"
             "${protocyte_out_arg}"
             ${normalized_proto_files}
         DEPENDS
