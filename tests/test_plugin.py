@@ -4043,7 +4043,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "::protocyte::Array<::protocyte::i32, 4u> values_;" in header
     assert "bool has_digest() const noexcept { return digest_.has_value(); }" in header
     assert "::protocyte::Span<::protocyte::u8> mutable_digest() noexcept {" in header
-    assert "if (ctx_->limits.max_string_bytes < 32u) {" in header
+    assert "max_string_bytes" not in header
     assert "::protocyte::usize digest_size() const noexcept" not in header
     assert "digest_max_size" not in header
     assert (
@@ -4952,7 +4952,14 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
         "static_cast<void>(choice_.data_.resize_for_overwrite(old_data_size));"
         not in header
     )
-    assert "if (*len > ctx_->limits.max_string_bytes) {" in header
+    data_setter = header.split(
+        "set_data(const Value &value) noexcept", maxsplit=1
+    )[1].split("template<typename Reader>", maxsplit=1)[0]
+    data_parse_case = header.split("case FieldNumber::data:", maxsplit=1)[1].split(
+        "default:", maxsplit=1
+    )[0]
+    assert "max_string_bytes" not in data_setter
+    assert "max_string_bytes" not in data_parse_case
     assert "new (&choice_.data_)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 

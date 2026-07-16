@@ -3008,6 +3008,7 @@ TEST_CASE("proto2 required validation waits for embedded message merge", "[smoke
 
 TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smoke][proto2][defaults]") {
     auto ctx = make_context();
+    ctx.limits.max_string_bytes = 0u;
     Proto2ArrayDefaults message(ctx);
 
     CHECK_FALSE(message.has_bounded_bytes());
@@ -4782,19 +4783,35 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
 
         Message message(ctx);
         require_failure(message.set_f_string(view_of(string_bytes)), protocyte::ErrorCode::size_limit);
+        require_failure(message.set_f_bytes(view_of(bytes_data)), protocyte::ErrorCode::size_limit);
 
         Config::Bytes bytes(&ctx);
         require_failure(bytes.assign(view_of(bytes_data)), protocyte::ErrorCode::size_limit);
     }
 
-    SECTION("mutable fixed bytes respect max_string_bytes") {
+    SECTION("array-backed bytes use their schema bounds instead of max_string_bytes") {
         auto ctx = make_context();
-        ctx.limits.max_string_bytes = sizeof(sha256_bytes) - 1u;
+        ctx.limits.max_string_bytes = 0u;
 
         Message message(ctx);
-        const auto view = message.mutable_sha256();
-        CHECK(view.data() == nullptr);
-        CHECK(view.empty());
+        const auto sha256 = message.mutable_sha256();
+        REQUIRE(sha256.size() == sizeof(sha256_bytes));
+        require_success(message.set_sha256(view_of(sha256_bytes)));
+        require_success(message.set_byte_array(view_of(byte_array)));
+        require_success(message.set_oneof_bytes(view_of(byte_array)));
+        require_success(message.set_crazy_fixed_bytes(view_of(crazy_fixed_bytes)));
+
+        uint8_t encoded[128] {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(message.serialize(writer));
+
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_success(parsed.merge_from(reader));
+        CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
+        CHECK(view_equal(parsed.byte_array(), view_of(byte_array)));
+        CHECK(view_equal(parsed.oneof_bytes(), view_of(byte_array)));
+        CHECK(view_equal(parsed.crazy_fixed_bytes(), view_of(crazy_fixed_bytes)));
     }
 
     SECTION("nested message fields respect max_message_bytes") {

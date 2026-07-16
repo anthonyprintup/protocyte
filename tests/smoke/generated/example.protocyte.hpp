@@ -2958,9 +2958,6 @@ namespace test::ultimate {
             if (!view) {
                 return view.status();
             }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             ::protocyte::ByteArray<4u> temp {};
             if (const auto st = temp.assign(*view); !st) {
                 return st;
@@ -3009,9 +3006,6 @@ namespace test::ultimate {
             if (!view) {
                 return view.status();
             }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             ::protocyte::ByteArray<4u> temp {};
             if (const auto st = temp.assign(*view); !st) {
                 return st;
@@ -3035,9 +3029,6 @@ namespace test::ultimate {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             ::protocyte::FixedByteArray<4u> temp {};
             if (const auto st = temp.assign(*view); !st) {
@@ -3269,16 +3260,8 @@ namespace test::ultimate {
 
         bool has_sha256() const noexcept { return sha256_.has_value(); }
         ::protocyte::Span<const ::protocyte::u8> sha256() const noexcept { return sha256_.view(); }
-        ::protocyte::Span<::protocyte::u8> mutable_sha256() noexcept {
-            if (ctx_->limits.max_string_bytes < 32u) {
-                return ::protocyte::Span<::protocyte::u8> {};
-            }
-            return sha256_.mutable_view();
-        }
+        ::protocyte::Span<::protocyte::u8> mutable_sha256() noexcept { return sha256_.mutable_view(); }
         ::protocyte::Status resize_sha256_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             return sha256_.resize_for_overwrite(size);
         }
         template<class Value>::protocyte::Status set_sha256(const Value &value) noexcept
@@ -3287,9 +3270,6 @@ namespace test::ultimate {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             return sha256_.assign(*view);
         }
@@ -3303,9 +3283,6 @@ namespace test::ultimate {
         ::protocyte::usize byte_array_size() const noexcept { return byte_array_.size(); }
         static constexpr ::protocyte::usize byte_array_max_size() noexcept { return 4u; }
         ::protocyte::Status resize_byte_array(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (size > 4u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
@@ -3315,9 +3292,6 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Status resize_byte_array_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (const auto st = byte_array_.resize_for_overwrite(size); !st) {
                 return st;
             }
@@ -3330,9 +3304,6 @@ namespace test::ultimate {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = byte_array_.assign(*view); !st) {
                 return st;
@@ -3353,9 +3324,6 @@ namespace test::ultimate {
         ::protocyte::usize float_expr_array_size() const noexcept { return float_expr_array_.size(); }
         static constexpr ::protocyte::usize float_expr_array_max_size() noexcept { return 2u; }
         ::protocyte::Status resize_float_expr_array(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (size > 2u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
@@ -3365,9 +3333,6 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Status resize_float_expr_array_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (const auto st = float_expr_array_.resize_for_overwrite(size); !st) {
                 return st;
             }
@@ -3382,9 +3347,6 @@ namespace test::ultimate {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = float_expr_array_.assign(*view); !st) {
                 return st;
@@ -3806,10 +3768,6 @@ namespace test::ultimate {
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
-                        }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
                         }
                         if (*len > 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
@@ -4301,10 +4259,6 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
-                        }
                         if (*len != 32u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
                                                            field_number);
@@ -4390,10 +4344,6 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
-                        }
                         if (*len > 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
@@ -4478,10 +4428,6 @@ namespace test::ultimate {
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
-                        }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
                         }
                         if (*len > 2u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
@@ -4572,10 +4518,6 @@ namespace test::ultimate {
                         if (!len) {
                             return len.status();
                         }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
-                        }
                         if (*len > 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
@@ -4605,10 +4547,6 @@ namespace test::ultimate {
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
-                        }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
                         }
                         if (*len != 4u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
@@ -7189,9 +7127,6 @@ namespace test::ultimate {
         ::protocyte::usize nested_bytes_size() const noexcept { return nested_bytes_.size(); }
         static constexpr ::protocyte::usize nested_bytes_max_size() noexcept { return 8u; }
         ::protocyte::Status resize_nested_bytes(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (size > 8u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
@@ -7201,9 +7136,6 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Status resize_nested_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (const auto st = nested_bytes_.resize_for_overwrite(size); !st) {
                 return st;
             }
@@ -7216,9 +7148,6 @@ namespace test::ultimate {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = nested_bytes_.assign(*view); !st) {
                 return st;
@@ -7284,10 +7213,6 @@ namespace test::ultimate {
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
-                        }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
                         }
                         if (*len > 8u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
@@ -7461,9 +7386,6 @@ namespace test::ultimate {
         ::protocyte::usize external_bytes_size() const noexcept { return external_bytes_.size(); }
         static constexpr ::protocyte::usize external_bytes_max_size() noexcept { return 6u; }
         ::protocyte::Status resize_external_bytes(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (size > 6u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
@@ -7473,9 +7395,6 @@ namespace test::ultimate {
             return {};
         }
         ::protocyte::Status resize_external_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (const auto st = external_bytes_.resize_for_overwrite(size); !st) {
                 return st;
             }
@@ -7488,9 +7407,6 @@ namespace test::ultimate {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = external_bytes_.assign(*view); !st) {
                 return st;
@@ -7575,10 +7491,6 @@ namespace test::ultimate {
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
-                        }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
                         }
                         if (*len > 6u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),

@@ -753,6 +753,13 @@ XOR, bitwise OR, logical AND, then logical OR.
   elements or the exact element count, rather than allowing any count up to the
   bound.
 
+For singular `bytes` fields with `protocyte.array`, the schema bound owns the
+field's storage policy. Bounded fields accept at most the declared size, and
+`fixed: true` fields accept exactly that size. These inline fields do not use
+`Limits::max_string_bytes`; in particular, mutable access to fixed storage is
+infallible and always returns the declared extent. `max_total_bytes` still
+bounds aggregate wire input during parsing.
+
 Examples:
 
 ```proto
@@ -900,8 +907,11 @@ application resource policy:
   including nested and unknown fields. This matches protobuf C++
   `CodedInputStream`'s default `INT_MAX` total-byte limit.
 - `max_recursion_depth` defaults to `100`, matching protobuf C++.
-- `max_message_bytes` and `max_string_bytes` bound individual
-  length-delimited values.
+- `max_message_bytes` bounds individual embedded messages.
+- `max_string_bytes` bounds dynamically stored string and bytes values,
+  including individual elements of repeated bytes fields. Singular inline
+  `bytes` fields using `protocyte.array` instead use their schema-declared
+  bound, or exact extent with `fixed: true`.
 - `max_repeated_elements` and `max_map_entries` default to `0x7fffffff` and
   count decoded occurrences across the complete top-level call. Packed chunks,
   expanded values, nested messages, and duplicate map keys share their

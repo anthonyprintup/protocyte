@@ -682,18 +682,12 @@ namespace test::required {
         ::protocyte::usize bounded_bytes_size() const noexcept { return bounded_bytes().size(); }
         static constexpr ::protocyte::usize bounded_bytes_max_size() noexcept { return 8u; }
         ::protocyte::Status resize_bounded_bytes(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (size > 8u) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {});
             }
             if (!has_bounded_bytes_) {
                 const auto default_value =
                     ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("abc"), 3u};
-                if (default_value.size() > ctx_->limits.max_string_bytes) {
-                    return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-                }
                 if (const auto st = bounded_bytes_.assign(default_value); !st) {
                     return st;
                 }
@@ -705,9 +699,6 @@ namespace test::required {
             return {};
         }
         ::protocyte::Status resize_bounded_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             if (const auto st = bounded_bytes_.resize_for_overwrite(size); !st) {
                 return st;
             }
@@ -718,9 +709,6 @@ namespace test::required {
             if (!has_bounded_bytes_) {
                 const auto default_value =
                     ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("abc"), 3u};
-                if (default_value.size() > ctx_->limits.max_string_bytes) {
-                    return ::protocyte::Span<::protocyte::u8> {};
-                }
                 if (const auto st = bounded_bytes_.assign(default_value); !st) {
                     return ::protocyte::Span<::protocyte::u8> {};
                 }
@@ -734,9 +722,6 @@ namespace test::required {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             if (const auto st = bounded_bytes_.assign(*view); !st) {
                 return st;
@@ -756,15 +741,9 @@ namespace test::required {
                        ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("xyz"), 3u};
         }
         ::protocyte::Span<::protocyte::u8> mutable_fixed_bytes() noexcept {
-            if (ctx_->limits.max_string_bytes < 3u) {
-                return ::protocyte::Span<::protocyte::u8> {};
-            }
             if (!has_fixed_bytes()) {
                 const auto default_value =
                     ::protocyte::Span<const ::protocyte::u8> {reinterpret_cast<const ::protocyte::u8 *>("xyz"), 3u};
-                if (default_value.size() > ctx_->limits.max_string_bytes) {
-                    return ::protocyte::Span<::protocyte::u8> {};
-                }
                 if (const auto st = fixed_bytes_.assign(default_value); !st) {
                     return ::protocyte::Span<::protocyte::u8> {};
                 }
@@ -772,9 +751,6 @@ namespace test::required {
             return fixed_bytes_.mutable_view();
         }
         ::protocyte::Status resize_fixed_bytes_for_overwrite(const ::protocyte::usize size) noexcept {
-            if (size > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
-            }
             return fixed_bytes_.resize_for_overwrite(size);
         }
         template<class Value>::protocyte::Status set_fixed_bytes(const Value &value) noexcept
@@ -783,9 +759,6 @@ namespace test::required {
             const auto view = ::protocyte::byte_span_of(value);
             if (!view) {
                 return view.status();
-            }
-            if (view->size() > ctx_->limits.max_string_bytes) {
-                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {});
             }
             return fixed_bytes_.assign(*view);
         }
@@ -849,10 +822,6 @@ namespace test::required {
                         if (!len) {
                             return len.status();
                         }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
-                        }
                         if (*len > 8u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(),
                                                            field_number);
@@ -880,10 +849,6 @@ namespace test::required {
                         auto len = ::protocyte::read_length_delimited_size(reader);
                         if (!len) {
                             return len.status();
-                        }
-                        if (*len > ctx_->limits.max_string_bytes) {
-                            return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(),
-                                                           field_number);
                         }
                         if (*len != 3u) {
                             return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, reader.position(),
