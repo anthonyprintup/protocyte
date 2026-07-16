@@ -805,7 +805,7 @@ namespace {
 
     void populate_compat_nested(CompatNested &nested, const int32_t value,
                                 const protocyte::Span<const protocyte::u8> label) {
-        require_success(nested.set_value(value));
+        nested.set_value(value);
         require_success(nested.set_label(label));
     }
 
@@ -1106,7 +1106,7 @@ namespace {
 
         SECTION("int32 alternative round trips") {
             Message message(ctx);
-            require_success(message.set_oneof_int32(2700));
+            message.set_oneof_int32(2700);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
@@ -1157,7 +1157,7 @@ namespace {
 
         SECTION("deep oneof alternative round trips") {
             Deep deep(ctx);
-            require_success(deep.set_val(4000));
+            deep.set_val(4000);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -1174,7 +1174,7 @@ namespace {
             Message first(ctx);
             require_success(first.set_oneof_string(view_of(oneof_string)));
             populate_required_fixed_array(first, ctx);
-            require_success(first.set_oneof_int32(2701));
+            first.set_oneof_int32(2701);
 
             uint8_t encoded[256] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -1899,10 +1899,7 @@ namespace {
 
 TEST_CASE("UltimateComplexMessage round-trips", "[smoke][roundtrip]") {
     auto ctx = make_context();
-    auto created = Message::create(ctx);
-    require_success(created);
-
-    auto &message = *created;
+    auto message = Message::create(ctx);
     populate_message(message, ctx);
     round_trip_and_check(message, ctx);
 }
@@ -2050,7 +2047,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         require_success(writer.write(oneof_string, 2u));
 
         Message parsed(ctx);
-        require_success(parsed.set_oneof_int32(2701));
+        parsed.set_oneof_int32(2701);
         protocyte::SliceReader reader(encoded, writer.position());
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
         REQUIRE(parsed.has_oneof_int32());
@@ -2609,13 +2606,13 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("varint scalars") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_f_int32(std::numeric_limits<int32_t>::min()));
-        require_success(protocyte_message.set_f_int64(std::numeric_limits<int64_t>::min()));
-        require_success(protocyte_message.set_f_uint32(std::numeric_limits<uint32_t>::max()));
-        require_success(protocyte_message.set_f_uint64(std::numeric_limits<uint64_t>::max()));
-        require_success(protocyte_message.set_f_sint32(-17));
-        require_success(protocyte_message.set_f_sint64(-17000000000ll));
-        require_success(protocyte_message.set_f_bool(true));
+        protocyte_message.set_f_int32(std::numeric_limits<int32_t>::min());
+        protocyte_message.set_f_int64(std::numeric_limits<int64_t>::min());
+        protocyte_message.set_f_uint32(std::numeric_limits<uint32_t>::max());
+        protocyte_message.set_f_uint64(std::numeric_limits<uint64_t>::max());
+        protocyte_message.set_f_sint32(-17);
+        protocyte_message.set_f_sint64(-17000000000ll);
+        protocyte_message.set_f_bool(true);
         require_success(protocyte_message.set_mode(CompatMode::SECOND));
 
         require_same_compat_bytes("varint", protocyte_message, compat_cases::varint);
@@ -2634,12 +2631,12 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("fixed scalars") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_f_fixed32(0x11223344u));
-        require_success(protocyte_message.set_f_fixed64(0x1122334455667788ull));
-        require_success(protocyte_message.set_f_sfixed32(-1234567));
-        require_success(protocyte_message.set_f_sfixed64(-1234567890123ll));
-        require_success(protocyte_message.set_f_float(-0.0f));
-        require_success(protocyte_message.set_f_double(123.5));
+        protocyte_message.set_f_fixed32(0x11223344u);
+        protocyte_message.set_f_fixed64(0x1122334455667788ull);
+        protocyte_message.set_f_sfixed32(-1234567);
+        protocyte_message.set_f_sfixed64(-1234567890123ll);
+        protocyte_message.set_f_float(-0.0f);
+        protocyte_message.set_f_double(123.5);
 
         require_same_compat_bytes("fixed", protocyte_message, compat_cases::fixed);
 
@@ -2709,7 +2706,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("oneof int32") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_oneof_int32(-2701));
+        protocyte_message.set_oneof_int32(-2701);
         require_same_compat_bytes("oneof-int32", protocyte_message, compat_cases::oneof_int32);
 
         auto parsed = parse_compat_bytes(ctx, compat_cases::oneof_int32);
@@ -2748,7 +2745,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("optional fields") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_opt_int32(-99));
+        protocyte_message.set_opt_int32(-99);
         require_success(protocyte_message.set_opt_string(view_of(optional_string)));
         require_same_compat_bytes("optional", protocyte_message, compat_cases::optional_case);
 
@@ -2996,63 +2993,63 @@ TEST_CASE("proto2 default accessors cover all supported defaultable types", "[sm
     CHECK_FALSE(message.has_bytes_value());
     CHECK(view_equal(message.bytes_value(), view_of(proto2_default_bytes)));
 
-    require_success(message.set_double_value(3.5));
+    message.set_double_value(3.5);
     CHECK(message.has_double_value());
     CHECK(message.double_value() == 3.5);
     message.clear_double_value();
     CHECK_FALSE(message.has_double_value());
     CHECK(message.double_value() == 1.5);
 
-    require_success(message.set_float_value(4.5f));
+    message.set_float_value(4.5f);
     CHECK(message.has_float_value());
     CHECK(message.float_value() == 4.5f);
     message.clear_float_value();
     CHECK_FALSE(message.has_float_value());
     CHECK(message.float_value() == -2.25f);
 
-    require_success(message.set_int64_value(-77ll));
+    message.set_int64_value(-77ll);
     CHECK(message.has_int64_value());
     CHECK(message.int64_value() == -77ll);
     message.clear_int64_value();
     CHECK_FALSE(message.has_int64_value());
     CHECK(message.int64_value() == -1234567890123ll);
 
-    require_success(message.set_uint64_value(88ull));
+    message.set_uint64_value(88ull);
     CHECK(message.has_uint64_value());
     CHECK(message.uint64_value() == 88ull);
     message.clear_uint64_value();
     CHECK_FALSE(message.has_uint64_value());
     CHECK(message.uint64_value() == 1234567890123ull);
 
-    require_success(message.set_int32_value(-99));
+    message.set_int32_value(-99);
     CHECK(message.has_int32_value());
     CHECK(message.int32_value() == -99);
     message.clear_int32_value();
     CHECK_FALSE(message.has_int32_value());
     CHECK(message.int32_value() == -12345);
 
-    require_success(message.set_fixed64_value(100ull));
+    message.set_fixed64_value(100ull);
     CHECK(message.has_fixed64_value());
     CHECK(message.fixed64_value() == 100ull);
     message.clear_fixed64_value();
     CHECK_FALSE(message.has_fixed64_value());
     CHECK(message.fixed64_value() == 12345678901234ull);
 
-    require_success(message.set_fixed32_value(101u));
+    message.set_fixed32_value(101u);
     CHECK(message.has_fixed32_value());
     CHECK(message.fixed32_value() == 101u);
     message.clear_fixed32_value();
     CHECK_FALSE(message.has_fixed32_value());
     CHECK(message.fixed32_value() == 123456789u);
 
-    require_success(message.set_bool_value(false));
+    message.set_bool_value(false);
     CHECK(message.has_bool_value());
     CHECK_FALSE(message.bool_value());
     message.clear_bool_value();
     CHECK_FALSE(message.has_bool_value());
     CHECK(message.bool_value());
 
-    require_success(message.set_uint32_value(102u));
+    message.set_uint32_value(102u);
     CHECK(message.has_uint32_value());
     CHECK(message.uint32_value() == 102u);
     message.clear_uint32_value();
@@ -3066,28 +3063,28 @@ TEST_CASE("proto2 default accessors cover all supported defaultable types", "[sm
     CHECK_FALSE(message.has_enum_value());
     CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
 
-    require_success(message.set_sfixed32_value(-103));
+    message.set_sfixed32_value(-103);
     CHECK(message.has_sfixed32_value());
     CHECK(message.sfixed32_value() == -103);
     message.clear_sfixed32_value();
     CHECK_FALSE(message.has_sfixed32_value());
     CHECK(message.sfixed32_value() == -54321);
 
-    require_success(message.set_sfixed64_value(-104ll));
+    message.set_sfixed64_value(-104ll);
     CHECK(message.has_sfixed64_value());
     CHECK(message.sfixed64_value() == -104ll);
     message.clear_sfixed64_value();
     CHECK_FALSE(message.has_sfixed64_value());
     CHECK(message.sfixed64_value() == -9876543210ll);
 
-    require_success(message.set_sint32_value(-105));
+    message.set_sint32_value(-105);
     CHECK(message.has_sint32_value());
     CHECK(message.sint32_value() == -105);
     message.clear_sint32_value();
     CHECK_FALSE(message.has_sint32_value());
     CHECK(message.sint32_value() == -23456);
 
-    require_success(message.set_sint64_value(-106ll));
+    message.set_sint64_value(-106ll);
     CHECK(message.has_sint64_value());
     CHECK(message.sint64_value() == -106ll);
     message.clear_sint64_value();
@@ -3106,7 +3103,7 @@ TEST_CASE("oneof scalar setters avoid storage name shadowing", "[smoke][oneof]")
     auto ctx = make_context();
     OneofShadowingValue message(ctx);
 
-    require_success(message.set_bool_value(true));
+    message.set_bool_value(true);
     CHECK(message.value_case() == OneofShadowingValue::ValueCase::bool_value);
     CHECK(message.has_bool_value());
     CHECK(message.bool_value());
@@ -3439,9 +3436,7 @@ TEST_CASE("Result<void> carries status without a payload", "[smoke][runtime]") {
 
 TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][bytes]") {
     auto ctx = make_context();
-    auto created = Message::create(ctx);
-    REQUIRE(created);
-    auto &message = *created;
+    auto message = Message::create(ctx);
 
     static_assert(::protocyte::TextSource<const char *>);
     static_assert(!::protocyte::ByteSpanSource<const char *>);
@@ -3570,9 +3565,7 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
 
 TEST_CASE("generated repeated fields accept contiguous range operations", "[smoke][runtime][repeated]") {
     auto ctx = make_context();
-    auto created = Message::create(ctx);
-    REQUIRE(created);
-    auto &message = *created;
+    auto message = Message::create(ctx);
 
     using RepeatedInt = std::remove_reference_t<decltype(message.mutable_r_int32_unpacked())>;
     static_assert(std::is_trivially_copyable_v<RepeatedInt::value_type>);
@@ -3628,21 +3621,19 @@ TEST_CASE("generated message copy uses memcpyable repeated int storage", "[smoke
     auto ctx = make_context();
     auto source = Message::create(ctx);
     auto target = Message::create(ctx);
-    REQUIRE(source);
-    REQUIRE(target);
 
-    using RepeatedInt = std::remove_reference_t<decltype(source->mutable_r_int32_unpacked())>;
+    using RepeatedInt = std::remove_reference_t<decltype(source.mutable_r_int32_unpacked())>;
     static_assert(std::is_trivially_copyable_v<RepeatedInt::value_type>);
 
     const std::array<int, 4u> values {11, 22, 33, 44};
-    require_success(source->mutable_r_int32_unpacked().assign(values));
-    require_success(source->mutable_r_int32_packed().assign(values));
+    require_success(source.mutable_r_int32_unpacked().assign(values));
+    require_success(source.mutable_r_int32_packed().assign(values));
 
-    require_success(target->copy_from(*source));
+    require_success(target.copy_from(source));
 
     const protocyte::i32 expected_values[] = {11, 22, 33, 44};
-    check_scalar_sequence(target->r_int32_unpacked(), expected_values);
-    check_scalar_sequence(target->r_int32_packed(), expected_values);
+    check_scalar_sequence(target.r_int32_unpacked(), expected_values);
+    check_scalar_sequence(target.r_int32_packed(), expected_values);
 }
 
 TEST_CASE("monadic runtime operations compose for status, result, and optional", "[smoke][runtime]") {
@@ -4767,7 +4758,7 @@ TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[s
     auto nested = message.ensure_nested1();
     require_success(nested);
     require_success(nested->set_name(view_of(nested_name)));
-    require_success(nested->set_id(77));
+    nested->set_id(77);
 
     auto inner = nested->ensure_inner();
     require_success(inner);

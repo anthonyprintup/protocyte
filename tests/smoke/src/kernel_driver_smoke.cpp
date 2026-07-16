@@ -86,15 +86,9 @@ namespace {
             protocyte::Limits {},
         };
 
-        auto created = test::ultimate::UltimateComplexMessage<>::create(ctx);
-        if (!created) {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        auto &message = *created;
-        if (!message.set_f_int32(42) || !message.set_f_bool(true)) {
-            return STATUS_INVALID_PARAMETER;
-        }
+        auto message = test::ultimate::UltimateComplexMessage<>::create(ctx);
+        message.set_f_int32(42);
+        message.set_f_bool(true);
 
         uint8_t encoded[16] = {};
         protocyte::SliceWriter writer(encoded, sizeof(encoded));

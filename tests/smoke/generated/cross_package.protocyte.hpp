@@ -23,9 +23,7 @@ namespace test::crosspkg {
 
         explicit CrossPackageConstants_Nested(Context &ctx) noexcept: ctx_ {&ctx} {}
 
-        static ::protocyte::Result<CrossPackageConstants_Nested> create(Context &ctx) noexcept {
-            return CrossPackageConstants_Nested {ctx};
-        }
+        static CrossPackageConstants_Nested create(Context &ctx) noexcept { return CrossPackageConstants_Nested {ctx}; }
         Context *context() const noexcept { return ctx_; }
         CrossPackageConstants_Nested(CrossPackageConstants_Nested &&) noexcept = default;
         CrossPackageConstants_Nested &operator=(CrossPackageConstants_Nested &&) noexcept = default;
@@ -44,13 +42,10 @@ namespace test::crosspkg {
 
         ::protocyte::Result<CrossPackageConstants_Nested> clone() const noexcept {
             auto out = CrossPackageConstants_Nested::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
+            if (const auto st = out.copy_from(*this); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return ::protocyte::move(out);
         }
 
         ::protocyte::Span<const ::protocyte::u8> nested_bytes() const noexcept { return nested_bytes_.view(); }
@@ -98,13 +93,10 @@ namespace test::crosspkg {
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
             auto out = CrossPackageConstants_Nested::create(ctx);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = out.merge_from(reader); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return ::protocyte::move(out);
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
@@ -238,9 +230,7 @@ namespace test::crosspkg {
 
         explicit CrossPackageConstants(Context &ctx) noexcept: ctx_ {&ctx}, remote_values_ {&ctx} {}
 
-        static ::protocyte::Result<CrossPackageConstants> create(Context &ctx) noexcept {
-            return CrossPackageConstants {ctx};
-        }
+        static CrossPackageConstants create(Context &ctx) noexcept { return CrossPackageConstants {ctx}; }
         Context *context() const noexcept { return ctx_; }
         CrossPackageConstants(CrossPackageConstants &&) noexcept = default;
         CrossPackageConstants &operator=(CrossPackageConstants &&) noexcept = default;
@@ -273,13 +263,10 @@ namespace test::crosspkg {
 
         ::protocyte::Result<CrossPackageConstants> clone() const noexcept {
             auto out = CrossPackageConstants::create(*ctx_);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->copy_from(*this); !st) {
+            if (const auto st = out.copy_from(*this); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return ::protocyte::move(out);
         }
 
         ::protocyte::Span<const ::protocyte::u8> remote_bytes() const noexcept { return remote_bytes_.view(); }
@@ -346,13 +333,10 @@ namespace test::crosspkg {
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants> parse(Context &ctx, Reader &reader) noexcept {
             auto out = CrossPackageConstants::create(ctx);
-            if (!out) {
-                return out;
-            }
-            if (const auto st = out->merge_from(reader); !st) {
+            if (const auto st = out.merge_from(reader); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return out;
+            return ::protocyte::move(out);
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {

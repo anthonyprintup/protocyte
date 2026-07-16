@@ -452,9 +452,6 @@ int main() {
     };
 
     auto sample = demo::sensors::SensorSample<>::create(ctx);
-    if (!sample) {
-        return 1;
-    }
 
     return 0;
 }

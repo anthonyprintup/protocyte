@@ -1,6 +1,6 @@
 #include "proto2_required.protocyte.hpp"
 
-#ifdef PROTOCYTE_ENABLE_REFLECTION
+#if PROTOCYTE_ENABLE_REFLECTION
 namespace test::required {
 
     namespace protocyte_reflection {

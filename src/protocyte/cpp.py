@@ -818,7 +818,7 @@ def generate_source(
     w = CppWriter(output_budget=output_budget)
     w.line(f'#include "{_header_name(file_model.name)}"')
     w.line()
-    w.line("#ifdef PROTOCYTE_ENABLE_REFLECTION")
+    w.line("#if PROTOCYTE_ENABLE_REFLECTION")
     _open_namespace(w, _namespace_parts(file_model, options))
     w.line("namespace protocyte_reflection {")
     with w.indent():
@@ -899,9 +899,7 @@ def _emit_message(
         _emit_constructor_initializers(w, message)
         _emit_constructor_body(w, message)
         w.line()
-        w.line(
-            f"static ::protocyte::Result<{message.cpp_name}> create(Context& ctx) noexcept {{"
-        )
+        w.line(f"static {message.cpp_name} create(Context& ctx) noexcept {{")
         with w.indent():
             w.line(f"return {message.cpp_name}{{ctx}};")
         w.line("}")
@@ -1195,15 +1193,11 @@ def _emit_clone_api(
             if _has_presence_flag(item):
                 w.line(f"if (other.has_{item.cpp_name}()) {{")
                 w.push()
-                w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
-                )
+                w.line(f"set_{item.cpp_name}(other.{item.cpp_name}());")
                 w.pop()
                 w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
             else:
-                w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
-                )
+                w.line(f"set_{item.cpp_name}(other.{item.cpp_name}());")
     for oneof in message.oneofs:
         _emit_copy_oneof_from_other(w, oneof, options, source="other")
     w.line("return {};")
@@ -1213,11 +1207,10 @@ def _emit_clone_api(
     w.line(f"::protocyte::Result<{message.cpp_name}> clone() const noexcept {{")
     w.push()
     w.line(f"auto out = {message.cpp_name}::create(*ctx_);")
-    w.line("if (!out) { return out; }")
     w.line(
-        "if (const auto st = out->copy_from(*this); !st) { return ::protocyte::unexpected(st.error()); }"
+        "if (const auto st = out.copy_from(*this); !st) { return ::protocyte::unexpected(st.error()); }"
     )
-    w.line("return out;")
+    w.line("return ::protocyte::move(out);")
     w.pop()
     w.line("}")
     w.line()
@@ -1277,9 +1270,7 @@ def _emit_copy_oneof_from_other(
                 f"if (const auto st = set_{item.cpp_name}_raw({source}.{item.cpp_name}_raw()); !st) {{ return st; }}"
             )
         else:
-            w.line(
-                f"if (const auto st = set_{item.cpp_name}({source}.{item.cpp_name}()); !st) {{ return st; }}"
-            )
+            w.line(f"set_{item.cpp_name}({source}.{item.cpp_name}());")
         w.line("break;")
         w.pop()
         w.line("}")
@@ -1661,12 +1652,10 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(
             f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
         )
-    w.line(
-        f"::protocyte::Status set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;"
-    )
+    w.line(f"void set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;")
     if item.proto3_optional:
         w.line(f"has_{item.cpp_name}_ = true;")
-    w.line("return {}; }")
+    w.line("}")
     w.line(
         f"constexpr void clear_{item.cpp_name}() noexcept {{ {_member(item)} = {{}};"
     )
@@ -1796,12 +1785,11 @@ def _emit_oneof_accessors(
     w.line(
         f"constexpr {typ} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)} : {_default(item)}; }}"
     )
-    w.line(f"::protocyte::Status set_{item.cpp_name}(const {typ} value) noexcept {{")
+    w.line(f"void set_{item.cpp_name}(const {typ} value) noexcept {{")
     w.push()
     w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
     w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
     w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-    w.line("return {};")
     w.pop()
     w.line("}")
 
@@ -1815,11 +1803,10 @@ def _emit_wire_api(
     )
     with w.indent():
         w.line(f"auto out = {message.cpp_name}::create(ctx);")
-        w.line("if (!out) { return out; }")
         w.line(
-            "if (const auto st = out->merge_from(reader); !st) { return ::protocyte::unexpected(st.error()); }"
+            "if (const auto st = out.merge_from(reader); !st) { return ::protocyte::unexpected(st.error()); }"
         )
-        w.line("return out;")
+        w.line("return ::protocyte::move(out);")
     w.line("}")
     w.line()
     w.line("template <typename Reader>")

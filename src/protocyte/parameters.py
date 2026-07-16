@@ -1,8 +1,119 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from protocyte.errors import ProtocyteError
+
+
+_CPP_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_CPP_KEYWORDS = frozenset(
+    {
+        "alignas",
+        "alignof",
+        "and",
+        "and_eq",
+        "asm",
+        "atomic_cancel",
+        "atomic_commit",
+        "atomic_noexcept",
+        "auto",
+        "bitand",
+        "bitor",
+        "bool",
+        "break",
+        "case",
+        "catch",
+        "char",
+        "char8_t",
+        "char16_t",
+        "char32_t",
+        "class",
+        "compl",
+        "concept",
+        "const",
+        "const_cast",
+        "consteval",
+        "constexpr",
+        "constinit",
+        "continue",
+        "co_await",
+        "co_return",
+        "co_yield",
+        "decltype",
+        "default",
+        "delete",
+        "do",
+        "double",
+        "dynamic_cast",
+        "else",
+        "enum",
+        "explicit",
+        "export",
+        "extern",
+        "false",
+        "float",
+        "for",
+        "friend",
+        "goto",
+        "if",
+        "inline",
+        "int",
+        "long",
+        "mutable",
+        "namespace",
+        "new",
+        "noexcept",
+        "not",
+        "not_eq",
+        "nullptr",
+        "operator",
+        "or",
+        "or_eq",
+        "private",
+        "protected",
+        "public",
+        "reflexpr",
+        "register",
+        "reinterpret_cast",
+        "requires",
+        "return",
+        "short",
+        "signed",
+        "sizeof",
+        "static",
+        "static_assert",
+        "static_cast",
+        "struct",
+        "switch",
+        "synchronized",
+        "template",
+        "this",
+        "thread_local",
+        "throw",
+        "true",
+        "try",
+        "typedef",
+        "typeid",
+        "typename",
+        "union",
+        "unsigned",
+        "using",
+        "virtual",
+        "void",
+        "volatile",
+        "wchar_t",
+        "while",
+        "xor",
+        "xor_eq",
+    }
+)
+_INVALID_VIRTUAL_PATH_CHARACTERS = frozenset('<>:"\\|?*;')
+_WINDOWS_RESERVED_PATH_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
 
 
 def _validate_namespace_prefix(value: str) -> str:
@@ -18,6 +129,16 @@ def _validate_namespace_prefix(value: str) -> str:
         )
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
         raise ProtocyteError("namespace prefix must not contain control characters")
+    for component in components:
+        if (
+            _CPP_IDENTIFIER.fullmatch(component) is None
+            or component in _CPP_KEYWORDS
+            or component.startswith("_")
+            or "__" in component
+        ):
+            raise ProtocyteError(
+                "namespace prefix components must be portable, non-reserved C++ identifiers"
+            )
     return value
 
 
@@ -63,6 +184,15 @@ def validate_virtual_directory_prefix(value: str, *, parameter: str) -> str:
     if any(segment != segment.strip() for segment in segments):
         raise ProtocyteError(
             f"{parameter} must not have leading or trailing segment whitespace"
+        )
+    if any(
+        any(char in _INVALID_VIRTUAL_PATH_CHARACTERS for char in segment)
+        or segment.endswith(".")
+        or segment.split(".", 1)[0].upper() in _WINDOWS_RESERVED_PATH_NAMES
+        for segment in segments
+    ):
+        raise ProtocyteError(
+            f"{parameter} contains characters or names that are unsafe in generated includes"
         )
     return value
 

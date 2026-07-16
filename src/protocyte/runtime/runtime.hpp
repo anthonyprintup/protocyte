@@ -3,6 +3,26 @@
 #ifndef PROTOCYTE_RUNTIME_RUNTIME_HPP
 #define PROTOCYTE_RUNTIME_RUNTIME_HPP
 
+#ifndef PROTOCYTE_ENABLE_STD_FORMAT
+#define PROTOCYTE_ENABLE_STD_FORMAT 0
+#endif
+
+#ifndef PROTOCYTE_ENABLE_STD_STRING_VIEW
+#define PROTOCYTE_ENABLE_STD_STRING_VIEW 0
+#endif
+
+#ifndef PROTOCYTE_ENABLE_FMT_FORMAT
+#define PROTOCYTE_ENABLE_FMT_FORMAT 0
+#endif
+
+#ifndef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
+#define PROTOCYTE_ENABLE_HOSTED_ALLOCATOR 0
+#endif
+
+#ifndef PROTOCYTE_ENABLE_REFLECTION
+#define PROTOCYTE_ENABLE_REFLECTION 0
+#endif
+
 #include <bit>
 #include <concepts>
 #include <cstddef>
@@ -42,7 +62,7 @@ namespace protocyte {
 
     template<class T> struct Optional;
     template<class E> struct Unexpected;
-    template<class T, class E> struct Result;
+    template<class T, class E> struct [[nodiscard]] Result;
 
     template<class T> constexpr ::std::remove_reference_t<T> &&move(T &&value) noexcept {
         return static_cast<::std::remove_reference_t<T> &&>(value);
@@ -281,7 +301,7 @@ namespace protocyte {
     struct ResultValueTag {};
     struct ResultErrorTag {};
 
-    template<class T, class E = Error> struct Result {
+    template<class T, class E = Error> struct [[nodiscard]] Result {
         using value_type = T;
         using error_type = E;
 
@@ -753,7 +773,7 @@ namespace protocyte {
         bool ok_;
     };
 
-    template<class T, class E> struct Result<T &, E> {
+    template<class T, class E> struct [[nodiscard]] Result<T &, E> {
         using value_type = T &;
         using error_type = E;
 
@@ -995,7 +1015,7 @@ namespace protocyte {
         bool ok_;
     };
 
-    template<class T, class E> struct Result<T &&, E> {
+    template<class T, class E> struct [[nodiscard]] Result<T &&, E> {
         using value_type = T &&;
         using error_type = E;
 
@@ -1003,7 +1023,7 @@ namespace protocyte {
         template<class... Args> Result(Args &&...) = delete;
     };
 
-    template<class E> struct Result<void, E> {
+    template<class E> struct [[nodiscard]] Result<void, E> {
         using value_type = void;
         using error_type = E;
 
@@ -3092,8 +3112,8 @@ namespace protocyte {
             return reinterpret_cast<const T *>(&storage_[index * sizeof(T)]);
         }
 
-        ContextStorage ctx_;
         alignas(T) unsigned char storage_[sizeof(T) * Max];
+        ContextStorage ctx_;
         usize size_ {};
     };
 
@@ -3664,7 +3684,7 @@ namespace protocyte {
                     if (Config::equal((*bucket).key, key)) {
                         K stored_key {protocyte::move((*bucket).key)};
                         bucket.reset();
-                        bucket.emplace(protocyte::move(stored_key), protocyte::move(value));
+                        static_cast<void>(bucket.emplace(protocyte::move(stored_key), protocyte::move(value)));
                         return {};
                     }
                     existing_index = (existing_index + 1u) & (buckets_.size() - 1u);
@@ -3676,7 +3696,7 @@ namespace protocyte {
             usize index {Config::hash(key) & (buckets_.size() - 1u)};
             for (;;) {
                 if (auto &bucket = buckets_[index]; !bucket.has_value()) {
-                    bucket.emplace(protocyte::move(key), protocyte::move(value));
+                    static_cast<void>(bucket.emplace(protocyte::move(key), protocyte::move(value)));
                     ++size_;
                     return {};
                 }
@@ -4930,7 +4950,7 @@ namespace protocyte {
 
     inline Result<usize> add_size(const usize total, const usize value) noexcept { return checked_add(total, value); }
 
-#ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
+#if PROTOCYTE_ENABLE_HOSTED_ALLOCATOR
     inline void *hosted_allocate(void *, const usize size, const usize alignment) noexcept {
         return ::operator new(size, static_cast<::std::align_val_t>(alignment), ::std::nothrow);
     }

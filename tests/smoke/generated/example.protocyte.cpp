@@ -1,6 +1,6 @@
 #include "example.protocyte.hpp"
 
-#ifdef PROTOCYTE_ENABLE_REFLECTION
+#if PROTOCYTE_ENABLE_REFLECTION
 namespace test::ultimate {
 
     namespace protocyte_reflection {

@@ -384,17 +384,19 @@ Supported `--protocyte_out=` parameters:
 Runtime and include prefixes are portable protobuf virtual directories, not
 filesystem paths. They must be normalized relative paths using `/`; absolute or
 drive-rooted paths, backslashes, control characters, empty segments, `.` and
-`..` segments, and leading or trailing segment whitespace are rejected. The
-same validation is applied by the CMake helpers before generated outputs are
-declared.
+`..` segments, leading or trailing segment whitespace, C++ include delimiters,
+CMake list separators, Windows-reserved characters, and Windows device names
+are rejected. The same validation is applied by the CMake helpers before
+generated outputs are declared.
 
 Parameter names are exact and case-sensitive. Unknown names, duplicate names,
 and bare tokens without `=` are errors; aliases are not accepted.
 Names beginning with `_protocyte_` are reserved for CMake's parameter transport
 and must not be supplied through CMake `OPTIONS`.
-`namespace_prefix` must be a normalized `::`-separated namespace with no empty
-components, extra colons, surrounding component whitespace, or control
-characters.
+`namespace_prefix` must be a normalized `::`-separated namespace whose
+components are portable, non-reserved C++ identifiers. Empty components, C++
+keywords, leading underscores, extra colons, surrounding component whitespace,
+control characters, and non-ASCII identifier characters are rejected.
 
 Formatting is best-effort by default. If `clang-format` is on `PATH`, protocyte
 uses it for generated C++ output. If it is not available and no explicit
@@ -772,8 +774,10 @@ struct Message;
 ```
 
 The default config uses a caller-supplied allocator context. Construction is
-non-allocating. Operations that may allocate return `::protocyte::Status` or
-`::protocyte::Result<T>`.
+non-allocating, so `create(ctx)` returns the message directly. Primitive scalar
+setters also return `void`. Operations that can fail, including allocation,
+parsing, serialization, strings, bytes, containers, and deep copies, return
+`[[nodiscard]]` `::protocyte::Status` or `::protocyte::Result<T>` values.
 
 ```cpp
 protocyte::DefaultConfig::Context ctx{/* allocator */, /* limits */};
@@ -990,8 +994,9 @@ The contract is:
 ## Runtime Notes
 
 The default runtime does not call `malloc` or `new` globally. Hosted allocation
-helpers are compiled only when `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR` is defined,
-which is intended for tests and examples rather than kernel builds.
+helpers are compiled only when `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR` is set to a
+nonzero value, which is intended for tests and examples rather than kernel
+builds.
 
 The runtime provides:
 
@@ -1001,5 +1006,6 @@ The runtime provides:
 - slice readers and writers
 - protobuf tag, varint, fixed-width, skip, scalar parse, and scalar serialize helpers
 
-Reflection tables are emitted only when `PROTOCYTE_ENABLE_REFLECTION` is
-defined. Release builds do not get descriptor pools or dynamic reflection.
+Reflection tables are emitted only when `PROTOCYTE_ENABLE_REFLECTION` is set to
+a nonzero value. Release builds do not get descriptor pools or dynamic
+reflection.
