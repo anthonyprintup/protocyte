@@ -840,9 +840,26 @@ Common generated operations include:
 - `clone()` and `clone(output)`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
 
-The convenience `copy_from(source)`, `clone()`, and `parse(ctx, reader)` forms
-may materialize one complete generated message in automatic storage. Their
-caller-supplied overloads avoid that full-message stack temporary:
+### Caller-Controlled Message Storage
+
+Copying, cloning, and parsing each have a convenience form and a
+caller-supplied-storage form:
+
+```cpp
+Status copy_from(const Message& source);
+Status copy_from(const Message& source, Message& staging_message);
+
+Result<Message> clone() const;
+Status clone(Message& output) const;
+
+static Result<Message> parse(Context& ctx, Reader& reader);
+static Status parse(Context& ctx, Reader& reader, Message& output);
+```
+
+The convenience forms are concise for hosted applications, but may materialize
+one complete generated message in automatic storage. That can be undesirable
+for large schemas and especially for kernel code with a small stack. The
+reference-taking variants create no full outer-message temporary internally:
 
 ```cpp
 demo::Sample<> staging_message{ctx};
@@ -850,17 +867,28 @@ if (const auto st = destination.copy_from(source, staging_message); !st) {
     // destination is unchanged
 }
 
-demo::Sample<> cloned{ctx};
-auto clone_status = source.clone(cloned);
+demo::Sample<> output{ctx};
+auto clone_status = source.clone(output);
+
+protocyte::SliceReader reader{encoded, encoded_size};
+auto parse_status = demo::Sample<>::parse(ctx, reader, output);
 ```
 
-`staging_message` is consumed as transactional working state and is valid but
-moved-from after success. It must not alias either copy operand. `clone(output)`
-and `parse(ctx, reader, output)` reset and directly populate `output`; on
-failure, `output` is reset to an empty message bound to the requested context.
-These overloads do not allocate the outer message object. Dynamic strings,
+The caller decides where `staging_message` and `output` live: stack, static
+storage, an arena, or a kernel-appropriate pool. Protocyte neither allocates nor
+deallocates those outer objects.
+
+`copy_from(source, staging_message)` uses `staging_message` as transactional
+working state. The destination remains unchanged on failure; after success the
+staging message is valid but moved-from. It must not alias either copy operand.
+`clone(output)` and `parse(ctx, reader, output)` reset and directly populate
+`output`; on failure, `output` is reset to an empty message bound to the
+requested context.
+
+This only controls storage for the outer message object. Dynamic strings,
 bytes, vectors, maps, and boxed messages still allocate through `Config` and
-its caller-supplied context.
+its caller-supplied context. Protocyte uses heap storage only when that context
+is configured with a heap-backed allocator.
 
 ### Parse Resource Limits
 
