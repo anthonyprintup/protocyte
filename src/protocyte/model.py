@@ -27,6 +27,29 @@ from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_exten
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
 
+
+def _descriptor_field_number(message_type, name: str) -> int:
+    return message_type.DESCRIPTOR.fields_by_name[name].number
+
+
+_FILE_MESSAGE_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.FileDescriptorProto, "message_type"
+)
+_FILE_ENUM_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.FileDescriptorProto, "enum_type"
+)
+_MESSAGE_FIELD_PATH = _descriptor_field_number(descriptor_pb2.DescriptorProto, "field")
+_MESSAGE_NESTED_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.DescriptorProto, "nested_type"
+)
+_MESSAGE_ENUM_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.DescriptorProto, "enum_type"
+)
+_MESSAGE_ONEOF_DECL_PATH = _descriptor_field_number(
+    descriptor_pb2.DescriptorProto, "oneof_decl"
+)
+_ENUM_VALUE_PATH = _descriptor_field_number(descriptor_pb2.EnumDescriptorProto, "value")
+
 _MAX_FIELD_NUMBER = (1 << 29) - 1
 _FIRST_RESERVED_FIELD_NUMBER = 19_000
 _LAST_RESERVED_FIELD_NUMBER = 19_999
@@ -601,11 +624,59 @@ class _CustomOptions:
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class SourceDocumentation:
+    text: str = ""
+
+
+@dataclass(slots=True)
+class _SourceDocumentationIndex:
+    by_path: dict[tuple[int, ...], SourceDocumentation]
+
+    @classmethod
+    def from_file(
+        cls, file: descriptor_pb2.FileDescriptorProto
+    ) -> "_SourceDocumentationIndex":
+        by_path: dict[tuple[int, ...], SourceDocumentation] = {}
+        for location in file.source_code_info.location:
+            documentation = _source_documentation(location)
+            if documentation.text:
+                by_path.setdefault(tuple(location.path), documentation)
+        return cls(by_path)
+
+    def get(self, path: tuple[int, ...]) -> SourceDocumentation:
+        return self.by_path.get(path, SourceDocumentation())
+
+
+def _source_documentation(location) -> SourceDocumentation:
+    parts = [
+        *location.leading_detached_comments,
+        location.leading_comments,
+        location.trailing_comments,
+    ]
+    normalized = [
+        fragment
+        for part in parts
+        if (fragment := _normalize_source_comment(part))
+    ]
+    return SourceDocumentation("\n\n".join(normalized))
+
+
+def _normalize_source_comment(value: str) -> str:
+    lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(line.rstrip() for line in lines)
+
+
 @dataclass(slots=True)
 class EnumValueModel:
     name: str
     cpp_name: str
     number: int
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -617,6 +688,7 @@ class EnumModel:
     package: str
     values: list[EnumValueModel]
     parent: "MessageModel | None" = None
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -624,6 +696,7 @@ class OneofModel:
     name: str
     cpp_name: str
     fields: list["FieldModel"] = field(default_factory=list)
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -671,6 +744,7 @@ class FieldModel:
     default_cpp: str | None = None
     default_byte_size: int | None = None
     enum_closed: bool = False
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
     @property
     def has_explicit_presence(self) -> bool:
@@ -724,12 +798,14 @@ class MessageModel:
     package: str
     parent: "MessageModel | None"
     descriptor: descriptor_pb2.DescriptorProto
+    descriptor_path: tuple[int, ...]
     is_map_entry: bool = False
     fields: list[FieldModel] = field(default_factory=list)
     oneofs: list[OneofModel] = field(default_factory=list)
     nested_messages: list["MessageModel"] = field(default_factory=list)
     nested_enums: list[EnumModel] = field(default_factory=list)
     constants: list[ConstantModel] = field(default_factory=list)
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -1250,6 +1326,10 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     files: dict[str, FileModel] = {}
     messages: dict[str, MessageModel] = {}
     enums: dict[str, EnumModel] = {}
+    source_documentation = {
+        file.name: _SourceDocumentationIndex.from_file(file)
+        for file in files_by_name.values()
+    }
 
     for file in files_by_name.values():
         files[file.name] = FileModel(
@@ -1261,12 +1341,27 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     for file in files_by_name.values():
         file_model = files[file.name]
-        for enum in file.enum_type:
-            enum_model = _build_enum(file, enum, None, enum.name)
+        documentation = source_documentation[file.name]
+        for index, enum in enumerate(file.enum_type):
+            enum_model = _build_enum(
+                file,
+                enum,
+                None,
+                enum.name,
+                (_FILE_ENUM_TYPE_PATH, index),
+                documentation,
+            )
             file_model.enums.append(enum_model)
             enums[enum_model.full_name] = enum_model
-        for message in file.message_type:
-            message_model = _build_message_skeleton(file, message, None, message.name)
+        for index, message in enumerate(file.message_type):
+            message_model = _build_message_skeleton(
+                file,
+                message,
+                None,
+                message.name,
+                (_FILE_MESSAGE_TYPE_PATH, index),
+                documentation,
+            )
             file_model.messages.append(message_model)
             _register_message_tree(message_model, messages, enums)
         file_model.constants = _build_file_constants(file_model, custom_options)
@@ -1277,7 +1372,14 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
-            _fill_message_details(message, files, messages, enums, custom_options)
+            _fill_message_details(
+                message,
+                files,
+                messages,
+                enums,
+                custom_options,
+                source_documentation[message.file_name],
+            )
 
     _validate_package_constant_namespace(files)
     _resolve_constants_and_arrays(files, messages)
@@ -1883,13 +1985,20 @@ def _build_enum(
     enum: descriptor_pb2.EnumDescriptorProto,
     parent: MessageModel | None,
     path: str,
+    descriptor_path: tuple[int, ...],
+    documentation: _SourceDocumentationIndex,
 ) -> EnumModel:
     cpp_prefix = f"{parent.cpp_name}_" if parent else ""
     values = [
         EnumValueModel(
-            name=value.name, cpp_name=cpp_identifier(value.name), number=value.number
+            name=value.name,
+            cpp_name=cpp_identifier(value.name),
+            number=value.number,
+            documentation=documentation.get(
+                (*descriptor_path, _ENUM_VALUE_PATH, index)
+            ),
         )
-        for value in enum.value
+        for index, value in enumerate(enum.value)
     ]
     return EnumModel(
         name=enum.name,
@@ -1899,6 +2008,7 @@ def _build_enum(
         package=file.package,
         values=values,
         parent=parent,
+        documentation=documentation.get(descriptor_path),
     )
 
 
@@ -1907,6 +2017,8 @@ def _build_message_skeleton(
     message: descriptor_pb2.DescriptorProto,
     parent: MessageModel | None,
     path: str,
+    descriptor_path: tuple[int, ...],
+    documentation: _SourceDocumentationIndex,
 ) -> MessageModel:
     cpp_prefix = f"{parent.cpp_name}_" if parent else ""
     model = MessageModel(
@@ -1917,12 +2029,30 @@ def _build_message_skeleton(
         package=file.package,
         parent=parent,
         descriptor=message,
+        descriptor_path=descriptor_path,
         is_map_entry=message.options.map_entry,
+        documentation=documentation.get(descriptor_path),
     )
-    for enum in message.enum_type:
-        model.nested_enums.append(_build_enum(file, enum, model, f"{path}.{enum.name}"))
-    for nested in message.nested_type:
-        child = _build_message_skeleton(file, nested, model, f"{path}.{nested.name}")
+    for index, enum in enumerate(message.enum_type):
+        model.nested_enums.append(
+            _build_enum(
+                file,
+                enum,
+                model,
+                f"{path}.{enum.name}",
+                (*descriptor_path, _MESSAGE_ENUM_TYPE_PATH, index),
+                documentation,
+            )
+        )
+    for index, nested in enumerate(message.nested_type):
+        child = _build_message_skeleton(
+            file,
+            nested,
+            model,
+            f"{path}.{nested.name}",
+            (*descriptor_path, _MESSAGE_NESTED_TYPE_PATH, index),
+            documentation,
+        )
         model.nested_messages.append(child)
     return model
 
@@ -1951,6 +2081,7 @@ def _fill_message_details(
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
     custom_options: _CustomOptions,
+    documentation: _SourceDocumentationIndex,
 ) -> None:
     message.constants = _build_constants(message, custom_options)
 
@@ -1959,9 +2090,12 @@ def _fill_message_details(
         oneof_fields[index] = OneofModel(
             name=oneof.name,
             cpp_name=cpp_pascal_identifier(oneof.name),
+            documentation=documentation.get(
+                (*message.descriptor_path, _MESSAGE_ONEOF_DECL_PATH, index)
+            ),
         )
 
-    for field_proto in message.descriptor.field:
+    for index, field_proto in enumerate(message.descriptor.field):
         field_model = _build_field(
             message,
             files[message.file_name],
@@ -1969,6 +2103,9 @@ def _fill_message_details(
             messages,
             enums,
             custom_options,
+            documentation=documentation.get(
+                (*message.descriptor_path, _MESSAGE_FIELD_PATH, index)
+            ),
         )
         message.fields.append(field_model)
         if field_model.oneof_index is not None and field_model.oneof_name is not None:
@@ -2224,6 +2361,7 @@ def _build_field(
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
     custom_options: _CustomOptions,
+    documentation: SourceDocumentation | None = None,
 ) -> FieldModel:
     if proto.extendee:
         raise ProtocyteError(
@@ -2364,6 +2502,7 @@ def _build_field(
         default_cpp=default_cpp,
         default_byte_size=default_byte_size,
         enum_closed=kind == "enum" and file_model.syntax == "proto2",
+        documentation=documentation or SourceDocumentation(),
     )
 
 

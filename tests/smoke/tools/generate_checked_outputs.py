@@ -170,6 +170,16 @@ def add_field(
     return field
 
 
+def add_source_documentation(
+    file: descriptor_pb2.FileDescriptorProto,
+    path: list[int],
+    text: str,
+) -> None:
+    location = file.source_code_info.location.add()
+    location.path.extend(path)
+    location.leading_comments = text
+
+
 def add_map_entry(
     parent: descriptor_pb2.DescriptorProto,
     name: str,
@@ -612,6 +622,11 @@ def compat_file() -> descriptor_pb2.FileDescriptorProto:
 
     msg = file.message_type.add()
     msg.name = "EncodingMatrix"
+    add_source_documentation(
+        file,
+        [4, 0],
+        "Exercises protobuf wire compatibility across every supported field shape.\n",
+    )
 
     mode = msg.enum_type.add()
     mode.name = "Mode"
@@ -680,6 +695,14 @@ def compat_file() -> descriptor_pb2.FileDescriptorProto:
     )
     add_field(msg, "map_str_int32", 27, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_str_int32)
     add_field(msg, "map_int32_str", 28, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_int32_str)
+    deprecated_field_index = len(msg.field)
+    deprecated_field = add_field(msg, "deprecated_unused", 29, F.TYPE_STRING)
+    deprecated_field.options.deprecated = True
+    add_source_documentation(
+        file,
+        [4, 0, 2, deprecated_field_index],
+        "Legacy field retained to verify generated deprecation diagnostics.\n",
+    )
 
     return file
 

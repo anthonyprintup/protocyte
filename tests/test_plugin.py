@@ -49,6 +49,21 @@ def _basic_request(*, parameter: str = "") -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+def _add_source_documentation(
+    file: descriptor_pb2.FileDescriptorProto,
+    path: list[int],
+    *,
+    leading: str = "",
+    trailing: str = "",
+    detached: tuple[str, ...] = (),
+) -> None:
+    location = file.source_code_info.location.add()
+    location.path.extend(path)
+    location.leading_comments = leading
+    location.trailing_comments = trailing
+    location.leading_detached_comments.extend(detached)
+
+
 @pytest.fixture(autouse=True)
 def _disable_implicit_clang_format(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
@@ -82,6 +97,100 @@ def test_response_file_names_keep_valid_runtime_prefix_relative() -> None:
         "simple.protocyte.hpp",
         "vendor/protocyte/runtime.hpp",
     }
+
+
+def test_generation_emits_source_documentation_and_field_deprecation_by_default() -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    file.message_type[0].field[0].options.deprecated = True
+    _add_source_documentation(file, [4, 0], leading="A documented sample.\r\n")
+    _add_source_documentation(
+        file,
+        [4, 0, 2, 0],
+        detached=("Detached field context.\n",),
+        leading="Primary identifier.\nContains */ safely.\nEnds with slash \\\n",
+        trailing="Trailing field detail.\n",
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert header.count("A documented sample.") == 1
+    assert header.count("Primary identifier.") == 5
+    assert "Contains * / safely." in header
+    assert "Ends with slash \\\n" in header
+    assert header.count("[[deprecated]]") == 3
+    assert '#pragma clang diagnostic ignored "-Wdeprecated-declarations"' in header
+    assert "#pragma warning(disable : 4996)" in header
+    assert "#pragma clang diagnostic pop" in header
+
+
+def test_comments_off_suppresses_documentation_but_not_deprecation() -> None:
+    request = _basic_request(parameter="format=off,comments=off")
+    file = request.proto_file[0]
+    file.message_type[0].field[0].options.deprecated = True
+    _add_source_documentation(file, [4, 0], leading="Hidden message docs.\n")
+    _add_source_documentation(file, [4, 0, 2, 0], leading="Hidden field docs.\n")
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "Hidden message docs." not in header
+    assert "Hidden field docs." not in header
+    assert "/**" not in header
+    assert header.count("[[deprecated]]") == 3
+
+
+def test_generation_maps_nested_enum_and_oneof_documentation() -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    message = file.message_type[0]
+
+    enum = file.enum_type.add()
+    enum.name = "Mode"
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    _add_source_documentation(file, [5, 0], leading="Operating mode.\n")
+    _add_source_documentation(file, [5, 0, 2, 0], leading="No mode selected.\n")
+
+    nested_index = len(message.nested_type)
+    nested = message.nested_type.add()
+    nested.name = "Child"
+    _add_source_documentation(
+        file, [4, 0, 3, nested_index], leading="Nested child payload.\n"
+    )
+
+    choice_message_index = len(file.message_type)
+    choice_message = file.message_type.add()
+    choice_message.name = "ChoiceHolder"
+    choice_message.oneof_decl.add().name = "choice"
+    field = choice_message.field.add()
+    field.name = "choice_id"
+    field.number = 100
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.oneof_index = 0
+    _add_source_documentation(
+        file,
+        [4, choice_message_index, 8, 0],
+        leading="Selects one payload.\n",
+    )
+    _add_source_documentation(
+        file,
+        [4, choice_message_index, 2, 0],
+        leading="Selected identifier.\n",
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "Operating mode." in header
+    assert "No mode selected." in header
+    assert header.count("Nested child payload.") == 2
+    assert header.count("Selects one payload.") == 3
+    assert header.count("Selected identifier.") == 6
 
 
 def test_rejects_obsolete_protocyte_options_schema() -> None:

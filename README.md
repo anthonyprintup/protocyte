@@ -180,7 +180,10 @@ protoc `
 The names after `--protocyte_out` are descriptor names inside
 `descriptor_set.pb`, not filesystem paths. Imported descriptors from the set are
 available for type and custom-option resolution, but Protocyte only emits files
-listed for generation.
+listed for generation. Generated C++ documentation requires source information;
+when creating a descriptor set that should retain schema comments, pass
+`--include_source_info` to `protoc`. Descriptor sets without source information
+remain valid but cannot reproduce documentation comments.
 
 ## CMake Integration
 
@@ -461,6 +464,9 @@ Supported `--protocyte_out=` parameters:
 - `namespace_prefix=<a::b>`: prepend additional C++ namespaces around the file
   package namespace.
 - `include_prefix=<path>`: prefix includes for imported generated headers.
+- `comments=on|off`: emit schema comments as Doxygen documentation on generated
+  C++ types and field APIs. The default is `on`. This setting does not suppress
+  `[[deprecated]]` attributes derived from protobuf field options.
 - `format=auto|off|required`: control generated C++ formatting. `auto` is the
   default and formats when `clang-format` is available; `off` never launches a
   formatter; `required` reports an error when no formatter is available.
@@ -512,6 +518,11 @@ prefixes remain relative virtual directories. Runtime state is the exception:
 use the dedicated `EMIT_RUNTIME` and `RUNTIME_PREFIX` arguments so CMake can
 declare the emitted runtime header and runtime linkage consistently. Forwarded
 `runtime` and `runtime_prefix` parameters are rejected.
+
+For example, size-sensitive builds can disable generated documentation with
+`OPTIONS "comments=off"`. Direct `.proto` generation normally receives source
+information from `protoc`; descriptor-set generation emits comments only when
+the set was created with `--include_source_info`.
 
 Example:
 

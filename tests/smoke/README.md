@@ -431,6 +431,7 @@ protoc `
   --proto_path=$protoRoot `
   --proto_path=$protocyteProtoDir `
   --include_imports `
+  --include_source_info `
   --descriptor_set_out=$descriptorSet `
   "$protoRoot\sensors\sensor.proto"
 ```
@@ -448,6 +449,9 @@ protocyte_add_descriptor_set_library(
 ```
 
 In descriptor-set mode, `FILES`/`PROTOS` entries are not filesystem paths.
+`--include_source_info` preserves schema comments so Protocyte can embed them as
+Doxygen documentation. Descriptor sets created without it still generate valid
+C++, but their generated declarations have no schema documentation.
 Imports, including `google/protobuf/*.proto`, are resolved from the descriptor
 set itself. Unreferenced runtime descriptors stay dependency-only under
 `DISCOVER`; referenced runtime message/enum descriptors are generated when

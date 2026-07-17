@@ -21,6 +21,7 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.emit_runtime is False
     assert options.runtime_prefix == "protocyte/runtime"
     assert options.namespace_prefix == ""
+    assert options.emit_comments is True
     assert options.format_mode == "auto"
     assert options.clang_format is None
     assert options.clang_format_config is None
@@ -32,6 +33,21 @@ def test_parse_accepts_clang_format_options() -> None:
     assert options.clang_format == "custom-format"
     assert options.clang_format_config == "configs/protocyte.style"
     assert options.format_mode == "required"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("on", True), ("off", False)],
+)
+def test_parse_accepts_comment_modes(value: str, expected: bool) -> None:
+    assert parse_parameter(f"comments={value}").emit_comments is expected
+
+
+def test_rejects_invalid_comment_mode() -> None:
+    with pytest.raises(
+        ProtocyteError, match="comments must be one of: on, off"
+    ):
+        parse_parameter("comments=sometimes")
 
 
 @pytest.mark.parametrize("format_mode", ["auto", "off", "required"])

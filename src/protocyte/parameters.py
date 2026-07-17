@@ -148,6 +148,7 @@ class GeneratorOptions:
     runtime_prefix: str = "protocyte/runtime"
     include_prefix: str = ""
     namespace_prefix: str = ""
+    emit_comments: bool = True
     format_mode: str = "auto"
     clang_format: str | None = None
     clang_format_config: str | None = None
@@ -264,6 +265,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "runtime_prefix",
         "include_prefix",
         "namespace_prefix",
+        "comments",
         "format",
         "clang_format",
         "clang_format_config",
@@ -288,6 +290,9 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         raise ProtocyteError("runtime must be one of: emit, omit, emit:<prefix>")
 
     namespace_prefix = values.get("namespace_prefix", "")
+    comments = values.get("comments", "on")
+    if comments not in {"on", "off"}:
+        raise ProtocyteError("comments must be one of: on, off")
     runtime_prefix = validate_virtual_directory_prefix(
         runtime_prefix, parameter="runtime prefix"
     )
@@ -319,6 +324,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         runtime_prefix=runtime_prefix,
         include_prefix=include_prefix,
         namespace_prefix=namespace_prefix,
+        emit_comments=comments == "on",
         format_mode=format_mode,
         clang_format=clang_format,
         clang_format_config=clang_format_config,

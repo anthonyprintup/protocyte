@@ -360,6 +360,19 @@ namespace protocyte_smoke::test::compat {
         typename Config::String label_;
     };
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    /**
+     * Exercises protobuf wire compatibility across every supported field shape.
+     */
     template<typename Config> struct EncodingMatrix {
         using Context = typename Config::Context;
         using Mode = EncodingMatrix_Mode;
@@ -402,6 +415,10 @@ namespace protocyte_smoke::test::compat {
             opt_string = 26u,
             map_str_int32 = 27u,
             map_int32_str = 28u,
+            /**
+             * Legacy field retained to verify generated deprecation diagnostics.
+             */
+            deprecated_unused = 29u,
         };
 
         explicit EncodingMatrix(Context &ctx) noexcept:
@@ -414,7 +431,8 @@ namespace protocyte_smoke::test::compat {
             r_double_ {&ctx},
             opt_string_ {&ctx},
             map_str_int32_ {&ctx},
-            map_int32_str_ {&ctx} {}
+            map_int32_str_ {&ctx},
+            deprecated_unused_ {&ctx} {}
 
         static EncodingMatrix create(Context &ctx) noexcept { return EncodingMatrix {ctx}; }
         Context *context() const noexcept { return ctx_; }
@@ -444,7 +462,8 @@ namespace protocyte_smoke::test::compat {
             opt_int32_ {other.opt_int32_},
             opt_string_ {::protocyte::move(other.opt_string_)},
             map_str_int32_ {::protocyte::move(other.map_str_int32_)},
-            map_int32_str_ {::protocyte::move(other.map_int32_str_)} {
+            map_int32_str_ {::protocyte::move(other.map_int32_str_)},
+            deprecated_unused_ {::protocyte::move(other.deprecated_unused_)} {
             has_opt_int32_ = other.has_opt_int32_;
             has_opt_string_ = other.has_opt_string_;
             switch (other.special_oneof_case_) {
@@ -512,6 +531,7 @@ namespace protocyte_smoke::test::compat {
             has_opt_string_ = other.has_opt_string_;
             map_str_int32_ = ::protocyte::move(other.map_str_int32_);
             map_int32_str_ = ::protocyte::move(other.map_int32_str_);
+            deprecated_unused_ = ::protocyte::move(other.deprecated_unused_);
             switch (other.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
                     new (&special_oneof_.oneof_string_)
@@ -663,6 +683,9 @@ namespace protocyte_smoke::test::compat {
             }
             if (const auto st = mutable_map_int32_str().copy_from(source.map_int32_str()); !st) {
                 return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::map_int32_str));
+            }
+            if (const auto st = set_deprecated_unused(source.deprecated_unused()); !st) {
+                return st;
             }
             switch (source.special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
@@ -1068,6 +1091,66 @@ namespace protocyte_smoke::test::compat {
             return map_int32_str_;
         }
         void clear_map_int32_str() noexcept { map_int32_str_.clear(); }
+
+        /**
+         * Legacy field retained to verify generated deprecation diagnostics.
+         */
+        [[deprecated]]
+        ::protocyte::StringView deprecated_unused() const noexcept {
+            return deprecated_unused_.view();
+        }
+        /**
+         * Legacy field retained to verify generated deprecation diagnostics.
+         */
+        [[deprecated]]
+        typename Config::String &mutable_deprecated_unused() noexcept {
+            return deprecated_unused_;
+        }
+        /**
+         * Legacy field retained to verify generated deprecation diagnostics.
+         */
+        template<class Value> [[deprecated]]
+        ::protocyte::Status set_deprecated_unused(const Value &value) noexcept
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return ::protocyte::with_field(view.status(),
+                                               static_cast<::protocyte::u32>(FieldNumber::deprecated_unused));
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::deprecated_unused));
+            }
+            deprecated_unused_ = ::protocyte::move(temp);
+            return {};
+        }
+        /**
+         * Legacy field retained to verify generated deprecation diagnostics.
+         */
+        template<class Value> [[deprecated]]
+        ::protocyte::Status set_deprecated_unused(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
+            if (!view) {
+                return ::protocyte::with_field(view.status(),
+                                               static_cast<::protocyte::u32>(FieldNumber::deprecated_unused));
+            }
+            typename Config::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::deprecated_unused));
+            }
+            deprecated_unused_ = ::protocyte::move(temp);
+            return {};
+        }
+        /**
+         * Legacy field retained to verify generated deprecation diagnostics.
+         */
+        [[deprecated]]
+        void clear_deprecated_unused() noexcept {
+            deprecated_unused_.clear();
+        }
 
         template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<EncodingMatrix> parse(Context &ctx, Reader &reader) noexcept {
@@ -2056,6 +2139,29 @@ namespace protocyte_smoke::test::compat {
                     }
                     break;
                 }
+                case FieldNumber::deprecated_unused: {
+                    if (wire_type != ::protocyte::WireType::LEN) {
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        break;
+                    }
+                    if (const auto st = ::protocyte::read_string_field<Config>(*ctx_, reader, wire_type, field_number,
+                                                                               deprecated_unused_);
+                        !st) {
+                        return st;
+                    }
+                    break;
+                }
                 default: {
                     if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
                         if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
@@ -2400,6 +2506,14 @@ namespace protocyte_smoke::test::compat {
                 }
                 if (const auto st = ::protocyte::write_string_field(writer, 2u, entry.value.view()); !st) {
                     return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::map_int32_str));
+                }
+            }
+            if (!deprecated_unused_.empty()) {
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::deprecated_unused),
+                        deprecated_unused_.view());
+                    !st) {
+                    return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::deprecated_unused));
                 }
             }
             if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
@@ -2807,6 +2921,21 @@ namespace protocyte_smoke::test::compat {
                 }
                 total = *st_size;
             }
+            if (!deprecated_unused_.empty()) {
+                const auto field_size_deprecated_unused = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::deprecated_unused), deprecated_unused_.size());
+                if (!field_size_deprecated_unused) {
+                    return ::protocyte::unexpected(
+                        ::protocyte::with_field(field_size_deprecated_unused.error(),
+                                                static_cast<::protocyte::u32>(FieldNumber::deprecated_unused)));
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_deprecated_unused);
+                if (!st_size) {
+                    return ::protocyte::unexpected(::protocyte::with_field(
+                        st_size.error(), static_cast<::protocyte::u32>(FieldNumber::deprecated_unused)));
+                }
+                total = *st_size;
+            }
             const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
             if (!total_with_unknown) {
                 return ::protocyte::unexpected(total_with_unknown.error());
@@ -2840,6 +2969,10 @@ namespace protocyte_smoke::test::compat {
                     return ::protocyte::unexpected(st.error().code, {},
                                                    static_cast<::protocyte::u32>(FieldNumber::map_int32_str));
                 }
+            }
+            if (const auto st = deprecated_unused_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, {},
+                                               static_cast<::protocyte::u32>(FieldNumber::deprecated_unused));
             }
             if (nested_.has_value()) {
                 if (const auto st = nested_->validate(); !st) {
@@ -2892,7 +3025,18 @@ namespace protocyte_smoke::test::compat {
         bool has_opt_string_ {};
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
+        /**
+         * Legacy field retained to verify generated deprecation diagnostics.
+         */
+        typename Config::String deprecated_unused_;
     };
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace protocyte_smoke::test::compat
 
