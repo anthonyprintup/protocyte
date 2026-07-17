@@ -11,13 +11,17 @@ The smoke project in this repository is both:
 ## What You Need
 
 - Python 3.12 or newer.
+- [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - A C++20-capable compiler.
 - CMake 3.24 or newer.
 - `protoc` from the Protocol Buffers project.
 
-Verify that `protoc` is installed:
+Verify the command-line prerequisites before continuing:
 
 ```powershell
+python --version
+uv --version
+cmake --version
 protoc --version
 ```
 
@@ -418,12 +422,17 @@ from a binary and rendered `.proto` files are only inspection artifacts. First
 produce a descriptor set with imports:
 
 ```powershell
+$protoRoot = "$PWD\proto"
+$protocyteProtoDir = python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
+$descriptorSet = "$PWD\build\descriptor_set.pb"
+New-Item -ItemType Directory -Force (Split-Path -Parent $descriptorSet) | Out-Null
+
 protoc `
-  --proto_path="${PROTO_ROOT}" `
-  --proto_path="${PROTOCYTE_PROTO_DIR}" `
+  --proto_path=$protoRoot `
+  --proto_path=$protocyteProtoDir `
   --include_imports `
-  --descriptor_set_out="${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb" `
-  "${PROTO_ROOT}/sensors/sensor.proto"
+  --descriptor_set_out=$descriptorSet `
+  "$protoRoot\sensors\sensor.proto"
 ```
 
 Then generate from descriptor names inside that set:
@@ -467,6 +476,9 @@ int main() {
     };
 
     auto sample = demo::sensors::SensorSample<>::create(ctx);
+    if (const auto status = sample.mutable_values().push_back(42u); !status) {
+        return 1;
+    }
 
     const auto size = sample.encoded_size();
     if (!size) {
@@ -481,6 +493,9 @@ int main() {
 
     const auto parsed = demo::sensors::SensorSample<>::parse(ctx, encoded);
     if (!parsed) {
+        return 1;
+    }
+    if ((*parsed).values().size() != 1u || (*parsed).values()[0] != 42u) {
         return 1;
     }
 

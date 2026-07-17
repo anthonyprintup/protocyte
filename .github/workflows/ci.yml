@@ -55,6 +55,48 @@ jobs:
       - name: Run plugin tests
         run: uv run pytest -q
 
+  quickstart-linux:
+    name: Quick Start Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Build plugin wheel
+        run: uv build --wheel
+
+      - name: Install plugin wheel in an isolated environment
+        run: |
+          uv venv build/quickstart-venv --python 3.12
+          uv pip install --python build/quickstart-venv/bin/python dist/*.whl
+
+      - name: Configure quick-start example
+        run: >
+          cmake -S examples/quickstart -B build/quickstart
+          "-DPROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/bin/protoc-gen-protocyte"
+
+      - name: Generate and build quick-start example
+        run: cmake --build build/quickstart
+
+      - name: Run quick-start round trip
+        run: ctest --test-dir build/quickstart --output-on-failure
+
   smoke-host:
     name: Smoke Host (clang-cl)
     runs-on: windows-latest

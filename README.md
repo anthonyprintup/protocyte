@@ -4,6 +4,79 @@ Protocyte is a Python `protoc` plugin that generates C++20 protobuf code for
 freestanding, embedded, or kernel-style environments. The generated C++ avoids
 the STL, exceptions, RTTI, iostreams, and implicit global allocation.
 
+## Quick Start
+
+You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), `protoc`,
+CMake 3.24 or newer, and a C++20 compiler. From a Protocyte checkout, this
+PowerShell flow builds and installs the wheel into an isolated environment,
+then generates, builds, and runs the checked-in example:
+
+```powershell
+uv build --wheel
+uv venv build\quickstart-venv --python 3.12
+
+$wheel = (Get-ChildItem dist\protocyte-*.whl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+$python = "$PWD\build\quickstart-venv\Scripts\python.exe"
+uv pip install --python $python $wheel
+
+$protoc = (Get-Command protoc).Source
+$plugin = "$PWD\build\quickstart-venv\Scripts\protoc-gen-protocyte.exe"
+cmake -S examples/quickstart -B build/quickstart `
+  "-DPROTOC_EXECUTABLE=$protoc" `
+  "-DPROTOCYTE_PLUGIN_EXECUTABLE=$plugin"
+cmake --build build/quickstart --config Release
+ctest --test-dir build/quickstart -C Release --output-on-failure
+```
+
+[`examples/quickstart/main.cpp`](examples/quickstart/main.cpp) mutates a
+generated message, serializes it into a byte vector, parses those bytes into a
+new message, and verifies the value. CI compiles and runs this exact source as
+part of the complete install-to-round-trip path:
+
+<!-- quickstart-main-start -->
+```cpp
+#include <vector>
+
+#include <protocyte/runtime/runtime.hpp>
+
+#include "quickstart.protocyte.hpp"
+
+int main() {
+    auto encode_ctx = protocyte::DefaultConfig::Context {
+        protocyte::hosted_allocator(),
+        protocyte::Limits {},
+    };
+    auto reading = demo::quickstart::Reading<>::create(encode_ctx);
+    reading.set_value(42u);
+
+    const auto size = reading.encoded_size();
+    if (!size) {
+        return 1;
+    }
+
+    std::vector<protocyte::u8> encoded(*size);
+    const auto written = reading.serialize(encoded);
+    if (!written || *written != encoded.size()) {
+        return 2;
+    }
+
+    auto decode_ctx = protocyte::DefaultConfig::Context {
+        protocyte::hosted_allocator(),
+        protocyte::Limits {},
+    };
+    const auto parsed = demo::quickstart::Reading<>::parse(decode_ctx, encoded);
+    if (!parsed || (*parsed).value() != 42u) {
+        return 3;
+    }
+
+    return 0;
+}
+```
+<!-- quickstart-main-end -->
+
+On POSIX systems, the virtual-environment executables are under
+`build/quickstart-venv/bin` instead of `Scripts`.
+
 ## AI Disclosure
 
 This repository contains a mix of human-written and AI-assisted work. Some
