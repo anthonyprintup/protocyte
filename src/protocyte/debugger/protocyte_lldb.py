@@ -601,20 +601,22 @@ def hash_map_summary(value, _internal_dict):
 
 def slice_reader_summary(value, _internal_dict):
     pos = _unsigned(_child(value, "pos_"), 0)
+    base = _unsigned(_child(value, "base_offset_"), 0)
     size = _unsigned(_child(value, "size_"), 0)
-    return f"pos={pos}, size={size}, remaining={max(size - pos, 0)}"
+    return f"pos={base + pos}, size={size}, remaining={max(size - pos, 0)}"
 
 
 def limited_reader_summary(value, _internal_dict):
     remaining = _unsigned(_child(value, "remaining_"), 0)
     pos = _unsigned(_child(value, "pos_"), 0)
-    return f"pos={pos}, remaining={remaining}"
+    return f"consumed={pos}, remaining={remaining}"
 
 
 def slice_writer_summary(value, _internal_dict):
     pos = _unsigned(_child(value, "pos_"), 0)
+    base = _unsigned(_child(value, "base_offset_"), 0)
     capacity = _unsigned(_child(value, "capacity_"), 0)
-    return f"pos={pos}, capacity={capacity}, remaining={max(capacity - pos, 0)}"
+    return f"pos={base + pos}, capacity={capacity}, remaining={max(capacity - pos, 0)}"
 
 
 class VectorSyntheticProvider:

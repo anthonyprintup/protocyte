@@ -269,6 +269,11 @@ namespace protocyte {
         u32 field_number {};
     };
 
+    constexpr Error with_field(Error error, const u32 field_number) noexcept {
+        error.field_number = field_number;
+        return error;
+    }
+
     template<class E> struct Unexpected {
         using error_type = E;
 
@@ -1445,6 +1450,13 @@ namespace protocyte {
     };
 
     using Status = Result<void>;
+
+    template<class T> constexpr Result<T> with_field(Result<T> result, const u32 field_number) noexcept {
+        if (!result) {
+            result.error().field_number = field_number;
+        }
+        return result;
+    }
 
     inline constexpr usize dynamic_extent {static_cast<usize>(~static_cast<usize>(0u))};
 
@@ -2862,7 +2874,7 @@ namespace protocyte {
         void clear() noexcept { bytes_.clear(); }
         Status copy_from(const UnknownFieldStorage &other, const usize maximum) noexcept {
             if (other.size() > maximum) {
-                return protocyte::unexpected(ErrorCode::size_limit, other.size());
+                return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             return bytes_.copy_from(other.bytes_);
         }
@@ -3805,24 +3817,25 @@ namespace protocyte {
     }
 
     struct SliceReader {
-        SliceReader(const u8 *data, const usize size) noexcept: data_ {data}, size_ {size} {}
+        SliceReader(const u8 *data, const usize size, const usize base_offset = {}) noexcept:
+            data_ {data}, size_ {size}, base_offset_ {base_offset} {}
         bool eof() const noexcept { return pos_ >= size_; }
-        usize position() const noexcept { return pos_; }
+        usize position() const noexcept { return base_offset_ + pos_; }
         Status can_read(const usize count) const noexcept {
             if (count > size_ - pos_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             return {};
         }
         Result<u8> read_byte() noexcept {
             if (pos_ >= size_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             return data_[pos_++];
         }
         Status read(u8 *out, const usize count) noexcept {
             if (count > size_ - pos_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             copy_bytes(out, data_ + pos_, count);
             pos_ += count;
@@ -3830,7 +3843,7 @@ namespace protocyte {
         }
         Status skip(const usize count) noexcept {
             if (count > size_ - pos_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             pos_ += count;
             return {};
@@ -3839,12 +3852,13 @@ namespace protocyte {
     protected:
         const u8 *data_;
         usize size_;
+        usize base_offset_ {};
         usize pos_ {};
     };
 
     template<class BudgetReader> struct StagedReader {
-        StagedReader(const Span<const u8> bytes, BudgetReader &budget_reader) noexcept:
-            reader_ {bytes.data(), bytes.size()}, budget_reader_ {&budget_reader} {}
+        StagedReader(const Span<const u8> bytes, BudgetReader &budget_reader, const usize base_offset = {}) noexcept:
+            reader_ {bytes.data(), bytes.size(), base_offset}, budget_reader_ {&budget_reader} {}
 
         bool eof() const noexcept { return reader_.eof(); }
         usize position() const noexcept { return reader_.position(); }
@@ -3853,10 +3867,20 @@ namespace protocyte {
         Status read(u8 *out, const usize count) noexcept { return reader_.read(out, count); }
         Status skip(const usize count) noexcept { return reader_.skip(count); }
         Status consume_repeated_elements(const usize count, const u32 field_number) noexcept {
-            return budget_reader_->consume_repeated_elements(count, field_number);
+            if (const auto st = budget_reader_->consume_repeated_elements(count, field_number); !st) {
+                auto error = st.error();
+                error.offset = position();
+                return protocyte::unexpected(error);
+            }
+            return {};
         }
         Status consume_map_entries(const usize count, const u32 field_number) noexcept {
-            return budget_reader_->consume_map_entries(count, field_number);
+            if (const auto st = budget_reader_->consume_map_entries(count, field_number); !st) {
+                auto error = st.error();
+                error.offset = position();
+                return protocyte::unexpected(error);
+            }
+            return {};
         }
 
     protected:
@@ -4009,16 +4033,16 @@ namespace protocyte {
     template<class Reader> struct LimitedReader {
         LimitedReader(Reader &inner, const usize remaining) noexcept: inner_ {&inner}, remaining_ {remaining} {}
         bool eof() const noexcept { return !remaining_; }
-        usize position() const noexcept { return pos_; }
+        usize position() const noexcept { return inner_->position(); }
         Status can_read(const usize count) const noexcept {
             if (count > remaining_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             return inner_->can_read(count);
         }
         Result<u8> read_byte() noexcept {
             if (!remaining_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             auto byte = inner_->read_byte();
             if (!byte) {
@@ -4030,7 +4054,7 @@ namespace protocyte {
         }
         Status read(u8 *out, const usize count) noexcept {
             if (count > remaining_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             if (const auto st = inner_->read(out, count); !st) {
                 return st;
@@ -4041,7 +4065,7 @@ namespace protocyte {
         }
         Status skip(const usize count) noexcept {
             if (count > remaining_) {
-                return protocyte::unexpected(ErrorCode::unexpected_eof, pos_);
+                return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             if (const auto st = inner_->skip(count); !st) {
                 return st;
@@ -4121,19 +4145,20 @@ namespace protocyte {
     };
 
     struct SliceWriter {
-        SliceWriter(u8 *data, const usize capacity) noexcept: data_ {data}, capacity_ {capacity} {}
-        usize position() const noexcept { return pos_; }
+        SliceWriter(u8 *data, const usize capacity, const usize base_offset = {}) noexcept:
+            data_ {data}, capacity_ {capacity}, base_offset_ {base_offset} {}
+        usize position() const noexcept { return base_offset_ + pos_; }
         bool can_write(const usize count) const noexcept { return count <= capacity_ - pos_; }
         Status write_byte(const u8 value) noexcept {
             if (pos_ >= capacity_) {
-                return protocyte::unexpected(ErrorCode::size_limit, pos_);
+                return protocyte::unexpected(ErrorCode::size_limit, position());
             }
             data_[pos_++] = value;
             return {};
         }
         Status write(const u8 *data, const usize count) noexcept {
             if (count > capacity_ - pos_) {
-                return protocyte::unexpected(ErrorCode::size_limit, pos_);
+                return protocyte::unexpected(ErrorCode::size_limit, position());
             }
             copy_bytes(data_ + pos_, data, count);
             pos_ += count;
@@ -4142,6 +4167,7 @@ namespace protocyte {
     protected:
         u8 *data_;
         usize capacity_;
+        usize base_offset_ {};
         usize pos_ {};
     };
 
@@ -4463,31 +4489,31 @@ namespace protocyte {
         }
         const usize count {byte_count / sizeof(Scalar)};
         if (const auto st = reader.can_read(byte_count); !st) {
-            return st;
+            return with_field(st, field_number);
         }
         if (const auto st = reader.consume_repeated_elements(count, field_number); !st) {
-            return st;
+            return with_field(st, field_number);
         }
         const usize old_size {out.size()};
         const auto total = checked_add(old_size, count);
         if (!total) {
-            return total.status();
+            return with_field(total.status(), field_number);
         }
         if (const auto st = out.resize_for_overwrite(*total); !st) {
-            return st;
+            return with_field(st, field_number);
         }
 
         if constexpr (::std::endian::native == ::std::endian::little) {
             if (const auto st = reader.read(reinterpret_cast<u8 *>(out.data() + old_size), byte_count); !st) {
                 static_cast<void>(out.resize_for_overwrite(old_size));
-                return st;
+                return with_field(st, field_number);
             }
         } else {
             for (usize index {}; index < count; ++index) {
                 auto value = read_fixed_width_packed_value<Scalar>(reader);
                 if (!value) {
                     static_cast<void>(out.resize_for_overwrite(old_size));
-                    return value.status();
+                    return with_field(value.status(), field_number);
                 }
                 out.data()[old_size + index] = *value;
             }
@@ -4525,7 +4551,8 @@ namespace protocyte {
     }
 
     template<class Writer> Status write_tag(Writer &writer, const u32 field_number, const WireType wire_type) noexcept {
-        return write_varint(writer, (static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type));
+        return with_field(write_varint(writer, (static_cast<u64>(field_number) << 3u) | static_cast<u64>(wire_type)),
+                          field_number);
     }
 
     constexpr usize tag_size(const u32 field_number, const WireType wire_type = WireType::LEN) noexcept {
@@ -4557,7 +4584,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_int32(reader);
+        return with_field(read_int32(reader), field_number);
     }
 
     template<class Reader>
@@ -4565,7 +4592,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_int64(reader);
+        return with_field(read_int64(reader), field_number);
     }
 
     template<class Reader>
@@ -4573,7 +4600,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_uint32(reader);
+        return with_field(read_uint32(reader), field_number);
     }
 
     template<class Reader>
@@ -4581,7 +4608,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_uint64(reader);
+        return with_field(read_uint64(reader), field_number);
     }
 
     template<class Reader>
@@ -4589,7 +4616,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_bool(reader);
+        return with_field(read_bool(reader), field_number);
     }
 
     template<class Reader>
@@ -4597,7 +4624,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_enum(reader);
+        return with_field(read_enum(reader), field_number);
     }
 
     template<class Reader>
@@ -4605,7 +4632,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_sint32(reader);
+        return with_field(read_sint32(reader), field_number);
     }
 
     template<class Reader>
@@ -4613,7 +4640,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::VARINT, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_sint64(reader);
+        return with_field(read_sint64(reader), field_number);
     }
 
     template<class Reader>
@@ -4621,7 +4648,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_fixed32_value(reader);
+        return with_field(read_fixed32_value(reader), field_number);
     }
 
     template<class Reader>
@@ -4629,7 +4656,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_fixed64_value(reader);
+        return with_field(read_fixed64_value(reader), field_number);
     }
 
     template<class Reader>
@@ -4637,7 +4664,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_sfixed32(reader);
+        return with_field(read_sfixed32(reader), field_number);
     }
 
     template<class Reader>
@@ -4645,7 +4672,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_sfixed64(reader);
+        return with_field(read_sfixed64(reader), field_number);
     }
 
     template<class Reader>
@@ -4653,7 +4680,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::I32, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_float(reader);
+        return with_field(read_float(reader), field_number);
     }
 
     template<class Reader>
@@ -4661,63 +4688,63 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::I64, field_number); !st) {
             return protocyte::unexpected(st.error());
         }
-        return read_double(reader);
+        return with_field(read_double(reader), field_number);
     }
 
     template<class Writer> Status write_int32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_int32(writer, value);
+        return with_field(write_int32(writer, value), field_number);
     }
 
     template<class Writer> Status write_int64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_int64(writer, value);
+        return with_field(write_int64(writer, value), field_number);
     }
 
     template<class Writer> Status write_uint32_field(Writer &writer, const u32 field_number, const u32 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_uint32(writer, value);
+        return with_field(write_uint32(writer, value), field_number);
     }
 
     template<class Writer> Status write_uint64_field(Writer &writer, const u32 field_number, const u64 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_uint64(writer, value);
+        return with_field(write_uint64(writer, value), field_number);
     }
 
     template<class Writer> Status write_bool_field(Writer &writer, const u32 field_number, const bool value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_bool(writer, value);
+        return with_field(write_bool(writer, value), field_number);
     }
 
     template<class Writer> Status write_enum_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_enum(writer, value);
+        return with_field(write_enum(writer, value), field_number);
     }
 
     template<class Writer> Status write_sint32_field(Writer &writer, const u32 field_number, const i32 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_sint32(writer, value);
+        return with_field(write_sint32(writer, value), field_number);
     }
 
     template<class Writer> Status write_sint64_field(Writer &writer, const u32 field_number, const i64 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::VARINT); !st) {
             return st;
         }
-        return write_sint64(writer, value);
+        return with_field(write_sint64(writer, value), field_number);
     }
 
     template<class Writer>
@@ -4725,7 +4752,7 @@ namespace protocyte {
         if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
             return st;
         }
-        return write_fixed32_value(writer, value);
+        return with_field(write_fixed32_value(writer, value), field_number);
     }
 
     template<class Writer>
@@ -4733,7 +4760,7 @@ namespace protocyte {
         if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
             return st;
         }
-        return write_fixed64_value(writer, value);
+        return with_field(write_fixed64_value(writer, value), field_number);
     }
 
     template<class Writer>
@@ -4741,7 +4768,7 @@ namespace protocyte {
         if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
             return st;
         }
-        return write_sfixed32(writer, value);
+        return with_field(write_sfixed32(writer, value), field_number);
     }
 
     template<class Writer>
@@ -4749,21 +4776,21 @@ namespace protocyte {
         if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
             return st;
         }
-        return write_sfixed64(writer, value);
+        return with_field(write_sfixed64(writer, value), field_number);
     }
 
     template<class Writer> Status write_float_field(Writer &writer, const u32 field_number, const f32 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::I32); !st) {
             return st;
         }
-        return write_float(writer, value);
+        return with_field(write_float(writer, value), field_number);
     }
 
     template<class Writer> Status write_double_field(Writer &writer, const u32 field_number, const f64 value) noexcept {
         if (const auto st = write_tag(writer, field_number, WireType::I64); !st) {
             return st;
         }
-        return write_double(writer, value);
+        return with_field(write_double(writer, value), field_number);
     }
 
     template<class Reader> Result<usize> read_length_delimited_size(Reader &reader) noexcept {
@@ -4794,9 +4821,9 @@ namespace protocyte {
     open_nested_message(typename Config::Context &ctx, Reader &reader, const u32 field_number) noexcept {
         const auto size = read_length_delimited_size(reader);
         if (!size) {
-            return protocyte::unexpected(size.error());
+            return protocyte::unexpected(with_field(size.error(), field_number));
         }
-        return open_nested_message_sized<Config>(ctx, reader, *size, field_number);
+        return with_field(open_nested_message_sized<Config>(ctx, reader, *size, field_number), field_number);
     }
 
     class MessageParseAccess {
@@ -4812,27 +4839,27 @@ namespace protocyte {
     read_message_partial(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
         auto nested = open_nested_message<Config>(ctx, reader, field_number);
         if (!nested) {
-            return nested.status();
+            return with_field(nested.status(), field_number);
         }
         auto &open = *nested;
         auto nested_reader = open.reader_ref();
         if (const auto st = MessageParseAccess::merge_fields_from(out, nested_reader); !st) {
-            return st;
+            return with_field(st, field_number);
         }
-        return open.finish();
+        return with_field(open.finish(), field_number);
     }
 
     template<class Config, class Reader, class Message>
     Status read_message(typename Config::Context &ctx, Reader &reader, const u32 field_number, Message &out) noexcept {
         Message parsed {ctx};
         if (const auto st = parsed.copy_from(out); !st) {
-            return st;
+            return with_field(st, field_number);
         }
         if (const auto st = read_message_partial<Config>(ctx, reader, field_number, parsed); !st) {
-            return st;
+            return with_field(st, field_number);
         }
         if (const auto st = parsed.validate(); !st) {
-            return st;
+            return with_field(st, field_number);
         }
         out = protocyte::move(parsed);
         return {};
@@ -4845,28 +4872,28 @@ namespace protocyte {
         }
         const auto size = value.encoded_size();
         if (!size) {
-            return size.status();
+            return with_field(size.status(), field_number);
         }
         if (const auto st = write_varint(writer, static_cast<u64>(*size)); !st) {
-            return st;
+            return with_field(st, field_number);
         }
-        return value.serialize(writer);
+        return with_field(value.serialize(writer), field_number);
     }
 
     inline Result<usize> length_delimited_field_size(const u32 field_number, const usize payload_size) noexcept {
         const auto prefix_size = checked_add(tag_size(field_number), varint_size(payload_size));
         if (!prefix_size) {
-            return protocyte::unexpected(prefix_size.error());
+            return protocyte::unexpected(with_field(prefix_size.error(), field_number));
         }
-        return checked_add(*prefix_size, payload_size);
+        return with_field(checked_add(*prefix_size, payload_size), field_number);
     }
 
     template<class Message> Result<usize> message_field_size(const u32 field_number, const Message &value) noexcept {
         const auto size = value.encoded_size();
         if (!size) {
-            return protocyte::unexpected(size.error());
+            return protocyte::unexpected(with_field(size.error(), field_number));
         }
-        return length_delimited_field_size(field_number, *size);
+        return with_field(length_delimited_field_size(field_number, *size), field_number);
     }
 
     template<class Config, class Reader>
@@ -4877,20 +4904,20 @@ namespace protocyte {
                                                            const u32 field_number = {}) noexcept {
         switch (wire_type) {
             case WireType::VARINT: {
-                return read_varint(reader).status();
+                return with_field(read_varint(reader).status(), field_number);
             }
-            case WireType::I64: return reader.skip(8u);
+            case WireType::I64: return with_field(reader.skip(8u), field_number);
             case WireType::LEN: {
                 const auto size = read_length_delimited_size(reader);
                 if (!size) {
-                    return size.status();
+                    return with_field(size.status(), field_number);
                 }
-                return reader.skip(*size);
+                return with_field(reader.skip(*size), field_number);
             }
-            case WireType::SGROUP: return skip_group<Config>(ctx, reader, field_number);
+            case WireType::SGROUP: return with_field(skip_group<Config>(ctx, reader, field_number), field_number);
             case WireType::EGROUP:
                 return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);
-            case WireType::I32: return reader.skip(4u);
+            case WireType::I32: return with_field(reader.skip(4u), field_number);
             default: return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field_number);
         }
     }
@@ -4898,24 +4925,25 @@ namespace protocyte {
     template<class Config, class Reader>
     Status skip_group(typename Config::Context &ctx, Reader &reader, const u32 start_field_number) noexcept {
         if (const auto st = push_recursion<Config>(ctx, reader.position(), start_field_number); !st) {
-            return st;
+            return with_field(st, start_field_number);
         }
         for (;;) {
             if (const auto tag = read_tag(reader); !tag) {
                 pop_recursion<Config>(ctx);
-                return tag.status();
+                return with_field(tag.status(), start_field_number);
             } else {
                 const auto [field, wire] = *tag;
                 if (wire == WireType::EGROUP) {
                     pop_recursion<Config>(ctx);
                     if (field != start_field_number) {
-                        return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(), field);
+                        return protocyte::unexpected(ErrorCode::invalid_wire_type, reader.position(),
+                                                     start_field_number);
                     }
                     return {};
                 }
                 if (const auto st = skip_field<Config>(ctx, reader, wire, field); !st) {
                     pop_recursion<Config>(ctx);
-                    return st;
+                    return with_field(st, start_field_number);
                 }
             }
         }
@@ -4961,7 +4989,7 @@ namespace protocyte {
             SliceReader reader {value_.data(), value_.size()};
             const auto decoded = read_varint(reader);
             if (!decoded) {
-                return protocyte::unexpected(decoded.error());
+                return protocyte::unexpected(with_field(decoded.error(), field_number()));
             }
             if (!reader.eof()) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, reader.position(), field_number());
@@ -4974,7 +5002,7 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
             SliceReader reader {value_.data(), value_.size()};
-            return read_fixed32(reader);
+            return with_field(read_fixed32(reader), field_number());
         }
 
         Result<u64> fixed64() const noexcept {
@@ -4982,7 +5010,7 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
             SliceReader reader {value_.data(), value_.size()};
-            return read_fixed64(reader);
+            return with_field(read_fixed64(reader), field_number());
         }
 
         Result<Span<const u8>> length_delimited() const noexcept {
@@ -5012,14 +5040,12 @@ namespace protocyte {
         if (offset >= bytes.size()) {
             return protocyte::unexpected(ErrorCode::unexpected_eof, offset);
         }
-        SliceReader reader {bytes.data() + offset, bytes.size() - offset};
+        SliceReader reader {bytes.data() + offset, bytes.size() - offset, offset};
         const auto tag = read_tag(reader);
         if (!tag) {
-            auto error = tag.error();
-            error.offset += offset;
-            return protocyte::unexpected(error);
+            return protocyte::unexpected(tag.error());
         }
-        const usize value_offset {offset + reader.position()};
+        const usize value_offset {reader.position()};
         usize value_size {};
         usize end_offset {};
         switch (tag->wire_type) {
@@ -5027,42 +5053,38 @@ namespace protocyte {
                 const auto value = read_varint(reader);
                 if (!value) {
                     auto error = value.error();
-                    error.offset += offset;
                     error.field_number = tag->field_number;
                     return protocyte::unexpected(error);
                 }
-                value_size = reader.position() - (value_offset - offset);
-                end_offset = offset + reader.position();
+                value_size = reader.position() - value_offset;
+                end_offset = reader.position();
                 break;
             }
             case WireType::I64: {
                 if (const auto st = reader.skip(8u); !st) {
                     auto error = st.error();
-                    error.offset += offset;
                     error.field_number = tag->field_number;
                     return protocyte::unexpected(error);
                 }
                 value_size = 8u;
-                end_offset = offset + reader.position();
+                end_offset = reader.position();
                 break;
             }
             case WireType::LEN: {
                 const auto size = read_length_delimited_size(reader);
                 if (!size) {
                     auto error = size.error();
-                    error.offset += offset;
                     error.field_number = tag->field_number;
                     return protocyte::unexpected(error);
                 }
-                const usize payload_offset {offset + reader.position()};
+                const usize payload_offset {reader.position()};
                 if (const auto st = reader.skip(*size); !st) {
                     auto error = st.error();
-                    error.offset += offset;
                     error.field_number = tag->field_number;
                     return protocyte::unexpected(error);
                 }
                 value_size = *size;
-                end_offset = offset + reader.position();
+                end_offset = reader.position();
                 return DecodedUnknownField {
                     .field =
                         UnknownFieldView {
@@ -5082,25 +5104,23 @@ namespace protocyte {
                     if (cursor >= bytes.size()) {
                         return protocyte::unexpected(ErrorCode::unexpected_eof, cursor, tag->field_number);
                     }
-                    SliceReader end_reader {bytes.data() + cursor, bytes.size() - cursor};
+                    SliceReader end_reader {bytes.data() + cursor, bytes.size() - cursor, cursor};
                     const auto nested_tag = read_tag(end_reader);
                     if (!nested_tag) {
-                        auto error = nested_tag.error();
-                        error.offset += cursor;
-                        return protocyte::unexpected(error);
+                        return protocyte::unexpected(with_field(nested_tag.error(), tag->field_number));
                     }
                     if (nested_tag->wire_type == WireType::EGROUP) {
                         if (nested_tag->field_number != tag->field_number) {
-                            return protocyte::unexpected(ErrorCode::invalid_wire_type, cursor + end_reader.position(),
-                                                         nested_tag->field_number);
+                            return protocyte::unexpected(ErrorCode::invalid_wire_type, end_reader.position(),
+                                                         tag->field_number);
                         }
-                        end_offset = cursor + end_reader.position();
+                        end_offset = end_reader.position();
                         value_size = cursor - value_offset;
                         break;
                     }
                     const auto nested = decode_unknown_field_at(bytes, cursor, max_recursion_depth - 1u);
                     if (!nested) {
-                        return protocyte::unexpected(nested.error());
+                        return protocyte::unexpected(with_field(nested.error(), tag->field_number));
                     }
                     cursor = nested->next_offset;
                 }
@@ -5109,7 +5129,6 @@ namespace protocyte {
             case WireType::I32: {
                 if (const auto st = reader.skip(4u); !st) {
                     auto error = st.error();
-                    error.offset += offset;
                     error.field_number = tag->field_number;
                     return protocyte::unexpected(error);
                 }
@@ -5218,7 +5237,7 @@ namespace protocyte {
                 ++current;
                 offset = decoded->next_offset;
             }
-            return protocyte::unexpected(ErrorCode::invalid_argument, index);
+            return protocyte::unexpected(ErrorCode::invalid_argument, {});
         }
 
     protected:
@@ -5367,7 +5386,7 @@ namespace protocyte {
             return total.status();
         }
         if (*total > ctx.limits.max_unknown_field_bytes) {
-            return protocyte::unexpected(ErrorCode::size_limit, current.size());
+            return protocyte::unexpected(ErrorCode::size_limit, {});
         }
         UnknownFieldStorage<Config, true> staged {&ctx};
         auto &bytes = staged.mutable_bytes();
@@ -5391,9 +5410,8 @@ namespace protocyte {
         const usize old_size {bytes.size()};
         const auto fail = [&](Error error) noexcept -> Status {
             static_cast<void>(bytes.resize_for_overwrite(old_size));
-            if (!error.field_number) {
-                error.field_number = field_number;
-            }
+            error.offset = reader.position();
+            error.field_number = field_number;
             return protocyte::unexpected(error);
         };
         UnknownFieldWriter<Config> writer {storage, ctx.limits.max_unknown_field_bytes};
@@ -5533,7 +5551,7 @@ namespace protocyte {
         {
             const auto bytes = byte_span_of(value);
             if (!bytes) {
-                return bytes.status();
+                return with_field(bytes.status(), field_number);
             }
             return add_length_delimited(field_number, *bytes);
         }
@@ -5560,7 +5578,7 @@ namespace protocyte {
             auto &output_bytes = output.mutable_bytes();
             const auto current = storage_->bytes();
             if (current.size() > ctx_->limits.max_unknown_field_bytes) {
-                return protocyte::unexpected(ErrorCode::size_limit, current.size());
+                return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             if (const auto st = output_bytes.reserve(current.size()); !st) {
                 return st;
@@ -5655,7 +5673,7 @@ namespace protocyte {
         {
             const auto bytes = byte_span_of(value);
             if (!bytes) {
-                return bytes.status();
+                return with_field(bytes.status(), field_number);
             }
             return replace_length_delimited(index, field_number, *bytes);
         }
@@ -5679,9 +5697,8 @@ namespace protocyte {
             const usize old_size {bytes.size()};
             const auto fail = [&](Error error) noexcept -> Status {
                 static_cast<void>(bytes.resize_for_overwrite(old_size));
-                if (!error.field_number) {
-                    error.field_number = field_number;
-                }
+                error.offset = {};
+                error.field_number = field_number;
                 return protocyte::unexpected(error);
             };
             UnknownFieldWriter<Config> writer {*storage_, ctx_->limits.max_unknown_field_bytes};
@@ -5701,14 +5718,13 @@ namespace protocyte {
             }
             const auto current = storage_->bytes();
             if (current.size() > ctx_->limits.max_unknown_field_bytes) {
-                return protocyte::unexpected(ErrorCode::size_limit, current.size(), field_number);
+                return protocyte::unexpected(ErrorCode::size_limit, {}, field_number);
             }
             Storage output {ctx_};
             auto &output_bytes = output.mutable_bytes();
             const auto fail = [&](Error error) noexcept -> Status {
-                if (!error.field_number) {
-                    error.field_number = field_number;
-                }
+                error.offset = {};
+                error.field_number = field_number;
                 return protocyte::unexpected(error);
             };
             if (const auto st = output_bytes.reserve(current.size()); !st) {
@@ -5741,7 +5757,7 @@ namespace protocyte {
                 ++current;
             }
             if (current != index) {
-                return protocyte::unexpected(ErrorCode::invalid_argument, index);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
             return offset;
         }
@@ -5762,7 +5778,7 @@ namespace protocyte {
                 return first.status();
             }
             if (*first >= bytes.size()) {
-                return protocyte::unexpected(ErrorCode::invalid_argument, index);
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
             const auto decoded = decode_unknown_field_at(bytes, *first, ctx_->limits.max_recursion_depth);
             if (!decoded) {
@@ -5775,7 +5791,7 @@ namespace protocyte {
                 return total.status();
             }
             if (*total > ctx_->limits.max_unknown_field_bytes) {
-                return protocyte::unexpected(ErrorCode::size_limit, *first);
+                return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             typename Config::template Vector<u8> output {ctx_};
             if (const auto st = output.reserve(*total); !st) {
@@ -5811,7 +5827,9 @@ namespace protocyte {
         }
         typename Config::Bytes temp {&ctx};
         if (const auto st = temp.resize_for_overwrite(size); !st) {
-            return st;
+            auto error = st.error();
+            error.offset = reader.position();
+            return protocyte::unexpected(error);
         }
         auto buffer = temp.mutable_view();
         if (const auto st = reader.read(buffer.data(), buffer.size()); !st) {
@@ -5836,7 +5854,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number); !st) {
             return st;
         }
-        return read_bytes<Config>(ctx, reader, out);
+        return with_field(read_bytes<Config>(ctx, reader, out), field_number);
     }
 
     template<class Config, class Reader> Status read_string_sized(typename Config::Context &ctx, Reader &reader,
@@ -5850,14 +5868,18 @@ namespace protocyte {
         }
         typename Config::String temp {&ctx};
         if (const auto st = temp.resize_for_overwrite(size); !st) {
-            return st;
+            auto error = st.error();
+            error.offset = reader.position();
+            return protocyte::unexpected(error);
         }
         auto bytes = temp.mutable_view_for_overwrite();
         if (const auto st = reader.read(bytes.data(), bytes.size()); !st) {
             return st;
         }
         if (const auto st = temp.validate(); !st) {
-            return st;
+            auto error = st.error();
+            error.offset = reader.position();
+            return protocyte::unexpected(error);
         }
         out = protocyte::move(temp);
         return {};
@@ -5878,7 +5900,7 @@ namespace protocyte {
         if (const auto st = expect_wire_type(reader, wire_type, WireType::LEN, field_number); !st) {
             return st;
         }
-        return read_string<Config>(ctx, reader, out);
+        return with_field(read_string<Config>(ctx, reader, out), field_number);
     }
 
     template<class Writer> Status write_bytes(Writer &writer, const Span<const u8> view) noexcept {
@@ -5893,7 +5915,7 @@ namespace protocyte {
         if (const auto st = write_tag(writer, field_number, WireType::LEN); !st) {
             return st;
         }
-        return write_bytes(writer, view);
+        return with_field(write_bytes(writer, view), field_number);
     }
 
     template<class Writer>
@@ -5907,9 +5929,9 @@ namespace protocyte {
     {
         const auto bytes = byte_span_of(view);
         if (!bytes) {
-            return bytes.status();
+            return with_field(bytes.status(), field_number);
         }
-        return write_string_field(writer, field_number, *bytes);
+        return with_field(write_string_field(writer, field_number, *bytes), field_number);
     }
 
     inline Result<usize> add_size(const usize total, const usize value) noexcept { return checked_add(total, value); }

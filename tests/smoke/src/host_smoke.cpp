@@ -3220,6 +3220,12 @@ TEST_CASE("unknown field raw ranges are canonicalized and recursion-limited", "[
         protocyte::Span<const protocyte::u8> {deeply_nested.data(), deeply_nested.size()}};
     require_failure(deeply_nested_range.field(0u), protocyte::ErrorCode::recursion_limit);
 
+    static constexpr uint8_t malformed_group[] = {0x2bu, 0x80u};
+    const auto malformed = protocyte::UnknownFieldRange {view_of(malformed_group)}.field(0u);
+    require_failure(malformed, protocyte::ErrorCode::unexpected_eof);
+    CHECK(malformed.error().offset == 2u);
+    CHECK(malformed.error().field_number == 5u);
+
     message.clear_unknown_fields();
     ctx.limits.max_recursion_depth = 4u;
     static constexpr uint8_t exceeds_context_depth[] = {
@@ -3258,7 +3264,10 @@ TEST_CASE("unknown field byte limits roll back only the failing occurrence", "[s
         0xa8u, 0x06u, 0x02u, // Field 101 would take the total past four bytes.
     };
     protocyte::SliceReader reader {encoded, sizeof(encoded)};
-    require_failure(message.merge_from(reader), protocyte::ErrorCode::size_limit);
+    const auto status = message.merge_from(reader);
+    require_failure(status, protocyte::ErrorCode::size_limit);
+    CHECK(status.error().offset == 5u);
+    CHECK(status.error().field_number == 101u);
 
     REQUIRE(message.unknown_field_count() == 1u);
     static constexpr uint8_t retained[] = {0xa0u, 0x06u, 0x01u};
@@ -3990,6 +3999,204 @@ TEST_CASE("read_varint rejects truncated and overflowing byte sequences", "[smok
 
         require_failure(value, protocyte::ErrorCode::malformed_varint);
         CHECK(reader.position() == overflowing.size());
+    }
+}
+
+TEST_CASE("reader failures retain the top-level absolute coordinate", "[smoke][runtime][diagnostics]") {
+    constexpr std::array<protocyte::u8, 1u> truncated {0x80u};
+
+    SECTION("slice readers can describe a nonzero source base") {
+        protocyte::SliceReader reader(truncated.data(), truncated.size(), 17u);
+
+        const auto value = protocyte::read_varint(reader);
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(value.error().offset == 18u);
+        CHECK(reader.position() == 18u);
+    }
+
+    SECTION("limited-reader boundary failures use the inner coordinate") {
+        protocyte::SliceReader reader(truncated.data(), truncated.size(), 17u);
+        protocyte::LimitedReader limited(reader, truncated.size());
+
+        const auto value = protocyte::read_varint(limited);
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(value.error().offset == 18u);
+        CHECK(limited.position() == 18u);
+    }
+
+    SECTION("limited-reader failures before consumption preserve the source base") {
+        protocyte::SliceReader reader(truncated.data(), truncated.size(), 17u);
+        protocyte::LimitedReader limited(reader, 0u);
+
+        const auto value = limited.read_byte();
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(value.error().offset == 17u);
+        CHECK(limited.position() == 17u);
+    }
+
+    SECTION("slice writers can describe a nonzero destination base") {
+        std::array<protocyte::u8, 1u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), encoded.size(), 31u);
+        require_success(writer.write_byte(0x01u));
+
+        const auto status = writer.write_byte(0x02u);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 32u);
+        CHECK(writer.position() == 32u);
+    }
+}
+
+TEST_CASE("generated errors identify the containing field", "[smoke][runtime][diagnostics]") {
+    SECTION("nested parse failures retain absolute offsets and the root field") {
+        auto ctx = make_context();
+        constexpr std::array<protocyte::u8, 4u> encoded {0x0au, 0x02u, 0x08u, 0x80u};
+        protocyte::SliceReader reader(encoded.data(), encoded.size(), 40u);
+
+        const auto parsed = RequiredParent::parse(ctx, reader);
+
+        require_failure(parsed, protocyte::ErrorCode::unexpected_eof);
+        CHECK(parsed.error().offset == 44u);
+        CHECK(parsed.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::child));
+    }
+
+    SECTION("nested validation failures identify the root repeated field") {
+        auto ctx = make_context();
+        constexpr std::array<protocyte::u8, 5u> encoded {0x12u, 0x03u, 0x12u, 0x01u, 'x'};
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+        const auto parsed = RequiredParent::parse(ctx, reader);
+
+        require_failure(parsed, protocyte::ErrorCode::invalid_argument);
+        CHECK(parsed.error().offset == 0u);
+        CHECK(parsed.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::children));
+    }
+
+    SECTION("staged map parsing retains the original payload coordinate") {
+        auto ctx = make_context();
+        constexpr std::array<protocyte::u8, 8u> encoded {0x9au, 0x01u, 0x05u, 0x0au, 0x01u, 0xffu, 0x10u, 0x09u};
+        protocyte::SliceReader reader(encoded.data(), encoded.size(), 20u);
+
+        const auto parsed = PreservingProto2DefaultValues::parse(ctx, reader);
+
+        require_failure(parsed, protocyte::ErrorCode::invalid_utf8);
+        CHECK(parsed.error().offset == 26u);
+        CHECK(parsed.error().field_number ==
+              static_cast<protocyte::u32>(PreservingProto2DefaultValues::FieldNumber::enum_by_name));
+    }
+
+    SECTION("serialization failures identify the active output field") {
+        auto ctx = make_context();
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredChild value(ctx);
+        value.set_id(42);
+        require_success(value.set_note(view_of(note)));
+        std::array<protocyte::u8, 2u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), encoded.size());
+
+        const auto status = value.serialize(writer);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 2u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredChild::FieldNumber::note));
+    }
+
+    SECTION("nested serialization failures identify the containing field") {
+        auto ctx = make_context();
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredParent value(ctx);
+        const auto child = value.ensure_child();
+        require_success(child);
+        child->set_id(42);
+        require_success(child->set_note(view_of(note)));
+        std::array<protocyte::u8, 6u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), encoded.size());
+
+        const auto status = value.serialize(writer);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 6u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::child));
+    }
+
+    SECTION("map serialization failures do not expose synthetic entry fields") {
+        auto ctx = make_context();
+        constexpr protocyte::u8 key_bytes[] {'x'};
+        Message value(ctx);
+        Config::String key {&ctx};
+        assign_string(key, view_of(key_bytes));
+        require_success(value.mutable_map_str_int32().insert_or_assign(protocyte::move(key), 1));
+        constexpr auto field_number = static_cast<protocyte::u32>(Message::FieldNumber::map_str_int32);
+        constexpr protocyte::usize entry_payload_size {5u};
+        const protocyte::usize prefix_size {protocyte::tag_size(field_number) +
+                                            protocyte::varint_size(entry_payload_size)};
+        std::array<protocyte::u8, 16u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), prefix_size, 70u);
+
+        const auto status = value.serialize(writer);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 70u + prefix_size);
+        CHECK(status.error().field_number == field_number);
+    }
+
+    SECTION("deep-copy failures identify the containing field") {
+        auto source_ctx = make_context();
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredParent source(source_ctx);
+        const auto child = source.ensure_child();
+        require_success(child);
+        child->set_id(42);
+        require_success(child->set_note(view_of(note)));
+
+        auto target_ctx = make_context();
+        target_ctx.limits.max_string_bytes = 0u;
+        RequiredParent target(target_ctx);
+
+        const auto status = target.copy_from(source);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 0u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::child));
+    }
+
+    SECTION("field mutation failures identify the mutated field without inventing an offset") {
+        auto ctx = make_context();
+        ctx.limits.max_string_bytes = 0u;
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredChild value(ctx);
+
+        const auto status = value.set_note(view_of(note));
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 0u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredChild::FieldNumber::note));
+    }
+}
+
+TEST_CASE("non-stream errors do not masquerade as byte offsets", "[smoke][runtime][diagnostics]") {
+    SECTION("range indexes are not byte coordinates") {
+        const protocyte::UnknownFieldRange fields {};
+
+        const auto missing = fields.field(3u);
+
+        require_failure(missing, protocyte::ErrorCode::invalid_argument);
+        CHECK(missing.error().offset == 0u);
+    }
+
+    SECTION("unknown-field mutation does not expose internal storage positions") {
+        auto ctx = make_context();
+        ctx.limits.max_unknown_field_bytes = 1u;
+        PreservingCompatMessage message(ctx);
+
+        const auto status = message.mutable_unknown_fields().add_varint(100u, 1u);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 0u);
+        CHECK(status.error().field_number == 100u);
     }
 }
 

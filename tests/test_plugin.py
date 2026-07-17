@@ -919,6 +919,21 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "protected:" in files["protocyte/runtime/runtime.hpp"]
     assert "protected:" in files["simple.protocyte.hpp"]
     assert "enum class ErrorCode : u32" in files["protocyte/runtime/runtime.hpp"]
+    assert (
+        "struct Error {\n        ErrorCode code {};\n        usize offset {};\n        u32 field_number {};\n    };"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "constexpr Error with_field(Error error, const u32 field_number) noexcept"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    error_body = files["protocyte/runtime/runtime.hpp"].split(
+        "struct Error {", maxsplit=1
+    )[1].split("};", maxsplit=1)[0]
+    assert "String" not in error_body
+    assert "char" not in error_body
+    assert "path" not in error_body
+    assert "name" not in error_body
     assert "enum class WireType : u32" in files["protocyte/runtime/runtime.hpp"]
     assert "VARINT = 0u" in files["protocyte/runtime/runtime.hpp"]
     assert "I64 = 1u" in files["protocyte/runtime/runtime.hpp"]
@@ -1276,7 +1291,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "return checked_add(*prefix_size, payload_size);"
+        "return with_field(checked_add(*prefix_size, payload_size), field_number);"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1292,7 +1307,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "return length_delimited_field_size(field_number, *size);"
+        "return with_field(length_delimited_field_size(field_number, *size), field_number);"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -2296,6 +2311,8 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "merge_partial_from" not in header
     assert "friend class ::protocyte::MessageParseAccess;" in header
     assert "ctx_->recursion_depth != 0u" not in header
+    assert "::protocyte::Status merge_field_from_(" in header
+    assert "const auto field_status = [&]" not in header
     assert "::protocyte::Status merge_fields_from(Reader& reader) noexcept" in header
     assert (
         "::protocyte::ParseBudgetReader<Reader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
@@ -2304,7 +2321,11 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "::protocyte::Status validate() const noexcept" in header
     assert "if (const auto st = validate(); !st) { return st; }" in header
     assert (
-        "if (const auto st = ::protocyte::write_fixed_width_packed_values(writer, samples_.data(), samples_.size()); !st) { return st; }"
+        "::protocyte::write_fixed_width_packed_values(writer, samples_.data(), samples_.size())"
+        in header
+    )
+    assert (
+        "return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::samples));"
         in header
     )
     assert "for (const auto &packed_value_samples : samples_) {" not in header
@@ -2504,19 +2525,19 @@ def test_generated_validation_checks_every_string_storage_shape() -> None:
     )
     assert "if (const auto st = name_.validate(); !st) {" in header
     assert (
-        "st.error().code, st.error().offset, "
+        "st.error().code, {}, "
         "static_cast<::protocyte::u32>(FieldNumber::name)"
     ) in header
     assert "for (const auto &aliases_value : aliases_) {" in header
     assert "if (const auto st = aliases_value.validate(); !st) {" in header
     assert (
-        "st.error().code, st.error().offset, "
+        "st.error().code, {}, "
         "static_cast<::protocyte::u32>(FieldNumber::aliases)"
     ) in header
     assert "if (choice_case_ == ChoiceCase::choice_text) {" in header
     assert "if (const auto st = choice_.choice_text_.validate(); !st) {" in header
     assert (
-        "st.error().code, st.error().offset, "
+        "st.error().code, {}, "
         "static_cast<::protocyte::u32>(FieldNumber::choice_text)"
     ) in header
     assert "for (const auto &labels_entry : labels_) {" in header
@@ -2524,7 +2545,7 @@ def test_generated_validation_checks_every_string_storage_shape() -> None:
     assert "if (const auto st = labels_entry.value.validate(); !st) {" in header
     assert (
         header.count(
-            "st.error().code, st.error().offset, "
+            "st.error().code, {}, "
             "static_cast<::protocyte::u32>(FieldNumber::labels)"
         )
         == 2
@@ -4282,7 +4303,8 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "const auto view = ::protocyte::cstring_byte_span_of(value);" not in header
     assert "const auto view = ::protocyte::text_byte_span_of(value);" not in header
     assert "if (!view)" in header
-    assert "return view.status();" in header
+    assert "return ::protocyte::with_field(view.status()," in header
+    assert "FieldNumber::blob" in header
     assert "if (const auto st = blob_.assign(*view); !st)" in header
     assert "if (*len != 32u)" in header
     assert "if (!values_.empty() && values_.size() != 4u) {" in header
@@ -4475,7 +4497,9 @@ def test_generated_header_copies_oneof_state() -> None:
     assert "if (const auto st = set_text(source.text()); !st) {" in header
     assert "return st;" in header
     assert "const auto ensured_inner = ensure_inner();" in header
-    assert "if (!ensured_inner) { return ensured_inner.status(); }" in header
+    assert "if (!ensured_inner) {" in header
+    assert "return ::protocyte::with_field(ensured_inner.status()," in header
+    assert "FieldNumber::inner" in header
     assert (
         "if (const auto st = ensured_inner->copy_from(*source.inner()); !st) {"
         in header
@@ -4932,9 +4956,9 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
         "return has_inner() && choice_.inner_.has_value() ? choice_.inner_.operator->() : nullptr;"
         in header
     )
-    assert (
-        "if (const auto st = choice_.inner_->validate(); !st) { return st; }" in header
-    )
+    assert "if (const auto st = choice_.inner_->validate(); !st) {" in header
+    assert "return ::protocyte::with_field(st," in header
+    assert "FieldNumber::inner" in header
     assert "(*choice_.inner_).validate()" not in header
     assert (
         "::protocyte::Result<::demo::Carrier_Inner<Config>&> ensure_inner() noexcept"
@@ -4944,7 +4968,8 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "new (&choice_.none_)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none_;" not in header
     assert "if (const auto st = choice_.inner_.emplace(*ctx_); !st) {" in header
-    assert "return ::protocyte::unexpected(st.error());" in header
+    assert "return ::protocyte::unexpected(" in header
+    assert "::protocyte::with_field(st.error()," in header
     assert "return *choice_.inner_;" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
@@ -5174,9 +5199,10 @@ def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
 
     assert "auto ensured = choice_.child_.ensure();" in ensure_body
     assert (
-        "if (!ensured) {\n      destroy_at_(&choice_.child_);\n      return ensured;\n    }"
+        "if (!ensured) {\n      destroy_at_(&choice_.child_);\n      return ::protocyte::with_field("
         in ensure_body
     )
+    assert "FieldNumber::child" in ensure_body
     assert ensure_body.index(
         "auto ensured = choice_.child_.ensure();"
     ) < ensure_body.index("choice_case_ = ChoiceCase::child;")

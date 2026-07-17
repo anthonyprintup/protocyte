@@ -382,6 +382,9 @@ Custom readers passed to generated parsing must provide `eof()`, `position()`,
 `can_read(count)`, `read_byte()`, `read(out, count)`, and `skip(count)`.
 `can_read(count)` returns `::protocyte::Status` without consuming input; it is a
 required reader operation, not an optional packed-field optimization.
+`position()` must remain in the top-level input coordinate through nested
+reader adapters. `SliceReader` accepts an optional third `base_offset` argument
+when it represents a subrange.
 Parse readers passed between nested generated messages also provide
 `consume_repeated_elements(count, field_number)` and
 `consume_map_entries(count, field_number)`. `ParseBudgetReader` implements the
@@ -391,6 +394,7 @@ Custom writers passed to generated serialization must provide
 `can_write(count)`, `write_byte(value)`, and `write(data, count)`.
 `can_write(count)` returns `bool` without consuming output capacity; it is a
 required writer operation, not an optional packed-field optimization.
+`SliceWriter` accepts the same optional `base_offset` argument for subranges.
 
 If protocyte was installed to a prefix instead of being consumed directly from a
 checkout, the manual `protoc`/custom-command pattern above can be replaced with

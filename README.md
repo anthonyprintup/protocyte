@@ -849,9 +849,12 @@ Readers passed to generated `parse()` or `merge_from()` are required to expose
 `eof()`, `position()`, `can_read(count)`, `read_byte()`, `read(out, count)`, and
 `skip(count)`. `can_read(count)` returns `::protocyte::Status`, does not consume
 input, and is part of the reader contract rather than an optional fast-path
-hook. `SliceReader`, `ReaderRef`, `ParseBudgetReader`, and `LimitedReader` all
-implement this transport contract. Parse readers passed between generated
-nested messages additionally expose `consume_repeated_elements(count,
+hook. `position()` is an absolute byte coordinate within the top-level input;
+reader adapters must preserve that coordinate rather than restarting at zero.
+`SliceReader(data, size, base_offset)` accepts an optional source base for
+subranges. `ReaderRef`, `ParseBudgetReader`, `LimitedReader`, and staged map
+readers preserve the wrapped reader's coordinate. Parse readers passed between
+generated nested messages additionally expose `consume_repeated_elements(count,
 field_number)` and `consume_map_entries(count, field_number)`, both returning
 `::protocyte::Status`. `ParseBudgetReader` owns those counters; `ReaderRef` and
 `LimitedReader` forward them unconditionally.
@@ -860,7 +863,8 @@ Writers passed to generated `serialize()` are required to expose
 `can_write(count)`, `write_byte(value)`, and `write(data, count)`.
 `can_write(count)` returns `bool`, does not consume output capacity, and is part
 of the writer contract rather than an optional bulk-write optimization.
-`SliceWriter` implements this contract.
+`SliceWriter(data, size, base_offset)` implements this contract and accepts the
+same optional absolute base for a subrange.
 
 Generated messages are move-only. Ordinary C++ copying is deleted because it
 cannot report allocation failure.
@@ -875,6 +879,37 @@ Common generated operations include:
 - `copy_from(source)` and `copy_from(source, staging_message)`
 - `clone()` and `clone(output)`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
+
+### Error Diagnostics
+
+Runtime and generated failures remain allocation-free and reflection-free:
+
+```cpp
+struct Error {
+    ErrorCode code {};
+    usize offset {};
+    u32 field_number {};
+};
+```
+
+The numeric members have these contracts:
+
+- `code` identifies the failure category through `ErrorCode`.
+- `offset` is the absolute reader or writer position in the top-level byte
+  coordinate. It is `0` when the failure has no meaningful I/O position, such
+  as validation, API misuse, or an allocation failure outside parsing. It is
+  never a container size or element index.
+- `field_number` identifies the field on the message operation that returned
+  the failure. Nested message failures are contained by their outer field, and
+  map-entry key/value failures identify the public map field rather than the
+  synthetic entry fields `1` or `2`. It is `0` when no message field is known.
+
+No field names, nested paths, source identifiers, or formatted diagnostic
+strings are stored in `Error`. Applications that need names can map the numeric
+field themselves; doing so is separate from the core runtime and is not needed
+for these diagnostics. Custom field-aware helpers can use
+`::protocyte::with_field(error_or_result, field_number)` to apply the same
+containment rule.
 
 ### Unknown Fields
 

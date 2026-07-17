@@ -646,6 +646,41 @@ def test_span_provider_registers_and_displays_indexed_children_with_raw_view(
     assert _child_names(provider) == ["[0]", "[1]", "Raw View"]
 
 
+def test_reader_and_writer_summaries_use_absolute_slice_positions(
+    protocyte_lldb_module,
+) -> None:
+    reader = _FakeLLDBValue(
+        children={
+            "pos_": _FakeLLDBValue("pos_", unsigned=2),
+            "base_offset_": _FakeLLDBValue("base_offset_", unsigned=40),
+            "size_": _FakeLLDBValue("size_", unsigned=10),
+        }
+    )
+    writer = _FakeLLDBValue(
+        children={
+            "pos_": _FakeLLDBValue("pos_", unsigned=3),
+            "base_offset_": _FakeLLDBValue("base_offset_", unsigned=70),
+            "capacity_": _FakeLLDBValue("capacity_", unsigned=12),
+        }
+    )
+    limited = _FakeLLDBValue(
+        children={
+            "pos_": _FakeLLDBValue("pos_", unsigned=4),
+            "remaining_": _FakeLLDBValue("remaining_", unsigned=6),
+        }
+    )
+
+    assert protocyte_lldb_module.slice_reader_summary(reader, {}) == (
+        "pos=42, size=10, remaining=8"
+    )
+    assert protocyte_lldb_module.slice_writer_summary(writer, {}) == (
+        "pos=73, capacity=12, remaining=9"
+    )
+    assert protocyte_lldb_module.limited_reader_summary(limited, {}) == (
+        "consumed=4, remaining=6"
+    )
+
+
 def test_oneof_provider_reads_suffixed_union_storage(
     protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:
