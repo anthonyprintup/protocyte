@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from protocyte import __version__
 from protocyte.descriptor_set import (
     discover_files,
     load_descriptor_set,
+    main as descriptor_set_main,
     validate_descriptor_set,
     validate_virtual_file_name,
 )
@@ -308,7 +310,7 @@ def test_plugin_entrypoint_dispatches_descriptor_set_commands(
     _write_descriptor_set(descriptor_set, _file("api/demo.proto"))
 
     assert plugin_main(["descriptor-set", "list", str(descriptor_set)]) == 0
-    assert capsys.readouterr().out.strip() == "api/demo.proto"
+    assert json.loads(capsys.readouterr().out) == ["api/demo.proto"]
 
 
 def test_plugin_entrypoint_reports_blocked_discovered_type_dependency(
@@ -391,6 +393,40 @@ def test_validate_descriptor_set_rejects_missing_import(tmp_path: Path) -> None:
 def test_validate_virtual_file_name_rejects_unsafe_names(name: str) -> None:
     with pytest.raises(ProtocyteError):
         validate_virtual_file_name(name)
+
+
+@pytest.mark.parametrize("codepoint", [*range(1, 0x20), *range(0x7F, 0xA0)])
+def test_validate_virtual_file_name_accepts_protobuf_control_characters(codepoint: int) -> None:
+    validate_virtual_file_name(f"api/control-{chr(codepoint)}.proto")
+
+
+def test_validate_virtual_file_name_rejects_null_character() -> None:
+    with pytest.raises(ProtocyteError, match="null character"):
+        validate_virtual_file_name("api/nul\0.proto")
+
+
+def test_validate_virtual_file_name_accepts_semicolon() -> None:
+    validate_virtual_file_name("api/one.proto;api/two.proto")
+
+
+def test_descriptor_set_list_encodes_transport_sensitive_names_as_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    names = [
+        "api/one.proto\napi/two.proto",
+        "api/one.proto;api/two.proto",
+        "api/c1\x85.proto",
+    ]
+    _write_descriptor_set(path, *(_file(name) for name in names))
+
+    assert descriptor_set_main(["list", str(path)]) == 0
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == sorted(names)
+    assert captured.out.count("\n") == 1
+    assert captured.err == ""
 
 
 def test_discover_files_skips_google_protobuf_runtime_descriptors(tmp_path: Path) -> None:

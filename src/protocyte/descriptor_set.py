@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
@@ -36,6 +37,8 @@ def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
 def validate_virtual_file_name(name: str) -> None:
     if not name:
         raise ProtocyteError("descriptor file name must not be empty")
+    if "\0" in name:
+        raise ProtocyteError(f"descriptor file name contains a null character: {name!r}")
     if "\\" in name:
         raise ProtocyteError(f"descriptor file name must use '/' separators: {name}")
 
@@ -347,14 +350,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect a protobuf FileDescriptorSet.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    list_parser = subparsers.add_parser("list", help="list generated descriptor files")
+    list_parser = subparsers.add_parser("list", help="list generated descriptor files as JSON")
     list_parser.add_argument("descriptor_set", type=Path)
 
     args = parser.parse_args(argv)
     try:
         if args.command == "list":
-            for name in discover_files(load_descriptor_set(args.descriptor_set)):
-                print(name)
+            print(json.dumps(discover_files(load_descriptor_set(args.descriptor_set))))
             return 0
     except ProtocyteError as exc:
         parser.exit(1, f"protocyte: {exc}\n")

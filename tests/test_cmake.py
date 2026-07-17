@@ -318,9 +318,9 @@ def test_generator_parameter_encoding_uses_hex_transport(tmp_path: Path) -> None
     assert encoded_output.read_text(encoding="utf-8") == expected
 
 
-def test_cmake_discovery_split_normalizes_crlf_descriptor_names(tmp_path: Path) -> None:
+def test_cmake_discovery_json_preserves_semicolon_descriptor_name(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    cmake_script = tmp_path / "split_discovered_names.cmake"
+    cmake_script = tmp_path / "parse_discovered_names.cmake"
     output = tmp_path / "names.txt"
 
     cmake_script.write_text(
@@ -328,7 +328,7 @@ def test_cmake_discovery_split_normalizes_crlf_descriptor_names(tmp_path: Path) 
             [
                 "cmake_minimum_required(VERSION 3.24)",
                 f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
-                '_protocyte_split_discovered_descriptor_names(names "api/one.proto\r\napi/two.proto")',
+                '_protocyte_parse_discovered_descriptor_names(names [==[["api/one;legacy.proto","api/two.proto"]]==])',
                 "foreach(name IN LISTS names)",
                 '    string(APPEND encoded "${name}|")',
                 "endforeach()",
@@ -341,7 +341,7 @@ def test_cmake_discovery_split_normalizes_crlf_descriptor_names(tmp_path: Path) 
 
     subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
 
-    assert output.read_text(encoding="utf-8") == "api/one.proto|api/two.proto|"
+    assert output.read_text(encoding="utf-8") == "api/one;legacy.proto|api/two.proto|"
 
 
 def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(
@@ -760,6 +760,57 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
     headers = (build_dir / "headers.txt").read_text(encoding="utf-8")
     assert "generated/api/demo.protocyte.hpp" in headers
     assert "generated/google/protobuf/timestamp.protocyte.hpp" in headers
+
+
+def test_descriptor_set_discover_preserves_semicolon_in_file_name(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    descriptor_name = "api/demo;legacy.proto"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = descriptor_name
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    protoc = _find_real_protoc(repo_root)
+    plugin = _installed_protocyte_plugin()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_semicolon LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                "    GENERATED_HEADERS_VAR generated_headers",
+                ")",
+                "list(LENGTH generated_headers generated_header_count)",
+                "if(NOT generated_header_count EQUAL 1)",
+                '    message(FATAL_ERROR "expected one generated header, got ${generated_header_count}")',
+                "endif()",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True
+    )
+
+    assert (build_dir / "generated" / "api" / "demo;legacy.protocyte.hpp").is_file()
+    assert (build_dir / "generated" / "api" / "demo;legacy.protocyte.cpp").is_file()
 
 
 def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(

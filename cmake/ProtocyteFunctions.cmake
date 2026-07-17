@@ -115,10 +115,10 @@ function(_protocyte_validate_forwarded_generator_options)
     endforeach()
 endfunction()
 
-function(_protocyte_descriptor_outputs out_headers out_sources out_dir)
+function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_names_var)
     set(headers)
     set(sources)
-    foreach(proto_name IN LISTS ARGN)
+    foreach(proto_name IN LISTS ${proto_names_var})
         _protocyte_validate_descriptor_name("${proto_name}")
         get_filename_component(proto_rel_dir "${proto_name}" DIRECTORY)
         get_filename_component(proto_stem "${proto_name}" NAME_WLE)
@@ -127,18 +127,34 @@ function(_protocyte_descriptor_outputs out_headers out_sources out_dir)
         else()
             set(protocyte_base "${out_dir}/${proto_rel_dir}/${proto_stem}.protocyte")
         endif()
-        list(APPEND headers "${protocyte_base}.hpp")
-        list(APPEND sources "${protocyte_base}.cpp")
+        string(REPLACE ";" "\\;" protocyte_header "${protocyte_base}.hpp")
+        string(REPLACE ";" "\\;" protocyte_source "${protocyte_base}.cpp")
+        list(APPEND headers "${protocyte_header}")
+        list(APPEND sources "${protocyte_source}")
     endforeach()
-    set(${out_headers} ${headers} PARENT_SCOPE)
-    set(${out_sources} ${sources} PARENT_SCOPE)
+    set(${out_headers} "${headers}" PARENT_SCOPE)
+    set(${out_sources} "${sources}" PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_split_discovered_descriptor_names out_var discovered)
-    string(REPLACE "\r\n" "\n" discovered_normalized "${discovered}")
-    string(REPLACE "\r" "\n" discovered_normalized "${discovered_normalized}")
-    string(REPLACE "\n" ";" discovered_list "${discovered_normalized}")
-    set(${out_var} ${discovered_list} PARENT_SCOPE)
+function(_protocyte_parse_discovered_descriptor_names out_var discovered_json)
+    string(JSON discovered_count ERROR_VARIABLE json_error LENGTH "${discovered_json}")
+    if(NOT json_error STREQUAL "NOTFOUND")
+        message(FATAL_ERROR "Protocyte descriptor discovery returned invalid JSON: ${json_error}")
+    endif()
+
+    set(discovered_list)
+    if(discovered_count GREATER 0)
+        math(EXPR discovered_last "${discovered_count} - 1")
+        foreach(index RANGE 0 ${discovered_last})
+            string(JSON discovered_name ERROR_VARIABLE json_error GET "${discovered_json}" ${index})
+            if(NOT json_error STREQUAL "NOTFOUND")
+                message(FATAL_ERROR "Protocyte descriptor discovery returned invalid JSON: ${json_error}")
+            endif()
+            string(REPLACE ";" "\\;" discovered_name "${discovered_name}")
+            list(APPEND discovered_list "${discovered_name}")
+        endforeach()
+    endif()
+    set(${out_var} "${discovered_list}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_discover_descriptor_set out_var descriptor_set)
@@ -179,12 +195,8 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
             "the 'descriptor-set list' command."
         )
     endif()
-    if(discovered STREQUAL "")
-        set(${out_var} "" PARENT_SCOPE)
-        return()
-    endif()
-    _protocyte_split_discovered_descriptor_names(discovered_list "${discovered}")
-    set(${out_var} ${discovered_list} PARENT_SCOPE)
+    _protocyte_parse_discovered_descriptor_names(discovered_list "${discovered}")
+    set(${out_var} "${discovered_list}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_get_internal out_var name)
@@ -821,10 +833,14 @@ function(protocyte_generate)
     if(PROTOCYTE_DESCRIPTOR_SET)
         foreach(proto_file IN LISTS protocyte_proto_files)
             _protocyte_validate_descriptor_name("${proto_file}")
-            list(APPEND normalized_proto_files "${proto_file}")
+            string(SHA256 proto_file_key "${proto_file}")
+            if(DEFINED protocyte_seen_proto_file_${proto_file_key})
+                continue()
+            endif()
+            set(protocyte_seen_proto_file_${proto_file_key} TRUE)
+            string(REPLACE ";" "\\;" proto_file_list_element "${proto_file}")
+            list(APPEND normalized_proto_files "${proto_file_list_element}")
         endforeach()
-        list(REMOVE_DUPLICATES normalized_proto_files)
-        list(SORT normalized_proto_files)
     else()
         foreach(proto_file IN LISTS protocyte_proto_files)
             if(IS_ABSOLUTE "${proto_file}")
@@ -876,7 +892,12 @@ function(protocyte_generate)
     set(protocyte_generated_headers)
     set(protocyte_generated_sources)
     if(PROTOCYTE_DESCRIPTOR_SET)
-        _protocyte_descriptor_outputs(protocyte_generated_headers protocyte_generated_sources "${PROTOCYTE_OUT_DIR}" ${normalized_proto_files})
+        _protocyte_descriptor_outputs(
+            protocyte_generated_headers
+            protocyte_generated_sources
+            "${PROTOCYTE_OUT_DIR}"
+            normalized_proto_files
+        )
     else()
         foreach(proto_file IN LISTS normalized_proto_files)
             file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
@@ -898,10 +919,7 @@ function(protocyte_generate)
         list(APPEND protocyte_generated_headers "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.hpp")
     endif()
 
-    set(protocyte_outputs
-        ${protocyte_generated_headers}
-        ${protocyte_generated_sources}
-    )
+    set(protocyte_outputs "${protocyte_generated_headers}" "${protocyte_generated_sources}")
 
     set(protoc_proto_paths)
     set(protoc_descriptor_args)
@@ -947,8 +965,32 @@ function(protocyte_generate)
         set(protocyte_out_arg "--protocyte_out=${encoded_generator_parameter}:${PROTOCYTE_OUT_DIR}")
     endif()
 
+    set(protocyte_command_outputs "${protocyte_outputs}")
+    set(protocyte_finalize_commands)
+    foreach(proto_file IN LISTS normalized_proto_files)
+        string(FIND "${proto_file}" ";" semicolon_index)
+        if(NOT semicolon_index EQUAL -1)
+            # CMake generators cannot represent semicolon-bearing custom-command outputs
+            # portably, so track this edge case through a safe stamp instead.
+            string(SHA256 stamp_key "${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}")
+            set(
+                protocyte_codegen_stamp
+                "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-${stamp_key}.stamp"
+            )
+            set(protocyte_command_outputs "${protocyte_codegen_stamp}")
+            list(
+                APPEND protocyte_finalize_commands
+                COMMAND "${CMAKE_COMMAND}" -E touch "${protocyte_codegen_stamp}"
+            )
+            foreach(protocyte_output IN LISTS protocyte_outputs)
+                set_source_files_properties("${protocyte_output}" PROPERTIES GENERATED TRUE)
+            endforeach()
+            break()
+        endif()
+    endforeach()
+
     add_custom_command(
-        OUTPUT ${protocyte_outputs}
+        OUTPUT ${protocyte_command_outputs}
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_OUT_DIR}"
         COMMAND "${PROTOCYTE_PROTOC_EXECUTABLE}"
             ${protoc_descriptor_args}
@@ -956,22 +998,22 @@ function(protocyte_generate)
             "--plugin=protoc-gen-protocyte=${protocyte_plugin_executable}"
             "${protocyte_out_arg}"
             ${normalized_proto_files}
+        ${protocyte_finalize_commands}
         DEPENDS
             ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
             "${protocyte_options_proto}"
             ${protocyte_generator_sources}
         VERBATIM
-        COMMAND_EXPAND_LISTS
     )
 
-    add_custom_target("${PROTOCYTE_TARGET}" DEPENDS ${protocyte_outputs})
+    add_custom_target("${PROTOCYTE_TARGET}" DEPENDS ${protocyte_command_outputs})
 
     if(PROTOCYTE_GENERATED_HEADERS_VAR)
-        set(${PROTOCYTE_GENERATED_HEADERS_VAR} ${protocyte_generated_headers} PARENT_SCOPE)
+        set(${PROTOCYTE_GENERATED_HEADERS_VAR} "${protocyte_generated_headers}" PARENT_SCOPE)
     endif()
     if(PROTOCYTE_GENERATED_SOURCES_VAR)
-        set(${PROTOCYTE_GENERATED_SOURCES_VAR} ${protocyte_generated_sources} PARENT_SCOPE)
+        set(${PROTOCYTE_GENERATED_SOURCES_VAR} "${protocyte_generated_sources}" PARENT_SCOPE)
     endif()
     if(PROTOCYTE_GENERATED_TARGET_VAR)
         set(${PROTOCYTE_GENERATED_TARGET_VAR} ${PROTOCYTE_TARGET} PARENT_SCOPE)
