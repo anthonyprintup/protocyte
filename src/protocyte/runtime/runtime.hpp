@@ -1451,6 +1451,23 @@ namespace protocyte {
 
     using Status = Result<void>;
 
+    template<class Reader>
+    concept ReaderLike = requires(Reader &reader, u8 *output, const usize count) {
+        { reader.eof() } -> ::std::convertible_to<bool>;
+        { reader.position() } -> ::std::same_as<usize>;
+        { reader.can_read(count) } -> ::std::same_as<Status>;
+        { reader.read_byte() } -> ::std::same_as<Result<u8>>;
+        { reader.read(output, count) } -> ::std::same_as<Status>;
+        { reader.skip(count) } -> ::std::same_as<Status>;
+    };
+
+    template<class Writer>
+    concept WriterLike = requires(Writer &writer, const u8 value, const u8 *input, const usize count) {
+        { writer.can_write(count) } -> ::std::convertible_to<bool>;
+        { writer.write_byte(value) } -> ::std::same_as<Status>;
+        { writer.write(input, count) } -> ::std::same_as<Status>;
+    };
+
     template<class T> constexpr Result<T> with_field(Result<T> result, const u32 field_number) noexcept {
         if (!result) {
             result.error().field_number = field_number;
@@ -4170,6 +4187,21 @@ namespace protocyte {
         usize base_offset_ {};
         usize pos_ {};
     };
+
+    template<class Message> Result<usize> serialize(const Message &message, const Span<u8> output) noexcept {
+        const auto size = message.encoded_size();
+        if (!size) {
+            return protocyte::unexpected(size.error());
+        }
+        if (*size > output.size()) {
+            return protocyte::unexpected(ErrorCode::size_limit, {});
+        }
+        SliceWriter writer {output.data(), output.size()};
+        if (const auto st = message.serialize(writer); !st) {
+            return protocyte::unexpected(st.error());
+        }
+        return writer.position();
+    }
 
     template<class Reader> Result<u64> read_varint(Reader &reader) noexcept {
         const auto first = reader.read_byte();

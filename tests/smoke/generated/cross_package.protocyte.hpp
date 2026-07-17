@@ -146,7 +146,7 @@ namespace test::crosspkg {
         }
         void clear_nested_bytes() noexcept { nested_bytes_.clear(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<CrossPackageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossPackageConstants_Nested::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -155,7 +155,13 @@ namespace test::crosspkg {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<CrossPackageConstants_Nested>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, CrossPackageConstants_Nested &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -166,7 +172,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -262,7 +268,7 @@ namespace test::crosspkg {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -282,6 +288,11 @@ namespace test::crosspkg {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -493,7 +504,7 @@ namespace test::crosspkg {
         }
         void clear_nested() noexcept { nested_.reset(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<CrossPackageConstants> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossPackageConstants::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -502,7 +513,13 @@ namespace test::crosspkg {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<CrossPackageConstants>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, CrossPackageConstants &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -513,7 +530,7 @@ namespace test::crosspkg {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -718,7 +735,7 @@ namespace test::crosspkg {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -773,6 +790,11 @@ namespace test::crosspkg {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {

@@ -208,8 +208,9 @@ namespace test::ultimate {
         }
         constexpr void clear_mode() noexcept { mode_ = {}; }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>
-        parse(Context &ctx, Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2> parse(Context &ctx,
+                                                                                           Reader &reader) noexcept {
             auto output = UltimateComplexMessage_NestedLevel1_NestedLevel2::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
@@ -217,7 +218,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader> static ::protocyte::Status
+        static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Status
         parse(Reader &reader, UltimateComplexMessage_NestedLevel1_NestedLevel2 &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -228,7 +235,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -370,7 +377,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -421,6 +428,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -666,7 +678,7 @@ namespace test::ultimate {
         }
         void clear_inner() noexcept { inner_.reset(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_NestedLevel1::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -675,7 +687,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<UltimateComplexMessage_NestedLevel1>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, UltimateComplexMessage_NestedLevel1 &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -686,7 +704,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -822,7 +840,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -856,6 +874,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -1034,7 +1057,7 @@ namespace test::ultimate {
         typename Config::template Vector<typename Config::Bytes> &mutable_values() noexcept { return values_; }
         void clear_values() noexcept { values_.clear(); }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_RepeatedBytesHolder::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -1043,7 +1066,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, UltimateComplexMessage_RepeatedBytesHolder &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -1054,7 +1083,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -1138,7 +1167,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -1158,6 +1187,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -1302,8 +1336,9 @@ namespace test::ultimate {
         ::protocyte::Array<typename Config::Bytes, 3u> &mutable_values() noexcept { return values_; }
         void clear_values() noexcept { values_.clear(); }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
-        parse(Context &ctx, Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder> parse(Context &ctx,
+                                                                                            Reader &reader) noexcept {
             auto output = UltimateComplexMessage_BoundedRepeatedBytesHolder::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
@@ -1311,7 +1346,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader> static ::protocyte::Status
+        static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Status
         parse(Reader &reader, UltimateComplexMessage_BoundedRepeatedBytesHolder &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -1322,7 +1363,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -1408,7 +1449,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -1428,6 +1469,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -1572,8 +1618,9 @@ namespace test::ultimate {
         ::protocyte::Array<typename Config::Bytes, 3u> &mutable_values() noexcept { return values_; }
         void clear_values() noexcept { values_.clear(); }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
-        parse(Context &ctx, Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder> parse(Context &ctx,
+                                                                                          Reader &reader) noexcept {
             auto output = UltimateComplexMessage_FixedRepeatedBytesHolder::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
@@ -1581,7 +1628,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader> static ::protocyte::Status
+        static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Status
         parse(Reader &reader, UltimateComplexMessage_FixedRepeatedBytesHolder &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -1592,7 +1645,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -1678,7 +1731,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -1698,6 +1751,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -2032,7 +2090,8 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -2041,7 +2100,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader> static ::protocyte::Status
+        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Status
         parse(Reader &reader, UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -2052,7 +2117,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -2280,7 +2345,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -2355,6 +2420,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -3963,7 +4033,7 @@ namespace test::ultimate {
         }
         void clear_fixed_repeated_byte_array() noexcept { fixed_repeated_byte_array_.clear(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<UltimateComplexMessage> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -3972,7 +4042,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<UltimateComplexMessage>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, UltimateComplexMessage &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -3983,7 +4059,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -6096,7 +6172,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -6744,6 +6820,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -7834,7 +7915,7 @@ namespace test::ultimate {
             return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
         }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<UltimateComplexMessage_LevelA> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -7843,7 +7924,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<UltimateComplexMessage_LevelA>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, UltimateComplexMessage_LevelA &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -7854,7 +7941,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -7902,7 +7989,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -7915,6 +8002,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -8030,7 +8122,7 @@ namespace test::ultimate {
             return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
         }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB> parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -8039,7 +8131,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, UltimateComplexMessage_LevelA_LevelB &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -8050,7 +8148,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -8098,7 +8196,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -8111,6 +8209,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -8229,7 +8332,7 @@ namespace test::ultimate {
             return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
         }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -8238,7 +8341,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, UltimateComplexMessage_LevelA_LevelB_LevelC &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -8249,7 +8358,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -8297,7 +8406,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -8310,6 +8419,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -8431,8 +8545,9 @@ namespace test::ultimate {
             return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
         }
 
-        template<typename Reader> static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>
-        parse(Context &ctx, Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD> parse(Context &ctx,
+                                                                                             Reader &reader) noexcept {
             auto output = UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
@@ -8440,7 +8555,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader> static ::protocyte::Status
+        static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Status
         parse(Reader &reader, UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -8451,7 +8572,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -8499,7 +8620,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -8512,6 +8633,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -8689,7 +8815,7 @@ namespace test::ultimate {
         }
         void clear_ref() noexcept { ref_.reset(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<ExtraMessage> parse(Context &ctx, Reader &reader) noexcept {
             auto output = ExtraMessage::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -8698,7 +8824,14 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader> static ::protocyte::Status parse(Reader &reader, ExtraMessage &output) noexcept {
+        static ::protocyte::Result<ExtraMessage> parse(Context &ctx,
+                                                       ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Status parse(Reader &reader, ExtraMessage &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -8708,7 +8841,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -8821,7 +8954,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -8848,6 +8981,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -9041,7 +9179,7 @@ namespace test::ultimate {
         }
         void clear_nested_bytes() noexcept { nested_bytes_.clear(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<CrossMessageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossMessageConstants_Nested::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -9050,7 +9188,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<CrossMessageConstants_Nested>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, CrossMessageConstants_Nested &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -9061,7 +9205,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -9157,7 +9301,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -9177,6 +9321,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
@@ -9388,7 +9537,7 @@ namespace test::ultimate {
         }
         void clear_nested() noexcept { nested_.reset(); }
 
-        template<typename Reader>
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Result<CrossMessageConstants> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossMessageConstants::create(ctx);
             if (const auto st = parse(reader, output); !st) {
@@ -9397,7 +9546,13 @@ namespace test::ultimate {
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
+        static ::protocyte::Result<CrossMessageConstants>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, CrossMessageConstants &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
@@ -9408,7 +9563,7 @@ namespace test::ultimate {
             return {};
         }
 
-        template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
             ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
@@ -9613,7 +9768,7 @@ namespace test::ultimate {
         }
 
     public:
-        template<typename Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
             if (const auto st = validate(); !st) {
                 return st;
             }
@@ -9669,6 +9824,11 @@ namespace test::ultimate {
                 }
             }
             return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
         }
 
         ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {

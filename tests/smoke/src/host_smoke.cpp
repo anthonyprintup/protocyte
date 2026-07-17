@@ -7,6 +7,7 @@
 #endif
 #include <iterator>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -2745,6 +2746,74 @@ TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
     auto writable_bytes = protocyte::as_writable_bytes(fixed);
     REQUIRE(writable_bytes.size() == fixed.size_bytes());
     writable_bytes[0u] = readonly_bytes[0u];
+}
+
+TEST_CASE("generated messages adapt byte ranges to slice readers and writers", "[smoke][runtime][span]") {
+    using Encoded = std::array<protocyte::u8, 3u>;
+
+    static_assert(protocyte::ReaderLike<protocyte::SliceReader>);
+    static_assert(protocyte::WriterLike<protocyte::SliceWriter>);
+    static_assert(!protocyte::ReaderLike<Encoded>);
+    static_assert(!protocyte::WriterLike<Encoded>);
+    static_assert(std::is_convertible_v<Encoded &, protocyte::Span<protocyte::u8>>);
+    static_assert(std::is_convertible_v<const Encoded &, protocyte::Span<const protocyte::u8>>);
+
+    auto ctx = make_context();
+    CompatMessage message {ctx};
+    message.set_f_int32(150);
+
+    const auto size = message.encoded_size();
+    require_success(size);
+    REQUIRE(*size == 3u);
+
+    Encoded encoded {};
+    const auto written = message.serialize(encoded);
+    require_success(written);
+    CHECK(*written == encoded.size());
+
+    auto array_ctx = make_context();
+    const auto parsed_array = CompatMessage::parse(array_ctx, encoded);
+    require_success(parsed_array);
+    CHECK((*parsed_array).f_int32() == 150);
+
+    std::span<protocyte::u8> standard_output {encoded};
+    const auto standard_written = message.serialize(standard_output);
+    require_success(standard_written);
+    CHECK(*standard_written == standard_output.size());
+
+    auto span_ctx = make_context();
+    const std::span<const protocyte::u8> standard_input {encoded};
+    const auto parsed_span = CompatMessage::parse(span_ctx, standard_input);
+    require_success(parsed_span);
+    CHECK((*parsed_span).f_int32() == 150);
+
+    std::vector<protocyte::u8> dynamic_encoded(*size);
+    const auto dynamic_written = message.serialize(dynamic_encoded);
+    require_success(dynamic_written);
+    CHECK(*dynamic_written == dynamic_encoded.size());
+
+    auto vector_ctx = make_context();
+    const auto parsed_vector = CompatMessage::parse(vector_ctx, dynamic_encoded);
+    require_success(parsed_vector);
+    CHECK((*parsed_vector).f_int32() == 150);
+
+    Encoded short_output {0xa5u, 0x5au, 0xc3u};
+    const auto short_result = message.serialize(protocyte::Span<protocyte::u8> {short_output.data(), 2u});
+    require_failure(short_result, protocyte::ErrorCode::size_limit);
+    CHECK(short_result.error().offset == 0u);
+    const Encoded expected_short_output {0xa5u, 0x5au, 0xc3u};
+    CHECK(short_output == expected_short_output);
+
+    CompatMessage empty_message {ctx};
+    std::vector<protocyte::u8> empty_output;
+    const auto empty_written = empty_message.serialize(empty_output);
+    require_success(empty_written);
+    CHECK(*empty_written == 0u);
+
+    auto empty_ctx = make_context();
+    const auto parsed_empty = CompatMessage::parse(empty_ctx, empty_output);
+    require_success(parsed_empty);
+    CHECK((*parsed_empty).f_int32() == 0);
 }
 
 TEST_CASE("HashMap iterators expose key/value proxies", "[smoke][iterators][map]") {

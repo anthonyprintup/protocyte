@@ -657,6 +657,8 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     ].split("template<class Reader> Result<u64> read_varint", maxsplit=1)[0]
 
     assert "#include <cstring>" in runtime_header
+    assert "concept ReaderLike = requires(Reader &reader" in runtime_header
+    assert "concept WriterLike = requires(Writer &writer" in runtime_header
     assert (
         "#if PROTOCYTE_ENABLE_STD_FORMAT\n#include <version>\n#if defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\n#include <format>\n#endif\n#endif"
         in runtime_header
@@ -2306,8 +2308,19 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert (
         "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     )
-    assert "template <typename Reader>" in header
+    assert "template <::protocyte::ReaderLike Reader>" in header
     assert "::protocyte::Status merge_from(Reader& reader) noexcept" in header
+    assert (
+        "static ::protocyte::Result<Sample> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept"
+        in header
+    )
+    assert "::protocyte::SliceReader reader {input.data(), input.size()};" in header
+    assert "template <::protocyte::WriterLike Writer>" in header
+    assert (
+        "::protocyte::Result<::protocyte::usize> serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept"
+        in header
+    )
+    assert "return ::protocyte::serialize(*this, output);" in header
     assert "merge_partial_from" not in header
     assert "friend class ::protocyte::MessageParseAccess;" in header
     assert "ctx_->recursion_depth != 0u" not in header
@@ -5025,6 +5038,8 @@ def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
 
     assert class_scope.owner("ctx_") == "generated context storage"
     assert class_scope.owner("unknown_fields_") == "generated unknown field storage"
+    assert class_scope.owner("serialize") == "generated serialize function"
+    assert class_scope.owner("serialize_to") is None
     assert class_scope.owner("choice_") == "oneof choice storage"
     assert class_scope.owner("choice_case_") == "oneof choice case storage"
     assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
@@ -5033,6 +5048,22 @@ def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
     assert choice_case_scope.owner("none") == "oneof choice empty case"
     assert choice_case_scope.owner("text") == "oneof field text case"
     assert field_number_scope.owner("text") == "field text number"
+
+
+def test_allows_serialize_to_field_after_span_overload_rename() -> None:
+    request = _basic_request()
+    message = request.proto_file[0].message_type[0]
+    field = message.field.add()
+    field.name = "serialize_to"
+    field.number = 100
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "serialize_to() const noexcept" in header
 
 
 def test_cpp_function_registry_rejects_parameters_that_shadow_visible_storage() -> None:
@@ -5195,7 +5226,9 @@ def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
     ensure_body = header.split(
         "Result<::demo::Node<Config>&> ensure_child()", maxsplit=1
     )[1]
-    ensure_body = ensure_body.split("template <typename Reader>", maxsplit=1)[0]
+    ensure_body = ensure_body.split(
+        "template <::protocyte::ReaderLike Reader>", maxsplit=1
+    )[0]
 
     assert "auto ensured = choice_.child_.ensure();" in ensure_body
     assert (

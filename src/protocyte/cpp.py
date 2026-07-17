@@ -586,6 +586,7 @@ def _reserve_message_function_parameter_cpp_names(
     function("merge_from", "reader")
     if message.fields:
         function("serialize", "writer")
+    function("serialize span overload", "output")
 
     for item in message.fields:
         _reserve_field_function_parameter_cpp_names(message, item, visible_storage)
@@ -1890,7 +1891,7 @@ def _emit_oneof_accessors(
 def _emit_wire_api(
     w: CppWriter, message: MessageModel, options: GeneratorOptions
 ) -> None:
-    w.line("template <typename Reader>")
+    w.line("template <::protocyte::ReaderLike Reader>")
     w.line(
         f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, Reader& reader) noexcept {{"
     )
@@ -1902,7 +1903,15 @@ def _emit_wire_api(
         w.line("return ::protocyte::move(output);")
     w.line("}")
     w.line()
-    w.line("template <typename Reader>")
+    w.line(
+        f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {{"
+    )
+    with w.indent():
+        w.line("::protocyte::SliceReader reader {input.data(), input.size()};")
+        w.line("return parse(ctx, reader);")
+    w.line("}")
+    w.line()
+    w.line("template <::protocyte::ReaderLike Reader>")
     w.line(
         f"static ::protocyte::Status parse(Reader& reader, {message.cpp_name}& output) noexcept {{"
     )
@@ -1917,7 +1926,7 @@ def _emit_wire_api(
         w.line("return {};")
     w.line("}")
     w.line()
-    w.line("template <typename Reader>")
+    w.line("template <::protocyte::ReaderLike Reader>")
     w.line("::protocyte::Status merge_from(Reader& reader) noexcept {")
     with w.indent():
         w.line(
@@ -1949,7 +1958,7 @@ def _emit_wire_api(
     w.line("}")
     w.line()
     w.line("public:")
-    w.line("template <typename Writer>")
+    w.line("template <::protocyte::WriterLike Writer>")
     w.line("::protocyte::Status serialize(Writer& writer) const noexcept {")
     with w.indent():
         w.line("if (const auto st = validate(); !st) { return st; }")
@@ -1966,6 +1975,13 @@ def _emit_wire_api(
             w.line("}")
         w.line("}")
         w.line("return {};")
+    w.line("}")
+    w.line()
+    w.line(
+        "::protocyte::Result<::protocyte::usize> serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {"
+    )
+    with w.indent():
+        w.line("return ::protocyte::serialize(*this, output);")
     w.line("}")
     w.line()
     w.line("::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {")

@@ -454,6 +454,8 @@ Once the target above is in place, your C++ code includes the generated headers
 using their source-relative paths under the generated include root:
 
 ```cpp
+#include <vector>
+
 #include <protocyte/runtime/runtime.hpp>
 #include "common/types.protocyte.hpp"
 #include "sensors/sensor.protocyte.hpp"
@@ -465,6 +467,22 @@ int main() {
     };
 
     auto sample = demo::sensors::SensorSample<>::create(ctx);
+
+    const auto size = sample.encoded_size();
+    if (!size) {
+        return 1;
+    }
+
+    std::vector<protocyte::u8> encoded(*size);
+    const auto written = sample.serialize(encoded);
+    if (!written) {
+        return 1;
+    }
+
+    const auto parsed = demo::sensors::SensorSample<>::parse(ctx, encoded);
+    if (!parsed) {
+        return 1;
+    }
 
     return 0;
 }

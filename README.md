@@ -849,8 +849,10 @@ Readers passed to generated `parse()` or `merge_from()` are required to expose
 `eof()`, `position()`, `can_read(count)`, `read_byte()`, `read(out, count)`, and
 `skip(count)`. `can_read(count)` returns `::protocyte::Status`, does not consume
 input, and is part of the reader contract rather than an optional fast-path
-hook. `position()` is an absolute byte coordinate within the top-level input;
-reader adapters must preserve that coordinate rather than restarting at zero.
+hook. The public `::protocyte::ReaderLike` concept checks this contract at the
+generated API boundary. `position()` is an absolute byte coordinate within the
+top-level input; reader adapters must preserve that coordinate rather than
+restarting at zero.
 `SliceReader(data, size, base_offset)` accepts an optional source base for
 subranges. `ReaderRef`, `ParseBudgetReader`, `LimitedReader`, and staged map
 readers preserve the wrapped reader's coordinate. Parse readers passed between
@@ -859,12 +861,25 @@ field_number)` and `consume_map_entries(count, field_number)`, both returning
 `::protocyte::Status`. `ParseBudgetReader` owns those counters; `ReaderRef` and
 `LimitedReader` forward them unconditionally.
 
+For contiguous bytes, `parse(ctx, input)` accepts
+`::protocyte::Span<const ::protocyte::u8>` directly. Compatible lvalue ranges
+such as byte arrays, `std::array`, `std::vector`, and `std::span` convert to that
+dynamic span automatically; the overload creates a `SliceReader` and delegates
+to the same reader-based parser.
+
 Writers passed to generated `serialize()` are required to expose
 `can_write(count)`, `write_byte(value)`, and `write(data, count)`.
 `can_write(count)` returns `bool`, does not consume output capacity, and is part
-of the writer contract rather than an optional bulk-write optimization.
+of the writer contract rather than an optional bulk-write optimization. The
+public `::protocyte::WriterLike` concept checks this contract.
 `SliceWriter(data, size, base_offset)` implements this contract and accepts the
 same optional absolute base for a subrange.
+
+For contiguous writable bytes, `serialize(output)` accepts
+`::protocyte::Span<::protocyte::u8>` and compatible mutable lvalue ranges. It
+returns the number of bytes written. The helper computes the encoded size first,
+so an undersized output returns `ErrorCode::size_limit` without modifying the
+buffer, then delegates the actual write to `serialize(writer)`.
 
 Generated messages are move-only. Ordinary C++ copying is deleted because it
 cannot report allocation failure.
@@ -872,9 +887,9 @@ cannot report allocation failure.
 Common generated operations include:
 
 - `create(ctx)`
-- `parse(ctx, reader)` and `parse(reader, output)`
+- `parse(ctx, reader)`, `parse(ctx, input_bytes)`, and `parse(reader, output)`
 - `merge_from(reader)`
-- `serialize(writer)`
+- `serialize(writer)` and `serialize(output_bytes)`
 - `encoded_size()`
 - `copy_from(source)` and `copy_from(source, staging_message)`
 - `clone()` and `clone(output)`
