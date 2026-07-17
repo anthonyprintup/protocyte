@@ -330,6 +330,12 @@ def generate_outputs(
             file_model, options, output_budget=output_budget
         )
     if not format_outputs:
+        if options.formatting_required:
+            raise ProtocyteError(
+                "output formatting is required but disabled by the generator policy"
+            )
+        return outputs
+    if options.format_mode == "off":
         return outputs
     return _format_cpp_outputs(
         outputs,
@@ -346,20 +352,31 @@ def _format_cpp_outputs(
     timeout_seconds: float | None = None,
     max_output_bytes: int | None = None,
 ) -> dict[str, str]:
+    style_args = _clang_format_style_args(options)
     clang_format = _resolve_clang_format_executable(options)
     if clang_format is None:
+        if options.formatting_required:
+            raise ProtocyteError(
+                "clang-format is required but was not found on PATH; "
+                "set clang_format=<executable-or-path> or use format=auto or format=off"
+            )
         return outputs
 
-    style_args = _clang_format_style_args(options)
     formatted: dict[str, str] = {}
     formatted_budget = _OutputBudget(max_output_bytes)
+    style_root = Path.cwd().resolve()
     for name, content in outputs.items():
         if not name.endswith((".h", ".hh", ".hpp", ".c", ".cc", ".cpp", ".cxx")):
             formatted_budget.consume(content)
             formatted[name] = content
             continue
         try:
-            command = [clang_format, *style_args, f"--assume-filename={name}"]
+            assume_filename = (style_root / name).resolve()
+            command = [
+                clang_format,
+                *style_args,
+                f"--assume-filename={assume_filename}",
+            ]
             remaining = formatted_budget.remaining()
             if remaining is None:
                 result = subprocess.run(
@@ -414,25 +431,14 @@ def _clang_format_style_args(options: GeneratorOptions) -> list[str]:
 
 
 def _resolve_clang_format_config(options: GeneratorOptions) -> str | None:
-    if options.clang_format_config is not None:
-        if not Path(options.clang_format_config).is_file():
-            raise ProtocyteError(
-                f"clang-format config was not found: {options.clang_format_config}"
-            )
-        return options.clang_format_config
-    config = _find_clang_format_config()
-    if config is None:
+    if options.clang_format_config is None:
         return None
-    return str(config)
-
-
-def _find_clang_format_config() -> Path | None:
-    for root in (Path.cwd(), Path(__file__).resolve().parents[2]):
-        for directory in (root, *root.parents):
-            config = directory / ".clang-format"
-            if config.is_file():
-                return config
-    return None
+    config = Path(options.clang_format_config)
+    if not config.is_file():
+        raise ProtocyteError(
+            f"clang-format config was not found: {options.clang_format_config}"
+        )
+    return options.clang_format_config
 
 
 def _validate_generated_cpp_names(

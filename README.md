@@ -274,6 +274,13 @@ Protocyte does not force or persist them in the parent cache.
 valid alias target name; namespaced aliases like `demo::proto` are recommended
 for downstream linkage.
 
+All public CMake helpers reject unknown arguments and keywords without values
+during configuration. In source mode, `PROTO_ROOT`, every explicit `PROTOS`
+file, and every `IMPORT_DIRS` directory must already exist; relative paths are
+resolved from the calling `CMakeLists.txt`. In descriptor-set mode,
+`DESCRIPTOR_SET` is a filesystem input, while `FILES`/`PROTOS` entries remain
+virtual descriptor names and are not checked as filesystem paths.
+
 Pin a published release tag for downstream builds instead of tracking `main`.
 
 ### Installed Package
@@ -381,12 +388,16 @@ Supported `--protocyte_out=` parameters:
 - `namespace_prefix=<a::b>`: prepend additional C++ namespaces around the file
   package namespace.
 - `include_prefix=<path>`: prefix includes for imported generated headers.
+- `format=auto|off|required`: control generated C++ formatting. `auto` is the
+  default and formats when `clang-format` is available; `off` never launches a
+  formatter; `required` reports an error when no formatter is available.
 - `clang_format=<executable-or-path>`: run an explicit `clang-format`
   executable after generation. The value is passed as one executable argument,
   not interpreted by a shell; do not append command-line options. When
   specified, launch and formatting failures are reported as plugin errors.
 - `clang_format_config=<path>`: use an explicit clang-format config file when
-  formatting runs.
+  formatting runs. Supplying either explicit formatter parameter implies
+  `format=required`; neither can be combined with `format=off`.
 
 Runtime and include prefixes are portable protobuf virtual directories, not
 filesystem paths. They must be normalized relative paths using `/`; absolute or
@@ -405,10 +416,21 @@ components are portable, non-reserved C++ identifiers. Empty components, C++
 keywords, leading underscores, extra colons, surrounding component whitespace,
 control characters, and non-ASCII identifier characters are rejected.
 
-Formatting is best-effort by default. If `clang-format` is on `PATH`, protocyte
-uses it for generated C++ output. If it is not available and no explicit
-`clang_format=...` override is supplied, protocyte still emits generated files
-without failing.
+Formatting uses `format=auto` by default. If `clang-format` is on `PATH`,
+protocyte uses it for generated C++ output. If it is unavailable and no
+explicit formatter setting is supplied, protocyte still emits generated files
+without failing. Implicit style discovery is anchored to the caller's working
+directory and delegated to clang-format through `--style=file`; Protocyte never
+searches its own package or source tree for a consumer's `.clang-format`.
+CMake generation runs from the directory containing the calling
+`CMakeLists.txt`, so clang-format searches that source directory and its
+ancestors. Direct `protoc` callers should invoke it from the intended project
+directory or pass `clang_format_config` explicitly.
+
+`format=auto` is a convenience mode, not a byte-for-byte reproducibility
+guarantee across machines or clang-format versions. Projects that check
+generated files into source control should either use `format=off`, or use
+`format=required` with a project-pinned formatter version and configuration.
 
 CMake users can forward non-runtime parameters through the existing `OPTIONS`
 argument on `protocyte_generate(...)` or `protocyte_add_proto_library(...)`.
@@ -457,7 +479,14 @@ response = generate_response(request, policy=policy)
 `GeneratorPolicy()` preserves normal local plugin behavior: its resource
 budgets are unset, formatter parameters are allowed, and output formatting is
 enabled. An embedding service must pass its own explicit policy; merely calling
-`generate_response()` does not opt into the example limits above.
+`generate_response()` does not opt into the example limits above. When a
+request requires formatting, a policy with `format_outputs=False` rejects the
+request rather than silently returning unformatted output.
+
+Before model construction, `generate_response()` validates structural
+descriptor invariants such as field numbers and uniqueness, labels, oneof and
+proto3-optional membership, reserved ranges, and canonical map-entry shapes.
+Malformed requests return a contextual response error without generated files.
 
 The values above are an example deployment profile, not protobuf format
 limits. Choose budgets for the service workload. `max_request_bytes` is checked

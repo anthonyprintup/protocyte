@@ -160,6 +160,90 @@ def test_invalid_oneof_indices_return_descriptor_errors(oneof_index: int) -> Non
     assert not response.file
 
 
+@pytest.mark.parametrize(
+    ("number", "error"),
+    [
+        (0, "field number 0 is outside the valid range"),
+        (19_000, "field number 19000 is reserved by the protobuf implementation"),
+        (536_870_912, "field number 536870912 is outside the valid range"),
+    ],
+)
+def test_invalid_field_numbers_return_descriptor_errors(
+    number: int, error: str
+) -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[0].number = number
+
+    response = generate_response(request)
+
+    assert response.error.startswith(f"demo.Sample.id: {error}")
+    assert not response.file
+
+
+def test_duplicate_field_numbers_return_descriptor_errors() -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[1].number = 1
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample.opt_name: field number 1 is already used by 'id'"
+    )
+    assert not response.file
+
+
+def test_missing_field_label_returns_descriptor_error() -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[0].ClearField("label")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.id: field label is missing or invalid"
+    assert not response.file
+
+
+def test_proto3_optional_field_requires_single_member_synthetic_oneof() -> None:
+    request = _basic_request()
+    message = request.proto_file[0].message_type[0]
+    message.field[0].oneof_index = 0
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample._opt_name: a synthetic oneof must contain exactly one "
+        "proto3_optional field"
+    )
+    assert not response.file
+
+
+def test_malformed_map_entry_returns_descriptor_error() -> None:
+    request = _basic_request()
+    entry = request.proto_file[0].message_type[0].nested_type[0]
+    del entry.field[:]
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample.ItemsEntry: map entry must contain exactly key and value fields"
+    )
+    assert not response.file
+
+
+def test_map_field_must_be_repeated() -> None:
+    request = _basic_request()
+    items = next(
+        field
+        for field in request.proto_file[0].message_type[0].field
+        if field.name == "items"
+    )
+    items.label = F.LABEL_OPTIONAL
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.items: map fields must be repeated"
+    assert not response.file
+
+
 def test_malformed_recognized_option_payload_returns_descriptor_error() -> None:
     source = _simple_file()
     source.dependency.append("protocyte/options.proto")
@@ -1409,6 +1493,7 @@ def test_rejects_selected_edition_files() -> None:
     file = request.proto_file.add()
     file.name = "edition.proto"
     file.package = "demo"
+    file.syntax = "editions"
     file.edition = descriptor_pb2.EDITION_2023
     file.message_type.add().name = "EditionMessage"
 
@@ -1706,6 +1791,98 @@ def test_generation_succeeds_without_clang_format_on_path(
     assert files["simple.protocyte.hpp"].startswith("#pragma once\n")
 
 
+def test_generation_skips_clang_format_when_formatting_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        protocyte_cpp.shutil, "which", lambda name: "/usr/bin/clang-format"
+    )
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("clang-format must not be launched"),
+    )
+
+    response = generate_response(_basic_request(parameter="format=off"))
+
+    assert not response.error
+    assert response.file
+
+
+def test_generation_reports_missing_required_clang_format() -> None:
+    response = generate_response(_basic_request(parameter="format=required"))
+
+    assert response.error == (
+        "clang-format is required but was not found on PATH; "
+        "set clang_format=<executable-or-path> or use format=auto or format=off"
+    )
+    assert not response.file
+
+
+def test_explicit_clang_format_config_requires_formatter(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / ".clang-format"
+    config_path.write_text("BasedOnStyle: LLVM\n", encoding="utf-8")
+
+    response = generate_response(
+        _basic_request(parameter=f"clang_format_config={config_path.as_posix()}")
+    )
+
+    assert "clang-format is required but was not found on PATH" in response.error
+    assert not response.file
+
+
+def test_required_formatting_cannot_be_disabled_by_generator_policy() -> None:
+    response = generate_response(
+        _basic_request(parameter="format=required"),
+        policy=GeneratorPolicy(format_outputs=False),
+    )
+
+    assert response.error == (
+        "output formatting is required but disabled by the generator policy"
+    )
+    assert not response.file
+
+
+def test_implicit_formatting_anchors_style_lookup_to_invocation_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "consumer"
+    invocation_dir = project_root / "schemas"
+    invocation_dir.mkdir(parents=True)
+    (project_root / ".clang-format").write_text(
+        "BasedOnStyle: LLVM\n", encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout=kwargs["input"], stderr="")
+
+    monkeypatch.chdir(invocation_dir)
+    monkeypatch.setattr(
+        protocyte_cpp.shutil, "which", lambda name: "/usr/bin/clang-format"
+    )
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    response = generate_response(_basic_request())
+
+    assert not response.error
+    assert commands
+    expected_root = invocation_dir.resolve()
+    for command in commands:
+        assert "--style=file" in command
+        assert not any(part.startswith("--style=file:") for part in command)
+        assume_filename = next(
+            part.split("=", 1)[1]
+            for part in command
+            if part.startswith("--assume-filename=")
+        )
+        assert Path(assume_filename).is_relative_to(expected_root)
+
+
 def test_generation_uses_explicit_clang_format_override_verbatim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1839,7 +2016,14 @@ def test_formatter_policy_uses_live_output_cap(
 
     assert formatted == {"sample.cpp": "formatted\n"}
     assert calls == [
-        (["my-format", "--style=file", "--assume-filename=sample.cpp"], 64)
+        (
+            [
+                "my-format",
+                "--style=file",
+                f"--assume-filename={(Path.cwd() / 'sample.cpp').resolve()}",
+            ],
+            64,
+        )
     ]
 
 
@@ -2034,7 +2218,7 @@ def test_generation_uses_clang_format_found_on_path(
         assume_filename = next(
             part for part in command if part.startswith("--assume-filename=")
         )
-        filename = assume_filename.split("=", 1)[1]
+        filename = Path(assume_filename.split("=", 1)[1]).name
         return SimpleNamespace(
             returncode=0, stdout=f"formatted:{filename}\n", stderr=""
         )

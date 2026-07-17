@@ -115,6 +115,23 @@ function(_protocyte_validate_forwarded_generator_options)
     endforeach()
 endfunction()
 
+function(_protocyte_validate_parsed_arguments function_name unparsed_arguments missing_values)
+    if(NOT "${missing_values}" STREQUAL "")
+        list(JOIN missing_values ", " missing_values_text)
+        message(
+            FATAL_ERROR
+            "${function_name} requires a value for the following keyword(s): ${missing_values_text}"
+        )
+    endif()
+    if(NOT "${unparsed_arguments}" STREQUAL "")
+        list(JOIN unparsed_arguments ", " unparsed_arguments_text)
+        message(
+            FATAL_ERROR
+            "${function_name} received unknown argument(s): ${unparsed_arguments_text}"
+        )
+    endif()
+endfunction()
+
 function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_names_var)
     set(headers)
     set(sources)
@@ -761,6 +778,11 @@ function(protocyte_generate)
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
     cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    _protocyte_validate_parsed_arguments(
+        "protocyte_generate"
+        "${PROTOCYTE_UNPARSED_ARGUMENTS}"
+        "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
+    )
 
     if(NOT PROTOCYTE_TARGET)
         message(FATAL_ERROR "protocyte_generate requires TARGET")
@@ -770,6 +792,14 @@ function(protocyte_generate)
     endif()
     if(NOT PROTOCYTE_OUT_DIR)
         message(FATAL_ERROR "protocyte_generate requires OUT_DIR")
+    endif()
+    if(NOT IS_ABSOLUTE "${PROTOCYTE_OUT_DIR}")
+        cmake_path(
+            ABSOLUTE_PATH PROTOCYTE_OUT_DIR
+            BASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+            NORMALIZE
+            OUTPUT_VARIABLE PROTOCYTE_OUT_DIR
+        )
     endif()
     if(PROTOCYTE_DISCOVER AND PROTOCYTE_PROTOS)
         message(FATAL_ERROR "protocyte_generate accepts either DISCOVER or PROTOS, not both")
@@ -786,6 +816,9 @@ function(protocyte_generate)
                 NORMALIZE
                 OUTPUT_VARIABLE protocyte_descriptor_set
             )
+        endif()
+        if(NOT EXISTS "${protocyte_descriptor_set}" OR IS_DIRECTORY "${protocyte_descriptor_set}")
+            message(FATAL_ERROR "protocyte_generate DESCRIPTOR_SET must be an existing file: ${protocyte_descriptor_set}")
         endif()
         if(PROTOCYTE_PROTO_ROOT)
             message(FATAL_ERROR "protocyte_generate accepts either DESCRIPTOR_SET or PROTO_ROOT, not both")
@@ -804,6 +837,30 @@ function(protocyte_generate)
         )
     endif()
 
+    set(protocyte_user_import_dirs)
+    if(NOT PROTOCYTE_DESCRIPTOR_SET)
+        if(NOT IS_DIRECTORY "${protocyte_proto_root}")
+            message(FATAL_ERROR "protocyte_generate PROTO_ROOT must be an existing directory: ${protocyte_proto_root}")
+        endif()
+        foreach(import_dir IN LISTS PROTOCYTE_IMPORT_DIRS)
+            if(IS_ABSOLUTE "${import_dir}")
+                set(import_dir_abs "${import_dir}")
+            else()
+                cmake_path(
+                    ABSOLUTE_PATH import_dir
+                    BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    NORMALIZE
+                    OUTPUT_VARIABLE import_dir_abs
+                )
+            endif()
+            if(NOT IS_DIRECTORY "${import_dir_abs}")
+                message(FATAL_ERROR "protocyte_generate IMPORT_DIRS entry must be an existing directory: ${import_dir_abs}")
+            endif()
+            list(APPEND protocyte_user_import_dirs "${import_dir_abs}")
+        endforeach()
+        list(REMOVE_DUPLICATES protocyte_user_import_dirs)
+    endif()
+
     if(PROTOCYTE_DESCRIPTOR_SET AND PROTOCYTE_DISCOVER)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_descriptor_set}")
         protocyte_setup_codegen()
@@ -816,17 +873,6 @@ function(protocyte_generate)
 
     if(NOT protocyte_proto_files)
         message(FATAL_ERROR "protocyte_generate did not receive any .proto files")
-    endif()
-
-    if(NOT PROTOCYTE_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
-        protocyte_setup_codegen()
-    endif()
-    _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
-    _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
-    _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
-    _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
-    if("${protocyte_plugin_executable}" STREQUAL "")
-        message(FATAL_ERROR "Protocyte code generation plugin was not prepared")
     endif()
 
     set(normalized_proto_files)
@@ -849,6 +895,10 @@ function(protocyte_generate)
                 cmake_path(ABSOLUTE_PATH proto_file BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE proto_abs)
             endif()
 
+            if(NOT EXISTS "${proto_abs}" OR IS_DIRECTORY "${proto_abs}")
+                message(FATAL_ERROR "protocyte_generate PROTOS entry must be an existing file: ${proto_abs}")
+            endif()
+
             file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_abs}")
             if(proto_rel MATCHES "^[.][.]")
                 message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
@@ -858,6 +908,17 @@ function(protocyte_generate)
         endforeach()
         list(REMOVE_DUPLICATES normalized_proto_files)
         list(SORT normalized_proto_files)
+    endif()
+
+    if(NOT PROTOCYTE_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
+        protocyte_setup_codegen()
+    endif()
+    _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
+    _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
+    _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
+    _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
+    if("${protocyte_plugin_executable}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte code generation plugin was not prepared")
     endif()
 
     set(generator_options ${PROTOCYTE_OPTIONS})
@@ -929,7 +990,7 @@ function(protocyte_generate)
         set(
             protocyte_import_dirs
             "${protocyte_proto_root}"
-            ${PROTOCYTE_IMPORT_DIRS}
+            ${protocyte_user_import_dirs}
             "${protocyte_proto_dir}"
             "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"
         )
@@ -1004,6 +1065,7 @@ function(protocyte_generate)
             ${PROTOCYTE_DEPENDS}
             "${protocyte_options_proto}"
             ${protocyte_generator_sources}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         VERBATIM
     )
 
@@ -1039,6 +1101,11 @@ function(protocyte_add_proto_library)
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
     cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    _protocyte_validate_parsed_arguments(
+        "protocyte_add_proto_library"
+        "${PROTOCYTE_UNPARSED_ARGUMENTS}"
+        "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
+    )
 
     if(NOT PROTOCYTE_TARGET)
         message(FATAL_ERROR "protocyte_add_proto_library requires TARGET")
@@ -1201,6 +1268,11 @@ function(protocyte_add_descriptor_set_library)
     )
     set(multiValueArgs FILES DEPENDS OPTIONS)
     cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    _protocyte_validate_parsed_arguments(
+        "protocyte_add_descriptor_set_library"
+        "${PROTOCYTE_UNPARSED_ARGUMENTS}"
+        "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
+    )
 
     if(NOT PROTOCYTE_DESCRIPTOR_SET)
         message(FATAL_ERROR "protocyte_add_descriptor_set_library requires DESCRIPTOR_SET")

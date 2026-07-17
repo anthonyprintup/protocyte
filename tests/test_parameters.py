@@ -21,6 +21,7 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.emit_runtime is False
     assert options.runtime_prefix == "protocyte/runtime"
     assert options.namespace_prefix == ""
+    assert options.format_mode == "auto"
     assert options.clang_format is None
     assert options.clang_format_config is None
 
@@ -30,6 +31,59 @@ def test_parse_accepts_clang_format_options() -> None:
 
     assert options.clang_format == "custom-format"
     assert options.clang_format_config == "configs/protocyte.style"
+    assert options.format_mode == "required"
+
+
+@pytest.mark.parametrize("format_mode", ["auto", "off", "required"])
+def test_parse_accepts_format_modes(format_mode: str) -> None:
+    options = parse_parameter(f"format={format_mode}")
+
+    assert options.format_mode == format_mode
+
+
+def test_rejects_invalid_format_mode() -> None:
+    with pytest.raises(
+        ProtocyteError, match="format must be one of: auto, off, required"
+    ):
+        parse_parameter("format=sometimes")
+
+
+def test_generator_options_rejects_invalid_format_mode() -> None:
+    with pytest.raises(
+        ProtocyteError, match="format must be one of: auto, off, required"
+    ):
+        GeneratorOptions(format_mode="sometimes")
+
+
+@pytest.mark.parametrize("parameter", ["clang_format=", "clang_format_config="])
+def test_rejects_empty_formatter_parameters(parameter: str) -> None:
+    with pytest.raises(ProtocyteError, match="must not be empty"):
+        parse_parameter(parameter)
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        "format=off,clang_format=clang-format",
+        "format=off,clang_format_config=.clang-format",
+    ],
+)
+def test_rejects_explicit_formatter_settings_when_formatting_is_off(
+    parameter: str,
+) -> None:
+    with pytest.raises(
+        ProtocyteError,
+        match="format=off cannot be combined with clang_format or clang_format_config",
+    ):
+        parse_parameter(parameter)
+
+
+def test_generator_options_rejects_explicit_formatter_when_formatting_is_off() -> None:
+    with pytest.raises(
+        ProtocyteError,
+        match="format=off cannot be combined with clang_format or clang_format_config",
+    ):
+        GeneratorOptions(format_mode="off", clang_format="clang-format")
 
 
 def test_parse_decodes_hex_transport_parameter() -> None:

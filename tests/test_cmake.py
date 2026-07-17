@@ -28,6 +28,40 @@ def _find_real_protoc(repo_root: Path) -> Path:
     pytest.skip("real protoc executable is not available")
 
 
+def _configure_cmake_snippet(
+    tmp_path: Path,
+    snippet: str,
+    *,
+    files: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    for relative_path, content in (files or {}).items():
+        path = source_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_argument_validation LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                snippet,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
     if os.name == "nt":
         wrapper = path.with_suffix(".cmd")
@@ -106,6 +140,134 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in source_config
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in installed_config
     assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
+
+
+def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> None:
+    functions = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake"
+    ).read_text(encoding="utf-8")
+    generation_command = functions.split("add_custom_command(", 1)[1].split(
+        "add_custom_target", 1
+    )[0]
+
+    assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"' in generation_command
+
+
+@pytest.mark.parametrize(
+    ("function_name", "invocation"),
+    [
+        ("protocyte_generate", "protocyte_generate(HOSTED_ALOCATOR)"),
+        (
+            "protocyte_add_proto_library",
+            "protocyte_add_proto_library(HOSTED_ALOCATOR)",
+        ),
+        (
+            "protocyte_add_descriptor_set_library",
+            "protocyte_add_descriptor_set_library(HOSTED_ALOCATOR)",
+        ),
+    ],
+)
+def test_public_cmake_functions_reject_unknown_arguments(
+    tmp_path: Path,
+    function_name: str,
+    invocation: str,
+) -> None:
+    result = _configure_cmake_snippet(tmp_path, invocation)
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert f"{function_name} received unknown argument(s): HOSTED_ALOCATOR" in output
+
+
+@pytest.mark.parametrize(
+    ("function_name", "invocation"),
+    [
+        (
+            "protocyte_generate",
+            "protocyte_generate(TARGET demo OUT_DIR)",
+        ),
+        (
+            "protocyte_add_proto_library",
+            "protocyte_add_proto_library(TARGET demo OUT_DIR)",
+        ),
+        (
+            "protocyte_add_descriptor_set_library",
+            "protocyte_add_descriptor_set_library(TARGET demo OUT_DIR)",
+        ),
+    ],
+)
+def test_public_cmake_functions_reject_keywords_without_values(
+    tmp_path: Path,
+    function_name: str,
+    invocation: str,
+) -> None:
+    result = _configure_cmake_snippet(tmp_path, invocation)
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        f"{function_name} requires a value for the following keyword(s): OUT_DIR"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    ("invocation", "expected_error"),
+    [
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT missing OUT_DIR generated DISCOVER)",
+            "protocyte_generate PROTO_ROOT must be an existing directory:",
+        ),
+        (
+            "protocyte_generate(TARGET demo DESCRIPTOR_SET missing.pb OUT_DIR generated PROTOS api.proto)",
+            "protocyte_generate DESCRIPTOR_SET must be an existing file:",
+        ),
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT proto OUT_DIR generated PROTOS proto/missing.proto)",
+            "protocyte_generate PROTOS entry must be an existing file:",
+        ),
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT proto OUT_DIR generated PROTOS proto/present.proto IMPORT_DIRS missing-imports)",
+            "protocyte_generate IMPORT_DIRS entry must be an existing directory:",
+        ),
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT not-a-directory OUT_DIR generated DISCOVER)",
+            "protocyte_generate PROTO_ROOT must be an existing directory:",
+        ),
+        (
+            "protocyte_generate(TARGET demo DESCRIPTOR_SET descriptor-directory OUT_DIR generated PROTOS api.proto)",
+            "protocyte_generate DESCRIPTOR_SET must be an existing file:",
+        ),
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT proto OUT_DIR generated PROTOS proto/proto-directory)",
+            "protocyte_generate PROTOS entry must be an existing file:",
+        ),
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT proto OUT_DIR generated PROTOS proto/present.proto IMPORT_DIRS not-an-import-directory)",
+            "protocyte_generate IMPORT_DIRS entry must be an existing directory:",
+        ),
+    ],
+)
+def test_protocyte_generate_rejects_missing_filesystem_inputs_at_configure_time(
+    tmp_path: Path,
+    invocation: str,
+    expected_error: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        invocation,
+        files={
+            "proto/present.proto": 'syntax = "proto3";\n',
+            "not-a-directory": "file\n",
+            "descriptor-directory/marker": "directory\n",
+            "proto/proto-directory/marker": "directory\n",
+            "not-an-import-directory": "file\n",
+        },
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert expected_error in output
 
 
 def test_cmake_install_tree_contains_installable_python_project() -> None:
@@ -685,6 +847,55 @@ def test_generate_accepts_descriptor_set_protos_without_proto_root(
         .read_text(encoding="utf-8")
         .endswith("generated/nested/demo.protocyte.cpp")
     )
+
+
+def test_generate_resolves_relative_out_dir_against_binary_directory(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    protoc = _find_real_protoc(repo_root)
+    plugin = _installed_protocyte_plugin()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(relative_codegen_out_dir LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                "    OUT_DIR generated",
+                "    PROTOS api/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
+        check=True,
+    )
+
+    assert (build_dir / "generated" / "api" / "demo.protocyte.hpp").is_file()
+    assert (build_dir / "generated" / "api" / "demo.protocyte.cpp").is_file()
+    assert not (source_dir / "generated").exists()
 
 
 def test_generate_descriptor_set_discover_skips_google_protobuf_files(

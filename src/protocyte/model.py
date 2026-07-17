@@ -27,6 +27,34 @@ from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_exten
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
 
+_MAX_FIELD_NUMBER = (1 << 29) - 1
+_FIRST_RESERVED_FIELD_NUMBER = 19_000
+_LAST_RESERVED_FIELD_NUMBER = 19_999
+_VALID_FIELD_LABELS = frozenset(
+    {
+        FieldDescriptorProto.LABEL_OPTIONAL,
+        FieldDescriptorProto.LABEL_REQUIRED,
+        FieldDescriptorProto.LABEL_REPEATED,
+    }
+)
+_VALID_FIELD_TYPES = frozenset(range(1, FieldDescriptorProto.TYPE_SINT64 + 1))
+_MAP_KEY_TYPES = frozenset(
+    {
+        FieldDescriptorProto.TYPE_INT32,
+        FieldDescriptorProto.TYPE_INT64,
+        FieldDescriptorProto.TYPE_UINT32,
+        FieldDescriptorProto.TYPE_UINT64,
+        FieldDescriptorProto.TYPE_SINT32,
+        FieldDescriptorProto.TYPE_SINT64,
+        FieldDescriptorProto.TYPE_FIXED32,
+        FieldDescriptorProto.TYPE_FIXED64,
+        FieldDescriptorProto.TYPE_SFIXED32,
+        FieldDescriptorProto.TYPE_SFIXED64,
+        FieldDescriptorProto.TYPE_BOOL,
+        FieldDescriptorProto.TYPE_STRING,
+    }
+)
+
 
 CPP_KEYWORDS = {
     "alignas",
@@ -1197,7 +1225,6 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     """Build a resolved model from a CodeGeneratorRequest-like object."""
     files_by_name = _index_request_files(request.proto_file)
     file_to_generate = list(request.file_to_generate)
-    custom_options = _custom_options(request.proto_file)
 
     missing = [name for name in file_to_generate if name not in files_by_name]
     if missing:
@@ -1209,6 +1236,9 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         validate_virtual_file_name(name)
         file = files_by_name[name]
         _reject_unsupported_file_features(file, f"target file {name}")
+
+    _validate_descriptor_invariants(files_by_name.values())
+    custom_options = _custom_options(request.proto_file)
 
     selected_files = set(file_to_generate)
     reachable_files = _validate_import_graph(files_by_name, file_to_generate)
@@ -1506,6 +1536,289 @@ def strip_type_name(type_name: str) -> str:
 
 def _file_syntax(file: descriptor_pb2.FileDescriptorProto) -> str:
     return file.syntax or "proto2"
+
+
+def _validate_descriptor_invariants(
+    files: Iterable[descriptor_pb2.FileDescriptorProto],
+) -> None:
+    message_descriptors: list[
+        tuple[
+            descriptor_pb2.FileDescriptorProto,
+            descriptor_pb2.DescriptorProto,
+            str,
+            str | None,
+        ]
+    ] = []
+    map_entry_owners: dict[str, str] = {}
+
+    for file in files:
+        if file.syntax == "editions":
+            raise ProtocyteError(
+                f"{file.name}: protobuf Editions are not supported in v1"
+            )
+        if file.syntax not in {"", "proto2", "proto3"}:
+            raise ProtocyteError(
+                f"{file.name}: unsupported protobuf syntax {file.syntax!r}"
+            )
+        for message, path, parent_full_name in _walk_descriptor_messages(file):
+            message_descriptors.append((file, message, path, parent_full_name))
+            _validate_message_descriptor(file, message, path)
+            if message.options.map_entry:
+                full_name = proto_full_name(file, path)
+                if parent_full_name is None:
+                    raise ProtocyteError(
+                        f"{full_name}: map entry messages must be nested"
+                    )
+                _validate_map_entry_descriptor(full_name, message)
+                map_entry_owners[full_name] = parent_full_name
+
+    for file, message, path, _ in message_descriptors:
+        owner_full_name = proto_full_name(file, path)
+        for field_proto in message.field:
+            if field_proto.type != FieldDescriptorProto.TYPE_MESSAGE:
+                continue
+            map_owner = map_entry_owners.get(strip_type_name(field_proto.type_name))
+            if map_owner is None:
+                continue
+            label = f"{owner_full_name}.{field_proto.name}"
+            if owner_full_name != map_owner:
+                raise ProtocyteError(
+                    f"{label}: map entry type {field_proto.type_name!r} belongs to {map_owner}"
+                )
+            if field_proto.label != FieldDescriptorProto.LABEL_REPEATED:
+                raise ProtocyteError(f"{label}: map fields must be repeated")
+
+
+def _walk_descriptor_messages(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> Iterable[tuple[descriptor_pb2.DescriptorProto, str, str | None]]:
+    def walk(
+        message: descriptor_pb2.DescriptorProto,
+        path: str,
+        parent_full_name: str | None,
+    ) -> Iterable[tuple[descriptor_pb2.DescriptorProto, str, str | None]]:
+        yield message, path, parent_full_name
+        full_name = proto_full_name(file, path)
+        for nested in message.nested_type:
+            yield from walk(nested, f"{path}.{nested.name}", full_name)
+
+    for message in file.message_type:
+        yield from walk(message, message.name, None)
+
+
+def _validate_message_descriptor(
+    file: descriptor_pb2.FileDescriptorProto,
+    message: descriptor_pb2.DescriptorProto,
+    path: str,
+) -> None:
+    owner_full_name = proto_full_name(file, path)
+    oneof_names: set[str] = set()
+    for oneof in message.oneof_decl:
+        if not oneof.name:
+            raise ProtocyteError(f"{owner_full_name}: oneof name must not be empty")
+        if oneof.name in oneof_names:
+            raise ProtocyteError(
+                f"{owner_full_name}: duplicate oneof name {oneof.name!r}"
+            )
+        oneof_names.add(oneof.name)
+
+    field_names: set[str] = set()
+    field_numbers: dict[int, str] = {}
+    oneof_members: dict[int, list[descriptor_pb2.FieldDescriptorProto]] = {
+        index: [] for index in range(len(message.oneof_decl))
+    }
+    syntax = _file_syntax(file)
+
+    for index, field_proto in enumerate(message.field):
+        if not field_proto.name:
+            raise ProtocyteError(
+                f"{owner_full_name}: field at index {index} has no name"
+            )
+        label = f"{owner_full_name}.{field_proto.name}"
+        if field_proto.name in field_names:
+            raise ProtocyteError(f"{label}: duplicate field name")
+        field_names.add(field_proto.name)
+
+        _validate_field_descriptor(label, field_proto, syntax)
+        first_field = field_numbers.get(field_proto.number)
+        if first_field is not None:
+            raise ProtocyteError(
+                f"{label}: field number {field_proto.number} is already used by {first_field!r}"
+            )
+        field_numbers[field_proto.number] = field_proto.name
+
+        if field_proto.HasField("oneof_index"):
+            oneof_index = field_proto.oneof_index
+            oneof_count = len(message.oneof_decl)
+            if oneof_index < 0 or oneof_index >= oneof_count:
+                raise ProtocyteError(
+                    f"{label}: oneof_index {oneof_index} is outside the message's "
+                    f"{oneof_count} oneof declaration(s)"
+                )
+            if field_proto.label != FieldDescriptorProto.LABEL_OPTIONAL:
+                raise ProtocyteError(f"{label}: oneof fields must be optional")
+            oneof_members[oneof_index].append(field_proto)
+
+        if field_proto.proto3_optional:
+            if syntax != "proto3":
+                raise ProtocyteError(
+                    f"{label}: proto3_optional is only valid in proto3"
+                )
+            if not field_proto.HasField("oneof_index"):
+                raise ProtocyteError(
+                    f"{label}: proto3_optional fields must belong to a synthetic oneof"
+                )
+
+    _validate_reserved_fields(owner_full_name, message, field_names, field_numbers)
+
+    synthetic_oneofs: set[int] = set()
+    for oneof_index, members in oneof_members.items():
+        optional_members = [field for field in members if field.proto3_optional]
+        if not optional_members:
+            continue
+        synthetic_oneofs.add(oneof_index)
+        if len(members) != 1:
+            oneof_name = message.oneof_decl[oneof_index].name
+            raise ProtocyteError(
+                f"{owner_full_name}.{oneof_name}: a synthetic oneof must contain exactly one proto3_optional field"
+            )
+
+    if synthetic_oneofs:
+        first_synthetic = min(synthetic_oneofs)
+        if any(
+            oneof_index not in synthetic_oneofs
+            for oneof_index in range(first_synthetic, len(message.oneof_decl))
+        ):
+            raise ProtocyteError(
+                f"{owner_full_name}: synthetic oneofs must follow all regular oneofs"
+            )
+
+
+def _validate_field_descriptor(
+    label: str,
+    field: descriptor_pb2.FieldDescriptorProto,
+    syntax: str,
+) -> None:
+    if field.number < 1 or field.number > _MAX_FIELD_NUMBER:
+        raise ProtocyteError(
+            f"{label}: field number {field.number} is outside the valid range 1..{_MAX_FIELD_NUMBER}"
+        )
+    if _FIRST_RESERVED_FIELD_NUMBER <= field.number <= _LAST_RESERVED_FIELD_NUMBER:
+        raise ProtocyteError(
+            f"{label}: field number {field.number} is reserved by the protobuf implementation"
+        )
+    if not field.HasField("label") or field.label not in _VALID_FIELD_LABELS:
+        raise ProtocyteError(f"{label}: field label is missing or invalid")
+    if not field.HasField("type") or field.type not in _VALID_FIELD_TYPES:
+        raise ProtocyteError(f"{label}: field type is missing or invalid")
+    if syntax == "proto3" and field.label == FieldDescriptorProto.LABEL_REQUIRED:
+        raise ProtocyteError(f"{label}: required fields are not allowed in proto3")
+
+    typed_reference = field.type in {
+        FieldDescriptorProto.TYPE_ENUM,
+        FieldDescriptorProto.TYPE_MESSAGE,
+    }
+    if typed_reference and not field.type_name:
+        raise ProtocyteError(f"{label}: field type requires type_name")
+    if (
+        not typed_reference
+        and field.type != FieldDescriptorProto.TYPE_GROUP
+        and field.type_name
+    ):
+        raise ProtocyteError(f"{label}: scalar fields must not specify type_name")
+
+
+def _validate_reserved_fields(
+    owner_full_name: str,
+    message: descriptor_pb2.DescriptorProto,
+    field_names: set[str],
+    field_numbers: dict[int, str],
+) -> None:
+    reserved_names: set[str] = set()
+    for name in message.reserved_name:
+        if not name:
+            raise ProtocyteError(
+                f"{owner_full_name}: reserved field name must not be empty"
+            )
+        if name in reserved_names:
+            raise ProtocyteError(
+                f"{owner_full_name}: duplicate reserved field name {name!r}"
+            )
+        if name in field_names:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: field name is reserved"
+            )
+        reserved_names.add(name)
+
+    ranges: list[tuple[int, int]] = []
+    for reserved_range in message.reserved_range:
+        start = reserved_range.start
+        end = reserved_range.end
+        if start < 1 or end > _MAX_FIELD_NUMBER + 1 or start >= end:
+            raise ProtocyteError(
+                f"{owner_full_name}: invalid reserved field range [{start}, {end})"
+            )
+        for previous_start, previous_end in ranges:
+            if start < previous_end and previous_start < end:
+                raise ProtocyteError(
+                    f"{owner_full_name}: reserved field ranges [{previous_start}, {previous_end}) "
+                    f"and [{start}, {end}) overlap"
+                )
+        for number, name in field_numbers.items():
+            if start <= number < end:
+                raise ProtocyteError(
+                    f"{owner_full_name}.{name}: field number {number} is reserved"
+                )
+        ranges.append((start, end))
+
+
+def _validate_map_entry_descriptor(
+    full_name: str,
+    message: descriptor_pb2.DescriptorProto,
+) -> None:
+    if len(message.field) != 2:
+        raise ProtocyteError(
+            f"{full_name}: map entry must contain exactly key and value fields"
+        )
+    if (
+        message.oneof_decl
+        or message.extension
+        or message.extension_range
+        or message.nested_type
+        or message.enum_type
+    ):
+        raise ProtocyteError(
+            f"{full_name}: map entry must not declare oneofs, extensions, or nested types"
+        )
+
+    key, value = message.field
+    if (
+        key.name != "key"
+        or key.number != 1
+        or key.label != FieldDescriptorProto.LABEL_OPTIONAL
+    ):
+        raise ProtocyteError(
+            f"{full_name}: map entry field 1 must be an optional field named 'key'"
+        )
+    if key.type not in _MAP_KEY_TYPES:
+        raise ProtocyteError(f"{full_name}.key: invalid map key type {key.type}")
+    if (
+        value.name != "value"
+        or value.number != 2
+        or value.label != FieldDescriptorProto.LABEL_OPTIONAL
+    ):
+        raise ProtocyteError(
+            f"{full_name}: map entry field 2 must be an optional field named 'value'"
+        )
+    for field_proto in (key, value):
+        if field_proto.HasField("oneof_index") or field_proto.proto3_optional:
+            raise ProtocyteError(
+                f"{full_name}.{field_proto.name}: map entry fields must not belong to oneofs"
+            )
+        if field_proto.HasField("default_value"):
+            raise ProtocyteError(
+                f"{full_name}.{field_proto.name}: map entry fields must not have default values"
+            )
 
 
 def _reject_unsupported_file_features(

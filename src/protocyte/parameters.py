@@ -148,6 +148,7 @@ class GeneratorOptions:
     runtime_prefix: str = "protocyte/runtime"
     include_prefix: str = ""
     namespace_prefix: str = ""
+    format_mode: str = "auto"
     clang_format: str | None = None
     clang_format_config: str | None = None
 
@@ -160,6 +161,24 @@ class GeneratorOptions:
             validate_virtual_directory_prefix(
                 self.include_prefix, parameter="include prefix"
             )
+        if self.format_mode not in {"auto", "off", "required"}:
+            raise ProtocyteError("format must be one of: auto, off, required")
+        if self.clang_format == "":
+            raise ProtocyteError("clang_format must not be empty")
+        if self.clang_format_config == "":
+            raise ProtocyteError("clang_format_config must not be empty")
+        if self.format_mode == "off" and (
+            self.clang_format is not None or self.clang_format_config is not None
+        ):
+            raise ProtocyteError(
+                "format=off cannot be combined with clang_format or clang_format_config"
+            )
+
+    @property
+    def formatting_required(self) -> bool:
+        return self.format_mode == "required" or (
+            self.clang_format is not None or self.clang_format_config is not None
+        )
 
 
 def validate_virtual_directory_prefix(value: str, *, parameter: str) -> str:
@@ -245,6 +264,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "runtime_prefix",
         "include_prefix",
         "namespace_prefix",
+        "format",
         "clang_format",
         "clang_format_config",
     }
@@ -278,12 +298,28 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         )
     clang_format = values.get("clang_format")
     clang_format_config = values.get("clang_format_config")
+    format_mode = values.get("format", "auto")
+    if format_mode not in {"auto", "off", "required"}:
+        raise ProtocyteError("format must be one of: auto, off, required")
+    if clang_format == "":
+        raise ProtocyteError("clang_format must not be empty")
+    if clang_format_config == "":
+        raise ProtocyteError("clang_format_config must not be empty")
+    if format_mode == "off" and (
+        clang_format is not None or clang_format_config is not None
+    ):
+        raise ProtocyteError(
+            "format=off cannot be combined with clang_format or clang_format_config"
+        )
+    if clang_format is not None or clang_format_config is not None:
+        format_mode = "required"
 
     return GeneratorOptions(
         emit_runtime=emit_runtime,
         runtime_prefix=runtime_prefix,
         include_prefix=include_prefix,
         namespace_prefix=namespace_prefix,
+        format_mode=format_mode,
         clang_format=clang_format,
         clang_format_config=clang_format_config,
     )
