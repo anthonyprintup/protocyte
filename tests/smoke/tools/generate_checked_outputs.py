@@ -779,6 +779,15 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     value.name = "PROTO2_DEFAULT_MODE_READY"
     value.number = 9
 
+    map_mode = file.enum_type.add()
+    map_mode.name = "Proto2MapMode"
+    value = map_mode.value.add()
+    value.name = "PROTO2_MAP_MODE_UNKNOWN"
+    value.number = 0
+    value = map_mode.value.add()
+    value.name = "PROTO2_MAP_MODE_READY"
+    value.number = 9
+
     defaults = file.message_type.add()
     defaults.name = "Proto2DefaultValues"
     field = add_field(defaults, "double_value", 1, F.TYPE_DOUBLE)
@@ -814,6 +823,31 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     field = add_field(defaults, "sint64_value", 16, F.TYPE_SINT64)
     field.default_value = "-123456789012"
     add_field(defaults, "implicit_enum_value", 17, F.TYPE_ENUM, type_name=".test.required.Proto2DefaultMode")
+    add_field(
+        defaults,
+        "enum_values",
+        18,
+        F.TYPE_ENUM,
+        label=F.LABEL_REPEATED,
+        type_name=".test.required.Proto2DefaultMode",
+        packed=True,
+    )
+    enum_by_name = add_map_entry(
+        defaults,
+        "EnumByNameEntry",
+        F.TYPE_STRING,
+        F.TYPE_ENUM,
+        value_type_name=".test.required.Proto2MapMode",
+        parent_type_name=".test.required.Proto2DefaultValues",
+    )
+    add_field(
+        defaults,
+        "enum_by_name",
+        19,
+        F.TYPE_MESSAGE,
+        label=F.LABEL_REPEATED,
+        type_name=enum_by_name,
+    )
 
     shadowing = file.message_type.add()
     shadowing.name = "OneofShadowingValue"

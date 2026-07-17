@@ -868,7 +868,7 @@ cannot report allocation failure.
 Common generated operations include:
 
 - `create(ctx)`
-- `parse(ctx, reader)` and `parse(ctx, reader, output)`
+- `parse(ctx, reader)` and `parse(reader, output)`
 - `merge_from(reader)`
 - `serialize(writer)`
 - `encoded_size()`
@@ -946,7 +946,7 @@ Result<Message> clone() const;
 Status clone(Message& output) const;
 
 static Result<Message> parse(Context& ctx, Reader& reader);
-static Status parse(Context& ctx, Reader& reader, Message& output);
+static Status parse(Reader& reader, Message& output);
 ```
 
 The convenience forms are concise for hosted applications, but may materialize
@@ -964,7 +964,7 @@ demo::Sample<> output{ctx};
 auto clone_status = source.clone(output);
 
 protocyte::SliceReader reader{encoded, encoded_size};
-auto parse_status = demo::Sample<>::parse(ctx, reader, output);
+auto parse_status = demo::Sample<>::parse(reader, output);
 ```
 
 The caller decides where `staging_message` and `output` live: stack, static
@@ -974,9 +974,15 @@ deallocates those outer objects.
 `copy_from(source, staging_message)` uses `staging_message` as transactional
 working state. The destination remains unchanged on failure; after success the
 staging message is valid but moved-from. It must not alias either copy operand.
-`clone(output)` and `parse(ctx, reader, output)` reset and directly populate
-`output`; on failure, `output` is reset to an empty message bound to the
-requested context.
+`clone()` binds its result to the source message's context. `clone(output)` and
+`parse(reader, output)` retain the context supplied when `output` was
+constructed. Both reference-taking operations reset and directly populate
+`output`; on failure, `output` is reset to an empty message bound to that same
+destination context.
+
+A message's context binding is non-owning. The `Context`, its allocator state,
+and any state referenced by its allocator callbacks must outlive every message
+bound to it. Moving or cloning a message does not extend those lifetimes.
 
 This only controls storage for the outer message object. Dynamic strings,
 bytes, vectors, maps, and boxed messages still allocate through `Config` and
@@ -989,7 +995,7 @@ is configured with a heap-backed allocator.
 application resource policy:
 
 - `max_total_bytes` defaults to `0x7fffffff` and bounds all wire bytes read or
-  skipped by one top-level `parse`, `merge_from`, or `merge_partial_from` call,
+  skipped by one top-level `parse` or `merge_from` call,
   including nested and unknown fields. This matches protobuf C++
   `CodedInputStream`'s default `INT_MAX` total-byte limit.
 - `max_recursion_depth` defaults to `100`, matching protobuf C++.

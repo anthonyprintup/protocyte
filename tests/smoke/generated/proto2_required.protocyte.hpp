@@ -75,9 +75,10 @@ namespace test::required {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -183,31 +184,24 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<RequiredChild> parse(Context &ctx, Reader &reader) noexcept {
             auto output = RequiredChild::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, RequiredChild &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        template<typename Reader> static ::protocyte::Status parse(Reader &reader, RequiredChild &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -215,12 +209,12 @@ namespace test::required {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
@@ -434,9 +428,10 @@ namespace test::required {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -515,31 +510,24 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<RequiredParent> parse(Context &ctx, Reader &reader) noexcept {
             auto output = RequiredParent::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, RequiredParent &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        template<typename Reader> static ::protocyte::Status parse(Reader &reader, RequiredParent &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -547,12 +535,12 @@ namespace test::required {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
@@ -792,9 +780,10 @@ namespace test::required {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -941,31 +930,25 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<Proto2ArrayDefaults> parse(Context &ctx, Reader &reader) noexcept {
             auto output = Proto2ArrayDefaults::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
         template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, Proto2ArrayDefaults &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        static ::protocyte::Status parse(Reader &reader, Proto2ArrayDefaults &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -973,12 +956,12 @@ namespace test::required {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
@@ -1246,9 +1229,10 @@ namespace test::required {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -1678,31 +1662,25 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<Proto2DefaultValues> parse(Context &ctx, Reader &reader) noexcept {
             auto output = Proto2DefaultValues::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
         template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, Proto2DefaultValues &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        static ::protocyte::Status parse(Reader &reader, Proto2DefaultValues &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -1710,12 +1688,12 @@ namespace test::required {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
@@ -3080,9 +3058,10 @@ namespace test::required {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -3157,31 +3136,25 @@ namespace test::required {
         template<typename Reader>
         static ::protocyte::Result<OneofShadowingValue> parse(Context &ctx, Reader &reader) noexcept {
             auto output = OneofShadowingValue::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
         template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, OneofShadowingValue &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        static ::protocyte::Status parse(Reader &reader, OneofShadowingValue &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -3189,12 +3162,12 @@ namespace test::required {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);

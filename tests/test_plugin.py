@@ -2293,18 +2293,12 @@ def test_generated_header_contains_expected_field_api() -> None:
     )
     assert "template <typename Reader>" in header
     assert "::protocyte::Status merge_from(Reader& reader) noexcept" in header
-    assert (
-        "::protocyte::Status merge_partial_from(InputReader& reader) noexcept" in header
-    )
-    assert (
-        "::protocyte::Status merge_partial_from(::protocyte::ReaderRef& reader) noexcept"
-        not in header
-    )
+    assert "merge_partial_from" not in header
     assert "friend class ::protocyte::MessageParseAccess;" in header
     assert "ctx_->recursion_depth != 0u" not in header
     assert "::protocyte::Status merge_fields_from(Reader& reader) noexcept" in header
     assert (
-        "::protocyte::ParseBudgetReader<InputReader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
+        "::protocyte::ParseBudgetReader<Reader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
         in header
     )
     assert "::protocyte::Status validate() const noexcept" in header
@@ -2325,11 +2319,18 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "staging_message.copy_from_in_place_(source)" in header
     assert "*this = ::protocyte::move(staging_message);" in header
     assert "::protocyte::Status clone(Sample& output) const noexcept" in header
+    assert "Context* const output_ctx = output.context();" in header
+    assert "reset_for_reuse_(output, *output_ctx);" in header
     assert "output.copy_from_in_place_(*this)" in header
     assert (
-        "static ::protocyte::Status parse(Context& ctx, Reader& reader, Sample& output) noexcept"
+        "static ::protocyte::Status parse(Reader& reader, Sample& output) noexcept"
         in header
     )
+    assert (
+        "static ::protocyte::Status parse(Context& ctx, Reader& reader, Sample& output) noexcept"
+        not in header
+    )
+    assert "if (const auto st = parse(reader, output); !st)" in header
     assert "if (const auto st = output.merge_from(reader); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
     assert "enum struct FieldNumber : ::protocyte::u32 {" in header

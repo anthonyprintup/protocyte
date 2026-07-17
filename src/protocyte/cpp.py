@@ -521,7 +521,6 @@ def _reserve_message_function_cpp_names(
         ("clone", "generated clone function"),
         ("parse", "generated parse function"),
         ("merge_from", "generated merge function"),
-        ("merge_partial_from", "generated partial merge function"),
         ("serialize", "generated serialize function"),
         ("encoded_size", "generated size function"),
         ("validate", "generated validate function"),
@@ -583,9 +582,8 @@ def _reserve_message_function_parameter_cpp_names(
     function("reset_for_reuse_", "value", "ctx")
     function("clone with output", "output")
     function("parse", "ctx", "reader")
-    function("parse with output", "ctx", "reader", "output")
+    function("parse with output", "reader", "output")
     function("merge_from", "reader")
-    function("merge_partial_from", "reader")
     if message.fields:
         function("serialize", "writer")
 
@@ -1218,10 +1216,11 @@ def _emit_clone_api(
     )
     with w.indent():
         w.line("if (this == &output) { return {}; }")
-        w.line("reset_for_reuse_(output, *ctx_);")
+        w.line("Context* const output_ctx = output.context();")
+        w.line("reset_for_reuse_(output, *output_ctx);")
         w.line("if (const auto st = output.copy_from_in_place_(*this); !st) {")
         with w.indent():
-            w.line("reset_for_reuse_(output, *ctx_);")
+            w.line("reset_for_reuse_(output, *output_ctx);")
             w.line("return st;")
         w.line("}")
         w.line("return {};")
@@ -1878,20 +1877,21 @@ def _emit_wire_api(
     with w.indent():
         w.line(f"auto output = {message.cpp_name}::create(ctx);")
         w.line(
-            "if (const auto st = parse(ctx, reader, output); !st) { return ::protocyte::unexpected(st.error()); }"
+            "if (const auto st = parse(reader, output); !st) { return ::protocyte::unexpected(st.error()); }"
         )
         w.line("return ::protocyte::move(output);")
     w.line("}")
     w.line()
     w.line("template <typename Reader>")
     w.line(
-        f"static ::protocyte::Status parse(Context& ctx, Reader& reader, {message.cpp_name}& output) noexcept {{"
+        f"static ::protocyte::Status parse(Reader& reader, {message.cpp_name}& output) noexcept {{"
     )
     with w.indent():
-        w.line("reset_for_reuse_(output, ctx);")
+        w.line("Context* const output_ctx = output.context();")
+        w.line("reset_for_reuse_(output, *output_ctx);")
         w.line("if (const auto st = output.merge_from(reader); !st) {")
         with w.indent():
-            w.line("reset_for_reuse_(output, ctx);")
+            w.line("reset_for_reuse_(output, *output_ctx);")
             w.line("return st;")
         w.line("}")
         w.line("return {};")
@@ -1900,26 +1900,19 @@ def _emit_wire_api(
     w.line("template <typename Reader>")
     w.line("::protocyte::Status merge_from(Reader& reader) noexcept {")
     with w.indent():
-        w.line("if (const auto st = merge_partial_from(reader); !st) { return st; }")
-        w.line("return validate();")
-    w.line("}")
-    w.line()
-    w.line("template <typename InputReader>")
-    w.line("::protocyte::Status merge_partial_from(InputReader& reader) noexcept {")
-    with w.indent():
         w.line(
-            "::protocyte::ParseBudgetReader<InputReader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
+            "::protocyte::ParseBudgetReader<Reader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
         )
         w.line("if (const auto st = merge_fields_from(budget_reader); !st) { return st; }")
         w.line(
             "if (budget_reader.limit_reached()) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position()); }"
         )
-        w.line("return {};")
+        w.line("return validate();")
     w.line("}")
     w.line()
+    w.line("protected:")
     w.line("friend class ::protocyte::MessageParseAccess;")
     w.line()
-    w.line("protected:")
     w.line("template <typename Reader>")
     w.line("::protocyte::Status merge_fields_from(Reader& reader) noexcept {")
     with w.indent():

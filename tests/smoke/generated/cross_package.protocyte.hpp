@@ -67,9 +67,10 @@ namespace test::crosspkg {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -147,31 +148,25 @@ namespace test::crosspkg {
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants_Nested> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossPackageConstants_Nested::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
         template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, CrossPackageConstants_Nested &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        static ::protocyte::Status parse(Reader &reader, CrossPackageConstants_Nested &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -179,12 +174,12 @@ namespace test::crosspkg {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
@@ -372,9 +367,10 @@ namespace test::crosspkg {
             if (this == &output) {
                 return {};
             }
-            reset_for_reuse_(output, *ctx_);
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.copy_from_in_place_(*this); !st) {
-                reset_for_reuse_(output, *ctx_);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
@@ -485,31 +481,25 @@ namespace test::crosspkg {
         template<typename Reader>
         static ::protocyte::Result<CrossPackageConstants> parse(Context &ctx, Reader &reader) noexcept {
             auto output = CrossPackageConstants::create(ctx);
-            if (const auto st = parse(ctx, reader, output); !st) {
+            if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
         template<typename Reader>
-        static ::protocyte::Status parse(Context &ctx, Reader &reader, CrossPackageConstants &output) noexcept {
-            reset_for_reuse_(output, ctx);
+        static ::protocyte::Status parse(Reader &reader, CrossPackageConstants &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
-                reset_for_reuse_(output, ctx);
+                reset_for_reuse_(output, *output_ctx);
                 return st;
             }
             return {};
         }
 
         template<typename Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
-            if (const auto st = merge_partial_from(reader); !st) {
-                return st;
-            }
-            return validate();
-        }
-
-        template<typename InputReader>::protocyte::Status merge_partial_from(InputReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<InputReader> budget_reader {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -517,12 +507,12 @@ namespace test::crosspkg {
             if (budget_reader.limit_reached()) {
                 return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
             }
-            return {};
+            return validate();
         }
 
+    protected:
         friend class ::protocyte::MessageParseAccess;
 
-    protected:
         template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);

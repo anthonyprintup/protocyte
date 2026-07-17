@@ -2009,34 +2009,76 @@ TEST_CASE("generated message staging overloads control full-object storage", "[s
         CHECK(source.f_int32() == 42);
     }
 
-    SECTION("clone writes directly into caller-owned output") {
-        auto ctx = make_context();
-        Message source(ctx);
+    SECTION("clone writes directly into caller-owned output using its context") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
         source.set_f_int32(42);
         require_success(source.set_f_string(view_of(string_bytes)));
 
-        Message output(ctx);
+        auto output_ctx = make_context();
+        Message output(output_ctx);
         output.set_f_int32(7);
         require_success(source.clone(output));
+        CHECK(output.context() == &output_ctx);
         CHECK(output.f_int32() == 42);
         CHECK(view_equal(output.f_string(), view_of(string_bytes)));
     }
 
-    SECTION("parse writes directly into caller-owned output") {
+    SECTION("clone applies caller-owned output allocation policy") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        source.set_f_int32(42);
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto output_ctx = make_context();
+        output_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        Message output(output_ctx);
+        output.set_f_int32(7);
+
+        require_failure(source.clone(output), protocyte::ErrorCode::no_memory);
+        CHECK(output.context() == &output_ctx);
+        CHECK(output.f_int32() == 0);
+        CHECK(output.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
+
+    SECTION("parse writes directly into caller-owned output using its context") {
         uint8_t encoded[64] = {};
         protocyte::SliceWriter writer(encoded, sizeof(encoded));
         require_success(protocyte::write_int32_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_int32), 42));
         require_success(protocyte::write_string_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
                                                       view_of(string_bytes)));
 
-        auto ctx = make_context();
-        Message output(ctx);
+        auto output_ctx = make_context();
+        Message output(output_ctx);
         output.set_f_int32(7);
         protocyte::SliceReader reader(encoded, writer.position());
-        require_success(Message::parse(ctx, reader, output));
+        require_success(Message::parse(reader, output));
         CHECK(reader.eof());
+        CHECK(output.context() == &output_ctx);
         CHECK(output.f_int32() == 42);
         CHECK(view_equal(output.f_string(), view_of(string_bytes)));
+    }
+
+    SECTION("parse applies caller-owned output allocation policy") {
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_string_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
+                                                      view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto output_ctx = make_context();
+        output_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        Message output(output_ctx);
+        output.set_f_int32(7);
+        protocyte::SliceReader reader(encoded, writer.position());
+
+        require_failure(Message::parse(reader, output), protocyte::ErrorCode::no_memory);
+        CHECK(output.context() == &output_ctx);
+        CHECK(output.f_int32() == 0);
+        CHECK(output.f_string().empty());
+        CHECK(probe.calls > 0u);
     }
 }
 
@@ -4985,14 +5027,14 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         exact_ctx.limits.max_total_bytes = writer.position();
         Message exact(exact_ctx);
         protocyte::SliceReader exact_reader(encoded, writer.position());
-        require_success(exact.merge_partial_from(exact_reader));
+        require_success(exact.merge_from(exact_reader));
         CHECK(exact_reader.eof());
 
         auto limited_ctx = make_context();
         limited_ctx.limits.max_total_bytes = writer.position() - 1u;
         Message limited(limited_ctx);
         protocyte::SliceReader limited_reader(encoded, writer.position());
-        require_failure(limited.merge_partial_from(limited_reader), protocyte::ErrorCode::size_limit);
+        require_failure(limited.merge_from(limited_reader), protocyte::ErrorCode::size_limit);
         CHECK(limited_ctx.recursion_depth == 0u);
     }
 
@@ -5013,7 +5055,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         };
         protocyte::ReaderRef erased {prebudgeted};
 
-        require_failure(parsed.merge_partial_from(erased), protocyte::ErrorCode::size_limit);
+        require_failure(parsed.merge_from(erased), protocyte::ErrorCode::size_limit);
         CHECK(ctx.recursion_depth == 0u);
     }
 
@@ -5030,7 +5072,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         RepeatedBytesHolder parsed(ctx);
         protocyte::SliceReader reader(encoded, writer.position());
 
-        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
         CHECK(probe.calls == 0u);
         CHECK(probe.largest == 0u);
     }
@@ -5055,7 +5097,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         Message parsed(ctx);
         protocyte::SliceReader reader(encoded, writer.position());
 
-        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
         CHECK(probe.calls == 0u);
         CHECK(probe.largest == 0u);
         CHECK(ctx.recursion_depth == 0u);
@@ -5218,7 +5260,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
 
             CompatMessage parsed(ctx);
             protocyte::SliceReader reader(encoded, writer.position());
-            require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::unexpected_eof);
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
             CHECK(reader.position() == writer.position());
             CHECK(probe.calls == 0u);
             CHECK(probe.largest == 0u);
