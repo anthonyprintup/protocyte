@@ -1091,6 +1091,138 @@ def test_public_cmake_functions_reject_mutually_exclusive_arguments(
 
 
 @pytest.mark.parametrize(
+    ("function_name", "one_value_keywords"),
+    [
+        (
+            "protocyte_generate",
+            (
+                "TARGET",
+                "DESCRIPTOR_SET",
+                "PROTO_ROOT",
+                "OUT_DIR",
+                "GENERATED_HEADERS_VAR",
+                "GENERATED_SOURCES_VAR",
+                "GENERATED_TARGET_VAR",
+                "RUNTIME_PREFIX",
+                "NAMESPACE_PREFIX",
+                "INCLUDE_PREFIX",
+            ),
+        ),
+        (
+            "protocyte_add_proto_library",
+            (
+                "TARGET",
+                "ALIAS",
+                "TYPE",
+                "DESCRIPTOR_SET",
+                "PROTO_ROOT",
+                "OUT_DIR",
+                "GENERATED_HEADERS_VAR",
+                "GENERATED_SOURCES_VAR",
+                "GENERATED_TARGET_VAR",
+                "RUNTIME_TARGET",
+                "RUNTIME_PREFIX",
+                "NAMESPACE_PREFIX",
+                "INCLUDE_PREFIX",
+            ),
+        ),
+        (
+            "protocyte_add_descriptor_set_library",
+            (
+                "TARGET",
+                "ALIAS",
+                "TYPE",
+                "DESCRIPTOR_SET",
+                "OUT_DIR",
+                "GENERATED_HEADERS_VAR",
+                "GENERATED_SOURCES_VAR",
+                "GENERATED_TARGET_VAR",
+                "RUNTIME_TARGET",
+                "RUNTIME_PREFIX",
+                "NAMESPACE_PREFIX",
+                "INCLUDE_PREFIX",
+            ),
+        ),
+    ],
+)
+def test_public_cmake_functions_reject_duplicate_single_value_keywords(
+    tmp_path: Path,
+    function_name: str,
+    one_value_keywords: tuple[str, ...],
+) -> None:
+    duplicate_arguments = " ".join(
+        f"{keyword} first {keyword} second" for keyword in one_value_keywords
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f"{function_name}({duplicate_arguments})",
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    expected_keywords = ", ".join(one_value_keywords)
+    assert (
+        f"{function_name} received duplicate single-value keyword(s): "
+        f"{expected_keywords}"
+    ) in output
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        """
+function(_protocyte_setup_codegen_internal fetch_missing_import_sources)
+    message(FATAL_ERROR "reached protocyte_generate downstream validation")
+endfunction()
+protocyte_generate(
+    TARGET demo
+    PROTO_ROOT proto
+    OUT_DIR generated
+    PROTOS proto/simple.proto proto/simple.proto
+    PROTOS proto/simple.proto
+)
+""",
+        """
+function(protocyte_generate)
+    message(FATAL_ERROR "reached protocyte_add_proto_library downstream validation")
+endfunction()
+protocyte_add_proto_library(
+    TARGET demo
+    PROTO_ROOT proto
+    PROTOS proto/simple.proto proto/simple.proto
+    PROTOS proto/simple.proto
+)
+""",
+        """
+function(protocyte_add_proto_library)
+    message(FATAL_ERROR "reached protocyte_add_descriptor_set_library downstream validation")
+endfunction()
+protocyte_add_descriptor_set_library(
+    TARGET demo
+    DESCRIPTOR_SET descriptors.pb
+    FILES simple.proto simple.proto
+    FILES simple.proto
+)
+""",
+    ],
+)
+def test_duplicate_keyword_validation_allows_repeated_multi_value_lists(
+    tmp_path: Path,
+    snippet: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        snippet,
+        files={"proto/simple.proto": 'syntax = "proto3"; message Demo {}\n'},
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "reached protocyte_" in output
+    assert "duplicate single-value keyword" not in output
+
+
+@pytest.mark.parametrize(
     "function_name",
     [
         "protocyte_generate",
@@ -1169,6 +1301,29 @@ def test_public_cmake_functions_accept_forwarded_key_value_syntax(
         assert f"{function_name} requires DESCRIPTOR_SET" in output
     else:
         assert f"{function_name} requires TARGET" in output
+
+
+def test_duplicate_keyword_validation_preserves_semicolon_descriptor_value(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        """
+function(protocyte_add_proto_library)
+    message(FATAL_ERROR "reached descriptor wrapper downstream validation")
+endfunction()
+protocyte_add_descriptor_set_library(
+    TARGET demo
+    DESCRIPTOR_SET descriptors.pb
+    FILES "api/demo;TARGET;legacy.proto"
+)
+""",
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "reached descriptor wrapper downstream validation" in output
+    assert "duplicate single-value keyword" not in output
 
 
 @pytest.mark.parametrize(

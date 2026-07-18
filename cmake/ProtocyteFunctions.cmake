@@ -393,6 +393,43 @@ function(_protocyte_validate_parsed_arguments function_name unparsed_arguments m
     endif()
 endfunction()
 
+macro(_protocyte_validate_unique_one_value_keywords_from_argv function_name one_value_keywords argument_count)
+    set(_protocyte_duplicate_keywords)
+    set(_protocyte_one_value_keywords "${one_value_keywords}")
+    if(${argument_count} GREATER 0)
+        math(EXPR _protocyte_last_argument_index "${argument_count} - 1")
+        foreach(_protocyte_keyword IN LISTS _protocyte_one_value_keywords)
+            set(_protocyte_keyword_count 0)
+            foreach(_protocyte_argument_index RANGE 0 ${_protocyte_last_argument_index})
+                set(_protocyte_argument_variable "ARGV${_protocyte_argument_index}")
+                if("${${_protocyte_argument_variable}}" STREQUAL "${_protocyte_keyword}")
+                    math(EXPR _protocyte_keyword_count "${_protocyte_keyword_count} + 1")
+                endif()
+            endforeach()
+            if(_protocyte_keyword_count GREATER 1)
+                list(APPEND _protocyte_duplicate_keywords "${_protocyte_keyword}")
+            endif()
+        endforeach()
+    endif()
+
+    if(_protocyte_duplicate_keywords)
+        list(JOIN _protocyte_duplicate_keywords ", " _protocyte_duplicate_keywords_text)
+        message(
+            FATAL_ERROR
+            "${function_name} received duplicate single-value keyword(s): ${_protocyte_duplicate_keywords_text}"
+        )
+    endif()
+
+    unset(_protocyte_argument_index)
+    unset(_protocyte_argument_variable)
+    unset(_protocyte_duplicate_keywords)
+    unset(_protocyte_duplicate_keywords_text)
+    unset(_protocyte_keyword)
+    unset(_protocyte_keyword_count)
+    unset(_protocyte_last_argument_index)
+    unset(_protocyte_one_value_keywords)
+endmacro()
+
 function(_protocyte_append_forwarded_values arguments_var keyword values_var)
     set(arguments "${${arguments_var}}")
     list(APPEND arguments "${keyword}")
@@ -1317,6 +1354,11 @@ function(protocyte_generate)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_generate"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
     cmake_parse_arguments(
         PARSE_ARGV
         0
@@ -1769,6 +1811,11 @@ function(protocyte_add_proto_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_add_proto_library"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
     cmake_parse_arguments(
         PARSE_ARGV
         0
@@ -1967,6 +2014,11 @@ function(protocyte_add_descriptor_set_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs FILES DEPENDS OPTIONS)
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_add_descriptor_set_library"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
     cmake_parse_arguments(
         PARSE_ARGV
         0

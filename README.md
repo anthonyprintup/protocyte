@@ -679,7 +679,8 @@ not apply because the descriptor set already carries its dependency descriptors.
 
 All public helpers reject unknown arguments during configuration.
 `protocyte_generate`, `protocyte_add_proto_library`, and
-`protocyte_add_descriptor_set_library` also reject keywords without values.
+`protocyte_add_descriptor_set_library` also reject keywords without values and
+duplicate single-value keywords.
 
 ## Debugging
 
