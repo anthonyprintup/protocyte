@@ -467,6 +467,163 @@ function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_nam
     set(${out_sources} "${sources}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_owned_output_key out_var output_path)
+    cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
+    set(output_identity "${normalized_output_path}")
+    if(CMAKE_HOST_WIN32)
+        string(TOLOWER "${output_identity}" output_identity)
+    endif()
+    string(SHA256 output_key "${output_identity}")
+    set(${out_var} "${output_key}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_generated_output_path_is_safe out_var output_path output_root)
+    set(is_safe FALSE)
+    if(IS_ABSOLUTE "${output_path}" AND IS_ABSOLUTE "${output_root}")
+        cmake_path(
+            IS_PREFIX output_root
+            "${output_path}"
+            NORMALIZE
+            output_is_under_root
+        )
+        if(
+            output_is_under_root
+            AND output_path MATCHES "([.]protocyte[.](hpp|cpp)|/runtime[.]hpp)$"
+        )
+            set(is_safe TRUE)
+        endif()
+    endif()
+    set(${out_var} "${is_safe}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_finalize_owned_outputs)
+    get_property(target_keys GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_TARGET_KEYS)
+    foreach(target_key IN LISTS target_keys)
+        get_property(
+            manifest_dir
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_DIR_${target_key}"
+        )
+        get_property(
+            current_output_root
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_ROOT_${target_key}"
+        )
+        get_property(
+            current_output_keys
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${target_key}"
+        )
+
+        set(previous_output_root_file "${manifest_dir}/output-root.path")
+        set(previous_output_root "")
+        if(EXISTS "${previous_output_root_file}")
+            file(READ "${previous_output_root_file}" previous_output_root)
+        endif()
+
+        file(GLOB previous_markers LIST_DIRECTORIES FALSE "${manifest_dir}/*.path")
+        list(REMOVE_ITEM previous_markers "${previous_output_root_file}")
+        foreach(previous_marker IN LISTS previous_markers)
+            cmake_path(GET previous_marker STEM previous_output_key)
+            file(READ "${previous_marker}" previous_output)
+            _protocyte_owned_output_key(recorded_output_key "${previous_output}")
+            _protocyte_generated_output_path_is_safe(
+                previous_output_is_safe
+                "${previous_output}"
+                "${previous_output_root}"
+            )
+            get_property(
+                output_is_still_owned
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_CURRENT_${previous_output_key}"
+                SET
+            )
+            if(
+                previous_output_is_safe
+                AND recorded_output_key STREQUAL previous_output_key
+                AND NOT output_is_still_owned
+            )
+                file(REMOVE "${previous_output}")
+            endif()
+            file(REMOVE "${previous_marker}")
+        endforeach()
+
+        file(MAKE_DIRECTORY "${manifest_dir}")
+        file(WRITE "${previous_output_root_file}" "${current_output_root}")
+        foreach(current_output_key IN LISTS current_output_keys)
+            get_property(
+                current_output
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PATH_${current_output_key}"
+            )
+            file(WRITE "${manifest_dir}/${current_output_key}.path" "${current_output}")
+        endforeach()
+    endforeach()
+endfunction()
+
+function(_protocyte_register_owned_outputs target_name output_root outputs_var)
+    cmake_path(NORMAL_PATH output_root OUTPUT_VARIABLE normalized_output_root)
+    string(
+        SHA256
+        target_key
+        "${CMAKE_CURRENT_BINARY_DIR}|${target_name}"
+    )
+    set(
+        manifest_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-owned-outputs/${target_key}"
+    )
+    set(current_output_keys)
+    foreach(output_path IN LISTS ${outputs_var})
+        cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
+        _protocyte_owned_output_key(output_key "${normalized_output_path}")
+        list(APPEND current_output_keys "${output_key}")
+        set_property(
+            GLOBAL PROPERTY
+            "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PATH_${output_key}"
+            "${normalized_output_path}"
+        )
+        set_property(
+            GLOBAL PROPERTY
+            "PROTOCYTE_INTERNAL_OWNED_OUTPUT_CURRENT_${output_key}"
+            TRUE
+        )
+    endforeach()
+
+    set_property(
+        GLOBAL APPEND PROPERTY
+        PROTOCYTE_INTERNAL_OWNED_OUTPUT_TARGET_KEYS
+        "${target_key}"
+    )
+    set_property(
+        GLOBAL PROPERTY
+        "PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_DIR_${target_key}"
+        "${manifest_dir}"
+    )
+    set_property(
+        GLOBAL PROPERTY
+        "PROTOCYTE_INTERNAL_OWNED_OUTPUT_ROOT_${target_key}"
+        "${normalized_output_root}"
+    )
+    set_property(
+        GLOBAL PROPERTY
+        "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${target_key}"
+        "${current_output_keys}"
+    )
+
+    get_property(
+        cleanup_scheduled
+        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
+        SET
+    )
+    if(NOT cleanup_scheduled)
+        set_property(
+            GLOBAL PROPERTY
+            PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
+            TRUE
+        )
+        cmake_language(
+            DEFER
+            DIRECTORY "${CMAKE_SOURCE_DIR}"
+            CALL _protocyte_finalize_owned_outputs
+        )
+    endif()
+endfunction()
+
 function(_protocyte_parse_discovered_descriptor_names out_var discovered_json)
     string(JSON discovered_count ERROR_VARIABLE json_error LENGTH "${discovered_json}")
     if(NOT json_error STREQUAL "NOTFOUND")
@@ -1725,6 +1882,11 @@ function(protocyte_generate)
     endif()
 
     set(protocyte_command_outputs "${protocyte_outputs}")
+    _protocyte_register_owned_outputs(
+        "${PROTOCYTE_TARGET}"
+        "${PROTOCYTE_OUT_DIR}"
+        protocyte_command_outputs
+    )
     set(protocyte_response_content "")
     if(NOT "${protoc_descriptor_argument}" STREQUAL "")
         _protocyte_append_protoc_response_argument(
