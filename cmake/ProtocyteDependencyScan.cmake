@@ -5,6 +5,7 @@ foreach(
     IN ITEMS
         PROTOC_EXECUTABLE
         ARGUMENT_FILE
+        LOCK_FILE
         PROTO_FILE
         SCAN_WORKING_DIRECTORY
 )
@@ -12,6 +13,21 @@ foreach(
         message(FATAL_ERROR "Protocyte dependency scan requires ${required_variable}")
     endif()
 endforeach()
+
+cmake_path(GET LOCK_FILE PARENT_PATH lock_directory)
+file(MAKE_DIRECTORY "${lock_directory}")
+file(
+    LOCK "${LOCK_FILE}"
+    GUARD PROCESS
+    TIMEOUT 600
+    RESULT_VARIABLE lock_result
+)
+if(NOT "${lock_result}" STREQUAL "0")
+    message(
+        FATAL_ERROR
+        "Failed to lock the dependency-scan output for '${PROTO_FILE}': ${lock_result}"
+    )
+endif()
 
 execute_process(
     COMMAND
