@@ -2396,6 +2396,208 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
 
+def test_source_codegen_normalizes_equivalent_proto_paths_before_deduplication(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    (proto_dir / "nested").mkdir(parents=True)
+    proto_file = proto_dir / "demo.proto"
+    proto_file.write_text(
+        'syntax = "proto3"; package demo; message Demo {}\n', encoding="utf-8"
+    )
+    plugin = _installed_protocyte_plugin()
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(normalized_source_paths LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/demo.proto proto/nested/../demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
+        check=True,
+    )
+
+    assert (build_dir / "generated" / "demo.protocyte.hpp").is_file()
+    response_texts = [
+        path.read_text(encoding="utf-8")
+        for path in (build_dir / "CMakeFiles" / "protocyte-arguments").glob("*.rsp")
+    ]
+    generation_responses = [
+        text
+        for text in response_texts
+        if "--plugin=protoc-gen-protocyte=" in text
+    ]
+    dependency_responses = [
+        text for text in response_texts if "--dependency_out=" in text
+    ]
+    normalized_proto = proto_file.resolve().as_posix()
+    assert len(generation_responses) == 1
+    assert generation_responses[0].splitlines().count(normalized_proto) == 1
+    assert len(dependency_responses) == 1
+    assert dependency_responses[0].splitlines().count(normalized_proto) == 1
+    assert "/nested/../" not in "\n".join(response_texts).replace("\\", "/")
+
+
+def test_source_codegen_preserves_semicolon_proto_path_end_to_end(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    proto_file = proto_dir / "demo;legacy.proto"
+    proto_file.write_text(
+        'syntax = "proto3"; package demo; message Legacy {}\n', encoding="utf-8"
+    )
+    plugin = _installed_protocyte_plugin()
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(semicolon_source_path LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS [==[proto/demo;legacy.proto]==]",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
+        check=True,
+    )
+
+    assert (build_dir / "generated" / "demo~3Blegacy.protocyte.hpp").is_file()
+    response_texts = [
+        path.read_text(encoding="utf-8")
+        for path in (build_dir / "CMakeFiles" / "protocyte-arguments").glob("*.rsp")
+    ]
+    generation_responses = [
+        text
+        for text in response_texts
+        if "--plugin=protoc-gen-protocyte=" in text
+    ]
+    dependency_responses = [
+        text for text in response_texts if "--dependency_out=" in text
+    ]
+    normalized_proto = proto_file.resolve().as_posix()
+    assert len(generation_responses) == 1
+    assert generation_responses[0].splitlines().count(normalized_proto) == 1
+    assert len(dependency_responses) == 1
+    assert dependency_responses[0].splitlines().count(normalized_proto) == 1
+
+
+def test_source_codegen_accepts_in_root_dotdot_prefixed_filename(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    (proto_dir / "..hidden.proto").write_text(
+        'syntax = "proto3"; package demo; message Hidden {}\n', encoding="utf-8"
+    )
+    plugin = _installed_protocyte_plugin()
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(dotdot_prefixed_source LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/..hidden.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
+        check=True,
+    )
+
+    assert (build_dir / "generated" / "..hidden.protocyte.hpp").is_file()
+
+
+def test_generate_rejects_existing_source_outside_proto_root(tmp_path: Path) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        " ".join(
+            [
+                "protocyte_generate(",
+                "TARGET demo_codegen",
+                "PROTO_ROOT proto",
+                "OUT_DIR generated",
+                "PROTOS outside.proto",
+                ")",
+            ]
+        ),
+        files={
+            "proto/inside.proto": 'syntax = "proto3"; message Inside {}\n',
+            "outside.proto": 'syntax = "proto3"; message Outside {}\n',
+        },
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "is outside PROTO_ROOT" in output
+
+
 def test_source_codegen_regenerates_when_transitive_import_changes(
     tmp_path: Path,
 ) -> None:

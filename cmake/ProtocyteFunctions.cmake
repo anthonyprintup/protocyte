@@ -1494,11 +1494,20 @@ function(protocyte_generate)
             list(APPEND normalized_proto_files "${proto_file_list_element}")
         endforeach()
     else()
+        # CMake list mutators discard escaped semicolons. Use a hexadecimal
+        # sort key and a digest-backed scalar mapping until sorting and exact
+        # duplicate removal are complete, then rebuild the escaped path list.
+        set(normalized_proto_file_entries)
         foreach(proto_file IN LISTS protocyte_proto_files)
             if(IS_ABSOLUTE "${proto_file}")
-                set(proto_abs "${proto_file}")
+                cmake_path(NORMAL_PATH proto_file OUTPUT_VARIABLE proto_abs)
             else()
-                cmake_path(ABSOLUTE_PATH proto_file BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE proto_abs)
+                cmake_path(
+                    ABSOLUTE_PATH proto_file
+                    BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    NORMALIZE
+                    OUTPUT_VARIABLE proto_abs
+                )
             endif()
 
             if(NOT EXISTS "${proto_abs}" OR IS_DIRECTORY "${proto_abs}")
@@ -1506,14 +1515,23 @@ function(protocyte_generate)
             endif()
 
             file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_abs}")
-            if(proto_rel MATCHES "^[.][.]")
+            if(proto_rel STREQUAL ".." OR proto_rel MATCHES "^[.][.][/\\\\]")
                 message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
             endif()
 
-            list(APPEND normalized_proto_files "${proto_abs}")
+            string(HEX "${proto_abs}" proto_abs_sort_key)
+            string(SHA256 proto_abs_key "${proto_abs}")
+            set("protocyte_normalized_proto_file_${proto_abs_key}" "${proto_abs}")
+            list(APPEND normalized_proto_file_entries "${proto_abs_sort_key}:${proto_abs_key}")
         endforeach()
-        list(REMOVE_DUPLICATES normalized_proto_files)
-        list(SORT normalized_proto_files)
+        list(REMOVE_DUPLICATES normalized_proto_file_entries)
+        list(SORT normalized_proto_file_entries)
+        foreach(proto_file_entry IN LISTS normalized_proto_file_entries)
+            string(REGEX REPLACE "^.*:" "" proto_abs_key "${proto_file_entry}")
+            set(proto_abs_variable "protocyte_normalized_proto_file_${proto_abs_key}")
+            string(REPLACE ";" "\\;" proto_abs_list_element "${${proto_abs_variable}}")
+            list(APPEND normalized_proto_files "${proto_abs_list_element}")
+        endforeach()
     endif()
 
     if(NOT protocyte_has_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
@@ -1613,7 +1631,7 @@ function(protocyte_generate)
     set(protoc_descriptor_argument)
     set(protocyte_input_depends)
     if(NOT protocyte_has_DESCRIPTOR_SET)
-        set(protocyte_input_depends ${normalized_proto_files})
+        set(protocyte_input_depends "${normalized_proto_files}")
         set(
             protocyte_import_dirs
             "${protocyte_proto_root}"
