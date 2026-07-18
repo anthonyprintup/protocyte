@@ -16,6 +16,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  protobuf-fallback:
+    name: Protobuf Fallback
+    uses: ./.github/workflows/protobuf-fallback.yml
+
   plugin:
     name: Plugin (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

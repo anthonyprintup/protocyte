@@ -139,6 +139,7 @@ if(PROTOCYTE_INSTALL)
             "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
             VERSION "${PROJECT_VERSION}"
             COMPATIBILITY ExactVersion
+            ARCH_INDEPENDENT
         )
     endif()
 
