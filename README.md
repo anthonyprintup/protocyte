@@ -291,7 +291,8 @@ set(PROTOCYTE_INSTALL ON)
 FetchContent_MakeAvailable(protocyte)
 ```
 
-Non-runtime generator options can be forwarded through `OPTIONS`:
+Non-runtime generator options can be forwarded through `OPTIONS`. Each entry
+must use `key=value`; bare entries are rejected during configuration:
 
 ```cmake
 protocyte_add_proto_library(
@@ -552,6 +553,8 @@ This is the lower-level primitive. It creates the custom target named by
   or CMake targets. Use it for project-specific prerequisite files or targets
   that Protocyte does not otherwise track.
 - `OPTIONS` forwards non-runtime [plugin parameters](#plugin-parameters).
+  Each entry must use `key=value`; bare entries are rejected during
+  configuration.
   Do not pass `runtime` or `runtime_prefix` here; use `EMIT_RUNTIME` and
   `RUNTIME_PREFIX` so CMake can declare the generated runtime output correctly.
   Names beginning with `_protocyte_` are reserved. Do not duplicate
@@ -744,6 +747,8 @@ generated files into source control should either use `format=off`, or use
 
 CMake users can forward non-runtime parameters through the existing `OPTIONS`
 argument on `protocyte_generate(...)` or `protocyte_add_proto_library(...)`.
+Every forwarded entry must use `key=value`; CMake rejects bare entries during
+configuration with the name of the public helper that received them.
 Absolute Windows and POSIX formatter paths are safe in `OPTIONS`; include
 prefixes remain relative virtual directories. Runtime state is the exception:
 use the dedicated `EMIT_RUNTIME` and `RUNTIME_PREFIX` arguments so CMake can

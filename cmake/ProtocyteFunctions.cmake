@@ -128,13 +128,17 @@ function(_protocyte_validate_virtual_directory_prefix parameter_name value)
     endforeach()
 endfunction()
 
-function(_protocyte_validate_forwarded_generator_options)
+function(_protocyte_validate_forwarded_generator_options function_name)
     foreach(generator_option IN LISTS ARGN)
         string(REPLACE "," ";" generator_option_parts "${generator_option}")
         foreach(generator_option_part IN LISTS generator_option_parts)
             string(FIND "${generator_option_part}" "=" option_separator)
             if(option_separator EQUAL -1)
-                continue()
+                string(STRIP "${generator_option_part}" generator_option_part)
+                message(
+                    FATAL_ERROR
+                    "${function_name} OPTIONS entry '${generator_option_part}' must use key=value"
+                )
             endif()
             string(SUBSTRING "${generator_option_part}" 0 ${option_separator} generator_option_name)
             string(STRIP "${generator_option_name}" generator_option_name)
@@ -144,12 +148,12 @@ function(_protocyte_validate_forwarded_generator_options)
             if(generator_option_name MATCHES "^_protocyte_")
                 message(
                     FATAL_ERROR
-                    "protocyte_generate OPTIONS must not use reserved _protocyte_ transport parameters"
+                    "${function_name} OPTIONS must not use reserved _protocyte_ transport parameters"
                 )
             elseif(generator_option_name STREQUAL "runtime" OR generator_option_name STREQUAL "runtime_prefix")
                 message(
                     FATAL_ERROR
-                    "protocyte_generate OPTIONS must not set runtime or runtime_prefix; "
+                    "${function_name} OPTIONS must not set runtime or runtime_prefix; "
                     "use EMIT_RUNTIME and RUNTIME_PREFIX so CMake can declare runtime outputs consistently"
                 )
             elseif(generator_option_name STREQUAL "include_prefix")
@@ -1326,6 +1330,7 @@ function(protocyte_generate)
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
         "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
     )
+    _protocyte_validate_forwarded_generator_options("protocyte_generate" ${PROTOCYTE_OPTIONS})
 
     foreach(name IN LISTS oneValueArgs multiValueArgs)
         _protocyte_value_is_nonempty(protocyte_has_${name} PROTOCYTE_${name})
@@ -1356,7 +1361,6 @@ function(protocyte_generate)
     if(PROTOCYTE_DISCOVER AND protocyte_has_PROTOS)
         message(FATAL_ERROR "protocyte_generate accepts either DISCOVER or PROTOS, not both")
     endif()
-    _protocyte_validate_forwarded_generator_options(${PROTOCYTE_OPTIONS})
 
     if(protocyte_has_DESCRIPTOR_SET)
         if(IS_ABSOLUTE "${PROTOCYTE_DESCRIPTOR_SET}")
@@ -1778,6 +1782,7 @@ function(protocyte_add_proto_library)
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
         "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
     )
+    _protocyte_validate_forwarded_generator_options("protocyte_add_proto_library" ${PROTOCYTE_OPTIONS})
 
     foreach(name IN LISTS oneValueArgs multiValueArgs)
         _protocyte_value_is_nonempty(protocyte_has_${name} PROTOCYTE_${name})
@@ -1974,6 +1979,10 @@ function(protocyte_add_descriptor_set_library)
         "protocyte_add_descriptor_set_library"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
         "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
+    )
+    _protocyte_validate_forwarded_generator_options(
+        "protocyte_add_descriptor_set_library"
+        ${PROTOCYTE_OPTIONS}
     )
 
     foreach(name IN LISTS oneValueArgs multiValueArgs)

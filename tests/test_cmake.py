@@ -926,7 +926,7 @@ def test_proto_library_forwards_false_like_scalar_and_list_arguments(
                 "    PROTOS OFF",
                 "    IMPORT_DIRS NO",
                 "    DEPENDS FALSE",
-                "    OPTIONS 0",
+                "    OPTIONS comments=off",
                 "    RUNTIME_TARGET FALSE",
                 "    RUNTIME_PREFIX 0",
                 "    NAMESPACE_PREFIX NO",
@@ -954,7 +954,7 @@ def test_proto_library_forwards_false_like_scalar_and_list_arguments(
     assert "PROTOS=OFF" in forwarded
     assert "IMPORT_DIRS=NO" in forwarded
     assert "DEPENDS=FALSE" in forwarded
-    assert "OPTIONS=0" in forwarded
+    assert "OPTIONS=comments=off" in forwarded
     assert "RUNTIME_PREFIX=0" in forwarded
     assert "NAMESPACE_PREFIX=NO" in forwarded
     assert "INCLUDE_PREFIX=OFF" in forwarded
@@ -1003,7 +1003,7 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
                 "    OUT_DIR 0",
                 "    FILES OFF",
                 "    DEPENDS NO",
-                "    OPTIONS FALSE",
+                "    OPTIONS comments=off",
                 "    RUNTIME_TARGET OFF",
                 "    RUNTIME_PREFIX NO",
                 "    NAMESPACE_PREFIX FALSE",
@@ -1028,7 +1028,7 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
     assert "OUT_DIR=0" in forwarded
     assert "PROTOS=OFF" in forwarded
     assert "DEPENDS=NO" in forwarded
-    assert "OPTIONS=FALSE" in forwarded
+    assert "OPTIONS=comments=off" in forwarded
     assert "RUNTIME_TARGET=OFF" in forwarded
     assert "RUNTIME_PREFIX=NO" in forwarded
     assert "NAMESPACE_PREFIX=FALSE" in forwarded
@@ -1088,6 +1088,87 @@ def test_public_cmake_functions_reject_mutually_exclusive_arguments(
     assert result.returncode != 0
     output = " ".join((result.stdout + result.stderr).split())
     assert expected_error in output
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        "protocyte_generate",
+        "protocyte_add_proto_library",
+        "protocyte_add_descriptor_set_library",
+    ],
+)
+def test_public_cmake_functions_reject_options_without_values(
+    tmp_path: Path,
+    function_name: str,
+) -> None:
+    result = _configure_cmake_snippet(tmp_path, f"{function_name}(OPTIONS)")
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        f"{function_name} requires a value for the following keyword(s): OPTIONS"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    ("function_name", "forwarded_option"),
+    [
+        (function_name, forwarded_option)
+        for function_name in (
+            "protocyte_generate",
+            "protocyte_add_proto_library",
+            "protocyte_add_descriptor_set_library",
+        )
+        for forwarded_option in (
+            "HOSTED_ALOCATOR",
+            "comments=off,HOSTED_ALOCATOR",
+        )
+    ],
+)
+def test_public_cmake_functions_reject_bare_forwarded_options(
+    tmp_path: Path,
+    function_name: str,
+    forwarded_option: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f"{function_name}(OPTIONS {forwarded_option})",
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        f"{function_name} OPTIONS entry 'HOSTED_ALOCATOR' must use key=value"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        "protocyte_generate",
+        "protocyte_add_proto_library",
+        "protocyte_add_descriptor_set_library",
+    ],
+)
+def test_public_cmake_functions_accept_forwarded_key_value_syntax(
+    tmp_path: Path,
+    function_name: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f'{function_name}(OPTIONS "comments=off" "clang_format=")',
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "OPTIONS entry" not in output
+    if function_name == "protocyte_add_descriptor_set_library":
+        assert f"{function_name} requires DESCRIPTOR_SET" in output
+    else:
+        assert f"{function_name} requires TARGET" in output
 
 
 @pytest.mark.parametrize(
