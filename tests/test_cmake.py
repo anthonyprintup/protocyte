@@ -1042,6 +1042,58 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
     ("invocation", "expected_error"),
     [
         (
+            "protocyte_generate(TARGET demo PROTO_ROOT proto OUT_DIR generated DISCOVER PROTOS proto/demo.proto)",
+            "protocyte_generate accepts either DISCOVER or PROTOS, not both",
+        ),
+        (
+            "protocyte_add_proto_library(TARGET demo PROTO_ROOT proto DISCOVER PROTOS proto/demo.proto)",
+            "protocyte_add_proto_library accepts either DISCOVER or PROTOS, not both",
+        ),
+        (
+            "protocyte_add_descriptor_set_library(TARGET demo DESCRIPTOR_SET descriptor_set.pb DISCOVER FILES demo.proto)",
+            "protocyte_add_descriptor_set_library accepts either DISCOVER or FILES, not both",
+        ),
+        (
+            "protocyte_add_proto_library(TARGET demo PROTO_ROOT proto DISCOVER PROTOS OFF)",
+            "protocyte_add_proto_library accepts either DISCOVER or PROTOS, not both",
+        ),
+        (
+            "protocyte_add_descriptor_set_library(TARGET demo DESCRIPTOR_SET descriptor_set.pb DISCOVER FILES OFF)",
+            "protocyte_add_descriptor_set_library accepts either DISCOVER or FILES, not both",
+        ),
+        (
+            "protocyte_add_proto_library(TARGET demo DESCRIPTOR_SET descriptor_set.pb PROTO_ROOT proto PROTOS proto/demo.proto)",
+            "protocyte_add_proto_library accepts either DESCRIPTOR_SET or PROTO_ROOT, not both",
+        ),
+        (
+            "protocyte_add_proto_library(TARGET demo PROTO_ROOT proto PROTOS proto/demo.proto EMIT_RUNTIME RUNTIME_TARGET protocyte::runtime)",
+            "protocyte_add_proto_library accepts either EMIT_RUNTIME or RUNTIME_TARGET, not both",
+        ),
+    ],
+)
+def test_public_cmake_functions_reject_mutually_exclusive_arguments(
+    tmp_path: Path,
+    invocation: str,
+    expected_error: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        invocation,
+        files={
+            "descriptor_set.pb": "placeholder",
+            "proto/demo.proto": 'syntax = "proto3";\n',
+        },
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert expected_error in output
+
+
+@pytest.mark.parametrize(
+    ("invocation", "expected_error"),
+    [
+        (
             "protocyte_generate(TARGET demo PROTO_ROOT missing OUT_DIR generated DISCOVER)",
             "protocyte_generate PROTO_ROOT must be an existing directory:",
         ),
