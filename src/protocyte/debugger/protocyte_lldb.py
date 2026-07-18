@@ -55,6 +55,32 @@ def _is_named_type(type_, type_name):
     return name == type_name or name == "::" + type_name
 
 
+def _canonicalized_lldb_type(type_):
+    current = type_
+    for method_name in ("GetCanonicalType", "GetUnqualifiedType"):
+        method = getattr(current, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            transformed = method()
+            transformed_is_valid = (
+                transformed is not None and transformed.IsValid()
+            )
+        except Exception:
+            continue
+        if transformed_is_valid:
+            current = transformed
+    return current
+
+
+def _is_canonical_named_type(value, type_name):
+    try:
+        value_type = value.GetType()
+    except Exception:
+        return False
+    return _is_named_type(_canonicalized_lldb_type(value_type), type_name)
+
+
 def is_result_type(type_, _internal_dict):
     return _is_template_type(type_, "protocyte::Result")
 
@@ -551,6 +577,8 @@ def status_summary(value, _internal_dict):
 
 
 def _structured_error_summary(value):
+    if not _is_canonical_named_type(value, "protocyte::Error"):
+        return None
     code = _child(value, "code")
     offset_value = _child(value, "offset")
     field_value = _child(value, "field_number")

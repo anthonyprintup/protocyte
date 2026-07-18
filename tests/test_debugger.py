@@ -148,6 +148,8 @@ class _FakeLLDBType:
         pointee: "_FakeLLDBType | None" = None,
         reference: bool = False,
         template_args: list["_FakeLLDBType"] | None = None,
+        canonical: "_FakeLLDBType | None" = None,
+        unqualified: "_FakeLLDBType | None" = None,
         valid: bool = True,
         byte_size: int = 16,
     ) -> None:
@@ -155,6 +157,8 @@ class _FakeLLDBType:
         self.pointee = pointee
         self.reference = reference
         self.template_args = template_args or []
+        self.canonical = canonical
+        self.unqualified = unqualified
         self.valid = valid
         self.byte_size = byte_size
 
@@ -179,6 +183,12 @@ class _FakeLLDBType:
 
     def GetDisplayTypeName(self) -> str:
         return self.name
+
+    def GetCanonicalType(self):
+        return self.canonical or self
+
+    def GetUnqualifiedType(self):
+        return self.unqualified or self
 
     def IsReferenceType(self) -> bool:
         return self.reference
@@ -492,6 +502,174 @@ def test_real_lldb_reimport_registers_frame_stop_hook_once() -> None:
         if line.strip() == "protocyte-register-frame-types"
     ]
     assert hook_commands == ["protocyte-register-frame-types"], output
+
+
+def test_real_lldb_result_summaries_distinguish_structured_error_type(
+    tmp_path: Path,
+) -> None:
+    lldb = os.environ.get("PROTOCYTE_TEST_LLDB") or shutil.which("lldb")
+    compiler = shutil.which("clang++") or shutil.which("c++")
+    if lldb is None or compiler is None:
+        pytest.skip("LLDB and a C++ compiler are required")
+
+    root = Path(__file__).resolve().parents[1]
+    module_path = root / "src" / "protocyte" / "debugger" / "protocyte_lldb.py"
+    try:
+        probe = subprocess.run(
+            [
+                lldb,
+                "--no-lldbinit",
+                "--batch",
+                "-o",
+                'script print("protocyte-lldb-python-ready")',
+                "-o",
+                "quit",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"LLDB could not be launched: {exc}")
+    if probe.returncode != 0 or "protocyte-lldb-python-ready" not in (
+        probe.stdout + probe.stderr
+    ):
+        pytest.skip("LLDB Python scripting is unavailable")
+
+    source = tmp_path / "result_formatter.cpp"
+    source_text = """\
+#include <protocyte/runtime/runtime.hpp>
+
+namespace demo {
+    struct CollidingError {
+        protocyte::ErrorCode code {};
+        protocyte::usize offset {};
+        protocyte::u32 field_number {};
+        int detail {};
+    };
+
+    using ErrorAlias = protocyte::Error;
+} // namespace demo
+
+int main() {
+    auto direct = protocyte::Result<int, demo::CollidingError> {
+        protocyte::unexpected(demo::CollidingError {
+            protocyte::ErrorCode::unsupported,
+            901u,
+            12u,
+            91,
+        }),
+    };
+    auto nested = protocyte::Result<void, demo::CollidingError> {
+        protocyte::unexpected(demo::CollidingError {
+            protocyte::ErrorCode::count_limit,
+            902u,
+            13u,
+            92,
+        }),
+    };
+    auto canonical = protocyte::Result<int> {
+        protocyte::unexpected(protocyte::ErrorCode::invalid_argument, 23u, 5u),
+    };
+    auto alias_nested = protocyte::Result<void, demo::ErrorAlias> {
+        protocyte::unexpected(protocyte::Error {
+            protocyte::ErrorCode::size_limit,
+            24u,
+            6u,
+        }),
+    };
+    volatile int inspect_here = 0;
+    return inspect_here + direct.error().detail + nested.error().detail +
+           static_cast<int>(canonical.error().field_number) +
+           static_cast<int>(alias_nested.error().field_number);
+}
+"""
+    source.write_text(source_text, encoding="utf-8")
+    breakpoint_line = next(
+        index
+        for index, line in enumerate(source_text.splitlines(), start=1)
+        if "volatile int inspect_here" in line
+    )
+    executable = tmp_path / (
+        "result_formatter.exe" if os.name == "nt" else "result_formatter"
+    )
+    compile_result = subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-O0",
+            "-g",
+            "-fstandalone-debug",
+            "-I",
+            str(root / "src"),
+            str(source),
+            "-o",
+            str(executable),
+        ],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=60,
+        check=False,
+    )
+    assert compile_result.returncode == 0, (
+        compile_result.stdout + compile_result.stderr
+    )
+
+    import_command = f'command script import "{module_path.as_posix()}"'
+    result_commands = {
+        "DIRECT": "direct",
+        "NESTED": "nested",
+        "CANONICAL": "canonical",
+        "ALIAS": "alias_nested",
+    }
+    commands = [
+        f'target create "{executable.as_posix()}"',
+        import_command,
+        (
+            'type summary add --summary-string "collision(detail=${var.detail})" '
+            "demo::CollidingError"
+        ),
+        f'breakpoint set --file "{source.name}" --line {breakpoint_line}',
+        "run",
+    ]
+    for label, variable in result_commands.items():
+        commands.append(
+            "script import lldb, protocyte_lldb; "
+            "frame=lldb.debugger.GetSelectedTarget().GetProcess()"
+            ".GetSelectedThread().GetFrameAtIndex(0); "
+            f'print("{label}=" + protocyte_lldb.result_summary('
+            f'frame.FindVariable("{variable}"), {{}}))'
+        )
+    arguments = [lldb, "--no-lldbinit", "--batch"]
+    for command in commands:
+        arguments.extend(("-o", command))
+    try:
+        completed = subprocess.run(
+            arguments,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        pytest.skip(f"LLDB could not be launched: {exc}")
+
+    output = completed.stdout + completed.stderr
+    if "Python scripting is not available" in output:
+        pytest.skip("LLDB Python scripting is unavailable")
+    assert completed.returncode == 0, output
+    assert "DIRECT=err, error=collision(detail=91)" in output
+    assert "NESTED=err, error=collision(detail=92)" in output
+    assert "CANONICAL=err, code=" in output
+    assert "offset=23, field=5" in output
+    assert "ALIAS=err, code=" in output
+    assert "offset=24, field=6" in output
 
 
 def test_lldb_init_module_ignores_fresh_session_script_delete_errors(
@@ -1176,6 +1354,7 @@ def test_status_and_void_result_summaries_use_nested_error_storage(
 ) -> None:
     error = _FakeLLDBValue(
         "error_",
+        type_=_FakeLLDBType("protocyte::Error"),
         children={
             "code": _FakeLLDBValue(
                 "code", value="protocyte::ErrorCode::invalid_argument"
@@ -1208,6 +1387,72 @@ def test_status_and_void_result_summaries_use_nested_error_storage(
     assert protocyte_lldb_module.result_summary(success, {}) == "ok"
     assert protocyte_lldb_module.result_summary(failure, {}) == (
         "err, code=protocyte::ErrorCode::invalid_argument, offset=17, field=3"
+    )
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "nested"])
+def test_result_summary_preserves_error_shaped_custom_aggregate(
+    protocyte_lldb_module, nested: bool
+) -> None:
+    error = _FakeLLDBValue(
+        "error_",
+        type_=_FakeLLDBType("demo::CollidingError"),
+        summary="collision(detail=91)",
+        children={
+            "code": _FakeLLDBValue("code", value="demo::Failure::timeout"),
+            "offset": _FakeLLDBValue("offset", unsigned=900),
+            "field_number": _FakeLLDBValue("field_number", unsigned=12),
+            "detail": _FakeLLDBValue("detail", unsigned=91),
+        },
+    )
+    error_children = (
+        {"storage_": _FakeLLDBValue("storage_", children={"error_": error})}
+        if nested
+        else {"error_": error}
+    )
+    failure = _FakeLLDBValue(
+        "result",
+        type_=_FakeLLDBType(
+            "protocyte::Result<void, demo::CollidingError>"
+            if nested
+            else "protocyte::Result<int, demo::CollidingError>"
+        ),
+        children={**error_children, "ok_": _FakeLLDBValue("ok_", unsigned=0)},
+    )
+
+    assert protocyte_lldb_module.result_summary(failure, {}) == (
+        "err, error=collision(detail=91)"
+    )
+
+
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "nested"])
+def test_result_summary_recognizes_canonicalized_error_alias(
+    protocyte_lldb_module, nested: bool
+) -> None:
+    canonical_error = _FakeLLDBType("struct protocyte::Error")
+    error = _FakeLLDBValue(
+        "error_",
+        type_=_FakeLLDBType("demo::ErrorAlias", canonical=canonical_error),
+        children={
+            "code": _FakeLLDBValue(
+                "code", value="protocyte::ErrorCode::invalid_argument"
+            ),
+            "offset": _FakeLLDBValue("offset", unsigned=23),
+            "field_number": _FakeLLDBValue("field_number", unsigned=5),
+        },
+    )
+    error_children = (
+        {"storage_": _FakeLLDBValue("storage_", children={"error_": error})}
+        if nested
+        else {"error_": error}
+    )
+    failure = _FakeLLDBValue(
+        "result",
+        children={**error_children, "ok_": _FakeLLDBValue("ok_", unsigned=0)},
+    )
+
+    assert protocyte_lldb_module.result_summary(failure, {}) == (
+        "err, code=protocyte::ErrorCode::invalid_argument, offset=23, field=5"
     )
 
 
