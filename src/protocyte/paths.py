@@ -8,8 +8,15 @@ _SAFE_GENERATED_PATH_BYTES = frozenset(
 )
 _MAX_GENERATED_PATH_COMPONENT_BYTES = 255
 _GENERATED_FILE_SUFFIX = ".protocyte.hpp"
+_GENERATED_PATH_DIGEST_BYTES = 64
+_GENERATED_PATH_DIGEST_SEPARATOR_BYTES = 1
 _MAX_GENERATED_FILE_STEM_BYTES = (
     _MAX_GENERATED_PATH_COMPONENT_BYTES - len(_GENERATED_FILE_SUFFIX)
+)
+MIN_HASHED_GENERATED_FILE_PATH_BYTES = (
+    _GENERATED_PATH_DIGEST_SEPARATOR_BYTES
+    + _GENERATED_PATH_DIGEST_BYTES
+    + len(_GENERATED_FILE_SUFFIX)
 )
 _WINDOWS_RESERVED_PATH_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
@@ -41,8 +48,59 @@ def normalize_generated_path(path: str) -> str:
     )
 
 
-def generated_file_base(proto_name: str) -> str:
-    return normalize_generated_path(proto_name.removesuffix(".proto")) + ".protocyte"
+def generated_file_base(
+    proto_name: str,
+    *,
+    max_output_path_bytes: int | None = None,
+    max_output_directory_bytes: int | None = None,
+) -> str:
+    """Return the portable generated-file base for a descriptor name.
+
+    ``max_output_path_bytes`` budgets the complete relative ``.hpp`` output
+    path, while ``max_output_directory_bytes`` independently budgets its
+    relative parent directory. When the normal component-bounded mapping
+    cannot fit either limit, the directory hierarchy is folded into a readable
+    prefix plus a SHA-256 digest of the complete descriptor name. The digest
+    keeps this fallback collision resistant even when distinct virtual
+    directories share a final segment.
+    """
+    normalized = normalize_generated_path(proto_name.removesuffix(".proto"))
+    generated_base = normalized + ".protocyte"
+    generated_directory = generated_base.rpartition("/")[0]
+    path_fits = (
+        max_output_path_bytes is None
+        or len(generated_base + ".hpp") <= max_output_path_bytes
+    )
+    directory_fits = (
+        not generated_directory
+        or max_output_directory_bytes is None
+        or len(generated_directory) <= max_output_directory_bytes
+    )
+    if path_fits and directory_fits:
+        return generated_base
+    if (
+        max_output_path_bytes is not None
+        and max_output_path_bytes < MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    ):
+        raise ValueError(
+            "generated output path budget must be at least "
+            f"{MIN_HASHED_GENERATED_FILE_PATH_BYTES} bytes"
+        )
+
+    digest = hashlib.sha256(proto_name.encode("utf-8")).hexdigest().upper()
+    readable = normalized.replace("/", "_")
+    effective_path_budget = (
+        min(max_output_path_bytes, _MAX_GENERATED_PATH_COMPONENT_BYTES)
+        if max_output_path_bytes is not None
+        else _MAX_GENERATED_PATH_COMPONENT_BYTES
+    )
+    prefix_bytes = (
+        effective_path_budget
+        - len(_GENERATED_FILE_SUFFIX)
+        - _GENERATED_PATH_DIGEST_SEPARATOR_BYTES
+        - len(digest)
+    )
+    return f"{readable[:prefix_bytes]}~{digest}.protocyte"
 
 
 def _normalize_generated_segment(segment: str, *, max_bytes: int) -> str:

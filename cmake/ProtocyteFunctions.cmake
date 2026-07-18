@@ -253,7 +253,123 @@ function(_protocyte_normalize_generated_path out_var proto_name)
         )
         string(APPEND normalized "${normalized_segment}/")
     endwhile()
-    set(${out_var} "${normalized}.protocyte" PARENT_SCOPE)
+    set(generated_base "${normalized}.protocyte")
+    set(generated_path_exceeds_budget FALSE)
+    if(ARGC GREATER 2 AND NOT "${ARGV2}" STREQUAL "")
+        set(max_output_path_length "${ARGV2}")
+        string(LENGTH "${generated_base}.hpp" output_path_length)
+        if(output_path_length GREATER max_output_path_length)
+            set(generated_path_exceeds_budget TRUE)
+        endif()
+    endif()
+    if(ARGC GREATER 3 AND NOT "${ARGV3}" STREQUAL "")
+        string(FIND "${normalized}" "/" final_directory_separator REVERSE)
+        if(NOT final_directory_separator EQUAL -1)
+            string(SUBSTRING "${normalized}" 0 ${final_directory_separator} generated_directory)
+            string(LENGTH "${generated_directory}" generated_directory_length)
+            if(generated_directory_length GREATER ARGV3)
+                set(generated_path_exceeds_budget TRUE)
+            endif()
+        endif()
+    endif()
+    if(generated_path_exceeds_budget)
+        if(NOT DEFINED max_output_path_length)
+            set(max_output_path_length 255)
+        elseif(max_output_path_length GREATER 255)
+            set(max_output_path_length 255)
+        endif()
+        string(LENGTH ".protocyte.hpp" generated_file_suffix_length)
+        string(SHA256 descriptor_digest "${proto_name}")
+        string(TOUPPER "${descriptor_digest}" descriptor_digest)
+        string(LENGTH "${descriptor_digest}" digest_length)
+        math(
+            EXPR
+            readable_prefix_length
+            "${max_output_path_length} - ${generated_file_suffix_length} - ${digest_length} - 1"
+        )
+        if(readable_prefix_length LESS 0)
+            message(
+                FATAL_ERROR
+                "internal Protocyte generated-path budget is too small for a collision-resistant name"
+            )
+        endif()
+        string(REPLACE "/" "_" flattened_readable "${normalized}")
+        string(SUBSTRING "${flattened_readable}" 0 ${readable_prefix_length} readable_prefix)
+        set(generated_base "${readable_prefix}~${descriptor_digest}.protocyte")
+    endif()
+    set(${out_var} "${generated_base}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_windows_utf16_length out_var value)
+    string(HEX "${value}" value_hex)
+    string(LENGTH "${value_hex}" value_hex_length)
+    set(offset 0)
+    set(utf16_length 0)
+    while(offset LESS value_hex_length)
+        string(SUBSTRING "${value_hex}" ${offset} 2 byte_hex)
+        math(EXPR byte_value "0x${byte_hex}")
+        if(byte_value LESS 128)
+            set(code_point_bytes 1)
+            set(code_point_utf16_length 1)
+        elseif(byte_value LESS 224)
+            set(code_point_bytes 2)
+            set(code_point_utf16_length 1)
+        elseif(byte_value LESS 240)
+            set(code_point_bytes 3)
+            set(code_point_utf16_length 1)
+        else()
+            set(code_point_bytes 4)
+            set(code_point_utf16_length 2)
+        endif()
+        math(EXPR offset "${offset} + (${code_point_bytes} * 2)")
+        math(EXPR utf16_length "${utf16_length} + ${code_point_utf16_length}")
+    endwhile()
+    set(${out_var} "${utf16_length}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_generated_path_budget out_path_var out_directory_var out_dir)
+    set(generated_path_budget "")
+    set(generated_directory_budget "")
+    if(CMAKE_GENERATOR MATCHES "^Visual Studio ")
+        set(normalized_out_dir "${out_dir}")
+        cmake_path(NORMAL_PATH normalized_out_dir)
+        _protocyte_windows_utf16_length(out_dir_length "${normalized_out_dir}")
+        if(normalized_out_dir MATCHES "[/\\\\]$")
+            set(path_separator_length 0)
+        else()
+            set(path_separator_length 1)
+        endif()
+
+        # MSBuild's project reader rejects source items whose full path is 260
+        # characters or longer, and directories at 248 characters or longer.
+        math(EXPR generated_path_budget "259 - ${out_dir_length} - ${path_separator_length}")
+        math(EXPR generated_directory_budget "247 - ${out_dir_length} - ${path_separator_length}")
+        if(generated_path_budget GREATER 255)
+            set(generated_path_budget 255)
+        endif()
+        string(LENGTH ".protocyte.hpp" generated_file_suffix_length)
+        set(generated_path_digest_length 64)
+        math(
+            EXPR
+            minimum_hashed_generated_path_length
+            "${generated_file_suffix_length} + ${generated_path_digest_length} + 1"
+        )
+        if(
+            out_dir_length GREATER 247
+            OR generated_path_budget LESS minimum_hashed_generated_path_length
+        )
+            message(
+                FATAL_ERROR
+                "protocyte_generate OUT_DIR is too long for Visual Studio/MSBuild: '${normalized_out_dir}'. "
+                "MSBuild requires generated source paths shorter than 260 characters and directories "
+                "shorter than 248 characters; collision-resistant Protocyte names need at least "
+                "${minimum_hashed_generated_path_length} characters below OUT_DIR. "
+                "Choose a shorter OUT_DIR or build directory."
+            )
+        endif()
+    endif()
+    set(${out_path_var} "${generated_path_budget}" PARENT_SCOPE)
+    set(${out_directory_var} "${generated_directory_budget}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_validate_parsed_arguments function_name unparsed_arguments missing_values)
@@ -288,7 +404,12 @@ function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_nam
     set(sources)
     foreach(proto_name IN LISTS ${proto_names_var})
         _protocyte_validate_descriptor_name("${proto_name}")
-        _protocyte_normalize_generated_path(normalized_generated_path "${proto_name}")
+        _protocyte_normalize_generated_path(
+            normalized_generated_path
+            "${proto_name}"
+            "${ARGV4}"
+            "${ARGV5}"
+        )
         set(protocyte_base "${out_dir}/${normalized_generated_path}")
         list(APPEND headers "${protocyte_base}.hpp")
         list(APPEND sources "${protocyte_base}.cpp")
@@ -1059,6 +1180,8 @@ function(protocyte_generate)
             NORMALIZE
             OUTPUT_VARIABLE PROTOCYTE_OUT_DIR
         )
+    else()
+        cmake_path(NORMAL_PATH PROTOCYTE_OUT_DIR OUTPUT_VARIABLE PROTOCYTE_OUT_DIR)
     endif()
     if(PROTOCYTE_DISCOVER AND PROTOCYTE_PROTOS)
         message(FATAL_ERROR "protocyte_generate accepts either DISCOVER or PROTOS, not both")
@@ -1206,6 +1329,20 @@ function(protocyte_generate)
         set(runtime_prefix "protocyte/runtime")
     endif()
 
+    _protocyte_generated_path_budget(
+        protocyte_generated_path_budget
+        protocyte_generated_directory_budget
+        "${PROTOCYTE_OUT_DIR}"
+    )
+    if(NOT "${protocyte_generated_path_budget}" STREQUAL "")
+        list(
+            APPEND
+            generator_options
+            "_protocyte_generated_path_max_bytes=${protocyte_generated_path_budget}"
+            "_protocyte_generated_directory_max_bytes=${protocyte_generated_directory_budget}"
+        )
+    endif()
+
     string(JOIN "," generator_parameter ${generator_options})
     _protocyte_encode_generator_parameter(encoded_generator_parameter "${generator_parameter}")
 
@@ -1217,13 +1354,20 @@ function(protocyte_generate)
             protocyte_generated_sources
             "${PROTOCYTE_OUT_DIR}"
             normalized_proto_files
+            "${protocyte_generated_path_budget}"
+            "${protocyte_generated_directory_budget}"
         )
     else()
         foreach(proto_file IN LISTS normalized_proto_files)
             file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
             string(REPLACE "\\" "/" proto_rel "${proto_rel}")
             _protocyte_validate_descriptor_name("${proto_rel}")
-            _protocyte_normalize_generated_path(normalized_generated_path "${proto_rel}")
+            _protocyte_normalize_generated_path(
+                normalized_generated_path
+                "${proto_rel}"
+                "${protocyte_generated_path_budget}"
+                "${protocyte_generated_directory_budget}"
+            )
             set(protocyte_base "${PROTOCYTE_OUT_DIR}/${normalized_generated_path}")
 
             list(APPEND protocyte_generated_headers "${protocyte_base}.hpp")

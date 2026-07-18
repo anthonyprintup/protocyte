@@ -176,7 +176,11 @@ is escaped too, so this mapping cannot alias an unescaped descriptor name. If
 escaping would exceed a filesystem's common 255-byte component limit,
 Protocyte retains a readable prefix and appends the full SHA-256 digest of the
 original segment. The final segment also reserves room for
-`.protocyte.hpp`/`.protocyte.cpp`.
+`.protocyte.hpp`/`.protocyte.cpp`. CMake projects generated with Visual Studio
+also budget the complete path below `OUT_DIR` for MSBuild's legacy path limits.
+Only names that exceed that remaining budget are folded into a readable prefix
+plus a SHA-256 digest of the complete descriptor name. Ninja and other
+non-Visual-Studio generators retain the ordinary component-bounded mapping.
 
 The CMake helpers pass protoc options and file names through protoc's UTF-8
 response-file interface. Non-ASCII characters and spaces are retained in
@@ -508,7 +512,11 @@ This is the lower-level primitive. It creates the custom target named by
 - `TARGET` is the required code-generation target name.
 - `OUT_DIR` is required and must be known at configure time; generator
   expressions are not accepted. A relative path is resolved from
-  `CMAKE_CURRENT_BINARY_DIR`.
+  `CMAKE_CURRENT_BINARY_DIR`. With a Visual Studio generator, Protocyte
+  automatically compacts overlong descriptor output paths to fit MSBuild's
+  source-item limits. Configuration reports a targeted error if the absolute
+  `OUT_DIR` itself leaves too little room for a collision-resistant generated
+  name; choose a shorter `OUT_DIR` or build directory in that case.
 - `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.

@@ -2,6 +2,7 @@ import pytest
 
 from protocyte.errors import ProtocyteError
 from protocyte.parameters import GeneratorOptions, parse_parameter
+from protocyte.paths import MIN_HASHED_GENERATED_FILE_PATH_BYTES
 
 
 def test_parse_runtime_emit_with_prefix() -> None:
@@ -126,6 +127,38 @@ def test_parse_decodes_hex_transport_parameter() -> None:
     assert options.runtime_prefix == "toolchain/runtime"
     assert options.namespace_prefix == "drv::wire"
     assert options.clang_format == "C:/Program Files/LLVM/bin/clang-format.exe"
+
+
+def test_parse_decodes_internal_generated_path_budget() -> None:
+    raw = (
+        "format=off,_protocyte_generated_path_max_bytes="
+        f"{MIN_HASHED_GENERATED_FILE_PATH_BYTES},"
+        "_protocyte_generated_directory_max_bytes=67"
+    )
+
+    options = parse_parameter(f"_protocyte_options_hex={raw.encode('utf-8').hex()}")
+
+    assert options.generated_path_max_bytes == MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    assert options.generated_directory_max_bytes == 67
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["", "not-a-number", str(MIN_HASHED_GENERATED_FILE_PATH_BYTES - 1)],
+)
+def test_rejects_invalid_internal_generated_path_budget(value: str) -> None:
+    raw = f"_protocyte_generated_path_max_bytes={value}"
+
+    with pytest.raises(ProtocyteError, match="internal generated path budget"):
+        parse_parameter(f"_protocyte_options_hex={raw.encode('utf-8').hex()}")
+
+
+@pytest.mark.parametrize("value", ["", "not-a-number", "-1"])
+def test_rejects_invalid_internal_generated_directory_budget(value: str) -> None:
+    raw = f"_protocyte_generated_directory_max_bytes={value}"
+
+    with pytest.raises(ProtocyteError, match="internal generated directory budget"):
+        parse_parameter(f"_protocyte_options_hex={raw.encode('utf-8').hex()}")
 
 
 def test_rejects_removed_base64_transport_parameter() -> None:

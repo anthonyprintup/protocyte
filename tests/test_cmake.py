@@ -13,7 +13,10 @@ import pytest
 from google.protobuf import descriptor_pb2
 
 from protocyte import __version__
-from protocyte.paths import generated_file_base
+from protocyte.paths import (
+    MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    generated_file_base,
+)
 
 
 _CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
@@ -484,6 +487,156 @@ def test_cmake_bounds_long_generated_components_like_the_plugin(
     directory, filename_base = expected.split("/")
     assert len(directory.encode("ascii")) == 255
     assert len(f"{filename_base}.hpp".encode("ascii")) == 255
+
+
+@pytest.mark.parametrize(
+    "path_budget",
+    [MIN_HASHED_GENERATED_FILE_PATH_BYTES, 120, 510, 511],
+)
+def test_cmake_complete_generated_path_budget_matches_the_plugin(
+    tmp_path: Path, path_budget: int
+) -> None:
+    long_segment = "é" * 50
+    descriptor_name = f"{long_segment}/{long_segment}.proto"
+    expected = generated_file_base(
+        descriptor_name, max_output_path_bytes=path_budget
+    )
+    output = tmp_path / "normalized.txt"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "_protocyte_normalize_generated_path(",
+                "    normalized",
+                f"    [==[{descriptor_name}]==]",
+                f"    {path_budget}",
+                ")",
+                f'file(WRITE "{output.as_posix()}" "${{normalized}}")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == expected
+    assert len(f"{expected}.hpp".encode("ascii")) <= path_budget
+
+
+@pytest.mark.parametrize("directory_budget_adjustment", [0, -1])
+def test_cmake_generated_directory_budget_matches_the_plugin(
+    tmp_path: Path, directory_budget_adjustment: int
+) -> None:
+    descriptor_name = f"{'readable/' * 12}leaf.proto"
+    ordinary_base = generated_file_base(descriptor_name)
+    directory_budget = (
+        len(ordinary_base.rpartition("/")[0]) + directory_budget_adjustment
+    )
+    expected = generated_file_base(
+        descriptor_name,
+        max_output_path_bytes=255,
+        max_output_directory_bytes=directory_budget,
+    )
+    output = tmp_path / "normalized.txt"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "_protocyte_normalize_generated_path(",
+                "    normalized",
+                f"    [==[{descriptor_name}]==]",
+                "    255",
+                f"    {directory_budget}",
+                ")",
+                f'file(WRITE "{output.as_posix()}" "${{normalized}}")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == expected
+
+
+def test_visual_studio_generated_path_budget_accepts_exact_minimum(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "budget.txt"
+    out_dir_length = 259 - 1 - MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    out_dir = "/" + "x" * (out_dir_length - 1)
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                'set(CMAKE_GENERATOR "Visual Studio 17 2022")',
+                f'_protocyte_generated_path_budget(path_budget directory_budget "{out_dir}")',
+                f'file(WRITE "{output.as_posix()}" "${{path_budget}};${{directory_budget}}")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == (
+        f"{MIN_HASHED_GENERATED_FILE_PATH_BYTES};"
+        f"{MIN_HASHED_GENERATED_FILE_PATH_BYTES - 12}"
+    )
+
+
+def test_visual_studio_generated_path_budget_rejects_impossible_out_dir(
+    tmp_path: Path,
+) -> None:
+    out_dir_length = 259 - MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    out_dir = "/" + "x" * (out_dir_length - 1)
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                'set(CMAKE_GENERATOR "Visual Studio 17 2022")',
+                f'_protocyte_generated_path_budget(path_budget directory_budget "{out_dir}")',
+            ]
+        ),
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "OUT_DIR is too long for Visual Studio/MSBuild" in output
+    assert "Choose a shorter OUT_DIR or build directory" in output
+
+
+def test_visual_studio_generated_path_budget_counts_utf16_code_units(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "budget.txt"
+    out_dir = "/" + "é" * 90
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                'set(CMAKE_GENERATOR "Visual Studio 17 2022")',
+                f'_protocyte_generated_path_budget(path_budget directory_budget [==[{out_dir}]==])',
+                f'file(WRITE "{output.as_posix()}" "${{path_budget}};${{directory_budget}}")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == "167;155"
+
+
+def test_non_visual_studio_generator_keeps_unbounded_generated_paths(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "budget.txt"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                'set(CMAKE_GENERATOR "Ninja")',
+                '_protocyte_generated_path_budget(path_budget directory_budget "/very/long/out")',
+                f'file(WRITE "{output.as_posix()}" "[${{path_budget}}][${{directory_budget}}]")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == "[][]"
 
 
 @pytest.mark.parametrize(
@@ -2014,24 +2167,27 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
     fake_protoc_py = tools_dir / "fake_protoc.py"
     fake_protoc_py.write_text(
         "\n".join(
-                [
-                    "from pathlib import Path",
-                    "import sys",
-                    "arguments = []",
-                    "for argument in sys.argv[1:]:",
-                    "    if argument.startswith('@'):",
-                    "        arguments.extend(Path(argument[1:]).read_text(encoding='utf-8').splitlines())",
-                    "    else:",
-                    "        arguments.append(argument)",
-                    f"Path({str(args_path)!r}).parent.mkdir(parents=True, exist_ok=True)",
-                    f"Path({str(args_path)!r}).write_text('\\n'.join(arguments), encoding='utf-8')",
-                    "out_dir = None",
-                    "for arg in arguments:",
+            [
+                "from pathlib import Path",
+                "import sys",
+                "arguments = []",
+                "for argument in sys.argv[1:]:",
+                "    if argument.startswith('@'):",
+                "        arguments.extend(Path(argument[1:]).read_text(encoding='utf-8').splitlines())",
+                "    else:",
+                "        arguments.append(argument)",
+                f"Path({str(args_path)!r}).parent.mkdir(parents=True, exist_ok=True)",
+                f"Path({str(args_path)!r}).write_text('\\n'.join(arguments), encoding='utf-8')",
+                "out_dir = None",
+                "for arg in arguments:",
                 "    if arg.startswith('--protocyte_out='):",
-                "        out_dir = Path(arg.split('=', 1)[1])",
+                "        out_value = arg.split('=', 1)[1]",
+                "        if out_value.startswith('_protocyte_options_hex='):",
+                "            out_value = out_value.split(':', 1)[1]",
+                "        out_dir = Path(out_value)",
                 "if out_dir is None:",
                 "    raise SystemExit('missing --protocyte_out')",
-                    "for name in arguments:",
+                "for name in arguments:",
                 "    if not name.endswith('.proto'):",
                 "        continue",
                 "    base = out_dir / name.removesuffix('.proto')",
@@ -2234,6 +2390,13 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
             "DISCOVER",
             id="long-unicode-discover",
         ),
+        pytest.param(
+            "x" * 255 + "/portable.proto",
+            "LongPortablePath",
+            None,
+            "DISCOVER",
+            id="msbuild-long-directory",
+        ),
     ],
 )
 def test_descriptor_set_library_builds_portable_descriptor_name(
@@ -2281,24 +2444,44 @@ def test_descriptor_set_library_builds_portable_descriptor_name(
         encoding="utf-8",
     )
 
+    configure_environment = os.environ.copy()
+    configure_environment.pop("CMAKE_GENERATOR", None)
     configure_command = ["cmake", "-S", str(source_dir), "-B", str(build_dir)]
     if generator is not None:
         configure_command.extend(["-G", generator])
-    subprocess.run(configure_command, check=True)
+    subprocess.run(configure_command, check=True, env=configure_environment)
     subprocess.run(
         ["cmake", "--build", str(build_dir), "--target", "portable_proto"],
         check=True,
     )
 
-    generated_base = generated_file_base(descriptor_name)
-    assert (
-        build_dir / "portable_proto_protocyte" / f"{generated_base}.hpp"
-    ).is_file()
-    assert (
-        build_dir / "portable_proto_protocyte" / f"{generated_base}.cpp"
-    ).is_file()
+    generated_dir = build_dir / "portable_proto_protocyte"
+    path_budget = None
+    directory_budget = None
+    cache = (build_dir / "CMakeCache.txt").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    uses_visual_studio = "CMAKE_GENERATOR:INTERNAL=Visual Studio " in cache
+    if os.name == "nt" and generator is None:
+        assert uses_visual_studio
+    if uses_visual_studio:
+        path_budget = min(255, 259 - len(str(generated_dir.resolve())) - 1)
+        directory_budget = 247 - len(str(generated_dir.resolve())) - 1
+    generated_base = generated_file_base(
+        descriptor_name,
+        max_output_path_bytes=path_budget,
+        max_output_directory_bytes=directory_budget,
+    )
+    generated_header = generated_dir / f"{generated_base}.hpp"
+    generated_source = generated_dir / f"{generated_base}.cpp"
+    assert generated_header.is_file()
+    assert generated_source.is_file()
     if ";" in descriptor_name:
         assert generated_base == "api/demo~3Blegacy.protocyte"
+    elif uses_visual_studio:
+        assert len(str(generated_header.resolve())) < 260
+        assert len(str(generated_header.resolve().parent)) < 248
+        assert "/" not in generated_base
     else:
         long_generated_directory = generated_base.split("/", 1)[0]
         assert len(long_generated_directory.encode("ascii")) == 255
