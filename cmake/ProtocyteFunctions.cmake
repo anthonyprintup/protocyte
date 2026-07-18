@@ -454,6 +454,30 @@ function(_protocyte_value_is_nonempty out_var variable_name)
     endif()
 endfunction()
 
+function(_protocyte_claim_runtime_output output_path owner_target)
+    set(output_identity "${output_path}")
+    if(CMAKE_HOST_WIN32)
+        string(TOLOWER "${output_identity}" output_identity)
+    endif()
+    string(SHA256 output_key "${output_identity}")
+    set(owner_property "PROTOCYTE_INTERNAL_RUNTIME_OUTPUT_OWNER_${output_key}")
+    set(path_property "PROTOCYTE_INTERNAL_RUNTIME_OUTPUT_PATH_${output_key}")
+    get_property(output_is_claimed GLOBAL PROPERTY "${owner_property}" SET)
+    if(output_is_claimed)
+        get_property(existing_owner GLOBAL PROPERTY "${owner_property}")
+        get_property(existing_path GLOBAL PROPERTY "${path_property}")
+        message(
+            FATAL_ERROR
+            "Protocyte runtime output '${existing_path}' is already owned by code generation target "
+            "'${existing_owner}'; target '${owner_target}' cannot also use EMIT_RUNTIME for that file. "
+            "Each emitted runtime.hpp must have one generation owner. Use a distinct OUT_DIR or RUNTIME_PREFIX. "
+            "For additional libraries, omit EMIT_RUNTIME and use RUNTIME_TARGET to select a shared runtime target."
+        )
+    endif()
+    set_property(GLOBAL PROPERTY "${owner_property}" "${owner_target}")
+    set_property(GLOBAL PROPERTY "${path_property}" "${output_path}")
+endfunction()
+
 function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_names_var)
     set(headers)
     set(sources)
@@ -2073,7 +2097,9 @@ function(protocyte_generate)
     )
 
     if(PROTOCYTE_EMIT_RUNTIME)
-        list(APPEND protocyte_generated_headers "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.hpp")
+        set(protocyte_runtime_output "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.hpp")
+        _protocyte_claim_runtime_output("${protocyte_runtime_output}" "${PROTOCYTE_TARGET}")
+        list(APPEND protocyte_generated_headers "${protocyte_runtime_output}")
     endif()
 
     set(protocyte_outputs "${protocyte_generated_headers}" "${protocyte_generated_sources}")
