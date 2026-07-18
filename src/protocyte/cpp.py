@@ -3910,7 +3910,9 @@ def _include_path(proto_name: str, options: GeneratorOptions) -> str:
 
 
 def _include_guard(proto_name: str) -> str:
-    sanitized = "".join(ch if ch.isalnum() else "_" for ch in proto_name.upper())
+    sanitized = "".join(
+        ch if ch.isascii() and ch.isalnum() else "_" for ch in proto_name.upper()
+    )
     digest = hashlib.sha1(proto_name.encode("utf-8")).hexdigest().upper()[:12]
     return f"PROTOCYTE_GENERATED_{sanitized}_{digest}_HPP"
 

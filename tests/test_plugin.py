@@ -2945,6 +2945,28 @@ def test_generated_include_guards_are_unique_for_normalized_path_collisions() ->
     )
 
 
+def test_generated_include_guards_use_portable_ascii_for_unicode_paths() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("².proto")
+    file = request.proto_file.add()
+    file.name = "².proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    message = file.message_type.add()
+    message.name = "Example"
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    guard = header.split("#ifndef ", maxsplit=1)[1].splitlines()[0]
+    assert guard.isascii()
+    assert all(
+        character == "_" or character.isascii() and character.isalnum()
+        for character in guard
+    )
+
+
 def test_nested_aliases_use_cpp_identifiers() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("nested_alias.proto")
