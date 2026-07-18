@@ -7,10 +7,13 @@ the STL, exceptions, RTTI, iostreams, and implicit global allocation.
 ## Quick Start
 
 You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), `protoc`,
-CMake 3.24 or newer, and a C++20 compiler. From a Protocyte checkout, this
-PowerShell flow builds and installs the wheel into an isolated environment,
-then generates, builds, and runs the checked-in example:
+CMake 3.24 or newer, and a C++20 compiler. From a Protocyte checkout, choose
+the block for your shell. Each flow builds and installs the wheel into an
+isolated environment, then generates, builds, and runs the checked-in example.
 
+PowerShell:
+
+<!-- quickstart-powershell-start -->
 ```powershell
 uv build --wheel
 uv venv build\quickstart-venv --python 3.12
@@ -27,6 +30,29 @@ cmake -S examples/quickstart -B build/quickstart `
 cmake --build build/quickstart --config Release
 ctest --test-dir build/quickstart -C Release --output-on-failure
 ```
+<!-- quickstart-powershell-end -->
+
+Bash on Linux, macOS, or another POSIX host:
+
+<!-- quickstart-posix-start -->
+```bash
+uv build --wheel
+uv venv build/quickstart-venv --python 3.12
+
+wheel=$(ls -t dist/protocyte-*.whl | head -n 1)
+python="$PWD/build/quickstart-venv/bin/python"
+uv pip install --python "$python" "$wheel"
+
+protoc=$(command -v protoc)
+plugin="$PWD/build/quickstart-venv/bin/protoc-gen-protocyte"
+cmake -S examples/quickstart -B build/quickstart \
+  "-DPROTOC_EXECUTABLE=$protoc" \
+  "-DPROTOCYTE_PLUGIN_EXECUTABLE=$plugin" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/quickstart --config Release
+ctest --test-dir build/quickstart -C Release --output-on-failure
+```
+<!-- quickstart-posix-end -->
 
 [`examples/quickstart/main.cpp`](examples/quickstart/main.cpp) mutates a
 generated message, serializes it into a byte vector, parses those bytes into a
@@ -35,11 +61,20 @@ part of the complete install-to-round-trip path:
 
 <!-- quickstart-main-start -->
 ```cpp
+#include <cstdio>
 #include <vector>
 
 #include <protocyte/runtime/runtime.hpp>
 
 #include "quickstart.protocyte.hpp"
+
+namespace {
+    int report_error(const char *operation, const protocyte::Error &error, const int exit_code) {
+        std::fprintf(stderr, "%s failed: code=%u offset=%llu field=%u\n", operation, static_cast<unsigned>(error.code),
+                     static_cast<unsigned long long>(error.offset), static_cast<unsigned>(error.field_number));
+        return exit_code;
+    }
+} // namespace
 
 int main() {
     auto encode_ctx = protocyte::DefaultConfig::Context {
@@ -51,12 +86,16 @@ int main() {
 
     const auto size = reading.encoded_size();
     if (!size) {
-        return 1;
+        return report_error("encoded_size", size.error(), 1);
     }
 
     std::vector<protocyte::u8> encoded(*size);
     const auto written = reading.serialize(encoded);
-    if (!written || *written != encoded.size()) {
+    if (!written) {
+        return report_error("serialize", written.error(), 2);
+    }
+    if (*written != encoded.size()) {
+        std::fputs("serialize returned an unexpected byte count\n", stderr);
         return 2;
     }
 
@@ -65,7 +104,11 @@ int main() {
         protocyte::Limits {},
     };
     const auto parsed = demo::quickstart::Reading<>::parse(decode_ctx, encoded);
-    if (!parsed || (*parsed).value() != 42u) {
+    if (!parsed) {
+        return report_error("parse", parsed.error(), 3);
+    }
+    if ((*parsed).value() != 42u) {
+        std::fputs("parsed value did not match the encoded value\n", stderr);
         return 3;
     }
 
@@ -73,9 +116,6 @@ int main() {
 }
 ```
 <!-- quickstart-main-end -->
-
-On POSIX systems, the virtual-environment executables are under
-`build/quickstart-venv/bin` instead of `Scripts`.
 
 ## AI Disclosure
 
@@ -136,28 +176,45 @@ local `uv sync` development, published wheel and sdist installs, and any CMake
 workflow that runs the plugin through `Python3_EXECUTABLE`.
 
 Install the project and make the virtual environment's script directory
-discoverable to `protoc`:
+discoverable to `protoc`. In PowerShell:
 
 ```powershell
 uv sync
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 ```
 
-On other shells, either activate `.venv` first or prepend the matching
-`.venv/bin` directory to `PATH`.
+In Bash on a POSIX host:
+
+```bash
+uv sync
+export PATH="$PWD/.venv/bin:$PATH"
+```
 
 For a ground-zero walkthrough that covers getting `protoc`, building and
 installing the protocyte package, running `protoc` with the plugin, wiring the
 generated files into a CMake target, and setting up automatic regeneration, see
 [tests/smoke/README.md](tests/smoke/README.md).
 
-Generate code:
+Generate code in PowerShell. `protoc` requires the output root to exist before
+the plugin can create files beneath it:
 
 ```powershell
+New-Item -ItemType Directory -Force generated | Out-Null
 protoc `
   --proto_path=. `
   --proto_path=src/protocyte/proto `
   --protocyte_out=runtime=emit:generated `
+  tests/example.proto
+```
+
+The equivalent Bash flow is:
+
+```bash
+mkdir -p generated
+protoc \
+  --proto_path=. \
+  --proto_path=src/protocyte/proto \
+  --protocyte_out=runtime=emit:generated \
   tests/example.proto
 ```
 
@@ -190,13 +247,26 @@ POSIX hosts. Protoc defines each response-file line as one literal argument and
 provides no escaping for line breaks, so the CMake helpers reject descriptor
 names or paths containing carriage returns or line feeds.
 
-Generate from a descriptor set when `.proto` source is not the authority:
+Generate from a descriptor set when `.proto` source is not the authority. In
+PowerShell:
 
 ```powershell
+New-Item -ItemType Directory -Force generated | Out-Null
 protoc `
   --descriptor_set_in=descriptor_set.pb `
   --plugin=protoc-gen-protocyte=path\to\protoc-gen-protocyte `
   --protocyte_out=generated `
+  core.proto messages.proto settings.proto
+```
+
+In Bash:
+
+```bash
+mkdir -p generated
+protoc \
+  --descriptor_set_in=descriptor_set.pb \
+  --plugin=protoc-gen-protocyte="$(command -v protoc-gen-protocyte)" \
+  --protocyte_out=generated \
   core.proto messages.proto settings.proto
 ```
 
@@ -217,7 +287,10 @@ Protocyte supports two CMake consumption modes:
 
 ### Release Assets
 
-Published GitHub releases contain three different asset types:
+Protocyte has not published its first tag or
+[GitHub release](https://github.com/anthonyprintup/protocyte/releases) yet. The
+release workflow is prepared to publish the following three asset types, but
+they are not currently available for download:
 
 - `protocyte-X.Y.Z-py3-none-any.whl`: the Python wheel for
   `protoc-gen-protocyte`. Install it into a Python 3.12+ environment when you
@@ -227,6 +300,10 @@ Published GitHub releases contain three different asset types:
 - `protocyte-X.Y.Z-cmake-prefix.tar.gz`: a preinstalled CMake prefix for
   `find_package(protocyte CONFIG REQUIRED)`. Unpack it and add the extracted
   directory to `CMAKE_PREFIX_PATH`.
+
+Until the first release is published, use a source checkout, or pin a reviewed
+full commit SHA through `FetchContent`. Do not use a release-tag placeholder as
+though it were an existing tag.
 
 The CMake prefix archive includes the CMake files, C++ runtime headers, and an
 installable copy of the protocyte Python generator project. It does not bundle
@@ -264,7 +341,7 @@ include(FetchContent)
 FetchContent_Declare(
     protocyte
     GIT_REPOSITORY https://github.com/anthonyprintup/protocyte.git
-    GIT_TAG vX.Y.Z
+    GIT_TAG <full-commit-sha>
 )
 FetchContent_MakeAvailable(protocyte)
 
@@ -378,23 +455,33 @@ protobuf, Abseil, upb, utf8_range, and protoc do not leak into the consumer's
 install tree. Parent-defined protobuf option values remain authoritative and
 Protocyte does not force or persist them in the parent cache.
 
-Pin a published release tag for downstream builds instead of tracking `main`.
+Before the first release, replace `<full-commit-sha>` with the reviewed commit
+you intend to consume. After releases exist, pin a published release tag rather
+than tracking `main`.
 
 ### Installed Package
 
 You can also install protocyte into a prefix and consume it later with
 `find_package`.
 
-For published releases, use the `protocyte-X.Y.Z-cmake-prefix.tar.gz` asset
+After the first release, use the `protocyte-X.Y.Z-cmake-prefix.tar.gz` asset
 described above, unpack it, and point `CMAKE_PREFIX_PATH` at the extracted
 prefix directory. Do not use the plain `protocyte-X.Y.Z.tar.gz` sdist here;
-that archive is only the Python plugin package source.
+that archive is only the Python plugin package source. Until then, install from
+a source checkout.
 
-Install protocyte:
+PowerShell:
 
 ```powershell
 cmake -S . -B build/protocyte
-cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
+cmake --install build/protocyte --prefix "$PWD\build\protocyte-prefix"
+```
+
+Bash:
+
+```bash
+cmake -S . -B build/protocyte
+cmake --install build/protocyte --prefix "$PWD/build/protocyte-prefix"
 ```
 
 `PROTOCYTE_INSTALL` defaults to `ON` when Protocyte is the top-level project,
@@ -693,7 +780,9 @@ not apply because the descriptor set already carries its dependency descriptors.
 All public helpers reject unknown arguments during configuration.
 `protocyte_generate`, `protocyte_add_proto_library`, and
 `protocyte_add_descriptor_set_library` also reject keywords without values and
-duplicate single-value keywords.
+duplicate single-value keywords. Missing mode selections are reported by the
+helper the project called and name both valid alternatives, such as
+`PROTO_ROOT` or `DESCRIPTOR_SET` and `DISCOVER` or `PROTOS`/`FILES`.
 
 ## Debugging
 
@@ -774,13 +863,25 @@ For example, size-sensitive builds can disable generated documentation with
 information from `protoc`; descriptor-set generation emits comments only when
 the set was created with `--include_source_info`.
 
-Example:
+PowerShell example:
 
 ```powershell
+New-Item -ItemType Directory -Force out | Out-Null
 protoc `
   --proto_path=. `
   --proto_path=src/protocyte/proto `
   --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out `
+  tests/example.proto
+```
+
+Bash example:
+
+```bash
+mkdir -p out
+protoc \
+  --proto_path=. \
+  --proto_path=src/protocyte/proto \
+  --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out \
   tests/example.proto
 ```
 
@@ -1247,6 +1348,20 @@ struct Error {
     u32 field_number {};
 };
 ```
+
+Both `Status` and `Result<T>` expose the error through `.error()` after a false
+status check. The compiled [quick-start example](examples/quickstart/main.cpp)
+prints all three members without allocating:
+
+```cpp
+if (!parsed) {
+    const auto &error = parsed.error();
+    return report_error("parse", error, 3);
+}
+```
+
+Access `.error()` only on a failed result. Successful results instead expose
+their value through `*result` or `result.value()`.
 
 The numeric members have these contracts:
 
