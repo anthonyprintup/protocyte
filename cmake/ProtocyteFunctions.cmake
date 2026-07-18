@@ -203,7 +203,11 @@ function(_protocyte_validate_forwarded_generator_options function_name)
                     "use EMIT_RUNTIME and RUNTIME_PREFIX so CMake can declare runtime outputs consistently"
                 )
             elseif(generator_option_name STREQUAL "include_prefix")
-                _protocyte_validate_virtual_directory_prefix("include prefix" "${generator_option_value}")
+                message(
+                    FATAL_ERROR
+                    "${function_name} OPTIONS must not set include_prefix; use INCLUDE_PREFIX so CMake can "
+                    "model the generated-header include layout consistently"
+                )
             endif()
         endforeach()
     endforeach()
@@ -1479,13 +1483,23 @@ function(_protocyte_resolve_protobuf_import_dir out_explicit toolchain_identity)
             # the same directory as the previous automatic root.
             unset(PROTOCYTE_PROTOBUF_IMPORT_DIR CACHE)
         else()
-            set(${out_explicit} TRUE PARENT_SCOPE)
-            if(
-                IS_DIRECTORY "${resolved_configured_import_dir}"
-                AND EXISTS "${resolved_configured_import_dir}/google/protobuf/descriptor.proto"
-            )
-                _protocyte_set_resolved_protobuf_import_dir("${resolved_configured_import_dir}")
+            if(NOT IS_DIRECTORY "${resolved_configured_import_dir}")
+                message(
+                    FATAL_ERROR
+                    "PROTOCYTE_PROTOBUF_IMPORT_DIR '${configured_import_dir}' resolves to "
+                    "'${resolved_configured_import_dir}', which is not an existing directory"
+                )
             endif()
+            if(NOT EXISTS "${resolved_configured_import_dir}/google/protobuf/descriptor.proto")
+                message(
+                    FATAL_ERROR
+                    "PROTOCYTE_PROTOBUF_IMPORT_DIR '${configured_import_dir}' resolves to "
+                    "'${resolved_configured_import_dir}', but that directory does not contain "
+                    "google/protobuf/descriptor.proto"
+                )
+            endif()
+            set(${out_explicit} TRUE PARENT_SCOPE)
+            _protocyte_set_resolved_protobuf_import_dir("${resolved_configured_import_dir}")
             return()
         endif()
     endif()
@@ -1893,8 +1907,25 @@ function(protocyte_generate)
                 OUTPUT_VARIABLE protocyte_descriptor_set
             )
         endif()
-        if(NOT EXISTS "${protocyte_descriptor_set}" OR IS_DIRECTORY "${protocyte_descriptor_set}")
+        if(IS_DIRECTORY "${protocyte_descriptor_set}")
             message(FATAL_ERROR "protocyte_generate DESCRIPTOR_SET must be an existing file: ${protocyte_descriptor_set}")
+        endif()
+        if(NOT EXISTS "${protocyte_descriptor_set}")
+            if(PROTOCYTE_DISCOVER)
+                message(
+                    FATAL_ERROR
+                    "protocyte_generate DESCRIPTOR_SET must exist during configuration when using DISCOVER: "
+                    "${protocyte_descriptor_set}. Generate the descriptor set before configuring, or use explicit "
+                    "PROTOS/FILES with DEPENDS on the target that produces it."
+                )
+            elseif(NOT protocyte_has_DEPENDS)
+                message(
+                    FATAL_ERROR
+                    "protocyte_generate DESCRIPTOR_SET must be an existing file: ${protocyte_descriptor_set}. "
+                    "For a descriptor set produced by the build, use explicit PROTOS/FILES and add its producing "
+                    "file or target to DEPENDS."
+                )
+            endif()
         endif()
         if(protocyte_has_PROTO_ROOT)
             message(FATAL_ERROR "protocyte_generate accepts either DESCRIPTOR_SET or PROTO_ROOT, not both")
@@ -2304,6 +2335,7 @@ function(protocyte_generate)
                     "${protocyte_dependency_scan_script}"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
                     "${protocyte_plugin_executable}"
+                    ${protocyte_generator_sources}
                 DEPFILE "${protocyte_dependency_depfile}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
                 COMMENT "Scanning protobuf imports for ${proto_file}"
@@ -2539,16 +2571,24 @@ function(protocyte_add_proto_library)
 
     if(protocyte_has_OUT_DIR)
         if(IS_ABSOLUTE "${PROTOCYTE_OUT_DIR}")
-            set(protocyte_out_dir "${PROTOCYTE_OUT_DIR}")
+            set(protocyte_include_root "${PROTOCYTE_OUT_DIR}")
         else()
             cmake_path(
                 ABSOLUTE_PATH PROTOCYTE_OUT_DIR
                 BASE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-                OUTPUT_VARIABLE protocyte_out_dir
+                OUTPUT_VARIABLE protocyte_include_root
             )
         endif()
     else()
-        set(protocyte_out_dir "${CMAKE_CURRENT_BINARY_DIR}/${PROTOCYTE_TARGET}_protocyte")
+        set(protocyte_include_root "${CMAKE_CURRENT_BINARY_DIR}/${PROTOCYTE_TARGET}_protocyte")
+    endif()
+    cmake_path(NORMAL_PATH protocyte_include_root)
+
+    set(protocyte_out_dir "${protocyte_include_root}")
+    if(protocyte_has_INCLUDE_PREFIX)
+        _protocyte_validate_virtual_directory_prefix("include prefix" "${PROTOCYTE_INCLUDE_PREFIX}")
+        set(protocyte_out_dir "${protocyte_include_root}/${PROTOCYTE_INCLUDE_PREFIX}")
+        cmake_path(NORMAL_PATH protocyte_out_dir)
     endif()
 
     set(protocyte_codegen_target "${PROTOCYTE_TARGET}__protocyte_codegen")
@@ -2621,7 +2661,7 @@ function(protocyte_add_proto_library)
             PUBLIC
                 FILE_SET protocyte_generated_headers
                 TYPE HEADERS
-                BASE_DIRS "${protocyte_out_dir}"
+                BASE_DIRS "${protocyte_include_root}"
                 FILES ${protocyte_generated_headers}
         )
     else()
@@ -2632,14 +2672,28 @@ function(protocyte_add_proto_library)
     target_include_directories(
         "${PROTOCYTE_TARGET}"
         PUBLIC
-            "$<BUILD_INTERFACE:${protocyte_out_dir}>"
+            "$<BUILD_INTERFACE:${protocyte_include_root}>"
     )
+    if(PROTOCYTE_EMIT_RUNTIME AND NOT "${protocyte_include_root}" STREQUAL "${protocyte_out_dir}")
+        target_include_directories(
+            "${PROTOCYTE_TARGET}"
+            PUBLIC
+                "$<BUILD_INTERFACE:${protocyte_out_dir}>"
+        )
+    endif()
     if(protocyte_has_INSTALL_INCLUDE_DIR)
         target_include_directories(
             "${PROTOCYTE_TARGET}"
             PUBLIC
                 "$<INSTALL_INTERFACE:${PROTOCYTE_INSTALL_INCLUDE_DIR}>"
         )
+        if(PROTOCYTE_EMIT_RUNTIME AND protocyte_has_INCLUDE_PREFIX)
+            target_include_directories(
+                "${PROTOCYTE_TARGET}"
+                PUBLIC
+                    "$<INSTALL_INTERFACE:${PROTOCYTE_INSTALL_INCLUDE_DIR}/${PROTOCYTE_INCLUDE_PREFIX}>"
+            )
+        endif()
     endif()
     target_link_libraries("${PROTOCYTE_TARGET}" PUBLIC protocyte::codegen)
 
