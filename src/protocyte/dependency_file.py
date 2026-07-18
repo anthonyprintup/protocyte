@@ -16,16 +16,35 @@ def write_dependency_file(
     output: str | Path,
     target: str | Path,
     working_directory: str | Path | None = None,
+    msbuild: bool = False,
 ) -> None:
     """Write a CMake-compatible GCC depfile for an include-complete descriptor set."""
-    roots = _protoc_import_roots(
+    roots, direct_input = _protoc_scan_context(
         protoc_argument_file,
         working_directory=working_directory,
     )
     dependencies = _resolve_descriptor_files(descriptor_set, roots)
-    escaped_target = _escape_depfile_path(Path(target))
+    if msbuild:
+        direct_input_key = os.path.normcase(str(direct_input))
+        tracked_dependencies: list[Path] = []
+        for dependency in dependencies:
+            if ";" not in str(dependency):
+                tracked_dependencies.append(dependency)
+                continue
+            if os.path.normcase(str(dependency)) == direct_input_key:
+                # The direct input is already present in add_custom_command's
+                # dependency list using MSBuild's double percent escape.
+                continue
+            raise ProtocyteError(
+                "Visual Studio cannot track an imported protobuf dependency "
+                f"whose path contains ';': {dependency}. Use a Ninja generator "
+                "or rename the imported file."
+            )
+        dependencies = tracked_dependencies
+    escaped_target = _escape_depfile_path(Path(target), msbuild=msbuild)
     escaped_dependencies = [
-        _escape_depfile_path(dependency) for dependency in dependencies
+        _escape_depfile_path(dependency, msbuild=msbuild)
+        for dependency in dependencies
     ]
     content = escaped_target + ":"
     for dependency in escaped_dependencies:
@@ -41,11 +60,11 @@ def write_dependency_file(
         ) from exc
 
 
-def _protoc_import_roots(
+def _protoc_scan_context(
     argument_file: str | Path,
     *,
     working_directory: str | Path | None,
-) -> list[Path]:
+) -> tuple[list[Path], Path]:
     try:
         arguments = Path(argument_file).read_text(encoding="utf-8").split("\n")
     except (OSError, UnicodeError) as exc:
@@ -55,8 +74,17 @@ def _protoc_import_roots(
 
     base = Path.cwd() if working_directory is None else Path(working_directory)
     roots: list[Path] = []
+    inputs: list[Path] = []
     seen: set[str] = set()
     for argument in arguments:
+        if not argument:
+            continue
+        if not argument.startswith("-"):
+            input_path = Path(argument)
+            if not input_path.is_absolute():
+                input_path = base / input_path
+            inputs.append(Path(os.path.abspath(input_path)))
+            continue
         if not argument.startswith("--proto_path="):
             continue
         raw_root = argument.removeprefix("--proto_path=")
@@ -77,7 +105,11 @@ def _protoc_import_roots(
         raise ProtocyteError(
             f"protoc argument file {argument_file} does not contain --proto_path"
         )
-    return roots
+    if len(inputs) != 1:
+        raise ProtocyteError(
+            f"protoc argument file {argument_file} must contain exactly one input file"
+        )
+    return roots, inputs[0]
 
 
 def _resolve_descriptor_files(
@@ -106,7 +138,7 @@ def _resolve_descriptor_files(
     return sorted(resolved.values(), key=lambda path: path.as_posix().casefold())
 
 
-def _escape_depfile_path(path: PurePath) -> str:
+def _escape_depfile_path(path: PurePath, *, msbuild: bool = False) -> str:
     value = path.as_posix()
     if any(character in value for character in "\r\n\t"):
         raise ProtocyteError(
@@ -128,4 +160,9 @@ def _escape_depfile_path(path: PurePath) -> str:
         raise ProtocyteError(
             f"dependency path contains a colon that CMake depfiles cannot represent safely: {value!r}"
         )
-    return value.replace("$", "$$").replace("#", "\\#").replace(" ", "\\ ")
+    value = (
+        value.replace("$", "$$")
+        .replace("#", "\\#")
+        .replace(" ", "\\ ")
+    )
+    return value.replace(";", "%25253B" if msbuild else "\\;")

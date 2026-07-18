@@ -400,6 +400,11 @@ def main(
     dependency_parser.add_argument("protoc_argument_file", type=Path)
     dependency_parser.add_argument("output", type=Path)
     dependency_parser.add_argument("target", type=Path)
+    dependency_parser.add_argument(
+        "--msbuild",
+        action="store_true",
+        help="encode semicolons using MSBuild's percent escape",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -414,6 +419,7 @@ def main(
                 protoc_argument_file=args.protoc_argument_file,
                 output=args.output,
                 target=args.target,
+                msbuild=args.msbuild,
             )
             return 0
     except ProtocyteError as exc:

@@ -1741,11 +1741,24 @@ function(protocyte_generate)
             list(APPEND normalized_proto_names "${proto_file_list_element}")
         endforeach()
     else()
+        # CMake list mutators discard escaped semicolons. Use a hexadecimal
+        # sort key and a digest-backed scalar mapping until sorting and exact
+        # duplicate removal are complete, then rebuild the escaped path list.
+        set(normalized_proto_file_entries)
+        set(
+            protocyte_source_dependency_dir
+            "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-source-dependencies"
+        )
         foreach(proto_file IN LISTS protocyte_proto_files)
             if(IS_ABSOLUTE "${proto_file}")
-                set(proto_abs "${proto_file}")
+                cmake_path(NORMAL_PATH proto_file OUTPUT_VARIABLE proto_abs)
             else()
-                cmake_path(ABSOLUTE_PATH proto_file BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE proto_abs)
+                cmake_path(
+                    ABSOLUTE_PATH proto_file
+                    BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    NORMALIZE
+                    OUTPUT_VARIABLE proto_abs
+                )
             endif()
 
             if(NOT EXISTS "${proto_abs}" OR IS_DIRECTORY "${proto_abs}")
@@ -1753,24 +1766,71 @@ function(protocyte_generate)
             endif()
 
             file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_abs}")
-            if(proto_rel MATCHES "^[.][.]")
+            if(proto_rel STREQUAL ".." OR proto_rel MATCHES "^[.][.][/\\\\]")
                 message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
             endif()
             string(REPLACE "\\" "/" proto_rel "${proto_rel}")
 
-            string(REPLACE ";" "\\;" proto_abs_list_element "${proto_abs}")
-            string(REPLACE ";" "\\;" proto_rel_list_element "${proto_rel}")
-            list(APPEND normalized_proto_files "${proto_abs_list_element}")
-            list(APPEND normalized_proto_names "${proto_rel_list_element}")
+            string(HEX "${proto_abs}" proto_abs_sort_key)
+            string(SHA256 proto_abs_key "${proto_abs}")
+            set("protocyte_normalized_proto_file_${proto_abs_key}" "${proto_abs}")
+            set("protocyte_normalized_proto_name_${proto_abs_key}" "${proto_rel}")
+            if(CMAKE_GENERATOR MATCHES "^Visual Studio" AND "${proto_abs}" MATCHES ";")
+                file(MAKE_DIRECTORY "${protocyte_source_dependency_dir}")
+                set(
+                    protocyte_source_dependency
+                    "${protocyte_source_dependency_dir}/${proto_abs_key}.proto"
+                )
+                # Visual Studio cannot represent a literal semicolon in a
+                # CustomBuild AdditionalInputs list. An always-run checker
+                # updates this safe proxy only when the real source changes.
+                file(COPY_FILE "${proto_abs}" "${protocyte_source_dependency}" ONLY_IF_DIFFERENT)
+                _protocyte_write_protoc_response_file(
+                    protocyte_source_argument_file
+                    protocyte_source_argument_file_relative
+                    "source-dependency|${proto_abs_key}"
+                    "${proto_abs}"
+                )
+                set(
+                    protocyte_source_check_target
+                    "${PROTOCYTE_TARGET}__protocyte_source_check_${proto_abs_key}"
+                )
+                if(NOT TARGET "${protocyte_source_check_target}")
+                    add_custom_target(
+                        "${protocyte_source_check_target}"
+                        COMMAND
+                            "${CMAKE_COMMAND}"
+                            "-DSOURCE_ARGUMENT_FILE=${protocyte_source_argument_file}"
+                            "-DPROXY_FILE=${protocyte_source_dependency}"
+                            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteSourceDependency.cmake"
+                        BYPRODUCTS "${protocyte_source_dependency}"
+                        VERBATIM
+                    )
+                endif()
+                list(
+                    APPEND
+                    protocyte_source_check_targets
+                    "${protocyte_source_check_target}"
+                )
+            else()
+                set(protocyte_source_dependency "${proto_abs}")
+            endif()
+            set(
+                "protocyte_source_dependency_${proto_abs_key}"
+                "${protocyte_source_dependency}"
+            )
+            list(APPEND normalized_proto_file_entries "${proto_abs_sort_key}:${proto_abs_key}")
         endforeach()
-        list(REMOVE_DUPLICATES normalized_proto_names)
-        list(SORT normalized_proto_names)
-        set(normalized_proto_files)
-        foreach(proto_name IN LISTS normalized_proto_names)
-            set(proto_abs "${protocyte_proto_root}/${proto_name}")
-            cmake_path(NORMAL_PATH proto_abs)
-            string(REPLACE ";" "\\;" proto_abs_list_element "${proto_abs}")
+        list(REMOVE_DUPLICATES normalized_proto_file_entries)
+        list(SORT normalized_proto_file_entries)
+        foreach(proto_file_entry IN LISTS normalized_proto_file_entries)
+            string(REGEX REPLACE "^.*:" "" proto_abs_key "${proto_file_entry}")
+            set(proto_abs_variable "protocyte_normalized_proto_file_${proto_abs_key}")
+            set(proto_name_variable "protocyte_normalized_proto_name_${proto_abs_key}")
+            string(REPLACE ";" "\\;" proto_abs_list_element "${${proto_abs_variable}}")
+            string(REPLACE ";" "\\;" proto_name_list_element "${${proto_name_variable}}")
             list(APPEND normalized_proto_files "${proto_abs_list_element}")
+            list(APPEND normalized_proto_names "${proto_name_list_element}")
         endforeach()
     endif()
 
@@ -1853,7 +1913,8 @@ function(protocyte_generate)
     set(protoc_descriptor_argument)
     set(protocyte_input_depends)
     if(NOT protocyte_has_DESCRIPTOR_SET)
-        set(protocyte_input_depends ${normalized_proto_files})
+        # The dependency-scan outputs below already track each direct source
+        # and its complete import closure.
         set(
             protocyte_import_dirs
             "${protocyte_proto_root}"
@@ -1898,7 +1959,15 @@ function(protocyte_generate)
         set(protocyte_dependency_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-dependencies")
         set(protocyte_dependency_scan_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteDependencyScan.cmake")
         set(protocyte_dependency_outputs)
+        set(protocyte_dependency_file_format_args)
+        if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+            list(APPEND protocyte_dependency_file_format_args --msbuild)
+        endif()
         foreach(proto_file IN LISTS normalized_proto_files)
+            string(SHA256 proto_file_key "${proto_file}")
+            set(proto_file_dependency "${protocyte_source_dependency_${proto_file_key}}")
+            string(REPLACE ";" "\\;" proto_file_dependency "${proto_file_dependency}")
+            string(REPLACE ";" "[semicolon]" proto_file_display "${proto_file}")
             string(SHA256 dependency_key "${PROTOCYTE_TARGET}|${proto_file}")
             set(dependency_descriptor_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.pb")
             set(dependency_depfile_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.d")
@@ -1972,7 +2041,7 @@ function(protocyte_generate)
                     "${CMAKE_COMMAND}"
                     "-DPROTOC_EXECUTABLE=${PROTOCYTE_PROTOC_EXECUTABLE}"
                     "-DARGUMENT_FILE=${dependency_response_file_relative}"
-                    "-DPROTO_FILE=${proto_file}"
+                    "-DPROTO_FILE=${proto_file_display}"
                     "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
@@ -1980,12 +2049,13 @@ function(protocyte_generate)
                     "${protocyte_plugin_executable}"
                     descriptor-set
                     dependency-file
+                    ${protocyte_dependency_file_format_args}
                     "${dependency_descriptor_rel}"
                     "${dependency_response_file_relative}"
                     "${dependency_depfile_rel}"
                     "${dependency_depfile_target}"
                 DEPENDS
-                    "${proto_file}"
+                    "${proto_file_dependency}"
                     "${dependency_response_file}"
                     "${protocyte_dependency_scan_script}"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
@@ -2074,6 +2144,9 @@ function(protocyte_generate)
     )
 
     add_custom_target("${PROTOCYTE_TARGET}" DEPENDS ${protocyte_command_outputs})
+    foreach(protocyte_source_check_target IN LISTS protocyte_source_check_targets)
+        add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_source_check_target}")
+    endforeach()
 
     if(protocyte_has_GENERATED_HEADERS_VAR)
         set(${PROTOCYTE_GENERATED_HEADERS_VAR} "${protocyte_generated_headers}" PARENT_SCOPE)
