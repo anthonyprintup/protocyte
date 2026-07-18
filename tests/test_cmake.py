@@ -652,6 +652,29 @@ def test_duplicate_keyword_validation_allows_repeated_multi_value_lists(
     assert "duplicate single-value keyword" not in output
 
 
+def test_duplicate_keyword_validation_preserves_semicolon_descriptor_value(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        """
+function(protocyte_add_proto_library)
+    message(FATAL_ERROR "reached descriptor wrapper downstream validation")
+endfunction()
+protocyte_add_descriptor_set_library(
+    TARGET demo
+    DESCRIPTOR_SET descriptors.pb
+    FILES "api/demo;TARGET;legacy.proto"
+)
+""",
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "reached descriptor wrapper downstream validation" in output
+    assert "duplicate single-value keyword" not in output
+
+
 @pytest.mark.parametrize(
     ("invocation", "expected_error"),
     [
@@ -2212,7 +2235,7 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
                 "    TARGET demo_proto",
                 "    ALIAS demo::proto",
                 f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
-                "    FILES nested/demo.proto",
+                "    FILES nested/demo.proto nested/other.proto",
                 "    GENERATED_HEADERS_VAR generated_headers",
                 "    GENERATED_SOURCES_VAR generated_sources",
                 "    GENERATED_TARGET_VAR generated_target",
@@ -2223,8 +2246,14 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
                 'if(NOT generated_headers MATCHES "nested/demo[.]protocyte[.]hpp")',
                 '    message(FATAL_ERROR "descriptor-set wrapper did not propagate generated headers")',
                 "endif()",
+                'if(NOT generated_headers MATCHES "nested/other[.]protocyte[.]hpp")',
+                '    message(FATAL_ERROR "descriptor-set wrapper dropped a generated header")',
+                "endif()",
                 'if(NOT generated_sources MATCHES "nested/demo[.]protocyte[.]cpp")',
                 '    message(FATAL_ERROR "descriptor-set wrapper did not propagate generated sources")',
+                "endif()",
+                'if(NOT generated_sources MATCHES "nested/other[.]protocyte[.]cpp")',
+                '    message(FATAL_ERROR "descriptor-set wrapper dropped a generated source")',
                 "endif()",
                 'if(NOT generated_target STREQUAL "demo_proto__protocyte_codegen")',
                 '    message(FATAL_ERROR "descriptor-set wrapper did not propagate generated target")',
@@ -2239,10 +2268,29 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
-    ("descriptor_name", "message_name", "generator"),
+    ("descriptor_name", "message_name", "generator", "selection"),
     [
-        ("api/demo;legacy.proto", "SemicolonName", None),
-        ("é" * 50 + "/unicode.proto", "LongUnicodePath", "Ninja"),
+        pytest.param(
+            "api/demo;legacy.proto",
+            "SemicolonName",
+            None,
+            "DISCOVER",
+            id="semicolon-discover",
+        ),
+        pytest.param(
+            "api/demo;legacy.proto",
+            "SemicolonName",
+            None,
+            'FILES "api/demo;legacy.proto"',
+            id="semicolon-files",
+        ),
+        pytest.param(
+            "é" * 50 + "/unicode.proto",
+            "LongUnicodePath",
+            "Ninja",
+            "DISCOVER",
+            id="long-unicode-discover",
+        ),
     ],
 )
 def test_descriptor_set_library_builds_portable_descriptor_name(
@@ -2250,6 +2298,7 @@ def test_descriptor_set_library_builds_portable_descriptor_name(
     descriptor_name: str,
     message_name: str,
     generator: str | None,
+    selection: str,
 ) -> None:
     if generator == "Ninja" and shutil.which("ninja") is None:
         pytest.skip("Ninja is required for portable long-path integration coverage")
@@ -2280,7 +2329,7 @@ def test_descriptor_set_library_builds_portable_descriptor_name(
                 "protocyte_add_descriptor_set_library(",
                 "    TARGET portable_proto",
                 f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
-                "    DISCOVER",
+                f"    {selection}",
                 "    OPTIONS format=off",
                 ")",
                 "",

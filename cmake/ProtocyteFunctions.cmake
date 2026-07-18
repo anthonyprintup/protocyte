@@ -229,27 +229,51 @@ function(_protocyte_validate_parsed_arguments function_name unparsed_arguments m
     endif()
 endfunction()
 
-function(_protocyte_validate_unique_one_value_keywords function_name one_value_keywords)
-    set(duplicate_keywords)
-    foreach(keyword IN LISTS one_value_keywords)
-        set(keyword_count 0)
-        foreach(argument IN LISTS ARGN)
-            if("${argument}" STREQUAL "${keyword}")
-                math(EXPR keyword_count "${keyword_count} + 1")
+macro(_protocyte_validate_unique_one_value_keywords_from_argv function_name one_value_keywords argument_count)
+    set(_protocyte_duplicate_keywords)
+    set(_protocyte_one_value_keywords "${one_value_keywords}")
+    if(${argument_count} GREATER 0)
+        math(EXPR _protocyte_last_argument_index "${argument_count} - 1")
+        foreach(_protocyte_keyword IN LISTS _protocyte_one_value_keywords)
+            set(_protocyte_keyword_count 0)
+            foreach(_protocyte_argument_index RANGE 0 ${_protocyte_last_argument_index})
+                set(_protocyte_argument_variable "ARGV${_protocyte_argument_index}")
+                if("${${_protocyte_argument_variable}}" STREQUAL "${_protocyte_keyword}")
+                    math(EXPR _protocyte_keyword_count "${_protocyte_keyword_count} + 1")
+                endif()
+            endforeach()
+            if(_protocyte_keyword_count GREATER 1)
+                list(APPEND _protocyte_duplicate_keywords "${_protocyte_keyword}")
             endif()
         endforeach()
-        if(keyword_count GREATER 1)
-            list(APPEND duplicate_keywords "${keyword}")
-        endif()
-    endforeach()
+    endif()
 
-    if(duplicate_keywords)
-        list(JOIN duplicate_keywords ", " duplicate_keywords_text)
+    if(_protocyte_duplicate_keywords)
+        list(JOIN _protocyte_duplicate_keywords ", " _protocyte_duplicate_keywords_text)
         message(
             FATAL_ERROR
-            "${function_name} received duplicate single-value keyword(s): ${duplicate_keywords_text}"
+            "${function_name} received duplicate single-value keyword(s): ${_protocyte_duplicate_keywords_text}"
         )
     endif()
+
+    unset(_protocyte_argument_index)
+    unset(_protocyte_argument_variable)
+    unset(_protocyte_duplicate_keywords)
+    unset(_protocyte_duplicate_keywords_text)
+    unset(_protocyte_keyword)
+    unset(_protocyte_keyword_count)
+    unset(_protocyte_last_argument_index)
+    unset(_protocyte_one_value_keywords)
+endmacro()
+
+function(_protocyte_append_forwarded_values arguments_var keyword values_var)
+    set(arguments "${${arguments_var}}")
+    list(APPEND arguments "${keyword}")
+    foreach(value IN LISTS ${values_var})
+        string(REPLACE ";" "\\;" escaped_value "${value}")
+        list(APPEND arguments "${escaped_value}")
+    endforeach()
+    set(${arguments_var} "${arguments}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_names_var)
@@ -995,8 +1019,19 @@ function(protocyte_generate)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
-    _protocyte_validate_unique_one_value_keywords("protocyte_generate" "${oneValueArgs}" ${ARGN})
-    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_generate"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        "${options}"
+        "${oneValueArgs}"
+        "${multiValueArgs}"
+    )
     _protocyte_validate_parsed_arguments(
         "protocyte_generate"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
@@ -1087,7 +1122,7 @@ function(protocyte_generate)
     elseif(PROTOCYTE_DISCOVER)
         file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${protocyte_proto_root}/*.proto")
     else()
-        set(protocyte_proto_files ${PROTOCYTE_PROTOS})
+        set(protocyte_proto_files "${PROTOCYTE_PROTOS}")
     endif()
 
     if(NOT protocyte_proto_files)
@@ -1329,8 +1364,19 @@ function(protocyte_add_proto_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
-    _protocyte_validate_unique_one_value_keywords("protocyte_add_proto_library" "${oneValueArgs}" ${ARGN})
-    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_add_proto_library"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        "${options}"
+        "${oneValueArgs}"
+        "${multiValueArgs}"
+    )
     _protocyte_validate_parsed_arguments(
         "protocyte_add_proto_library"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
@@ -1404,19 +1450,35 @@ function(protocyte_add_proto_library)
     if(PROTOCYTE_DISCOVER)
         list(APPEND protocyte_generate_args DISCOVER)
     else()
-        list(APPEND protocyte_generate_args PROTOS ${PROTOCYTE_PROTOS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            PROTOS
+            PROTOCYTE_PROTOS
+        )
     endif()
     if(PROTOCYTE_EMIT_RUNTIME)
         list(APPEND protocyte_generate_args EMIT_RUNTIME)
     endif()
     if(PROTOCYTE_IMPORT_DIRS)
-        list(APPEND protocyte_generate_args IMPORT_DIRS ${PROTOCYTE_IMPORT_DIRS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            IMPORT_DIRS
+            PROTOCYTE_IMPORT_DIRS
+        )
     endif()
     if(PROTOCYTE_DEPENDS)
-        list(APPEND protocyte_generate_args DEPENDS ${PROTOCYTE_DEPENDS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            DEPENDS
+            PROTOCYTE_DEPENDS
+        )
     endif()
     if(PROTOCYTE_OPTIONS)
-        list(APPEND protocyte_generate_args OPTIONS ${PROTOCYTE_OPTIONS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            OPTIONS
+            PROTOCYTE_OPTIONS
+        )
     endif()
     if(PROTOCYTE_RUNTIME_PREFIX)
         list(APPEND protocyte_generate_args RUNTIME_PREFIX "${PROTOCYTE_RUNTIME_PREFIX}")
@@ -1497,12 +1559,19 @@ function(protocyte_add_descriptor_set_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs FILES DEPENDS OPTIONS)
-    _protocyte_validate_unique_one_value_keywords(
+    _protocyte_validate_unique_one_value_keywords_from_argv(
         "protocyte_add_descriptor_set_library"
         "${oneValueArgs}"
-        ${ARGN}
+        "${ARGC}"
     )
-    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        "${options}"
+        "${oneValueArgs}"
+        "${multiValueArgs}"
+    )
     _protocyte_validate_parsed_arguments(
         "protocyte_add_descriptor_set_library"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
@@ -1528,13 +1597,13 @@ function(protocyte_add_descriptor_set_library)
         endif()
     endforeach()
     if(PROTOCYTE_FILES)
-        list(APPEND args PROTOS ${PROTOCYTE_FILES})
+        _protocyte_append_forwarded_values(args PROTOS PROTOCYTE_FILES)
     endif()
     if(PROTOCYTE_DEPENDS)
-        list(APPEND args DEPENDS ${PROTOCYTE_DEPENDS})
+        _protocyte_append_forwarded_values(args DEPENDS PROTOCYTE_DEPENDS)
     endif()
     if(PROTOCYTE_OPTIONS)
-        list(APPEND args OPTIONS ${PROTOCYTE_OPTIONS})
+        _protocyte_append_forwarded_values(args OPTIONS PROTOCYTE_OPTIONS)
     endif()
 
     protocyte_add_proto_library(${args})
