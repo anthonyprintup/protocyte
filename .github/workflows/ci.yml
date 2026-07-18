@@ -77,6 +77,11 @@ jobs:
         id: protoc
         run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
 
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build
+
       - name: Build plugin wheel
         run: uv build --wheel
 
@@ -96,6 +101,14 @@ jobs:
 
       - name: Run quick-start round trip
         run: ctest --test-dir build/quickstart --output-on-failure
+
+      - name: Verify transitive import regeneration
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST: "1"
+        run: >
+          uv run pytest -q
+          tests/test_cmake.py::test_source_codegen_regenerates_when_transitive_import_changes
 
   smoke-host:
     name: Smoke Host (clang-cl)
