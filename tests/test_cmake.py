@@ -961,6 +961,54 @@ def test_generate_rejects_generator_expression_out_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("install_include_dir", "expected_error"),
+    [
+        (
+            '"$<IF:$<BOOL:1>,include,other>"',
+            "INSTALL_INCLUDE_DIR must be a configure-time relative path, not a generator expression",
+        ),
+        (
+            '"/absolute/include"',
+            "INSTALL_INCLUDE_DIR must be a relative install path using '/'",
+        ),
+        (
+            '"C:/absolute/include"',
+            "INSTALL_INCLUDE_DIR must be a relative install path using '/'",
+        ),
+        (
+            '"include/../escape"',
+            "INSTALL_INCLUDE_DIR contains an unsafe or non-normalized path segment",
+        ),
+        (
+            '"include//nested"',
+            "INSTALL_INCLUDE_DIR contains an unsafe or non-normalized path segment",
+        ),
+    ],
+)
+def test_proto_library_rejects_non_relocatable_install_include_dir(
+    tmp_path: Path,
+    install_include_dir: str,
+    expected_error: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        " ".join(
+            [
+                "protocyte_add_proto_library(",
+                "TARGET demo",
+                "PROTO_ROOT .",
+                f"INSTALL_INCLUDE_DIR {install_include_dir}",
+                ")",
+            ]
+        ),
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert expected_error in output
+
+
+@pytest.mark.parametrize(
     ("arguments", "expected_arguments"),
     [
         ("TYPO_IS_SILENTLY_IGNORED", "TYPO_IS_SILENTLY_IGNORED"),
@@ -1122,7 +1170,8 @@ def test_proto_library_forwards_false_like_scalar_and_list_arguments(
                 '        "PROTOS;IMPORT_DIRS;DEPENDS;OPTIONS"',
                 "        ${ARGN}",
                 "    )",
-                '    set(stub_header "${CMAKE_CURRENT_BINARY_DIR}/stub.hpp")',
+                '    file(MAKE_DIRECTORY "${CAP_OUT_DIR}")',
+                '    set(stub_header "${CAP_OUT_DIR}/stub.hpp")',
                 '    set(stub_source "${CMAKE_CURRENT_BINARY_DIR}/stub.cpp")',
                 '    file(WRITE "${stub_header}" "#pragma once\n")',
                 '    file(WRITE "${stub_source}" "int protocyte_stub = 0;\n")',
@@ -1153,14 +1202,18 @@ def test_proto_library_forwards_false_like_scalar_and_list_arguments(
                 "    RUNTIME_PREFIX 0",
                 "    NAMESPACE_PREFIX NO",
                 "    INCLUDE_PREFIX OFF",
+                "    INSTALL_INCLUDE_DIR OFF",
                 "    GENERATED_HEADERS_VAR OFF",
                 "    GENERATED_SOURCES_VAR NO",
                 "    GENERATED_TARGET_VAR target-NOTFOUND",
                 ")",
                 "get_target_property(alias_target alias-NOTFOUND ALIASED_TARGET)",
                 "get_target_property(link_libraries NO LINK_LIBRARIES)",
+                "get_target_property(include_directories NO INTERFACE_INCLUDE_DIRECTORIES)",
+                "get_target_property(header_sets NO HEADER_SETS)",
                 'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/library.txt"',
                 '    "alias=${alias_target}\nlinks=${link_libraries}\n"',
+                '    "includes=${include_directories}\nheader_sets=${header_sets}\n"',
                 '    "headers=${OFF}\nsources=${NO}\ntarget=${target-NOTFOUND}\n"',
                 ")",
             ]
@@ -1182,11 +1235,68 @@ def test_proto_library_forwards_false_like_scalar_and_list_arguments(
     assert "INCLUDE_PREFIX=OFF" in forwarded
 
     library = (tmp_path / "build" / "library.txt").read_text(encoding="utf-8")
+    normalized_library = library.replace("\\", "/")
     assert "alias=NO" in library
     assert "links=protocyte::codegen;FALSE" in library
+    assert "$<BUILD_INTERFACE:" in normalized_library
+    assert "/build/OFF>" in normalized_library
+    assert "$<INSTALL_INTERFACE:OFF>" in library
+    assert "header_sets=protocyte_generated_headers" in library
     assert "stub.hpp" in library
     assert "stub.cpp" in library
     assert "target=NO__protocyte_codegen" in library
+
+
+def test_proto_library_default_build_only_target_can_be_exported(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "enable_language(CXX)",
+                "add_library(protocyte::codegen INTERFACE IMPORTED)",
+                "add_library(protocyte::runtime INTERFACE IMPORTED)",
+                "function(protocyte_generate)",
+                "    cmake_parse_arguments(",
+                "        CAP",
+                '        ""',
+                '        "TARGET;OUT_DIR;GENERATED_HEADERS_VAR;GENERATED_SOURCES_VAR;GENERATED_TARGET_VAR"',
+                '        ""',
+                "        ${ARGN}",
+                "    )",
+                '    file(MAKE_DIRECTORY "${CAP_OUT_DIR}")',
+                '    set(stub_header "${CAP_OUT_DIR}/stub.hpp")',
+                '    set(stub_source "${CAP_OUT_DIR}/stub.cpp")',
+                '    file(WRITE "${stub_header}" "#pragma once\n")',
+                '    file(WRITE "${stub_source}" "int protocyte_stub = 0;\n")',
+                '    add_custom_target("${CAP_TARGET}")',
+                '    set(${CAP_GENERATED_HEADERS_VAR} "${stub_header}" PARENT_SCOPE)',
+                '    set(${CAP_GENERATED_SOURCES_VAR} "${stub_source}" PARENT_SCOPE)',
+                '    set(${CAP_GENERATED_TARGET_VAR} "${CAP_TARGET}" PARENT_SCOPE)',
+                "endfunction()",
+                "protocyte_add_proto_library(",
+                "    TARGET demo_proto",
+                "    PROTO_ROOT .",
+                ")",
+                "get_target_property(include_directories demo_proto INTERFACE_INCLUDE_DIRECTORIES)",
+                "get_target_property(header_sets demo_proto HEADER_SETS)",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/target.txt"',
+                '    "includes=${include_directories}\nheader_sets=${header_sets}\n"',
+                ")",
+                "install(TARGETS demo_proto EXPORT demoTargets)",
+                "install(EXPORT demoTargets DESTINATION lib/cmake/demo)",
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    target = (tmp_path / "build" / "target.txt").read_text(encoding="utf-8")
+    normalized_target = target.replace("\\", "/")
+    assert "$<BUILD_INTERFACE:" in normalized_target
+    assert "/build/demo_proto_protocyte>" in normalized_target
+    assert "$<INSTALL_INTERFACE:" not in target
+    assert "header_sets=\n" in target
 
 
 def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
@@ -1200,7 +1310,7 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
                 "    cmake_parse_arguments(",
                 "        CAP",
                 '        "DISCOVER;EMIT_RUNTIME;HOSTED_ALLOCATOR"',
-                '        "TARGET;ALIAS;TYPE;DESCRIPTOR_SET;OUT_DIR;GENERATED_HEADERS_VAR;GENERATED_SOURCES_VAR;GENERATED_TARGET_VAR;RUNTIME_TARGET;RUNTIME_PREFIX;NAMESPACE_PREFIX;INCLUDE_PREFIX"',
+                '        "TARGET;ALIAS;TYPE;DESCRIPTOR_SET;OUT_DIR;GENERATED_HEADERS_VAR;GENERATED_SOURCES_VAR;GENERATED_TARGET_VAR;RUNTIME_TARGET;RUNTIME_PREFIX;NAMESPACE_PREFIX;INCLUDE_PREFIX;INSTALL_INCLUDE_DIR"',
                 '        "PROTOS;DEPENDS;OPTIONS"',
                 "        ${ARGN}",
                 "    )",
@@ -1215,6 +1325,7 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
                 '        "RUNTIME_PREFIX=${CAP_RUNTIME_PREFIX}\n"',
                 '        "NAMESPACE_PREFIX=${CAP_NAMESPACE_PREFIX}\n"',
                 '        "INCLUDE_PREFIX=${CAP_INCLUDE_PREFIX}\n"',
+                '        "INSTALL_INCLUDE_DIR=${CAP_INSTALL_INCLUDE_DIR}\n"',
                 "    )",
                 "endfunction()",
                 "protocyte_add_descriptor_set_library(",
@@ -1230,6 +1341,7 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
                 "    RUNTIME_PREFIX NO",
                 "    NAMESPACE_PREFIX FALSE",
                 "    INCLUDE_PREFIX 0",
+                "    INSTALL_INCLUDE_DIR OFF",
                 "    GENERATED_HEADERS_VAR output-NOTFOUND",
                 "    GENERATED_SOURCES_VAR OFF",
                 "    GENERATED_TARGET_VAR NO",
@@ -1255,6 +1367,7 @@ def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
     assert "RUNTIME_PREFIX=NO" in forwarded
     assert "NAMESPACE_PREFIX=FALSE" in forwarded
     assert "INCLUDE_PREFIX=0" in forwarded
+    assert "INSTALL_INCLUDE_DIR=OFF" in forwarded
     assert (tmp_path / "build" / "outputs.txt").read_text(encoding="utf-8") == (
         "headers=headers\nsources=sources\ntarget=codegen\n"
     )
@@ -1498,6 +1611,7 @@ def test_cmake_allows_distinct_emitted_runtime_outputs(
                 "RUNTIME_PREFIX",
                 "NAMESPACE_PREFIX",
                 "INCLUDE_PREFIX",
+                "INSTALL_INCLUDE_DIR",
             ),
         ),
         (
@@ -1515,6 +1629,7 @@ def test_cmake_allows_distinct_emitted_runtime_outputs(
                 "RUNTIME_PREFIX",
                 "NAMESPACE_PREFIX",
                 "INCLUDE_PREFIX",
+                "INSTALL_INCLUDE_DIR",
             ),
         ),
     ],
@@ -1855,6 +1970,226 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert any(prefix.rglob("protocyteConfig.cmake"))
     assert any(prefix.rglob("ProtocyteDependencyScan.cmake"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
+
+
+@pytest.mark.parametrize("library_mode", ["source", "descriptor-set"])
+def test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix(
+    tmp_path: Path,
+    library_mode: str,
+) -> None:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for the install/export integration test")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    (tmp_path / "tools").mkdir()
+    plugin = _write_python_plugin_wrapper(
+        tmp_path / "tools" / "protoc-gen-protocyte", repo_root
+    )
+    core_build_dir = tmp_path / "protocyte-build"
+    provider_source_dir = tmp_path / "provider"
+    provider_build_dir = tmp_path / "provider-build"
+    install_prefix = tmp_path / "install"
+    relocated_prefix = tmp_path / "relocated-install"
+    consumer_source_dir = tmp_path / "consumer"
+    consumer_build_dir = tmp_path / "consumer-build"
+
+    proto_dir = provider_source_dir / "proto"
+    proto_file = proto_dir / "api" / "demo.proto"
+    proto_file.parent.mkdir(parents=True)
+    proto_file.write_text(
+        'syntax = "proto3"; package api; message Demo { int32 id = 1; }\n',
+        encoding="utf-8",
+    )
+    descriptor_set = provider_source_dir / "descriptor-set.pb"
+    if library_mode == "descriptor-set":
+        subprocess.run(
+            [
+                str(protoc),
+                f"--proto_path={proto_dir}",
+                f"--descriptor_set_out={descriptor_set}",
+                "--include_imports",
+                "api/demo.proto",
+            ],
+            cwd=proto_dir,
+            check=True,
+        )
+
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(repo_root),
+            "-B",
+            str(core_build_dir),
+            "-DPROTOCYTE_INSTALL=ON",
+            "-DPROTOCYTE_FETCH_PROTOBUF=OFF",
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
+        ],
+        check=True,
+    )
+    subprocess.run(["cmake", "--install", str(core_build_dir)], check=True)
+
+    if library_mode == "source":
+        helper_invocation = "\n".join(
+            [
+                "protocyte_add_proto_library(",
+                "    TARGET installable_proto",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                "    DISCOVER",
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                '    INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}"',
+                "    OPTIONS format=off",
+                ")",
+            ]
+        )
+        installed_runtime = install_prefix / "include/protocyte/runtime/runtime.hpp"
+        runtime_include = "protocyte/runtime/runtime.hpp"
+    else:
+        helper_invocation = "\n".join(
+            [
+                "protocyte_add_descriptor_set_library(",
+                "    TARGET installable_proto",
+                '    DESCRIPTOR_SET "${CMAKE_CURRENT_SOURCE_DIR}/descriptor-set.pb"',
+                "    FILES api/demo.proto",
+                "    EMIT_RUNTIME",
+                "    RUNTIME_PREFIX vendor/runtime",
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                '    INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}"',
+                "    OPTIONS format=off",
+                ")",
+            ]
+        )
+        installed_runtime = install_prefix / "include/vendor/runtime/runtime.hpp"
+        runtime_include = "vendor/runtime/runtime.hpp"
+
+    (provider_source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(installable_proto_provider LANGUAGES CXX)",
+                "include(GNUInstallDirs)",
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "find_package(protocyte CONFIG REQUIRED)",
+                helper_invocation,
+                "set_target_properties(installable_proto PROPERTIES EXPORT_NAME proto)",
+                "install(",
+                "    TARGETS installable_proto",
+                "    EXPORT installable_protoTargets",
+                '    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"',
+                '    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"',
+                '    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"',
+                "    FILE_SET protocyte_generated_headers",
+                '        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"',
+                ")",
+                "install(",
+                "    EXPORT installable_protoTargets",
+                "    NAMESPACE installable::",
+                '    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/installable_proto"',
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/installable_protoConfig.cmake" [=[',
+                "include(CMakeFindDependencyMacro)",
+                "find_dependency(protocyte CONFIG)",
+                'include("${CMAKE_CURRENT_LIST_DIR}/installable_protoTargets.cmake")',
+                "]=])",
+                "install(",
+                '    FILES "${CMAKE_CURRENT_BINARY_DIR}/installable_protoConfig.cmake"',
+                '    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/installable_proto"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(provider_source_dir),
+            "-B",
+            str(provider_build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_PREFIX_PATH={install_prefix}",
+            f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
+        ],
+        check=True,
+    )
+    subprocess.run(["cmake", "--build", str(provider_build_dir)], check=True)
+    subprocess.run(["cmake", "--install", str(provider_build_dir)], check=True)
+
+    installed_header = install_prefix / "include/api/demo.protocyte.hpp"
+    installed_targets = (
+        install_prefix / "lib/cmake/installable_proto/installable_protoTargets.cmake"
+    )
+    assert installed_header.is_file()
+    assert installed_runtime.is_file()
+    normalized_targets = installed_targets.read_text(encoding="utf-8").replace(
+        "\\", "/"
+    )
+    assert provider_build_dir.as_posix() not in normalized_targets
+    assert "protocyte_generated_headers" in normalized_targets
+
+    shutil.rmtree(provider_build_dir)
+    shutil.rmtree(provider_source_dir)
+    install_prefix.rename(relocated_prefix)
+
+    consumer_source_dir.mkdir()
+    (consumer_source_dir / "main.cpp").write_text(
+        "\n".join(
+            [
+                "#include <type_traits>",
+                f'#include "{runtime_include}"',
+                '#include "api/demo.protocyte.hpp"',
+                "static_assert(std::is_class_v<::api::Demo<>>);",
+                "int main() { return 0; }",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (consumer_source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(installable_proto_consumer LANGUAGES CXX)",
+                "find_package(installable_proto CONFIG REQUIRED)",
+                "add_executable(consumer main.cpp)",
+                "target_link_libraries(consumer PRIVATE installable::proto)",
+                "enable_testing()",
+                "add_test(NAME consumer COMMAND consumer)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(consumer_source_dir),
+            "-B",
+            str(consumer_build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_PREFIX_PATH={relocated_prefix}",
+        ],
+        check=True,
+    )
+    subprocess.run(["cmake", "--build", str(consumer_build_dir)], check=True)
+    subprocess.run(
+        ["ctest", "--test-dir", str(consumer_build_dir), "--output-on-failure"],
+        check=True,
+    )
 
 
 def test_protobuf_fallback_uses_parent_safe_function_scoped_defaults() -> None:
