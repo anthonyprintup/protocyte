@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,7 @@ from protocyte.descriptor_set import (
     validate_virtual_file_name,
 )
 from protocyte.errors import ProtocyteError
-from protocyte.main import main as plugin_main
+from protocyte.main import _enter_cmake_working_directory, main as plugin_main
 from protocyte.plugin import generate_response
 
 
@@ -25,6 +26,26 @@ def _file(name: str, *dependencies: str) -> descriptor_pb2.FileDescriptorProto:
     file.dependency.extend(dependencies)
     file.message_type.add().name = "Sample"
     return file
+
+
+def test_cmake_transport_restores_unicode_consumer_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer_directory = tmp_path / "consumer café"
+    consumer_directory.mkdir()
+    monkeypatch.setenv(
+        "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX",
+        str(consumer_directory).encode().hex(),
+    )
+
+    previous_directory, error = _enter_cmake_working_directory()
+    try:
+        assert error is None
+        assert previous_directory is not None
+        assert Path.cwd() == consumer_directory
+    finally:
+        if previous_directory is not None:
+            os.chdir(previous_directory)
 
 
 def _timestamp_file() -> descriptor_pb2.FileDescriptorProto:

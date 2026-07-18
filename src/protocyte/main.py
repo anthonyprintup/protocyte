@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from google.protobuf.message import DecodeError
@@ -11,6 +12,27 @@ from protocyte.plugin import generate_response
 
 
 _PROGRAM_NAME = "protoc-gen-protocyte"
+_CMAKE_WORKING_DIRECTORY_ENV = "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX"
+
+
+def _enter_cmake_working_directory() -> tuple[str | None, str | None]:
+    encoded = os.environ.get(_CMAKE_WORKING_DIRECTORY_ENV)
+    if encoded is None:
+        return None, None
+
+    try:
+        directory = bytes.fromhex(encoded).decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return None, f"invalid {_CMAKE_WORKING_DIRECTORY_ENV} payload"
+    if not os.path.isabs(directory):
+        return None, f"{_CMAKE_WORKING_DIRECTORY_ENV} must decode to an absolute path"
+
+    previous_directory = os.getcwd()
+    try:
+        os.chdir(directory)
+    except OSError as exc:
+        return None, f"failed to enter CMake invocation directory {directory!r}: {exc}"
+    return previous_directory, None
 
 
 def _help_parser() -> argparse.ArgumentParser:
@@ -72,16 +94,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    request = plugin_pb2.CodeGeneratorRequest()
-    try:
-        request.ParseFromString(sys.stdin.buffer.read())
-    except DecodeError as exc:
-        print(f"protocyte: failed to parse CodeGeneratorRequest: {exc}", file=sys.stderr)
+    previous_directory, working_directory_error = _enter_cmake_working_directory()
+    if working_directory_error is not None:
+        print(f"protocyte: {working_directory_error}", file=sys.stderr)
         return 1
 
-    response = generate_response(request)
-    sys.stdout.buffer.write(response.SerializeToString())
-    return 0
+    try:
+        request = plugin_pb2.CodeGeneratorRequest()
+        try:
+            request.ParseFromString(sys.stdin.buffer.read())
+        except DecodeError as exc:
+            print(
+                f"protocyte: failed to parse CodeGeneratorRequest: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+
+        response = generate_response(request)
+        sys.stdout.buffer.write(response.SerializeToString())
+        return 0
+    finally:
+        if previous_directory is not None:
+            os.chdir(previous_directory)
 
 
 if __name__ == "__main__":

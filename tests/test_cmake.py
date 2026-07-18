@@ -18,10 +18,17 @@ from protocyte.paths import generated_file_base
 
 _CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
 _CI_REQUIRE_INCREMENTAL_TEST_ENV = "PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST"
+_CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV = "PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST"
 
 
 def _incremental_requirement_unavailable(message: str) -> Never:
     if os.environ.get(_CI_REQUIRE_INCREMENTAL_TEST_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _windows_transport_requirement_unavailable(message: str) -> Never:
+    if os.environ.get(_CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
 
@@ -359,7 +366,7 @@ def test_explicit_plugin_change_rechecks_version_on_build(tmp_path: Path) -> Non
     assert "plugin reported 99.0.0" in output
 
 
-def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> None:
+def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> None:
     functions = (
         Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake"
     ).read_text(encoding="utf-8")
@@ -367,7 +374,9 @@ def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> N
         "add_custom_target", 1
     )[0]
 
-    assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"' in generation_command
+    assert '"@${protocyte_response_file_relative}"' in generation_command
+    assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in generation_command
+    assert "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=" in generation_command
     assert '"${protocyte_plugin_executable}"' in generation_command.split("DEPENDS", 1)[1]
 
 
@@ -381,6 +390,48 @@ def test_quickstart_tracks_protoc_as_a_generation_dependency() -> None:
     generation_dependencies = quickstart.split("DEPENDS", 1)[1].split("COMMENT", 1)[0]
 
     assert '"${PROTOC_EXECUTABLE}"' in generation_dependencies
+    assert '"@${PROTOC_RESPONSE_FILE_RELATIVE}"' in quickstart
+    assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in quickstart
+
+
+def test_cmake_protoc_response_file_preserves_utf8_and_literal_arguments(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "write_response.cmake"
+    copied_response = tmp_path / "response.txt"
+    argument = 'api/café name;literal"quote.proto'
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                'set(response_content "")',
+                f"_protocyte_append_protoc_response_argument(response_content [==[{argument}]==])",
+                "_protocyte_write_protoc_response_file(response_file response_relative unit-test \"${response_content}\")",
+                f'file(COPY_FILE "${{response_file}}" "{copied_response.as_posix()}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], cwd=tmp_path, check=True)
+
+    assert copied_response.read_text(encoding="utf-8").splitlines() == [argument]
+
+
+def test_cmake_protoc_response_file_rejects_multiline_arguments(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        '_protocyte_append_protoc_response_argument(content [==[first\nsecond]==])',
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "protoc response files define one literal argument per line" in output
 
 
 @pytest.mark.parametrize(
@@ -459,6 +510,29 @@ def test_public_cmake_functions_reject_unknown_arguments(
     assert result.returncode != 0
     output = " ".join((result.stdout + result.stderr).split())
     assert f"{function_name} received unknown argument(s): HOSTED_ALOCATOR" in output
+
+
+def test_generate_rejects_generator_expression_out_dir(tmp_path: Path) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        " ".join(
+            [
+                "protocyte_generate(",
+                "TARGET demo_codegen",
+                "DESCRIPTOR_SET descriptor.pb",
+                'OUT_DIR "$<CONFIG>"',
+                "PROTOS api/demo.proto",
+                ")",
+            ]
+        ),
+        files={"descriptor.pb": "placeholder"},
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        "OUT_DIR must be a configure-time path, not a generator expression" in output
+    )
 
 
 @pytest.mark.parametrize(
@@ -1533,8 +1607,12 @@ def test_source_mode_codegen_declares_normalized_generated_paths(tmp_path: Path)
         'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
     )
     protoc = _find_real_protoc(repo_root)
-    protobuf_import = _find_protobuf_import_root(repo_root)
+    protobuf_import = _find_protobuf_import_dir(repo_root, protoc)
     plugin = _installed_protocyte_plugin()
+    if shutil.which("ninja") is None:
+        _windows_transport_requirement_unavailable(
+            "Ninja is required for source response-file integration coverage"
+        )
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -1549,6 +1627,7 @@ def test_source_mode_codegen_declares_normalized_generated_paths(tmp_path: Path)
                 '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
                 '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
                 "    PROTOS proto/café.proto",
+                "    OPTIONS format=off",
                 ")",
                 "",
             ]
@@ -1556,13 +1635,26 @@ def test_source_mode_codegen_declares_normalized_generated_paths(tmp_path: Path)
         encoding="utf-8",
     )
 
-    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
     subprocess.run(
         ["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True
     )
 
     assert (build_dir / "generated" / "caf~C3~A9.protocyte.hpp").is_file()
     assert (build_dir / "generated" / "caf~C3~A9.protocyte.cpp").is_file()
+    response_files = list(
+        (build_dir / "CMakeFiles" / "protocyte-arguments").glob("*.rsp")
+    )
+    assert any(
+        f"{(proto_dir / 'café.proto').as_posix()}\n" in response.read_text(
+            encoding="utf-8"
+        )
+        and "--dependency_out=" in response.read_text(encoding="utf-8")
+        for response in response_files
+    )
 
 
 def test_generate_descriptor_set_discover_skips_google_protobuf_files(
@@ -1922,18 +2014,24 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
     fake_protoc_py = tools_dir / "fake_protoc.py"
     fake_protoc_py.write_text(
         "\n".join(
-            [
-                "from pathlib import Path",
-                "import sys",
-                f"Path({str(args_path)!r}).parent.mkdir(parents=True, exist_ok=True)",
-                f"Path({str(args_path)!r}).write_text('\\n'.join(sys.argv[1:]), encoding='utf-8')",
-                "out_dir = None",
-                "for arg in sys.argv[1:]:",
+                [
+                    "from pathlib import Path",
+                    "import sys",
+                    "arguments = []",
+                    "for argument in sys.argv[1:]:",
+                    "    if argument.startswith('@'):",
+                    "        arguments.extend(Path(argument[1:]).read_text(encoding='utf-8').splitlines())",
+                    "    else:",
+                    "        arguments.append(argument)",
+                    f"Path({str(args_path)!r}).parent.mkdir(parents=True, exist_ok=True)",
+                    f"Path({str(args_path)!r}).write_text('\\n'.join(arguments), encoding='utf-8')",
+                    "out_dir = None",
+                    "for arg in arguments:",
                 "    if arg.startswith('--protocyte_out='):",
                 "        out_dir = Path(arg.split('=', 1)[1])",
                 "if out_dir is None:",
                 "    raise SystemExit('missing --protocyte_out')",
-                "for name in sys.argv[1:]:",
+                    "for name in arguments:",
                 "    if not name.endswith('.proto'):",
                 "        continue",
                 "    base = out_dir / name.removesuffix('.proto')",
@@ -2204,6 +2302,125 @@ def test_descriptor_set_library_builds_portable_descriptor_name(
     else:
         long_generated_directory = generated_base.split("/", 1)[0]
         assert len(long_generated_directory.encode("ascii")) == 255
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows protoc argv encoding regression")
+def test_prebuilt_windows_protoc_receives_utf8_descriptor_arguments(
+    tmp_path: Path,
+) -> None:
+    configured_protoc = os.environ.get(_CI_PROTOC_ENV)
+    if not configured_protoc:
+        _windows_transport_requirement_unavailable(
+            f"{_CI_PROTOC_ENV} is not configured with the prebuilt protoc"
+        )
+    if shutil.which("ninja") is None:
+        _windows_transport_requirement_unavailable(
+            "Ninja is required for Windows response-file integration coverage"
+        )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = Path(configured_protoc).resolve()
+    version = subprocess.run(
+        [str(protoc), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert version.startswith("libprotoc ")
+
+    source_dir = tmp_path / "café source"
+    build_dir = tmp_path / "bûild output"
+    tools_dir = source_dir / "plugin café"
+    tools_dir.mkdir(parents=True)
+    plugin = tools_dir / "protoc-gen-protocyte.exe"
+    shutil.copy2(_installed_protocyte_plugin(), plugin)
+
+    descriptor_names = [
+        "api/café name.proto",
+        "api/semi;colon.proto",
+        'api/literal"quote.proto',
+    ]
+    descriptor_set = source_dir / "descriptor sét.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    for index, descriptor_name in enumerate(descriptor_names):
+        descriptor = file_set.file.add()
+        descriptor.name = descriptor_name
+        descriptor.package = "demo"
+        descriptor.syntax = "proto3"
+        descriptor.message_type.add().name = f"Message{index}"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(windows_utf8_protoc_transport LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET utf8_discover_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated discover café"',
+                "    DISCOVER",
+                "    OPTIONS format=off",
+                ")",
+                "protocyte_generate(",
+                "    TARGET utf8_explicit_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated explicit café"',
+                "    PROTOS",
+                *(f"        [==[{name}]==]" for name in descriptor_names),
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--target",
+            "utf8_discover_codegen",
+            "utf8_explicit_codegen",
+        ],
+        check=True,
+    )
+
+    for generated_dir in (
+        build_dir / "generated discover café",
+        build_dir / "generated explicit café",
+    ):
+        for descriptor_name in descriptor_names:
+            generated_base = generated_file_base(descriptor_name)
+            assert (generated_dir / f"{generated_base}.hpp").is_file()
+            assert (generated_dir / f"{generated_base}.cpp").is_file()
+
+    response_files = list(
+        (build_dir / "CMakeFiles" / "protocyte-arguments").glob("*.rsp")
+    )
+    generation_responses = [
+        response.read_text(encoding="utf-8")
+        for response in response_files
+        if "--protocyte_out=" in response.read_text(encoding="utf-8")
+    ]
+    assert len(generation_responses) == 2
+    for generation_response in generation_responses:
+        response_lines = generation_response.splitlines()
+        assert f"--descriptor_set_in={descriptor_set.as_posix()}" in response_lines
+        assert f"--plugin=protoc-gen-protocyte={plugin.as_posix()}" in response_lines
+        assert sorted(descriptor_names) == sorted(
+            response_lines[-len(descriptor_names) :]
+        )
 
 
 def test_cmake_constraints_pin_the_private_environment() -> None:

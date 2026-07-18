@@ -178,6 +178,14 @@ Protocyte retains a readable prefix and appends the full SHA-256 digest of the
 original segment. The final segment also reserves room for
 `.protocyte.hpp`/`.protocyte.cpp`.
 
+The CMake helpers pass protoc options and file names through protoc's UTF-8
+response-file interface. Non-ASCII characters and spaces are retained in
+descriptor names and source, tool, and output paths; semicolons and quotes in
+descriptor names remain literal too. This behavior is consistent on Windows and
+POSIX hosts. Protoc defines each response-file line as one literal argument and
+provides no escaping for line breaks, so the CMake helpers reject descriptor
+names or paths containing carriage returns or line feeds.
+
 Generate from a descriptor set when `.proto` source is not the authority:
 
 ```powershell
@@ -498,7 +506,8 @@ This is the lower-level primitive. It creates the custom target named by
 `TARGET`, but it does not create a C++ library.
 
 - `TARGET` is the required code-generation target name.
-- `OUT_DIR` is required. A relative path is resolved from
+- `OUT_DIR` is required and must be known at configure time; generator
+  expressions are not accepted. A relative path is resolved from
   `CMAKE_CURRENT_BINARY_DIR`.
 - `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
@@ -588,7 +597,7 @@ This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
   `STATIC`.
 - `OUT_DIR` defaults to
   `${CMAKE_CURRENT_BINARY_DIR}/<TARGET>_protocyte`. Relative paths are resolved
-  from `CMAKE_CURRENT_BINARY_DIR`.
+  from `CMAKE_CURRENT_BINARY_DIR`; generator expressions are not accepted.
 - `HOSTED_ALLOCATOR` selects hosted allocation support. With `EMIT_RUNTIME`, it
   adds `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1` to consumers of the emitted runtime.
   Otherwise, it selects the default `protocyte::runtime_hosted` target when no
@@ -701,10 +710,10 @@ explicit formatter setting is supplied, protocyte still emits generated files
 without failing. Implicit style discovery is anchored to the caller's working
 directory and delegated to clang-format through `--style=file`; Protocyte never
 searches its own package or source tree for a consumer's `.clang-format`.
-CMake generation runs from the directory containing the calling
-`CMakeLists.txt`, so clang-format searches that source directory and its
-ancestors. Direct `protoc` callers should invoke it from the intended project
-directory or pass `clang_format_config` explicitly.
+CMake's response-file transport preserves the directory containing the calling
+`CMakeLists.txt` as the plugin invocation directory, so clang-format searches
+that source directory and its ancestors. Direct `protoc` callers should invoke
+it from the intended project directory or pass `clang_format_config` explicitly.
 
 `format=auto` is a convenience mode, not a byte-for-byte reproducibility
 guarantee across machines or clang-format versions. Projects that check
