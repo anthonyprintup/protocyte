@@ -389,6 +389,20 @@ namespace {
         return nullptr;
     }
 
+    struct FailingAllocationProbe {
+        size_t calls {};
+        size_t successful_calls_before_failure {};
+    };
+
+    void *fail_after_allocations(void *state, const size_t size, size_t) noexcept {
+        auto &probe = *static_cast<FailingAllocationProbe *>(state);
+        const size_t call {probe.calls++};
+        if (call >= probe.successful_calls_before_failure) {
+            return nullptr;
+        }
+        return malloc(size);
+    }
+
     void ignore_deallocation(void *, void *, size_t, size_t) noexcept {}
 
     struct RetainedAllocationProbe {
@@ -746,6 +760,23 @@ namespace {
     template<class Container>
     void append_bytes(Container &out, Config::Context &ctx, protocyte::Span<const protocyte::u8> view) {
         require_success(protocyte_smoke::fixture::append_bytes(out, ctx, view));
+    }
+
+    template<class Map> void insert_bytes(Map &out, Config::Context &ctx, const protocyte::i32 key,
+                                          const protocyte::Span<const protocyte::u8> view) {
+        Config::Bytes value(&ctx);
+        assign_bytes(value, view);
+        require_success(out.insert_or_assign(protocyte::i32 {key}, protocyte::move(value)));
+    }
+
+    template<class Map> bool contains_bytes(const Map &values, const protocyte::i32 key,
+                                            const protocyte::Span<const protocyte::u8> expected) noexcept {
+        for (const auto entry : values) {
+            if (entry.key == key && view_equal(entry.value.view(), expected)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     template<class Container, class T, size_t N>
@@ -2647,6 +2678,161 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         auto text_view = overwritten_text.mutable_view_for_overwrite();
         for (size_t i {}; i < text_view.size(); ++i) { text_view.data()[i] = string_bytes[i]; }
         CHECK(view_equal(overwritten_text.view(), view_of(string_bytes)));
+    }
+}
+
+TEST_CASE("Runtime container copies commit only after complete success", "[smoke][runtime][copy][atomic]") {
+    SECTION("Vector preserves its destination after a later element allocation fails") {
+        auto source_ctx = make_context();
+        Config::Vector<Config::Bytes> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Vector<Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(4u));
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+        const auto destination_capacity = destination.capacity();
+        const auto baseline_allocation = destination_ctx.total_allocated_bytes;
+        FailingAllocationProbe probe {.successful_calls_before_failure = 2u};
+        destination_ctx.allocator = protocyte::Allocator {&probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+
+        const protocyte::Span<const protocyte::u8> expected[] = {view_of(repeated_bytes_0)};
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.capacity() == destination_capacity);
+        CHECK(destination[0].context() == &destination_ctx);
+        CHECK(destination_ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(probe.calls == 3u);
+    }
+
+    SECTION("Vector commits a successful copy in the destination context") {
+        auto source_ctx = make_context();
+        Config::Vector<Config::Bytes> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Vector<Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(4u));
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+        const auto destination_capacity = destination.capacity();
+
+        require_success(destination.copy_from(source));
+        const protocyte::Span<const protocyte::u8> expected[] = {
+            view_of(repeated_bytes_1),
+            view_of(repeated_bytes_2),
+        };
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.capacity() == destination_capacity);
+        for (const auto &value : destination) { CHECK(value.context() == &destination_ctx); }
+
+        require_success(destination.copy_from(destination));
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.capacity() == destination_capacity);
+    }
+
+    SECTION("Array preserves its destination after a later element allocation fails") {
+        auto source_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> destination(&destination_ctx);
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+        const auto baseline_allocation = destination_ctx.total_allocated_bytes;
+        FailingAllocationProbe probe {.successful_calls_before_failure = 1u};
+        destination_ctx.allocator = protocyte::Allocator {&probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+
+        const protocyte::Span<const protocyte::u8> expected[] = {view_of(repeated_bytes_0)};
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.context() == &destination_ctx);
+        CHECK(destination[0].context() == &destination_ctx);
+        CHECK(destination_ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(probe.calls == 2u);
+    }
+
+    SECTION("Array commits a successful copy in the destination context") {
+        auto source_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> destination(&destination_ctx);
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+
+        require_success(destination.copy_from(source));
+        const protocyte::Span<const protocyte::u8> expected[] = {
+            view_of(repeated_bytes_1),
+            view_of(repeated_bytes_2),
+        };
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.context() == &destination_ctx);
+        for (const auto &value : destination) { CHECK(value.context() == &destination_ctx); }
+
+        require_success(destination.copy_from(destination));
+        check_byte_entry_sequence(destination, expected);
+    }
+
+    SECTION("HashMap preserves its destination after a later value allocation fails") {
+        auto source_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> source(&source_ctx);
+        insert_bytes(source, source_ctx, 1, view_of(repeated_bytes_1));
+        insert_bytes(source, source_ctx, 2, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(8u));
+        insert_bytes(destination, destination_ctx, 7, view_of(repeated_bytes_0));
+        const auto baseline_allocation = destination_ctx.total_allocated_bytes;
+        FailingAllocationProbe probe {.successful_calls_before_failure = 2u};
+        destination_ctx.allocator = protocyte::Allocator {&probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+
+        REQUIRE(destination.size() == 1u);
+        CHECK(contains_bytes(destination, 7, view_of(repeated_bytes_0)));
+        CHECK_FALSE(contains_bytes(destination, 1, view_of(repeated_bytes_1)));
+        CHECK_FALSE(contains_bytes(destination, 2, view_of(repeated_bytes_2)));
+        CHECK(destination_ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(probe.calls == 3u);
+    }
+
+    SECTION("HashMap commits a successful copy in the destination context") {
+        auto source_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> source(&source_ctx);
+        insert_bytes(source, source_ctx, 1, view_of(repeated_bytes_1));
+        insert_bytes(source, source_ctx, 2, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(8u));
+        insert_bytes(destination, destination_ctx, 7, view_of(repeated_bytes_0));
+
+        require_success(destination.copy_from(source));
+        REQUIRE(destination.size() == 2u);
+        CHECK(contains_bytes(destination, 1, view_of(repeated_bytes_1)));
+        CHECK(contains_bytes(destination, 2, view_of(repeated_bytes_2)));
+        CHECK_FALSE(contains_bytes(destination, 7, view_of(repeated_bytes_0)));
+        for (const auto entry : destination) { CHECK(entry.value.context() == &destination_ctx); }
+
+        require_success(destination.copy_from(destination));
+        REQUIRE(destination.size() == 2u);
+        CHECK(contains_bytes(destination, 1, view_of(repeated_bytes_1)));
+        CHECK(contains_bytes(destination, 2, view_of(repeated_bytes_2)));
+
+        AllocationProbe probe {};
+        destination_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, smoke_deallocate};
+        for (protocyte::i32 key {3}; key <= 8; ++key) {
+            Config::Bytes empty_value(&destination_ctx);
+            require_success(destination.insert_or_assign(protocyte::i32 {key}, protocyte::move(empty_value)));
+        }
+        CHECK(probe.calls == 0u);
     }
 }
 
