@@ -521,6 +521,87 @@ def test_public_cmake_functions_reject_keywords_without_values(
 
 
 @pytest.mark.parametrize(
+    "function_name",
+    [
+        "protocyte_generate",
+        "protocyte_add_proto_library",
+        "protocyte_add_descriptor_set_library",
+    ],
+)
+def test_public_cmake_functions_reject_options_without_values(
+    tmp_path: Path,
+    function_name: str,
+) -> None:
+    result = _configure_cmake_snippet(tmp_path, f"{function_name}(OPTIONS)")
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        f"{function_name} requires a value for the following keyword(s): OPTIONS"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    ("function_name", "forwarded_option"),
+    [
+        (function_name, forwarded_option)
+        for function_name in (
+            "protocyte_generate",
+            "protocyte_add_proto_library",
+            "protocyte_add_descriptor_set_library",
+        )
+        for forwarded_option in (
+            "HOSTED_ALOCATOR",
+            "comments=off,HOSTED_ALOCATOR",
+        )
+    ],
+)
+def test_public_cmake_functions_reject_bare_forwarded_options(
+    tmp_path: Path,
+    function_name: str,
+    forwarded_option: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f"{function_name}(OPTIONS {forwarded_option})",
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        f"{function_name} OPTIONS entry 'HOSTED_ALOCATOR' must use key=value"
+        in output
+    )
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        "protocyte_generate",
+        "protocyte_add_proto_library",
+        "protocyte_add_descriptor_set_library",
+    ],
+)
+def test_public_cmake_functions_accept_forwarded_key_value_syntax(
+    tmp_path: Path,
+    function_name: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f'{function_name}(OPTIONS "comments=off" "clang_format=")',
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "OPTIONS entry" not in output
+    if function_name == "protocyte_add_descriptor_set_library":
+        assert f"{function_name} requires DESCRIPTOR_SET" in output
+    else:
+        assert f"{function_name} requires TARGET" in output
+
+
+@pytest.mark.parametrize(
     ("invocation", "expected_error"),
     [
         (
