@@ -13,6 +13,50 @@ function(_protocyte_encode_generator_parameter out_var value)
     set(${out_var} "_protocyte_options_hex=${encoded}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_append_protoc_response_argument out_var argument)
+    string(FIND "${argument}" "\r" carriage_return_index)
+    string(FIND "${argument}" "\n" line_feed_index)
+    if(NOT carriage_return_index EQUAL -1 OR NOT line_feed_index EQUAL -1)
+        message(
+            FATAL_ERROR
+            "Protocyte CMake generation cannot pass descriptor names or paths containing carriage returns or "
+            "line feeds: protoc response files define one literal argument per line and provide no newline escaping"
+        )
+    endif()
+
+    set(response_content "${${out_var}}")
+    string(APPEND response_content "${argument}\n")
+    set(${out_var} "${response_content}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_write_protoc_response_file
+    out_absolute_path
+    out_relative_path
+    identity
+    content
+)
+    string(SHA256 response_key "${identity}")
+    set(response_relative_path "CMakeFiles/protocyte-arguments/${response_key}.rsp")
+    set(response_absolute_path "${CMAKE_CURRENT_BINARY_DIR}/${response_relative_path}")
+    cmake_path(GET response_absolute_path PARENT_PATH response_directory)
+    file(MAKE_DIRECTORY "${response_directory}")
+
+    set(write_response TRUE)
+    if(EXISTS "${response_absolute_path}")
+        file(READ "${response_absolute_path}" existing_content)
+        if(existing_content STREQUAL content)
+            set(write_response FALSE)
+        endif()
+    endif()
+    if(write_response)
+        file(WRITE "${response_absolute_path}" "${content}")
+    endif()
+
+    set(${out_absolute_path} "${response_absolute_path}" PARENT_SCOPE)
+    set(${out_relative_path} "${response_relative_path}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_descriptor_name_is_unsafe out_var name)
     if(IS_ABSOLUTE "${name}" OR "${name}" MATCHES "^[A-Za-z]:" OR "${name}" MATCHES "\\\\")
         set(${out_var} TRUE PARENT_SCOPE)
@@ -1005,6 +1049,9 @@ function(protocyte_generate)
     if(NOT PROTOCYTE_OUT_DIR)
         message(FATAL_ERROR "protocyte_generate requires OUT_DIR")
     endif()
+    if("${PROTOCYTE_OUT_DIR}" MATCHES "\\$<")
+        message(FATAL_ERROR "protocyte_generate OUT_DIR must be a configure-time path, not a generator expression")
+    endif()
     if(NOT IS_ABSOLUTE "${PROTOCYTE_OUT_DIR}")
         cmake_path(
             ABSOLUTE_PATH PROTOCYTE_OUT_DIR
@@ -1191,7 +1238,7 @@ function(protocyte_generate)
     set(protocyte_outputs "${protocyte_generated_headers}" "${protocyte_generated_sources}")
 
     set(protoc_proto_paths)
-    set(protoc_descriptor_args)
+    set(protoc_descriptor_argument)
     set(protocyte_input_depends)
     if(NOT PROTOCYTE_DESCRIPTOR_SET)
         set(protocyte_input_depends ${normalized_proto_files})
@@ -1221,7 +1268,9 @@ function(protocyte_generate)
         endif()
 
         foreach(import_dir IN LISTS protocyte_import_dirs)
-            list(APPEND protoc_proto_paths "--proto_path=${import_dir}")
+            set(protoc_proto_path "--proto_path=${import_dir}")
+            string(REPLACE ";" "\\;" protoc_proto_path_list_element "${protoc_proto_path}")
+            list(APPEND protoc_proto_paths "${protoc_proto_path_list_element}")
         endforeach()
 
         set(protocyte_dependency_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-dependencies")
@@ -1232,6 +1281,31 @@ function(protocyte_generate)
             set(dependency_descriptor_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.pb")
             set(dependency_depfile_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.d")
             set(dependency_descriptor "${CMAKE_CURRENT_BINARY_DIR}/${dependency_descriptor_rel}")
+            set(dependency_response_content "")
+            foreach(protoc_proto_path IN LISTS protoc_proto_paths)
+                _protocyte_append_protoc_response_argument(
+                    dependency_response_content
+                    "${protoc_proto_path}"
+                )
+            endforeach()
+            _protocyte_append_protoc_response_argument(
+                dependency_response_content
+                "--dependency_out=${dependency_depfile_rel}"
+            )
+            _protocyte_append_protoc_response_argument(
+                dependency_response_content
+                "--descriptor_set_out=${dependency_descriptor_rel}"
+            )
+            _protocyte_append_protoc_response_argument(
+                dependency_response_content
+                "${proto_file}"
+            )
+            _protocyte_write_protoc_response_file(
+                dependency_response_file
+                dependency_response_file_relative
+                "dependency-scan|${dependency_key}"
+                "${dependency_response_content}"
+            )
 
             add_custom_command(
                 OUTPUT "${dependency_descriptor}"
@@ -1239,15 +1313,14 @@ function(protocyte_generate)
                 COMMAND
                     "${CMAKE_COMMAND}"
                     "-DPROTOC_EXECUTABLE=${PROTOCYTE_PROTOC_EXECUTABLE}"
-                    "-DPROTO_PATH_ARGUMENTS=${protoc_proto_paths}"
-                    "-DDEPENDENCY_OUT=${dependency_depfile_rel}"
-                    "-DDESCRIPTOR_SET_OUT=${dependency_descriptor_rel}"
+                    "-DARGUMENT_FILE=${dependency_response_file_relative}"
                     "-DPROTO_FILE=${proto_file}"
                     "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
                 DEPENDS
                     "${proto_file}"
+                    "${dependency_response_file}"
                     "${protocyte_dependency_scan_script}"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
                 DEPFILE "${dependency_depfile_rel}"
@@ -1259,7 +1332,7 @@ function(protocyte_generate)
         endforeach()
         list(APPEND protocyte_input_depends ${protocyte_dependency_outputs})
     else()
-        list(APPEND protoc_descriptor_args "--descriptor_set_in=${protocyte_descriptor_set}")
+        set(protoc_descriptor_argument "--descriptor_set_in=${protocyte_descriptor_set}")
         list(APPEND protocyte_input_depends "${protocyte_descriptor_set}")
     endif()
 
@@ -1270,24 +1343,58 @@ function(protocyte_generate)
     endif()
 
     set(protocyte_command_outputs "${protocyte_outputs}")
+    set(protocyte_response_content "")
+    if(NOT "${protoc_descriptor_argument}" STREQUAL "")
+        _protocyte_append_protoc_response_argument(
+            protocyte_response_content
+            "${protoc_descriptor_argument}"
+        )
+    endif()
+    foreach(protoc_proto_path IN LISTS protoc_proto_paths)
+        _protocyte_append_protoc_response_argument(
+            protocyte_response_content
+            "${protoc_proto_path}"
+        )
+    endforeach()
+    _protocyte_append_protoc_response_argument(
+        protocyte_response_content
+        "--plugin=protoc-gen-protocyte=${protocyte_plugin_executable}"
+    )
+    _protocyte_append_protoc_response_argument(
+        protocyte_response_content
+        "${protocyte_out_arg}"
+    )
+    foreach(proto_file IN LISTS normalized_proto_files)
+        _protocyte_append_protoc_response_argument(
+            protocyte_response_content
+            "${proto_file}"
+        )
+    endforeach()
+    _protocyte_write_protoc_response_file(
+        protocyte_response_file
+        protocyte_response_file_relative
+        "generation|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+        "${protocyte_response_content}"
+    )
+    string(HEX "${CMAKE_CURRENT_SOURCE_DIR}" protocyte_source_directory_hex)
 
     add_custom_command(
         OUTPUT ${protocyte_command_outputs}
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_OUT_DIR}"
-        COMMAND "${PROTOCYTE_PROTOC_EXECUTABLE}"
-            ${protoc_descriptor_args}
-            ${protoc_proto_paths}
-            "--plugin=protoc-gen-protocyte=${protocyte_plugin_executable}"
-            "${protocyte_out_arg}"
-            ${normalized_proto_files}
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=${protocyte_source_directory_hex}"
+            "${PROTOCYTE_PROTOC_EXECUTABLE}"
+            "@${protocyte_response_file_relative}"
         DEPENDS
             ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
+            "${protocyte_response_file}"
             "${PROTOCYTE_PROTOC_DEPENDENCY}"
             "${protocyte_plugin_executable}"
             "${protocyte_options_proto}"
             ${protocyte_generator_sources}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
         VERBATIM
     )
 

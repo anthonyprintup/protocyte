@@ -131,6 +131,19 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Install prebuilt protoc for Windows argument transport
+        id: windows-protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Verify prebuilt protoc UTF-8 response-file transport
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST: "1"
+        run: >
+          uv run pytest -q
+          tests/test_cmake.py::test_prebuilt_windows_protoc_receives_utf8_descriptor_arguments
+          tests/test_cmake.py::test_source_mode_codegen_declares_normalized_generated_paths
+
       - name: Verify checked smoke outputs
         run: |
           uv run python tests/smoke/tools/generate_checked_outputs.py

@@ -4,8 +4,7 @@ foreach(
     required_variable
     IN ITEMS
         PROTOC_EXECUTABLE
-        DEPENDENCY_OUT
-        DESCRIPTOR_SET_OUT
+        ARGUMENT_FILE
         PROTO_FILE
         SCAN_WORKING_DIRECTORY
 )
@@ -17,10 +16,7 @@ endforeach()
 execute_process(
     COMMAND
         "${PROTOC_EXECUTABLE}"
-        ${PROTO_PATH_ARGUMENTS}
-        "--dependency_out=${DEPENDENCY_OUT}"
-        "--descriptor_set_out=${DESCRIPTOR_SET_OUT}"
-        "${PROTO_FILE}"
+        "@${ARGUMENT_FILE}"
     WORKING_DIRECTORY "${SCAN_WORKING_DIRECTORY}"
     RESULT_VARIABLE protoc_result
     OUTPUT_VARIABLE protoc_output
