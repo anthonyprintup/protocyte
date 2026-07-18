@@ -102,13 +102,16 @@ jobs:
       - name: Run quick-start round trip
         run: ctest --test-dir build/quickstart --output-on-failure
 
-      - name: Verify transitive import regeneration
+      - name: Verify incremental generated-output ownership
         env:
           PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.protoc.outputs.protoc }}
           PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST: "1"
         run: >
           uv run pytest -q
           tests/test_cmake.py::test_source_codegen_regenerates_when_transitive_import_changes
+          tests/test_cmake.py::test_source_discover_removes_only_outputs_owned_by_a_renamed_proto
+          tests/test_cmake.py::test_descriptor_discover_removes_only_outputs_owned_by_a_deleted_file
+          tests/test_cmake.py::test_owned_output_cleanup_preserves_files_transferred_between_targets
 
   smoke-host:
     name: Smoke Host (clang-cl)

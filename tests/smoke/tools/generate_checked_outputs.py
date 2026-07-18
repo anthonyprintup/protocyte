@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
@@ -26,9 +27,52 @@ def main() -> int:
         return 1
 
     out_dir = Path(__file__).resolve().parents[1] / "generated"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    written_paths: set[Path] = set()
+    error = _regenerate_checked_outputs(out_dir, clang_format, clang_format_config)
+    if error is not None:
+        print(error, file=sys.stderr)
+        return 1
+    return 0
 
+
+def _regenerate_checked_outputs(
+    out_dir: Path,
+    clang_format: str,
+    clang_format_config: Path,
+) -> str | None:
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".protocyte-smoke-generated-",
+        dir=out_dir.parent,
+    ) as transaction_dir:
+        transaction = Path(transaction_dir)
+        staged_out_dir = transaction / "generated"
+        staged_out_dir.mkdir()
+        error = _write_checked_outputs(
+            staged_out_dir,
+            clang_format,
+            clang_format_config,
+        )
+        if error is not None:
+            return error
+
+        previous_out_dir = transaction / "previous"
+        had_previous = out_dir.exists()
+        if had_previous:
+            out_dir.replace(previous_out_dir)
+        try:
+            staged_out_dir.replace(out_dir)
+        except BaseException:
+            if had_previous:
+                previous_out_dir.replace(out_dir)
+            raise
+    return None
+
+
+def _write_checked_outputs(
+    out_dir: Path,
+    clang_format: str,
+    clang_format_config: Path,
+) -> str | None:
     requests: list[plugin_pb2.CodeGeneratorRequest] = []
     smoke_format_options = (
         f"clang_format={clang_format}",
@@ -62,25 +106,17 @@ def main() -> int:
     for request in requests:
         response = generate_response(request)
         if response.error:
-            print(response.error, file=sys.stderr)
-            return 1
+            return response.error
 
         for item in response.file:
             path = out_dir / item.name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(item.content, encoding="utf-8", newline="\n")
-            written_paths.add(path)
 
     compat_cases_path = out_dir / "compat_cases.hpp"
     compat_cases_path.write_text(compat_cases_header(), encoding="utf-8", newline="\n")
     _clang_format_file(compat_cases_path, clang_format, clang_format_config)
-    written_paths.add(compat_cases_path)
-
-    stale_runtime_source = out_dir / "protocyte" / "runtime" / "runtime.cpp"
-    if stale_runtime_source not in written_paths and stale_runtime_source.exists():
-        stale_runtime_source.unlink()
-
-    return 0
+    return None
 
 
 def _generator_parameter(*parts: str) -> str:
