@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from google.protobuf import descriptor_pb2
 
+from protocyte import __version__
+
 
 def _find_real_protoc(repo_root: Path) -> Path:
     candidates: list[Path] = []
@@ -105,13 +107,50 @@ def _write_incompatible_protocyte_plugin(path: Path) -> Path:
     if os.name == "nt":
         plugin = path.with_suffix(".cmd")
         plugin.write_text(
-            "@echo off\r\necho old plugin cannot discover 1>&2\r\nexit /b 4\r\n",
+            "\r\n".join(
+                [
+                    "@echo off",
+                    'if "%~1"=="--version" (',
+                    f"  echo {__version__}",
+                    "  exit /b 0",
+                    ")",
+                    "echo old plugin cannot discover 1>&2",
+                    "exit /b 4",
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
     else:
         plugin = path
         plugin.write_text(
-            "#!/usr/bin/env sh\necho 'old plugin cannot discover' >&2\nexit 4\n",
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'[ "$1" = "--version" ] && echo "{__version__}" && exit 0',
+                    "echo 'old plugin cannot discover' >&2",
+                    "exit 4",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        plugin.chmod(0o755)
+    return plugin
+
+
+def _write_version_only_plugin(path: Path, version: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        plugin = path.with_suffix(".cmd")
+        plugin.write_text(
+            f"@echo off\r\necho {version}\r\n",
+            encoding="utf-8",
+        )
+    else:
+        plugin = path
+        plugin.write_text(
+            f"#!/usr/bin/env sh\necho '{version}'\n",
             encoding="utf-8",
         )
         plugin.chmod(0o755)
@@ -139,7 +178,93 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in installed_config
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in source_config
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in installed_config
+    assert "PROTOCYTE_INTERNAL_VERSION" in source_config
+    assert "PROTOCYTE_INTERNAL_VERSION" in installed_config
     assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
+
+
+def test_explicit_plugin_override_must_exist(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    missing = tmp_path / "missing" / "protoc-gen-protocyte"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{missing.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "does not name an existing file" in output
+
+
+def test_explicit_plugin_override_must_match_package_version(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    plugin = _write_version_only_plugin(
+        tmp_path / "tools" / "protoc-gen-protocyte", "99.0.0"
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert f"CMake package {__version__}" in output
+    assert "plugin reported 99.0.0" in output
+
+
+def test_explicit_plugin_change_rechecks_version_on_build(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(explicit_plugin_reconfigure LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+                "add_custom_target(noop)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    original_mtime_ns = plugin.stat().st_mtime_ns
+    _write_version_only_plugin(plugin.with_suffix(""), "99.0.0")
+    changed_mtime_ns = max(plugin.stat().st_mtime_ns, original_mtime_ns + 2_000_000_000)
+    os.utime(plugin, ns=(changed_mtime_ns, changed_mtime_ns))
+
+    result = subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "noop"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert f"CMake package {__version__}" in output
+    assert "plugin reported 99.0.0" in output
 
 
 def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> None:
@@ -761,7 +886,9 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     proto_dir = source_dir / "proto"
     descriptor = source_dir / "protobuf" / "google" / "protobuf" / "descriptor.proto"
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
 
     proto_dir.mkdir(parents=True)
     (proto_dir / "demo.proto").write_text(
@@ -769,9 +896,8 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     )
     descriptor.parent.mkdir(parents=True)
     descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
-    protoc.parent.mkdir(parents=True)
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -806,10 +932,11 @@ def test_generate_accepts_descriptor_set_protos_without_proto_root(
     descriptor_set = source_dir / "descriptor_set.pb"
     descriptor_set.write_bytes(b"placeholder")
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
-    protoc.parent.mkdir(parents=True)
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -1189,10 +1316,11 @@ def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(
     descriptor_set = source_dir / "descriptor_set.pb"
     descriptor_set.write_bytes(b"placeholder")
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
-    protoc.parent.mkdir(parents=True)
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -1279,8 +1407,9 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
             encoding="utf-8",
         )
         protoc.chmod(0o755)
-    plugin = tools_dir / "protoc-gen-protocyte"
-    plugin.write_text("", encoding="utf-8")
+    plugin = _write_version_only_plugin(
+        tools_dir / "protoc-gen-protocyte", __version__
+    )
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -1382,10 +1511,11 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
     descriptor_set = source_dir / "descriptor_set.pb"
     descriptor_set.write_bytes(b"placeholder")
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
-    protoc.parent.mkdir(parents=True)
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [

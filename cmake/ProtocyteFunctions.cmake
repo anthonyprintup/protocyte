@@ -216,6 +216,55 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
     set(${out_var} "${discovered_list}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_validate_explicit_plugin out_var plugin_executable)
+    if("${plugin_executable}" MATCHES "\\$<")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE must be a configure-time executable path, not a generator expression"
+        )
+    endif()
+    if(IS_ABSOLUTE "${plugin_executable}")
+        set(plugin_path "${plugin_executable}")
+    else()
+        get_filename_component(plugin_path "${plugin_executable}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+    cmake_path(NORMAL_PATH plugin_path)
+    if(NOT EXISTS "${plugin_path}" OR IS_DIRECTORY "${plugin_path}")
+        message(FATAL_ERROR "PROTOCYTE_PLUGIN_EXECUTABLE does not name an existing file: ${plugin_path}")
+    endif()
+
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${plugin_path}")
+
+    _protocyte_get_internal(expected_version VERSION)
+    if("${expected_version}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte's CMake package did not declare its expected plugin version")
+    endif()
+    execute_process(
+        COMMAND "${plugin_path}" --version
+        RESULT_VARIABLE version_result
+        OUTPUT_VARIABLE version_output
+        ERROR_VARIABLE version_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 15
+    )
+    if(NOT "${version_result}" STREQUAL "0")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE failed its required --version check: ${plugin_path}\n"
+            "Exit code: ${version_result}\nStandard output: ${version_output}\nStandard error: ${version_error}"
+        )
+    endif()
+    if(NOT "${version_output}" STREQUAL "${expected_version}")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE version mismatch: CMake package ${expected_version}, "
+            "plugin reported ${version_output}\nPlugin: ${plugin_path}"
+        )
+    endif()
+    set(${out_var} "${plugin_path}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_get_internal out_var name)
     get_property(value GLOBAL PROPERTY "PROTOCYTE_INTERNAL_${name}")
     set(${out_var} "${value}" PARENT_SCOPE)
@@ -688,7 +737,10 @@ function(_protocyte_prepare_plugin)
     endif()
 
     if(DEFINED PROTOCYTE_PLUGIN_EXECUTABLE AND NOT "${PROTOCYTE_PLUGIN_EXECUTABLE}" STREQUAL "")
-        set(protocyte_plugin_executable "${PROTOCYTE_PLUGIN_EXECUTABLE}")
+        _protocyte_validate_explicit_plugin(
+            protocyte_plugin_executable
+            "${PROTOCYTE_PLUGIN_EXECUTABLE}"
+        )
     else()
         _protocyte_ensure_python_environment(protocyte_python_executable protocyte_plugin_executable)
     endif()

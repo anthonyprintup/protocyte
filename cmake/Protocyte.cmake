@@ -7,6 +7,11 @@ set(PROTOCYTE_PYTHON_SOURCE_ROOT "${PROTOCYTE_REPO_ROOT}/src")
 set(PROTOCYTE_PACKAGE_ROOT "${PROTOCYTE_PYTHON_SOURCE_ROOT}/protocyte")
 set(PROTOCYTE_PROTO_DIR "${PROTOCYTE_PACKAGE_ROOT}/proto")
 set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_PROTO_DIR}/protocyte/options.proto")
+file(STRINGS "${PROTOCYTE_PACKAGE_ROOT}/__init__.py" protocyte_version_line REGEX "^__version__ = ")
+if(NOT protocyte_version_line MATCHES "^__version__ = \"([^\"]+)\"$")
+    message(FATAL_ERROR "Failed to read Protocyte's Python package version")
+endif()
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_VERSION "${CMAKE_MATCH_1}")
 set(
     PROTOCYTE_GENERATOR_SOURCES
     "${PROTOCYTE_PACKAGE_ROOT}/__init__.py"
