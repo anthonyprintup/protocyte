@@ -346,12 +346,46 @@ def _validate_import_graph(
             stack.append(dependency)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Inspect a protobuf FileDescriptorSet.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+def main(
+    argv: list[str] | None = None,
+    *,
+    prog: str = "protoc-gen-protocyte descriptor-set",
+) -> int:
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description=(
+            "Inspect a binary protobuf FileDescriptorSet and determine which files "
+            "Protocyte would generate."
+        ),
+        epilog=(
+            "Create a descriptor set with protoc, including imported descriptors:\n"
+            "  protoc --proto_path=. --include_imports "
+            "--descriptor_set_out=descriptor_set.pb schema.proto\n\n"
+            "Then inspect it with:\n"
+            "  protoc-gen-protocyte descriptor-set list descriptor_set.pb"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(
+        dest="command",
+        required=True,
+        title="commands",
+    )
 
-    list_parser = subparsers.add_parser("list", help="list generated descriptor files as JSON")
-    list_parser.add_argument("descriptor_set", type=Path)
+    list_parser = subparsers.add_parser(
+        "list",
+        help="list the descriptor files Protocyte would generate",
+        description=(
+            "List the descriptor files Protocyte would generate. The result is written "
+            "to standard output as a sorted JSON array of virtual .proto file names."
+        ),
+    )
+    list_parser.add_argument(
+        "descriptor_set",
+        metavar="FILE",
+        type=Path,
+        help="path to a binary protobuf FileDescriptorSet",
+    )
 
     args = parser.parse_args(argv)
     try:

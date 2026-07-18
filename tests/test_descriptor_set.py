@@ -302,6 +302,63 @@ def test_plugin_entrypoint_reports_version(capsys: pytest.CaptureFixture[str]) -
     assert capsys.readouterr().out.strip() == __version__
 
 
+@pytest.mark.parametrize("option", ["-h", "--help"])
+def test_plugin_entrypoint_reports_help(
+    option: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert plugin_main([option]) == 0
+
+    captured = capsys.readouterr()
+    assert "usage: protoc-gen-protocyte" in captured.out
+    assert "Most users generate code by running protoc" in captured.out
+    assert "protoc --proto_path=. --protocyte_out=generated schema.proto" in captured.out
+    assert "descriptor-set" in captured.out
+    assert "--version" in captured.out
+    assert captured.err == ""
+
+
+def test_plugin_entrypoint_unknown_arguments_show_help_hint(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert plugin_main(["unknown-command"]) == 2
+
+    captured = capsys.readouterr()
+    assert "usage: protoc-gen-protocyte" in captured.err
+    assert "unsupported arguments: unknown-command" in captured.err
+    assert "protoc-gen-protocyte --help" in captured.err
+    assert captured.out == ""
+
+
+def test_plugin_entrypoint_descriptor_set_help_uses_canonical_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        plugin_main(["descriptor-set", "--help"])
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "usage: protoc-gen-protocyte descriptor-set" in captured.out
+    assert "binary protobuf FileDescriptorSet" in captured.out
+    assert "--include_imports" in captured.out
+    assert "descriptor-set list descriptor_set.pb" in captured.out
+    assert captured.err == ""
+
+
+def test_plugin_entrypoint_descriptor_set_list_help_explains_io(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        plugin_main(["descriptor-set", "list", "--help"])
+
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert "usage: protoc-gen-protocyte descriptor-set list" in captured.out
+    assert "sorted JSON array of virtual .proto file names" in captured.out
+    assert "path to a binary protobuf FileDescriptorSet" in captured.out
+    assert captured.err == ""
+
+
 def test_plugin_entrypoint_dispatches_descriptor_set_commands(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
