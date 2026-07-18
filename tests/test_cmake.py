@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -123,6 +124,45 @@ def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
         )
         wrapper.chmod(0o755)
     return wrapper
+
+
+def _write_protoc_wrapper(path: Path, protoc: Path, invocation_log: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'echo invoked>>"{invocation_log}"',
+                    f'"{protoc}" %*',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f"printf 'invoked\\n' >> {shlex.quote(str(invocation_log))}",
+                    f'exec {shlex.quote(str(protoc))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
+def _touch_newer_than(path: Path, output: Path) -> None:
+    changed_mtime_ns = (
+        max(path.stat().st_mtime_ns, output.stat().st_mtime_ns) + 2_000_000_000
+    )
+    os.utime(path, ns=(changed_mtime_ns, changed_mtime_ns))
 
 
 def _installed_protocyte_plugin() -> Path:
@@ -310,6 +350,18 @@ def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> N
 
     assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"' in generation_command
     assert '"${protocyte_plugin_executable}"' in generation_command.split("DEPENDS", 1)[1]
+
+
+def test_quickstart_tracks_protoc_as_a_generation_dependency() -> None:
+    quickstart = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "quickstart"
+        / "CMakeLists.txt"
+    ).read_text(encoding="utf-8")
+    generation_dependencies = quickstart.split("DEPENDS", 1)[1].split("COMMENT", 1)[0]
+
+    assert '"${PROTOC_EXECUTABLE}"' in generation_dependencies
 
 
 @pytest.mark.parametrize(
@@ -665,6 +717,53 @@ def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
         resolved_output.read_text(encoding="utf-8")
         == (tmp_path / "toolchain" / "include").as_posix()
     )
+
+
+def test_relative_protoc_path_must_name_an_existing_file(tmp_path: Path) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                'set(Protobuf_PROTOC_EXECUTABLE "tools/missing-protoc")',
+                "_protocyte_ensure_protobuf()",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert "Protobuf_PROTOC_EXECUTABLE 'tools/missing-protoc' resolves to" in output
+    assert "does not name an existing file" in output
+
+
+@pytest.mark.parametrize("target_name", ["protobuf::protoc", "protoc"])
+def test_protoc_target_preserves_generator_expression_and_target_dependency(
+    tmp_path: Path, target_name: str
+) -> None:
+    selected = tmp_path / "build" / "selected.txt"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f"add_executable({target_name} IMPORTED)",
+                f'set_target_properties({target_name} PROPERTIES IMPORTED_LOCATION "${{CMAKE_CURRENT_SOURCE_DIR}}/tools/protoc")',
+                'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/protobuf")',
+                "_protocyte_ensure_protobuf()",
+                f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
+            ]
+        ),
+        files={
+            "tools/protoc": "",
+            "protobuf/google/protobuf/descriptor.proto": 'syntax = "proto3";\n',
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert selected.read_text(encoding="utf-8").splitlines() == [
+        f"$<TARGET_FILE:{target_name}>",
+        target_name,
+    ]
 
 
 def test_generator_parameter_encoding_uses_hex_transport(tmp_path: Path) -> None:
@@ -1117,6 +1216,160 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
 
     no_change = subprocess.run(build_command, check=True, capture_output=True, text=True)
     assert "no work to do" in no_change.stdout.lower()
+
+
+@pytest.mark.parametrize("protoc_selection", ["relative_path", "imported_target"])
+def test_source_codegen_accepts_relative_protoc_and_tracks_tool_changes(
+    tmp_path: Path, protoc_selection: str
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    real_protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required to verify an incremental build")
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    tools_dir = source_dir / "tools"
+    proto_dir.mkdir(parents=True)
+    tools_dir.mkdir()
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; package demo; message Demo {}\n', encoding="utf-8"
+    )
+    invocation_log = source_dir / "protoc-invocations.txt"
+    protoc = _write_protoc_wrapper(tools_dir / "protoc", real_protoc, invocation_log)
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    relative_protoc = protoc.relative_to(source_dir).as_posix()
+    if protoc_selection == "relative_path":
+        protoc_setup = [f'set(Protobuf_PROTOC_EXECUTABLE "{relative_protoc}")']
+    else:
+        protoc_setup = [
+            "add_executable(protobuf::protoc IMPORTED)",
+            f'set_target_properties(protobuf::protoc PROPERTIES IMPORTED_LOCATION "{protoc.as_posix()}")',
+        ]
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(relative_protoc_incremental LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                *protoc_setup,
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    if protoc_selection == "relative_path":
+        cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+        assert f"PROTOCYTE_PROTOC_EXECUTABLE:INTERNAL={protoc.as_posix()}" in cache
+
+    build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
+    subprocess.run(build_command, check=True)
+    generated_header = build_dir / "generated" / "demo.protocyte.hpp"
+    assert generated_header.is_file()
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+    ]
+
+    _touch_newer_than(protoc, generated_header)
+    subprocess.run(build_command, check=True)
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+        "invoked",
+        "invoked",
+    ]
+
+
+@pytest.mark.parametrize("protoc_selection", ["relative_path", "imported_target"])
+def test_descriptor_set_codegen_tracks_protoc_tool_changes(
+    tmp_path: Path, protoc_selection: str
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    real_protoc = _find_real_protoc(repo_root)
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required to verify an incremental build")
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    tools_dir = source_dir / "tools"
+    tools_dir.mkdir(parents=True)
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    demo = file_set.file.add()
+    demo.name = "api/demo.proto"
+    demo.package = "demo"
+    demo.syntax = "proto3"
+    demo.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    invocation_log = source_dir / "protoc-invocations.txt"
+    protoc = _write_protoc_wrapper(tools_dir / "protoc", real_protoc, invocation_log)
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    relative_protoc = protoc.relative_to(source_dir).as_posix()
+    if protoc_selection == "relative_path":
+        protoc_setup = [f'set(Protobuf_PROTOC_EXECUTABLE "{relative_protoc}")']
+    else:
+        protoc_setup = [
+            "add_executable(protobuf::protoc IMPORTED)",
+            f'set_target_properties(protobuf::protoc PROPERTIES IMPORTED_LOCATION "{protoc.as_posix()}")',
+        ]
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_protoc_incremental LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                *protoc_setup,
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    DESCRIPTOR_SET "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS api/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
+    subprocess.run(build_command, check=True)
+    generated_header = build_dir / "generated" / "api" / "demo.protocyte.hpp"
+    assert generated_header.is_file()
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == ["invoked"]
+
+    _touch_newer_than(protoc, generated_header)
+    subprocess.run(build_command, check=True)
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+    ]
 
 
 def test_generate_accepts_descriptor_set_protos_without_proto_root(
