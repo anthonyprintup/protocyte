@@ -476,7 +476,7 @@ Supported `--protocyte_out=` parameters:
 - `include_prefix=<path>`: prefix includes for imported generated headers.
 - `comments=on|off`: emit schema comments as Doxygen documentation on generated
   C++ types and field APIs. The default is `on`. This setting does not suppress
-  `[[deprecated]]` attributes derived from protobuf field options.
+  `[[deprecated]]` attributes derived from protobuf field and enum-value options.
 - `format=auto|off|required`: control generated C++ formatting. `auto` is the
   default and formats when `clang-format` is available; `off` never launches a
   formatter; `required` reports an error when no formatter is available.

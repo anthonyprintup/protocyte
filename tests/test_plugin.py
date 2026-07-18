@@ -183,6 +183,31 @@ def test_comments_off_suppresses_documentation_but_not_deprecation() -> None:
     assert header.count("[[deprecated]]") == 3
 
 
+def test_generation_preserves_enum_value_deprecation() -> None:
+    request = _basic_request(parameter="format=off,comments=off")
+    file = request.proto_file[0]
+
+    mode = file.enum_type.add(name="Mode")
+    mode.value.add(name="MODE_CURRENT", number=0)
+    mode.value.add(name="MODE_LEGACY", number=1).options.deprecated = True
+
+    nested_mode = file.message_type[0].enum_type.add(name="NestedMode")
+    nested_mode.value.add(name="NESTED_MODE_CURRENT", number=0)
+    nested_mode.value.add(
+        name="NESTED_MODE_LEGACY", number=1
+    ).options.deprecated = True
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "MODE_CURRENT = 0," in header
+    assert "MODE_LEGACY [[deprecated]] = 1," in header
+    assert "NESTED_MODE_CURRENT = 0," in header
+    assert "NESTED_MODE_LEGACY [[deprecated]] = 1," in header
+    assert header.count("[[deprecated]]") == 2
+
+
 def test_generation_maps_nested_enum_and_oneof_documentation() -> None:
     request = _basic_request(parameter="format=off")
     file = request.proto_file[0]
