@@ -146,6 +146,14 @@ $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 On other shells, either activate `.venv` first or prepend the matching
 `.venv/bin` directory to `PATH`.
 
+The installed package also exposes the command-line interface as a Python
+module, including its help and version information:
+
+```powershell
+python -m protocyte --help
+python -m protocyte --version
+```
+
 For a ground-zero walkthrough that covers getting `protoc`, building and
 installing the protocyte package, running `protoc` with the plugin, wiring the
 generated files into a CMake target, and setting up automatic regeneration, see
