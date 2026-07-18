@@ -80,19 +80,27 @@ On Windows, the plugin executable will normally be here:
 <repo>\.venv\Scripts\protoc-gen-protocyte.exe
 ```
 
-If you want `protoc` to discover the plugin by name instead of passing an
-explicit `--plugin=...` path, prepend the virtual environment to `PATH`:
+Select that environment's interpreter and, if you want `protoc` to discover the
+plugin by name instead of passing an explicit `--plugin=...` path, prepend the
+virtual environment to `PATH`:
 
 ```powershell
+$python = "$PWD\.venv\Scripts\python.exe"
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 ```
 
 On a POSIX host, the plugin is `<repo>/.venv/bin/protoc-gen-protocyte`.
-Prepend that script directory in Bash with:
+Select the matching interpreter and prepend that script directory in Bash with:
 
 ```bash
+python="$PWD/.venv/bin/python"
 export PATH="$PWD/.venv/bin:$PATH"
 ```
+
+Both assignments capture an absolute interpreter path. Keep using that
+`$python` value after moving into a separate consumer project; `uv run` resolves
+its project from the current directory and would no longer select this checkout
+environment there.
 
 ### Option B: Build A Wheel And Install It Somewhere Else
 
@@ -208,16 +216,20 @@ In a local checkout, that directory is:
 <repo>\src\protocyte\proto
 ```
 
-With Option A's checkout environment, print it without relying on an ambient
-Python command:
+With either Option A or Option B, print it through the explicit interpreter
+selected above. In PowerShell:
 
-```console
-uv run python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
+```powershell
+& $python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
 ```
 
-With Option B, run the same `-c` argument through the explicit `$python` or
-`"$python"` interpreter created above. Use the printed path as one of your
-`--proto_path` values.
+In Bash:
+
+```bash
+"$python" -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
+```
+
+Use the printed path as one of your `--proto_path` values.
 
 ## 4. Write A Proto Tree
 
@@ -435,7 +447,7 @@ produce a descriptor set with imports. In PowerShell:
 
 ```powershell
 $protoRoot = "$PWD\proto"
-$protocyteProtoDir = uv run python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
+$protocyteProtoDir = & $python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
 $descriptorSet = "$PWD\build\descriptor_set.pb"
 New-Item -ItemType Directory -Force (Split-Path -Parent $descriptorSet) | Out-Null
 
@@ -452,7 +464,7 @@ In Bash:
 
 ```bash
 proto_root="$PWD/proto"
-protocyte_proto_dir=$(uv run python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))")
+protocyte_proto_dir=$("$python" -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))")
 descriptor_set="$PWD/build/descriptor_set.pb"
 mkdir -p "$(dirname "$descriptor_set")"
 

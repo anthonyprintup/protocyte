@@ -1,6 +1,7 @@
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -36,9 +37,7 @@ def test_readme_quickstart_matches_compiled_example() -> None:
 
 def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    powershell = _marked_fenced_block(
-        readme, "quickstart-powershell", "powershell"
-    )
+    powershell = _marked_fenced_block(readme, "quickstart-powershell", "powershell")
     posix = _marked_fenced_block(readme, "quickstart-posix", "bash")
 
     for fragment in (
@@ -57,9 +56,7 @@ def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
     assert "$(command -v protoc)" in posix
     assert "Scripts" not in posix
 
-    linux_ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    linux_ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     for fragment in (
         "uv build --wheel",
         "uv venv build/quickstart-venv --python 3.12",
@@ -144,8 +141,7 @@ def test_direct_generation_examples_create_output_directories() -> None:
         )
         assert all("mkdir -p" in block for block in posix_blocks)
         assert all(
-            "--protocyte_out=runtime=emit:" in block
-            for block in powershell_blocks
+            "--protocyte_out=runtime=emit:" in block for block in powershell_blocks
         )
         assert all("--protocyte_out=runtime=emit:" in block for block in posix_blocks)
 
@@ -153,18 +149,60 @@ def test_direct_generation_examples_create_output_directories() -> None:
 def test_ground_zero_python_commands_use_uv_managed_environments() -> None:
     guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
     prerequisites = guide.split("## 1. Install `protoc`", maxsplit=1)[0]
+    checkout_install = guide.split(
+        "### Option A: Use This Repository Checkout Directly", maxsplit=1
+    )[1].split("### Option B: Build A Wheel And Install It Somewhere Else", maxsplit=1)[
+        0
+    ]
     wheel_install = guide.split(
         "### Option B: Build A Wheel And Install It Somewhere Else", maxsplit=1
     )[1].split("### Option C: Install The CMake Package", maxsplit=1)[0]
 
     assert "uv python find 3.12" in prerequisites
     assert "python --version" not in prerequisites
+    assert '$python = "$PWD\\.venv\\Scripts\\python.exe"' in checkout_install
+    assert 'python="$PWD/.venv/bin/python"' in checkout_install
     assert "uv venv build\\plugin-venv --python 3.12" in wheel_install
     assert "uv venv build/plugin-venv --python 3.12" in wheel_install
     assert "uv pip install --python $python $wheel" in wheel_install
     assert 'uv pip install --python "$python" "$wheel"' in wheel_install
     assert "python -m pip" not in wheel_install
-    assert "uv run python -c" in guide
+    assert "uv run python -c" not in guide
+    assert '& $python -c "from pathlib import Path; import protocyte;' in guide
+    assert '$("$python" -c "from pathlib import Path; import protocyte;' in guide
+
+
+def test_documented_proto_locator_runs_from_separate_consumer_directory(
+    tmp_path: Path,
+) -> None:
+    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+    descriptor_blocks = [
+        block
+        for language in ("powershell", "bash")
+        for block in _fenced_blocks(guide, language)
+        if "--descriptor_set_out" in block
+    ]
+
+    locator_commands = set()
+    for block in descriptor_blocks:
+        match = re.search(r'-c "([^"\n]+)"', block)
+        assert match is not None
+        locator_commands.add(match.group(1))
+    assert len(locator_commands) == 1
+
+    consumer = tmp_path / "separate-consumer"
+    consumer.mkdir()
+    completed = subprocess.run(
+        [sys.executable, "-c", locator_commands.pop()],
+        cwd=consumer,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    proto_directory = Path(completed.stdout.strip())
+    assert (proto_directory / "protocyte" / "options.proto").is_file()
 
 
 def test_descriptor_set_cmake_example_uses_a_defined_output_directory() -> None:
@@ -221,9 +259,9 @@ def test_documented_protobuf_fallback_defaults_match_cmake_modes() -> None:
 
 def test_readme_documents_descriptor_name_portability_rejections() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    descriptor_paths = readme.split(
-        "Protobuf virtual descriptor names", maxsplit=1
-    )[1].split("Generate from a descriptor set", maxsplit=1)[0]
+    descriptor_paths = readme.split("Protobuf virtual descriptor names", maxsplit=1)[
+        1
+    ].split("Generate from a descriptor set", maxsplit=1)[0]
 
     assert "Descriptor names beginning with `-` are rejected" in descriptor_paths
     assert "differ only by letter case" in descriptor_paths
