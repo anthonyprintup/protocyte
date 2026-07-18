@@ -529,7 +529,9 @@ def _write_managed_environment_consumer(
         [
             "_protocyte_prepare_plugin()",
             "_protocyte_get_internal(managed_plugin PLUGIN_EXECUTABLE)",
+            "_protocyte_get_internal(managed_root PYTHON_ENV_ROOT)",
             'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-plugin.txt" "${managed_plugin}")',
+            'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-root.txt" "${PROTOCYTE_PYTHON_ENV_ROOT}\n${managed_root}\n")',
             "",
         ]
     )
@@ -542,6 +544,7 @@ def _configure_managed_environment(
     build_dir: Path,
     *,
     env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
@@ -549,6 +552,7 @@ def _configure_managed_environment(
         capture_output=True,
         text=True,
         env=env,
+        cwd=cwd,
         timeout=900,
     )
 
@@ -637,6 +641,9 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     installed_config = (repo_root / "cmake" / "protocyteConfig.cmake.in").read_text(
         encoding="utf-8"
     )
+    functions = (repo_root / "cmake" / "ProtocyteFunctions.cmake").read_text(
+        encoding="utf-8"
+    )
 
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in source_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
@@ -650,8 +657,9 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert "PROTOCYTE_INTERNAL_PYTHON_PROJECT_ROOT" in installed_config
     assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in source_config
     assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in installed_config
-    assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in source_config
-    assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in installed_config
+    assert "_protocyte_configure_python_environment_root()" in source_config
+    assert "_protocyte_configure_python_environment_root()" in installed_config
+    assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in functions
     assert "PROTOCYTE_INTERNAL_VERSION" in source_config
     assert "PROTOCYTE_INTERNAL_VERSION" in installed_config
     assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
@@ -696,6 +704,31 @@ def test_explicit_plugin_override_must_match_package_version(tmp_path: Path) -> 
     assert result.returncode != 0
     assert f"CMake package {__version__}" in output
     assert "plugin reported 99.0.0" in output
+
+
+def test_explicit_plugin_override_rejects_semicolon_path_before_execution(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    plugin = _write_version_only_plugin(
+        tmp_path / "tools;legacy" / "protoc-gen-protocyte", __version__
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert "PROTOCYTE_PLUGIN_EXECUTABLE must not contain ';'" in output
+    assert "semicolon-free path" in output
+    assert "failed its required --version check" not in output
 
 
 def test_explicit_plugin_change_rechecks_version_on_build(tmp_path: Path) -> None:
@@ -5781,6 +5814,111 @@ def test_cmake_constraints_pin_the_private_environment() -> None:
         if package["name"] == "protobuf"
     )
     assert constraints["protobuf"] == locked_protobuf
+
+
+def test_relative_managed_environment_root_is_canonical_and_confined(
+    tmp_path: Path,
+) -> None:
+    relative_root = Path("relative-environments")
+    expected_root = tmp_path / "project-build" / relative_root
+    source_dir = tmp_path / "project"
+    launch_dir = tmp_path / "launcher"
+    launch_dir.mkdir()
+    build_dir = _write_managed_environment_consumer(
+        source_dir,
+        relative_root,
+    )
+
+    result = _configure_managed_environment(
+        source_dir,
+        build_dir,
+        cwd=launch_dir,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    configured_roots = (build_dir / "managed-root.txt").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert [Path(root) for root in configured_roots] == [expected_root, expected_root]
+    environment = _published_managed_environment(expected_root)
+    _python, plugin = _managed_environment_executables(environment)
+    assert Path(
+        (build_dir / "managed-plugin.txt").read_text(encoding="utf-8")
+    ) == plugin
+    assert plugin.is_file()
+    assert not (source_dir / relative_root).exists()
+    assert not (launch_dir / relative_root).exists()
+    _assert_no_managed_environment_transaction_leftovers(expected_root)
+
+
+def test_relative_managed_environment_root_cache_is_canonical(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    launch_dir = tmp_path / "launcher"
+    source_dir.mkdir()
+    launch_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(relative_environment_cache LANGUAGES NONE)",
+                'set(PROTOCYTE_PYTHON_ENV_ROOT "cached-environments" CACHE PATH "" FORCE)',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                "_protocyte_get_internal(managed_root PYTHON_ENV_ROOT)",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/roots.txt" "${PROTOCYTE_PYTHON_ENV_ROOT}\n${managed_root}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=launch_dir,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected_root = build_dir / "cached-environments"
+    configured_roots = (build_dir / "roots.txt").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert [Path(root) for root in configured_roots] == [expected_root, expected_root]
+    cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    assert (
+        f"PROTOCYTE_PYTHON_ENV_ROOT:PATH={expected_root.as_posix()}" in cache
+    )
+    assert not (source_dir / "cached-environments").exists()
+    assert not (launch_dir / "cached-environments").exists()
+
+
+def test_managed_environment_root_rejects_semicolon_before_provisioning(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    environment_root = tmp_path / "managed;environments"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'set(PROTOCYTE_PYTHON_ENV_ROOT "{environment_root.as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert "PROTOCYTE_PYTHON_ENV_ROOT must not contain ';'" in output
+    assert "Choose an environment root without semicolons" in output
+    assert "Provisioning Protocyte Python environment" not in output
+    assert not environment_root.exists()
+    assert not (tmp_path / "managed").exists()
 
 
 def test_shared_managed_environment_serializes_concurrent_configures(
