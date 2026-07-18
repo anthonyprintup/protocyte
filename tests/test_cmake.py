@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Never
 
 import pytest
 from google.protobuf import descriptor_pb2
@@ -15,8 +16,24 @@ from protocyte import __version__
 from protocyte.paths import generated_file_base
 
 
+_CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
+_CI_REQUIRE_INCREMENTAL_TEST_ENV = "PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST"
+
+
+def _incremental_requirement_unavailable(message: str) -> Never:
+    if os.environ.get(_CI_REQUIRE_INCREMENTAL_TEST_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
 def _find_real_protoc(repo_root: Path) -> Path:
     candidates: list[Path] = []
+    if configured := os.environ.get(_CI_PROTOC_ENV):
+        protoc = Path(configured)
+        if not protoc.is_file():
+            pytest.fail(f"{_CI_PROTOC_ENV} does not name a file: {protoc}")
+        return protoc
+
     if found := shutil.which("protoc"):
         candidates.append(Path(found))
 
@@ -29,7 +46,7 @@ def _find_real_protoc(repo_root: Path) -> Path:
         if candidate.is_file():
             return candidate
 
-    pytest.skip("real protoc executable is not available")
+    _incremental_requirement_unavailable("real protoc executable is not available")
 
 
 def _find_protobuf_import_root(repo_root: Path) -> Path:
@@ -59,7 +76,9 @@ def _find_protobuf_import_dir(repo_root: Path, protoc: Path) -> Path:
         if (candidate / "google" / "protobuf" / "descriptor.proto").is_file():
             return candidate
 
-    pytest.skip("protobuf import directory is not available")
+    _incremental_requirement_unavailable(
+        "protobuf import directory is not available"
+    )
 
 
 def _configure_cmake_snippet(
@@ -1142,7 +1161,9 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
     protoc = _find_real_protoc(repo_root)
     protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required to verify an incremental build")
+        _incremental_requirement_unavailable(
+            "Ninja is required to verify an incremental build"
+        )
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
     proto_dir = source_dir / "proto"
