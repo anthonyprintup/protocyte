@@ -438,11 +438,16 @@ set(PROTOCYTE_FETCH_PROTOBUF ON CACHE BOOL "" FORCE)
 find_package(protocyte CONFIG REQUIRED)
 ```
 
+The fallback can provision the protobuf import sources independently when a
+usable `protoc` executable or target is already available; it does not replace
+that selected compiler.
+
 Public CMake variables exposed by the package:
 
 - `PROTOCYTE_PROTO_DIR`: the installed directory that contains `protocyte/options.proto`
 - `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
 - `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
+- `PROTOCYTE_PROTOBUF_IMPORT_DIR`: an optional explicit root containing `google/protobuf/descriptor.proto`
 - `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments
 - `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning
 
@@ -479,6 +484,15 @@ Prepares the Protocyte plugin and locates or provisions `protoc`. Generation
 helpers call it automatically, so most projects do not need to call it. Use it
 when configuration should perform that setup eagerly, before any generation
 target is declared. It has no options.
+
+An ordinary relative `Protobuf_PROTOC_EXECUTABLE` value is anchored to the
+source directory of the first Protocyte setup call that consumes that exact
+value. Descendant and sibling directories reuse the resolved executable instead
+of rebasing the inherited token. Use an absolute path or a distinct relative
+value to select a different compiler in a subdirectory. Automatically discovered
+protobuf imports remain associated with their compiler; set
+`PROTOCYTE_PROTOBUF_IMPORT_DIR` explicitly when different compilers should
+intentionally share one import root.
 
 #### `protocyte_generate`
 

@@ -194,6 +194,16 @@ def _touch_newer_than(path: Path, output: Path) -> None:
     os.utime(path, ns=(changed_mtime_ns, changed_mtime_ns))
 
 
+def _write_protobuf_toolchain(root: Path) -> Path:
+    protoc = root / "bin" / "protoc"
+    protoc.parent.mkdir(parents=True)
+    protoc.write_text("", encoding="utf-8")
+    descriptor = root / "include" / "google" / "protobuf" / "descriptor.proto"
+    descriptor.parent.mkdir(parents=True)
+    descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+    return protoc
+
+
 def _installed_protocyte_plugin() -> Path:
     executable_name = (
         "protoc-gen-protocyte.exe" if os.name == "nt" else "protoc-gen-protocyte"
@@ -435,6 +445,46 @@ def test_cmake_protoc_response_file_rejects_multiline_arguments(
     assert result.returncode != 0
     output = " ".join((result.stdout + result.stderr).split())
     assert "protoc response files define one literal argument per line" in output
+
+
+def test_quickstart_generates_with_source_relative_tool_paths(tmp_path: Path) -> None:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required to verify quick-start generation")
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = repo_root / "examples" / "quickstart"
+    build_dir = tmp_path / "build"
+    protoc = _find_real_protoc(repo_root)
+    plugin = _installed_protocyte_plugin()
+    relative_protoc = Path(os.path.relpath(protoc, source_dir)).as_posix()
+    relative_plugin = Path(os.path.relpath(plugin, source_dir)).as_posix()
+
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            f"-DPROTOC_EXECUTABLE:FILEPATH={relative_protoc}",
+            f"-DPROTOCYTE_PLUGIN_EXECUTABLE:FILEPATH={relative_plugin}",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--target",
+            "generated/quickstart.protocyte.hpp",
+        ],
+        check=True,
+    )
+
+    assert (build_dir / "generated" / "quickstart.protocyte.hpp").is_file()
 
 
 @pytest.mark.parametrize(
@@ -975,8 +1025,9 @@ def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
             [
                 "cmake_minimum_required(VERSION 3.24)",
                 f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
                 f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
-                "_protocyte_resolve_protobuf_import_dir()",
+                "_protocyte_ensure_protobuf(TRUE)",
                 f'file(WRITE "{resolved_output.as_posix()}" "${{PROTOCYTE_PROTOBUF_IMPORT_DIR}}")',
                 "",
             ]
@@ -999,7 +1050,7 @@ def test_relative_protoc_path_must_name_an_existing_file(tmp_path: Path) -> None
             [
                 "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
                 'set(Protobuf_PROTOC_EXECUTABLE "tools/missing-protoc")',
-                "_protocyte_ensure_protobuf()",
+                "_protocyte_ensure_protobuf(FALSE)",
             ]
         ),
     )
@@ -1022,7 +1073,7 @@ def test_protoc_target_preserves_generator_expression_and_target_dependency(
                 f"add_executable({target_name} IMPORTED)",
                 f'set_target_properties({target_name} PROPERTIES IMPORTED_LOCATION "${{CMAKE_CURRENT_SOURCE_DIR}}/tools/protoc")',
                 'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/protobuf")',
-                "_protocyte_ensure_protobuf()",
+                "_protocyte_ensure_protobuf(FALSE)",
                 f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
             ]
         ),
@@ -1037,6 +1088,441 @@ def test_protoc_target_preserves_generator_expression_and_target_dependency(
         f"$<TARGET_FILE:{target_name}>",
         target_name,
     ]
+
+
+@pytest.mark.parametrize("protoc_selection", ["external_path", "imported_target"])
+def test_fetch_fallback_provisions_imports_for_an_existing_protoc(
+    tmp_path: Path, protoc_selection: str
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+    )
+    protoc = source_dir / "tools" / "protoc"
+    protoc.parent.mkdir()
+    protoc.write_text("", encoding="utf-8")
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    fetched_source = source_dir / "fetched-protobuf"
+    descriptor = fetched_source / "src" / "google" / "protobuf" / "descriptor.proto"
+    descriptor.parent.mkdir(parents=True)
+    descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+    resolved_output = build_dir / "resolved-import.txt"
+    if protoc_selection == "external_path":
+        protoc_setup = [f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")']
+    else:
+        protoc_setup = [
+            "add_executable(protobuf::protoc IMPORTED)",
+            f'set_target_properties(protobuf::protoc PROPERTIES IMPORTED_LOCATION "{protoc.as_posix()}")',
+        ]
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(fetch_missing_imports LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                "set(PROTOCYTE_FETCH_PROTOBUF ON)",
+                'set(PROTOCYTE_PROTOBUF_GIT_TAG "test-fixture")',
+                f'set(FETCHCONTENT_SOURCE_DIR_PROTOCYTE_PROTOBUF_IMPORTS "{fetched_source.as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                *protoc_setup,
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/demo.proto",
+                ")",
+                "if(TARGET protobuf::libprotobuf OR TARGET libprotobuf)",
+                '    message(FATAL_ERROR "import-only fallback unexpectedly added protobuf libraries")',
+                "endif()",
+                f'file(WRITE "{resolved_output.as_posix()}" "${{PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    assert resolved_output.read_text(encoding="utf-8") == (fetched_source / "src").as_posix()
+
+
+def test_fetch_fallback_import_sources_build_with_real_protoc(tmp_path: Path) -> None:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required to verify fetched import source generation")
+    repo_root = Path(__file__).resolve().parents[1]
+    real_protoc = _find_real_protoc(repo_root)
+    real_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    tools_dir = source_dir / "tools"
+    proto_dir.mkdir(parents=True)
+    tools_dir.mkdir()
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+    )
+    invocation_log = source_dir / "protoc-invocations.txt"
+    protoc = _write_protoc_wrapper(tools_dir / "protoc", real_protoc, invocation_log)
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    fetched_source = source_dir / "fetched-protobuf"
+    fetched_descriptor = (
+        fetched_source / "src" / "google" / "protobuf" / "descriptor.proto"
+    )
+    fetched_descriptor.parent.mkdir(parents=True)
+    shutil.copy2(
+        real_import_dir / "google" / "protobuf" / "descriptor.proto",
+        fetched_descriptor,
+    )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(fetch_import_build LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                "set(PROTOCYTE_FETCH_PROTOBUF ON)",
+                'set(PROTOCYTE_PROTOBUF_GIT_TAG "test-fixture")',
+                f'set(FETCHCONTENT_SOURCE_DIR_PROTOCYTE_PROTOBUF_IMPORTS "{fetched_source.as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
+        check=True,
+    )
+
+    assert (build_dir / "generated" / "demo.protocyte.hpp").is_file()
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+    ]
+
+
+def test_eager_setup_fetches_missing_import_sources_for_an_existing_protoc(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    protoc = source_dir / "tools" / "protoc"
+    protoc.parent.mkdir()
+    protoc.write_text("", encoding="utf-8")
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    fetched_source = source_dir / "fetched-protobuf"
+    descriptor = fetched_source / "src" / "google" / "protobuf" / "descriptor.proto"
+    descriptor.parent.mkdir(parents=True)
+    descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+    resolved_output = build_dir / "resolved-import.txt"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(eager_fetch_missing_imports LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                "set(PROTOCYTE_FETCH_PROTOBUF ON)",
+                'set(PROTOCYTE_PROTOBUF_GIT_TAG "test-fixture")',
+                f'set(FETCHCONTENT_SOURCE_DIR_PROTOCYTE_PROTOBUF_IMPORTS "{fetched_source.as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_setup_codegen()",
+                f'file(WRITE "{resolved_output.as_posix()}" "${{PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    assert resolved_output.read_text(encoding="utf-8") == (fetched_source / "src").as_posix()
+
+
+def test_eager_setup_keeps_an_inherited_relative_protoc_stable(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    child_dir = source_dir / "child"
+    sibling_dir = source_dir / "sibling"
+    for directory in (child_dir, sibling_dir):
+        directory.mkdir(parents=True)
+        (directory / "demo.proto").write_text(
+            'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+        )
+    protoc = _write_protobuf_toolchain(source_dir / "toolchain")
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    selected_outputs = [
+        build_dir / "child" / "selected.txt",
+        build_dir / "sibling" / "selected.txt",
+    ]
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(eager_relative_protoc LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                'set(Protobuf_PROTOC_EXECUTABLE "toolchain/bin/protoc")',
+                "protocyte_setup_codegen()",
+                "add_subdirectory(child)",
+                "add_subdirectory(sibling)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for directory, selected_output in zip(
+        (child_dir, sibling_dir), selected_outputs, strict=True
+    ):
+        (directory / "CMakeLists.txt").write_text(
+            "\n".join(
+                [
+                    f"protocyte_generate(TARGET {directory.name}_codegen",
+                    '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}"',
+                    '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                    "    PROTOS demo.proto",
+                    ")",
+                    f'file(WRITE "{selected_output.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n${{PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}}\n")',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    expected_selection = [
+        protoc.as_posix(),
+        protoc.as_posix(),
+        (source_dir / "toolchain" / "include").as_posix(),
+    ]
+    for selected_output in selected_outputs:
+        assert selected_output.read_text(encoding="utf-8").splitlines() == expected_selection
+
+
+def test_siblings_reuse_the_first_relative_protoc_resolution(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    first_dir = source_dir / "first"
+    second_dir = source_dir / "second"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir()
+    protoc = _write_protobuf_toolchain(first_dir / "toolchain")
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(sibling_relative_protoc LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                'set(Protobuf_PROTOC_EXECUTABLE "toolchain/bin/protoc")',
+                "add_subdirectory(first)",
+                "add_subdirectory(second)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    selected_outputs = []
+    for directory in (first_dir, second_dir):
+        selected_output = build_dir / directory.name / "selected.txt"
+        selected_outputs.append(selected_output)
+        (directory / "CMakeLists.txt").write_text(
+            "\n".join(
+                [
+                    "protocyte_setup_codegen()",
+                    f'file(WRITE "{selected_output.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOBUF_IMPORT_DIR}}\n")',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    expected_selection = [
+        protoc.as_posix(),
+        (first_dir / "toolchain" / "include").as_posix(),
+    ]
+    for selected_output in selected_outputs:
+        assert selected_output.read_text(encoding="utf-8").splitlines() == expected_selection
+
+
+def test_switching_protoc_toolchains_refreshes_the_automatic_import_root(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    child_dir = source_dir / "child"
+    child_dir.mkdir(parents=True)
+    first_protoc = _write_protobuf_toolchain(source_dir / "toolchain-a")
+    second_protoc = _write_protobuf_toolchain(source_dir / "toolchain-b")
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    selected_output = build_dir / "child" / "selected.txt"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(switched_protoc_toolchain LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{first_protoc.as_posix()}")',
+                "protocyte_setup_codegen()",
+                "add_subdirectory(child)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (child_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                f'set(Protobuf_PROTOC_EXECUTABLE "{second_protoc.as_posix()}")',
+                "protocyte_setup_codegen()",
+                'if(DEFINED PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR)',
+                '    message(FATAL_ERROR "successful toolchain switch retained stale import metadata")',
+                "endif()",
+                f'file(WRITE "{selected_output.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOBUF_IMPORT_DIR}}\n${{PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    second_import_dir = (source_dir / "toolchain-b" / "include").as_posix()
+    assert selected_output.read_text(encoding="utf-8").splitlines() == [
+        second_protoc.as_posix(),
+        second_import_dir,
+        second_import_dir,
+    ]
+
+
+def test_switching_protoc_rejects_stale_automatic_source_variables(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    child_dir = source_dir / "child"
+    child_dir.mkdir(parents=True)
+    (child_dir / "demo.proto").write_text(
+        'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+    )
+    first_protoc = _write_protobuf_toolchain(source_dir / "toolchain-a")
+    second_protoc = source_dir / "toolchain-b" / "bin" / "protoc"
+    second_protoc.parent.mkdir(parents=True)
+    second_protoc.write_text("", encoding="utf-8")
+    stale_source = source_dir / "stale-protobuf-source"
+    stale_source_descriptor = (
+        stale_source / "src" / "google" / "protobuf" / "descriptor.proto"
+    )
+    stale_source_descriptor.parent.mkdir(parents=True)
+    stale_source_descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+    stale_include = source_dir / "stale-protobuf-include"
+    stale_include_descriptor = stale_include / "google" / "protobuf" / "descriptor.proto"
+    stale_include_descriptor.parent.mkdir(parents=True)
+    stale_include_descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(stale_protobuf_sources LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{first_protoc.as_posix()}")',
+                f'set(protobuf_SOURCE_DIR "{stale_source.as_posix()}")',
+                f'set(Protobuf_INCLUDE_DIRS "{stale_include.as_posix()}")',
+                "protocyte_setup_codegen()",
+                "add_subdirectory(child)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (child_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                f'set(Protobuf_PROTOC_EXECUTABLE "{second_protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET child_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS demo.proto",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert "selected a different protoc toolchain" in output
+    assert "Set PROTOCYTE_PROTOBUF_IMPORT_DIR or IMPORT_DIRS explicitly" in output
+    assert (source_dir / "toolchain-a" / "include").as_posix() in output
+    assert stale_source.as_posix() not in output
+    assert stale_include.as_posix() not in output
 
 
 def test_generator_parameter_encoding_uses_hex_transport(tmp_path: Path) -> None:
