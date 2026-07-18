@@ -1,6 +1,8 @@
 #include "example.protocyte.hpp"
 
 #if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+
 namespace test::ultimate {
 
     namespace protocyte_reflection {
@@ -13,38 +15,42 @@ namespace test::ultimate {
             bool packed;
         };
 
-        static const FieldInfo UltimateComplexMessage_NestedLevel1_NestedLevel2_fields[] = {
-            {"description", 1u, "string", false, false, false},
-            {"values", 2u, "scalar", true, false, true},
-            {"mode", 3u, "enum", false, false, false},
-        };
+        [[maybe_unused]] static const ::std::array<FieldInfo, 3>
+            UltimateComplexMessage_NestedLevel1_NestedLevel2_fields {{
+                {"description", 1u, "string", false, false, false},
+                {"values", 2u, "scalar", true, false, true},
+                {"mode", 3u, "enum", false, false, false},
+            }};
 
-        static const FieldInfo UltimateComplexMessage_NestedLevel1_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 3> UltimateComplexMessage_NestedLevel1_fields {{
             {"name", 1u, "string", false, false, false},
             {"id", 2u, "scalar", false, false, false},
             {"inner", 3u, "message", false, true, false},
-        };
+        }};
 
-        static const FieldInfo UltimateComplexMessage_RepeatedBytesHolder_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 1> UltimateComplexMessage_RepeatedBytesHolder_fields {{
             {"values", 1u, "bytes", true, false, false},
-        };
+        }};
 
-        static const FieldInfo UltimateComplexMessage_BoundedRepeatedBytesHolder_fields[] = {
-            {"values", 1u, "bytes", true, false, false},
-        };
+        [[maybe_unused]] static const ::std::array<FieldInfo, 1>
+            UltimateComplexMessage_BoundedRepeatedBytesHolder_fields {{
+                {"values", 1u, "bytes", true, false, false},
+            }};
 
-        static const FieldInfo UltimateComplexMessage_FixedRepeatedBytesHolder_fields[] = {
-            {"values", 1u, "bytes", true, false, false},
-        };
+        [[maybe_unused]] static const ::std::array<FieldInfo, 1>
+            UltimateComplexMessage_FixedRepeatedBytesHolder_fields {{
+                {"values", 1u, "bytes", true, false, false},
+            }};
 
-        static const FieldInfo UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE_fields[] = {
-            {"extreme", 1u, "string", false, false, false},
-            {"weird_map", 2u, "map", true, false, false},
-            {"val", 3u, "scalar", false, true, false},
-            {"text", 4u, "string", false, true, false},
-        };
+        [[maybe_unused]] static const ::std::array<FieldInfo, 4>
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE_fields {{
+                {"extreme", 1u, "string", false, false, false},
+                {"weird_map", 2u, "map", true, false, false},
+                {"val", 3u, "scalar", false, true, false},
+                {"text", 4u, "string", false, true, false},
+            }};
 
-        static const FieldInfo UltimateComplexMessage_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 49> UltimateComplexMessage_fields {{
             {"f_double", 1u, "scalar", false, false, false},
             {"f_float", 2u, "scalar", false, false, false},
             {"f_int32", 4u, "scalar", false, false, false},
@@ -94,30 +100,32 @@ namespace test::ultimate {
             {"repeated_byte_array", 46u, "bytes", true, false, false},
             {"bounded_repeated_byte_array", 47u, "bytes", true, false, false},
             {"fixed_repeated_byte_array", 48u, "bytes", true, false, false},
-        };
+        }};
 
-        static const FieldInfo UltimateComplexMessage_LevelA_fields[] = {};
+        [[maybe_unused]] static const ::std::array<FieldInfo, 0> UltimateComplexMessage_LevelA_fields {{}};
 
-        static const FieldInfo UltimateComplexMessage_LevelA_LevelB_fields[] = {};
+        [[maybe_unused]] static const ::std::array<FieldInfo, 0> UltimateComplexMessage_LevelA_LevelB_fields {{}};
 
-        static const FieldInfo UltimateComplexMessage_LevelA_LevelB_LevelC_fields[] = {};
+        [[maybe_unused]] static const ::std::array<FieldInfo, 0> UltimateComplexMessage_LevelA_LevelB_LevelC_fields {
+            {}};
 
-        static const FieldInfo UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_fields[] = {};
+        [[maybe_unused]] static const ::std::array<FieldInfo, 0>
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_fields {{}};
 
-        static const FieldInfo ExtraMessage_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 2> ExtraMessage_fields {{
             {"tag", 1u, "string", false, false, false},
             {"ref", 2u, "message", false, true, false},
-        };
+        }};
 
-        static const FieldInfo CrossMessageConstants_Nested_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 1> CrossMessageConstants_Nested_fields {{
             {"nested_bytes", 1u, "bytes", false, false, false},
-        };
+        }};
 
-        static const FieldInfo CrossMessageConstants_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 3> CrossMessageConstants_fields {{
             {"external_bytes", 1u, "bytes", false, false, false},
             {"mirrored_values", 2u, "scalar", true, false, true},
             {"nested", 3u, "message", false, true, false},
-        };
+        }};
 
     } // namespace protocyte_reflection
 

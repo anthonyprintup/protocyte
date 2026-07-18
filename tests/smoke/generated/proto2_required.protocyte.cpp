@@ -1,6 +1,8 @@
 #include "proto2_required.protocyte.hpp"
 
 #if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+
 namespace test::required {
 
     namespace protocyte_reflection {
@@ -13,22 +15,22 @@ namespace test::required {
             bool packed;
         };
 
-        static const FieldInfo RequiredChild_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 2> RequiredChild_fields {{
             {"id", 1u, "scalar", false, true, false},
             {"note", 2u, "string", false, true, false},
-        };
+        }};
 
-        static const FieldInfo RequiredParent_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 2> RequiredParent_fields {{
             {"child", 1u, "message", false, true, false},
             {"children", 2u, "message", true, true, false},
-        };
+        }};
 
-        static const FieldInfo Proto2ArrayDefaults_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 2> Proto2ArrayDefaults_fields {{
             {"bounded_bytes", 1u, "bytes", false, true, false},
             {"fixed_bytes", 2u, "bytes", false, true, false},
-        };
+        }};
 
-        static const FieldInfo Proto2DefaultValues_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 19> Proto2DefaultValues_fields {{
             {"double_value", 1u, "scalar", false, true, false},
             {"float_value", 2u, "scalar", false, true, false},
             {"int64_value", 3u, "scalar", false, true, false},
@@ -48,11 +50,11 @@ namespace test::required {
             {"implicit_enum_value", 17u, "enum", false, true, false},
             {"enum_values", 18u, "enum", true, false, true},
             {"enum_by_name", 19u, "map", true, false, false},
-        };
+        }};
 
-        static const FieldInfo OneofShadowingValue_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 1> OneofShadowingValue_fields {{
             {"bool_value", 1u, "scalar", false, true, false},
-        };
+        }};
 
     } // namespace protocyte_reflection
 

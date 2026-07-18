@@ -268,22 +268,47 @@ add_library(protocyte_runtime_strict_compile OBJECT src/runtime_strict_compile.c
 target_link_libraries(protocyte_runtime_strict_compile PRIVATE protocyte::runtime)
 target_compile_features(protocyte_runtime_strict_compile PRIVATE cxx_std_20)
 
-if(MSVC)
-    target_compile_options(protocyte_runtime_strict_compile PRIVATE /W4 /WX /permissive-)
-else()
-    target_compile_options(
+add_library(
+    protocyte_reflection_strict_compile
+    OBJECT
+        "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+)
+target_include_directories(
+    protocyte_reflection_strict_compile
+    PRIVATE
+        "${PROTOCYTE_GENERATED_DIR}"
+)
+target_compile_definitions(
+    protocyte_reflection_strict_compile
+    PRIVATE
+        PROTOCYTE_ENABLE_REFLECTION=1
+)
+target_compile_features(protocyte_reflection_strict_compile PRIVATE cxx_std_20)
+
+foreach(
+    target_name
+    IN ITEMS
         protocyte_runtime_strict_compile
-        PRIVATE
-            -Wall
-            -Wextra
-            -Wpedantic
-            -Wundef
-            -Werror
-    )
-endif()
+        protocyte_reflection_strict_compile
+)
+    if(MSVC)
+        target_compile_options("${target_name}" PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(
+            "${target_name}"
+            PRIVATE
+                -Wall
+                -Wextra
+                -Wpedantic
+                -Wundef
+                -Werror
+        )
+    endif()
+endforeach()
 
 if(PROTOCYTE_SMOKE_REGENERATE)
     add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
+    add_dependencies(protocyte_reflection_strict_compile protocyte_smoke_regenerate)
 endif()
 
 if(MSVC)

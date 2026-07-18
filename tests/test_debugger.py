@@ -974,6 +974,95 @@ def test_result_provider_preserves_pointer_payload(
     assert provider.get_child_at_index(0) is pointer_value
 
 
+def test_status_and_void_result_summaries_use_nested_error_storage(
+    protocyte_lldb_module,
+) -> None:
+    error = _FakeLLDBValue(
+        "error_",
+        children={
+            "code": _FakeLLDBValue(
+                "code", value="protocyte::ErrorCode::invalid_argument"
+            ),
+            "offset": _FakeLLDBValue("offset", unsigned=17),
+            "field_number": _FakeLLDBValue("field_number", unsigned=3),
+        },
+    )
+    success = _FakeLLDBValue(
+        "status",
+        children={
+            "storage_": _FakeLLDBValue("storage_"),
+            "ok_": _FakeLLDBValue("ok_", unsigned=1),
+        },
+    )
+    failure = _FakeLLDBValue(
+        "status",
+        children={
+            "storage_": _FakeLLDBValue(
+                "storage_", children={"error_": error}
+            ),
+            "ok_": _FakeLLDBValue("ok_", unsigned=0),
+        },
+    )
+
+    assert protocyte_lldb_module.status_summary(success, {}) == "ok"
+    assert protocyte_lldb_module.status_summary(failure, {}) == (
+        "code=protocyte::ErrorCode::invalid_argument, offset=17, field=3"
+    )
+    assert protocyte_lldb_module.result_summary(success, {}) == "ok"
+    assert protocyte_lldb_module.result_summary(failure, {}) == (
+        "err, code=protocyte::ErrorCode::invalid_argument, offset=17, field=3"
+    )
+
+
+def test_void_result_provider_uses_nested_error_and_omits_success_value(
+    protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    void_result_type = _FakeLLDBType(
+        "protocyte::Result<void, protocyte::Error>",
+        template_args=[_FakeLLDBType("void")],
+    )
+    success = _FakeLLDBValue(
+        "result",
+        type_=void_result_type,
+        children={
+            "storage_": _FakeLLDBValue("storage_"),
+            "ok_": _FakeLLDBValue("ok_", unsigned=1),
+        },
+    )
+    error = _FakeLLDBValue("error_", address=0x2000)
+    failure = _FakeLLDBValue(
+        "result",
+        type_=void_result_type,
+        children={
+            "storage_": _FakeLLDBValue(
+                "storage_", children={"error_": error}
+            ),
+            "ok_": _FakeLLDBValue("ok_", unsigned=0),
+        },
+    )
+    renamed_error = _FakeLLDBValue("error")
+    monkeypatch.setattr(protocyte_lldb_module, "_raw_children", lambda value: [])
+    monkeypatch.setattr(
+        protocyte_lldb_module,
+        "_renamed_value",
+        lambda parent, source, name: renamed_error
+        if parent is failure and source is error and name == "error"
+        else _InvalidLLDBValue(),
+    )
+
+    success_provider = protocyte_lldb_module.ResultSyntheticProvider(success, {})
+    failure_provider = protocyte_lldb_module.ResultSyntheticProvider(failure, {})
+
+    assert success_provider.num_children() == 0
+    assert success_provider.get_child_index("value") == -1
+    assert success_provider.get_child_index("error") == -1
+    assert not success_provider.get_child_at_index(0).IsValid()
+    assert failure_provider.num_children() == 1
+    assert failure_provider.get_child_index("value") == -1
+    assert failure_provider.get_child_index("error") == 0
+    assert failure_provider.get_child_at_index(0) is renamed_error
+
+
 def test_optional_reference_summary_and_child_use_backing_pointer(
     protocyte_lldb_module, monkeypatch: pytest.MonkeyPatch
 ) -> None:

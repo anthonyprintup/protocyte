@@ -1,6 +1,8 @@
 #include "compat.protocyte.hpp"
 
 #if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+
 namespace protocyte_smoke::test::compat {
 
     namespace protocyte_reflection {
@@ -13,12 +15,12 @@ namespace protocyte_smoke::test::compat {
             bool packed;
         };
 
-        static const FieldInfo EncodingMatrix_Inner_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 2> EncodingMatrix_Inner_fields {{
             {"value", 1u, "scalar", false, false, false},
             {"label", 2u, "string", false, false, false},
-        };
+        }};
 
-        static const FieldInfo EncodingMatrix_fields[] = {
+        [[maybe_unused]] static const ::std::array<FieldInfo, 29> EncodingMatrix_fields {{
             {"f_int32", 1u, "scalar", false, false, false},
             {"f_int64", 2u, "scalar", false, false, false},
             {"f_uint32", 3u, "scalar", false, false, false},
@@ -48,7 +50,7 @@ namespace protocyte_smoke::test::compat {
             {"map_str_int32", 27u, "map", true, false, false},
             {"map_int32_str", 28u, "map", true, false, false},
             {"deprecated_unused", 29u, "string", false, false, false},
-        };
+        }};
 
     } // namespace protocyte_reflection
 
