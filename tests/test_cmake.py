@@ -1278,6 +1278,7 @@ def test_proto_library_default_build_only_target_can_be_exported(
                 "protocyte_add_proto_library(",
                 "    TARGET demo_proto",
                 "    PROTO_ROOT .",
+                "    DISCOVER",
                 ")",
                 "get_target_property(include_directories demo_proto INTERFACE_INCLUDE_DIRECTORIES)",
                 "get_target_property(header_sets demo_proto HEADER_SETS)",
