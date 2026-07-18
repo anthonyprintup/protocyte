@@ -21,11 +21,19 @@ from protocyte.paths import (
 
 
 _CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
+_CI_REQUIRE_REAL_PROTOC_TEST_ENV = "PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS"
 _CI_REQUIRE_INCREMENTAL_TEST_ENV = "PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST"
 _CI_REQUIRE_MULTICONFIG_LOCKING_TEST_ENV = (
     "PROTOCYTE_CI_REQUIRE_MULTICONFIG_LOCKING_TEST"
 )
 _CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV = "PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST"
+_CI_REQUIRE_VISUAL_STUDIO_TEST_ENV = "PROTOCYTE_CI_REQUIRE_VISUAL_STUDIO_TEST"
+
+
+def _real_protoc_requirement_unavailable(message: str) -> Never:
+    if os.environ.get(_CI_REQUIRE_REAL_PROTOC_TEST_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 def _incremental_requirement_unavailable(message: str) -> Never:
@@ -42,6 +50,12 @@ def _multiconfig_locking_requirement_unavailable(message: str) -> Never:
 
 def _windows_transport_requirement_unavailable(message: str) -> Never:
     if os.environ.get(_CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _visual_studio_requirement_unavailable(message: str) -> Never:
+    if os.environ.get(_CI_REQUIRE_VISUAL_STUDIO_TEST_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
 
@@ -66,7 +80,7 @@ def _find_real_protoc(repo_root: Path) -> Path:
         if candidate.is_file():
             return candidate
 
-    _incremental_requirement_unavailable("real protoc executable is not available")
+    _real_protoc_requirement_unavailable("real protoc executable is not available")
 
 
 def _find_protobuf_import_root(repo_root: Path) -> Path:
@@ -96,7 +110,7 @@ def _find_protobuf_import_dir(repo_root: Path, protoc: Path) -> Path:
         if (candidate / "google" / "protobuf" / "descriptor.proto").is_file():
             return candidate
 
-    _incremental_requirement_unavailable(
+    _real_protoc_requirement_unavailable(
         "protobuf import directory is not available"
     )
 
@@ -816,7 +830,9 @@ def test_cmake_protoc_response_file_rejects_multiline_arguments(
 
 def test_quickstart_generates_with_source_relative_tool_paths(tmp_path: Path) -> None:
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required to verify quick-start generation")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required to verify quick-start generation"
+        )
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = repo_root / "examples" / "quickstart"
     build_dir = tmp_path / "build"
@@ -2125,7 +2141,9 @@ def test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix(
     library_mode: str,
 ) -> None:
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required for the install/export integration test")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required for the install/export integration test"
+        )
 
     repo_root = Path(__file__).resolve().parents[1]
     protoc = _find_real_protoc(repo_root)
@@ -2665,7 +2683,9 @@ def test_fetch_fallback_provisions_imports_for_an_existing_protoc(
 
 def test_fetch_fallback_import_sources_build_with_real_protoc(tmp_path: Path) -> None:
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required to verify fetched import source generation")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required to verify fetched import source generation"
+        )
     repo_root = Path(__file__).resolve().parents[1]
     real_protoc = _find_real_protoc(repo_root)
     real_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
@@ -3542,7 +3562,9 @@ def test_source_codegen_preserves_semicolon_proto_path_end_to_end(
     generator: str | None,
 ) -> None:
     if generator == "Ninja" and shutil.which("ninja") is None:
-        pytest.skip("Ninja is required for the Ninja semicolon-path regression")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required for the Ninja semicolon-path regression"
+        )
     repo_root = Path(__file__).resolve().parents[1]
     protoc = _find_real_protoc(repo_root)
     protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
@@ -3712,7 +3734,9 @@ def test_proto_libraries_build_with_distinct_emitted_runtime_outputs(
     tmp_path: Path,
 ) -> None:
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required for emitted runtime ownership build coverage")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required for emitted runtime ownership build coverage"
+        )
 
     repo_root = Path(__file__).resolve().parents[1]
     protoc = _find_real_protoc(repo_root)
@@ -3908,6 +3932,164 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
         build_command, check=True, capture_output=True, text=True
     )
     assert "no work to do" in no_change.stdout.lower()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Visual Studio generator regression")
+def test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import(
+    tmp_path: Path,
+) -> None:
+    configured_protoc = os.environ.get(_CI_PROTOC_ENV)
+    if not configured_protoc:
+        _visual_studio_requirement_unavailable(
+            f"{_CI_PROTOC_ENV} is not configured with the prebuilt protoc"
+        )
+
+    cmake_help = subprocess.run(
+        ["cmake", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "Visual Studio 17 2022" not in cmake_help:
+        _visual_studio_requirement_unavailable(
+            "CMake does not provide the Visual Studio 17 2022 generator"
+        )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    configured_test_root = os.environ.get("PROTOCYTE_CI_VISUAL_STUDIO_TEST_ROOT")
+    if not configured_test_root:
+        _visual_studio_requirement_unavailable(
+            "PROTOCYTE_CI_VISUAL_STUDIO_TEST_ROOT is not configured outside the Windows temporary directory"
+        )
+    test_root = Path(configured_test_root).resolve() / tmp_path.name
+    real_protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
+    source_dir = test_root / "project"
+    build_dir = test_root / "build"
+    proto_dir = source_dir / "proto"
+    import_dir = source_dir / "imports"
+    tools_dir = source_dir / "tools"
+    proto_dir.mkdir(parents=True)
+    import_dir.mkdir()
+    tools_dir.mkdir()
+
+    imported_proto = import_dir / "base.proto"
+
+    def write_imported(capacity: int) -> None:
+        imported_proto.write_text(
+            "\n".join(
+                [
+                    'syntax = "proto3";',
+                    "package demo;",
+                    'import "protocyte/options.proto";',
+                    "option (protocyte.package_constant) = "
+                    f'{{ name: "CAPACITY" u32: {capacity} }};',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    write_imported(2)
+    (proto_dir / "consumer.proto").write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package demo;",
+                'import "base.proto";',
+                'import "protocyte/options.proto";',
+                "option (protocyte.package_constant) = "
+                '{ name: "DERIVED" u32_expr: "demo.CAPACITY + 1" };',
+                "message Consumer {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    invocation_log = source_dir / "protoc-invocations.txt"
+    protoc = _write_protoc_wrapper(
+        tools_dir / "protoc",
+        real_protoc,
+        invocation_log,
+    )
+    plugin = _write_python_plugin_wrapper(
+        tools_dir / "protoc-gen-protocyte",
+        repo_root,
+    )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(visual_studio_incremental LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/consumer.proto",
+                '    IMPORT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/imports"',
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Visual Studio 17 2022",
+            "-A",
+            "x64",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+        ],
+        check=True,
+    )
+    build_command = [
+        "cmake",
+        "--build",
+        str(build_dir),
+        "--config",
+        "Release",
+        "--target",
+        "demo_codegen",
+        "--parallel",
+        "1",
+    ]
+    subprocess.run(build_command, check=True)
+    generated_header = build_dir / "generated" / "consumer.protocyte.hpp"
+    assert "DERIVED {3u}" in generated_header.read_text(encoding="utf-8")
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+    ]
+
+    subprocess.run(build_command, check=True)
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+    ]
+
+    write_imported(5)
+    _touch_newer_than(imported_proto, generated_header)
+    subprocess.run(build_command, check=True)
+    assert "DERIVED {6u}" in generated_header.read_text(encoding="utf-8")
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        "invoked",
+        "invoked",
+        "invoked",
+        "invoked",
+    ]
 
 
 def test_source_codegen_tracks_special_character_paths_incrementally(
@@ -4469,7 +4651,9 @@ def test_source_codegen_accepts_relative_protoc_and_tracks_tool_changes(
     real_protoc = _find_real_protoc(repo_root)
     protobuf_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required to verify an incremental build")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required to verify an incremental build"
+        )
 
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -4549,7 +4733,9 @@ def test_descriptor_set_codegen_tracks_protoc_tool_changes(
     repo_root = Path(__file__).resolve().parents[1]
     real_protoc = _find_real_protoc(repo_root)
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required to verify an incremental build")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required to verify an incremental build"
+        )
 
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
@@ -5561,7 +5747,9 @@ def test_descriptor_set_library_builds_portable_descriptor_name(
     selection: str,
 ) -> None:
     if generator == "Ninja" and shutil.which("ninja") is None:
-        pytest.skip("Ninja is required for portable long-path integration coverage")
+        _real_protoc_requirement_unavailable(
+            "Ninja is required for portable long-path integration coverage"
+        )
 
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"

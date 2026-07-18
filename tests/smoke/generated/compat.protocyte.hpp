@@ -371,7 +371,7 @@ namespace protocyte_smoke::test::compat {
 #pragma warning(disable : 4996)
 #endif
     /**
-     * Exercises protobuf wire compatibility across every supported field shape.
+     *  Exercises protobuf wire compatibility across every supported field shape.
      */
     template<typename Config> struct EncodingMatrix {
         using Context = typename Config::Context;
@@ -416,7 +416,7 @@ namespace protocyte_smoke::test::compat {
             map_str_int32 = 27u,
             map_int32_str = 28u,
             /**
-             * Legacy field retained to verify generated deprecation diagnostics.
+             *  Legacy field retained to verify generated deprecation diagnostics.
              */
             deprecated_unused = 29u,
         };
@@ -1093,21 +1093,21 @@ namespace protocyte_smoke::test::compat {
         void clear_map_int32_str() noexcept { map_int32_str_.clear(); }
 
         /**
-         * Legacy field retained to verify generated deprecation diagnostics.
+         *  Legacy field retained to verify generated deprecation diagnostics.
          */
         [[deprecated]]
         ::protocyte::StringView deprecated_unused() const noexcept {
             return deprecated_unused_.view();
         }
         /**
-         * Legacy field retained to verify generated deprecation diagnostics.
+         *  Legacy field retained to verify generated deprecation diagnostics.
          */
         [[deprecated]]
         typename Config::String &mutable_deprecated_unused() noexcept {
             return deprecated_unused_;
         }
         /**
-         * Legacy field retained to verify generated deprecation diagnostics.
+         *  Legacy field retained to verify generated deprecation diagnostics.
          */
         template<class Value> [[deprecated]]
         ::protocyte::Status set_deprecated_unused(const Value &value) noexcept
@@ -1126,7 +1126,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
         /**
-         * Legacy field retained to verify generated deprecation diagnostics.
+         *  Legacy field retained to verify generated deprecation diagnostics.
          */
         template<class Value> [[deprecated]]
         ::protocyte::Status set_deprecated_unused(const Value &value) noexcept
@@ -1145,7 +1145,7 @@ namespace protocyte_smoke::test::compat {
             return {};
         }
         /**
-         * Legacy field retained to verify generated deprecation diagnostics.
+         *  Legacy field retained to verify generated deprecation diagnostics.
          */
         [[deprecated]]
         void clear_deprecated_unused() noexcept {
@@ -3026,7 +3026,7 @@ namespace protocyte_smoke::test::compat {
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
         /**
-         * Legacy field retained to verify generated deprecation diagnostics.
+         *  Legacy field retained to verify generated deprecation diagnostics.
          */
         typename Config::String deprecated_unused_;
     };

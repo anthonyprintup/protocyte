@@ -7,6 +7,11 @@
 
 namespace test::ultimate {
 
+    /**
+     *  -------------------------------------------------------------------------
+     *  Enums (with nested enum)
+     *  -------------------------------------------------------------------------
+     */
     enum struct UltimateComplexMessage_Color : ::protocyte::i32 {
         COLOR_UNSPECIFIED = 0,
         RED = 1,
@@ -507,6 +512,11 @@ namespace test::ultimate {
         ::protocyte::i32 mode_ {};
     };
 
+    /**
+     *  -------------------------------------------------------------------------
+     *  Nested Message Types
+     *  -------------------------------------------------------------------------
+     */
     template<typename Config> struct UltimateComplexMessage_NestedLevel1 {
         using Context = typename Config::Context;
         template<typename NestedConfig = Config> using NestedLevel2 =
@@ -2548,9 +2558,24 @@ namespace test::ultimate {
         } deep_oneof_;
     };
 
+    /**
+     *  -----------------------------------------------------------------------------
+     *                       The Most Annoying Proto3 Message
+     *  -----------------------------------------------------------------------------
+     */
     template<typename Config> struct UltimateComplexMessage {
         using Context = typename Config::Context;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Enums (with nested enum)
+         *  -------------------------------------------------------------------------
+         */
         using Color = UltimateComplexMessage_Color;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Nested Message Types
+         *  -------------------------------------------------------------------------
+         */
         template<typename NestedConfig = Config> using NestedLevel1 = UltimateComplexMessage_NestedLevel1<NestedConfig>;
         template<typename NestedConfig = Config> using RepeatedBytesHolder =
             UltimateComplexMessage_RepeatedBytesHolder<NestedConfig>;
@@ -2558,6 +2583,11 @@ namespace test::ultimate {
             UltimateComplexMessage_BoundedRepeatedBytesHolder<NestedConfig>;
         template<typename NestedConfig = Config> using FixedRepeatedBytesHolder =
             UltimateComplexMessage_FixedRepeatedBytesHolder<NestedConfig>;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Extremely deep nesting
+         *  -------------------------------------------------------------------------
+         */
         template<typename NestedConfig = Config> using LevelA = UltimateComplexMessage_LevelA<NestedConfig>;
 
         static constexpr ::protocyte::i64 SHIFTED_COUNT {5000000000ll};
@@ -2634,6 +2664,11 @@ namespace test::ultimate {
         static constexpr bool MATH_BOOL {true};
         static constexpr ::protocyte::StringView MATH_STR {"b", 1u};
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Oneof fields (mixed types)
+         *  -------------------------------------------------------------------------
+         */
         enum struct Special_oneofCase : ::protocyte::u32 {
             none = 0u,
             oneof_string = 26u,
@@ -2653,6 +2688,11 @@ namespace test::ultimate {
         };
 
         enum struct FieldNumber : ::protocyte::u32 {
+            /**
+             *  -------------------------------------------------------------------------
+             *  Basic Scalar Fields (all proto3 types)
+             *  -------------------------------------------------------------------------
+             */
             f_double = 1u,
             f_float = 2u,
             f_int32 = 4u,
@@ -2668,8 +2708,16 @@ namespace test::ultimate {
             f_bool = 17u,
             f_string = 18u,
             f_bytes = 19u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Repeated Scalars (packed and unpacked)
+             *  -------------------------------------------------------------------------
+             */
             r_int32_unpacked = 21u,
             r_int32_packed = 22u,
+            /**
+             *  implicit packed=true in proto3
+             */
             r_double = 23u,
             color = 24u,
             nested1 = 25u,
@@ -2677,17 +2725,53 @@ namespace test::ultimate {
             oneof_int32 = 27u,
             oneof_msg = 28u,
             oneof_bytes = 29u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Maps (all legal map key types)
+             *  -------------------------------------------------------------------------
+             */
             map_str_int32 = 30u,
             map_int32_str = 31u,
             map_bool_bytes = 32u,
             map_uint64_msg = 33u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Deeply Nested Maps & Messages
+             *  -------------------------------------------------------------------------
+             */
             very_nested_map = 34u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Messages referencing themselves (cycle)
+             *  -------------------------------------------------------------------------
+             */
             recursive_self = 35u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Repeated messages + oneofs mixed
+             *  -------------------------------------------------------------------------
+             */
             lots_of_nested = 36u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Huge repeated enum list
+             *  -------------------------------------------------------------------------
+             */
             colors = 37u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Optional fields (proto3 style)
+             *  -------------------------------------------------------------------------
+             */
             opt_int32 = 38u,
             opt_string = 39u,
             extreme_nesting = 40u,
+            /**
+             *  -------------------------------------------------------------------------
+             *  Fixed-size binary fields
+             *  -------------------------------------------------------------------------
+             *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+             */
             sha256 = 41u,
             integer_array = 42u,
             byte_array = 43u,
@@ -3301,7 +3385,17 @@ namespace test::ultimate {
             return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
         }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Oneof fields (mixed types)
+         *  -------------------------------------------------------------------------
+         */
         constexpr Special_oneofCase special_oneof_case() const noexcept { return special_oneof_case_; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Oneof fields (mixed types)
+         *  -------------------------------------------------------------------------
+         */
         void clear_special_oneof() noexcept {
             switch (special_oneof_case_) {
                 case Special_oneofCase::oneof_string: {
@@ -3362,8 +3456,23 @@ namespace test::ultimate {
             crazy_bytes_oneof_case_ = Crazy_bytes_oneofCase::none;
         }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Basic Scalar Fields (all proto3 types)
+         *  -------------------------------------------------------------------------
+         */
         constexpr ::protocyte::f64 f_double() const noexcept { return f_double_; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Basic Scalar Fields (all proto3 types)
+         *  -------------------------------------------------------------------------
+         */
         void set_f_double(const ::protocyte::f64 value) noexcept { f_double_ = value; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Basic Scalar Fields (all proto3 types)
+         *  -------------------------------------------------------------------------
+         */
         constexpr void clear_f_double() noexcept { f_double_ = {}; }
 
         constexpr ::protocyte::f32 f_float() const noexcept { return f_float_; }
@@ -3464,12 +3573,27 @@ namespace test::ultimate {
         }
         void clear_f_bytes() noexcept { f_bytes_.clear(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated Scalars (packed and unpacked)
+         *  -------------------------------------------------------------------------
+         */
         const typename Config::template Vector<::protocyte::i32> &r_int32_unpacked() const noexcept {
             return r_int32_unpacked_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated Scalars (packed and unpacked)
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Vector<::protocyte::i32> &mutable_r_int32_unpacked() noexcept {
             return r_int32_unpacked_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated Scalars (packed and unpacked)
+         *  -------------------------------------------------------------------------
+         */
         void clear_r_int32_unpacked() noexcept { r_int32_unpacked_.clear(); }
 
         const typename Config::template Vector<::protocyte::i32> &r_int32_packed() const noexcept {
@@ -3480,8 +3604,17 @@ namespace test::ultimate {
         }
         void clear_r_int32_packed() noexcept { r_int32_packed_.clear(); }
 
+        /**
+         *  implicit packed=true in proto3
+         */
         const typename Config::template Vector<::protocyte::f64> &r_double() const noexcept { return r_double_; }
+        /**
+         *  implicit packed=true in proto3
+         */
         typename Config::template Vector<::protocyte::f64> &mutable_r_double() noexcept { return r_double_; }
+        /**
+         *  implicit packed=true in proto3
+         */
         void clear_r_double() noexcept { r_double_.clear(); }
 
         constexpr ::protocyte::i32 color_raw() const noexcept { return color_; }
@@ -3766,12 +3899,27 @@ namespace test::ultimate {
             return *crazy_bytes_oneof_.crazy_fixed_repeated_bytes_;
         }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Maps (all legal map key types)
+         *  -------------------------------------------------------------------------
+         */
         const typename Config::template Map<typename Config::String, ::protocyte::i32> &map_str_int32() const noexcept {
             return map_str_int32_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Maps (all legal map key types)
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Map<typename Config::String, ::protocyte::i32> &mutable_map_str_int32() noexcept {
             return map_str_int32_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Maps (all legal map key types)
+         *  -------------------------------------------------------------------------
+         */
         void clear_map_str_int32() noexcept { map_str_int32_.clear(); }
 
         const typename Config::template Map<::protocyte::i32, typename Config::String> &map_int32_str() const noexcept {
@@ -3801,49 +3949,134 @@ namespace test::ultimate {
         }
         void clear_map_uint64_msg() noexcept { map_uint64_msg_.clear(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Deeply Nested Maps & Messages
+         *  -------------------------------------------------------------------------
+         */
         const typename Config::template Map<
             typename Config::String, ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> &
         very_nested_map() const noexcept {
             return very_nested_map_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Deeply Nested Maps & Messages
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Map<typename Config::String,
                                       ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> &
         mutable_very_nested_map() noexcept {
             return very_nested_map_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Deeply Nested Maps & Messages
+         *  -------------------------------------------------------------------------
+         */
         void clear_very_nested_map() noexcept { very_nested_map_.clear(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Messages referencing themselves (cycle)
+         *  -------------------------------------------------------------------------
+         */
         bool has_recursive_self() const noexcept { return recursive_self_.has_value(); }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Messages referencing themselves (cycle)
+         *  -------------------------------------------------------------------------
+         */
         const ::test::ultimate::UltimateComplexMessage<Config> *recursive_self() const noexcept {
             return has_recursive_self() ? recursive_self_.operator->() : nullptr;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Messages referencing themselves (cycle)
+         *  -------------------------------------------------------------------------
+         */
         ::protocyte::Result<::test::ultimate::UltimateComplexMessage<Config> &> ensure_recursive_self() noexcept {
             return ::protocyte::with_field(recursive_self_.ensure(),
                                            static_cast<::protocyte::u32>(FieldNumber::recursive_self));
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Messages referencing themselves (cycle)
+         *  -------------------------------------------------------------------------
+         */
         void clear_recursive_self() noexcept { recursive_self_.reset(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated messages + oneofs mixed
+         *  -------------------------------------------------------------------------
+         */
         const typename Config::template Vector<
             ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> &
         lots_of_nested() const noexcept {
             return lots_of_nested_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated messages + oneofs mixed
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Vector<::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>> &
         mutable_lots_of_nested() noexcept {
             return lots_of_nested_;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated messages + oneofs mixed
+         *  -------------------------------------------------------------------------
+         */
         void clear_lots_of_nested() noexcept { lots_of_nested_.clear(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Huge repeated enum list
+         *  -------------------------------------------------------------------------
+         */
         const typename Config::template Vector<::protocyte::i32> &colors() const noexcept { return colors_; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Huge repeated enum list
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Vector<::protocyte::i32> &mutable_colors() noexcept { return colors_; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Huge repeated enum list
+         *  -------------------------------------------------------------------------
+         */
         void clear_colors() noexcept { colors_.clear(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Optional fields (proto3 style)
+         *  -------------------------------------------------------------------------
+         */
         constexpr ::protocyte::i32 opt_int32() const noexcept { return opt_int32_; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Optional fields (proto3 style)
+         *  -------------------------------------------------------------------------
+         */
         constexpr bool has_opt_int32() const noexcept { return has_opt_int32_; }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Optional fields (proto3 style)
+         *  -------------------------------------------------------------------------
+         */
         void set_opt_int32(const ::protocyte::i32 value) noexcept {
             opt_int32_ = value;
             has_opt_int32_ = true;
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Optional fields (proto3 style)
+         *  -------------------------------------------------------------------------
+         */
         constexpr void clear_opt_int32() noexcept {
             opt_int32_ = {};
             has_opt_int32_ = false;
@@ -3908,13 +4141,43 @@ namespace test::ultimate {
         }
         void clear_extreme_nesting() noexcept { extreme_nesting_.reset(); }
 
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         bool has_sha256() const noexcept { return sha256_.has_value(); }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         ::protocyte::Span<const ::protocyte::u8> sha256() const noexcept { return sha256_.view(); }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         ::protocyte::Span<::protocyte::u8> mutable_sha256() noexcept { return sha256_.mutable_view(); }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         ::protocyte::Status resize_sha256_for_overwrite(const ::protocyte::usize size) noexcept {
             return ::protocyte::with_field(sha256_.resize_for_overwrite(size),
                                            static_cast<::protocyte::u32>(FieldNumber::sha256));
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         template<class Value>::protocyte::Status set_sha256(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value>)
         {
@@ -3924,6 +4187,12 @@ namespace test::ultimate {
             }
             return ::protocyte::with_field(sha256_.assign(*view), static_cast<::protocyte::u32>(FieldNumber::sha256));
         }
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         void clear_sha256() noexcept { sha256_.clear(); }
 
         const ::protocyte::Array<::protocyte::i32, 8u> &integer_array() const noexcept { return integer_array_; }
@@ -7746,6 +8015,11 @@ namespace test::ultimate {
     protected:
         Context *ctx_;
         PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Basic Scalar Fields (all proto3 types)
+         *  -------------------------------------------------------------------------
+         */
         ::protocyte::f64 f_double_ {};
         ::protocyte::f32 f_float_ {};
         ::protocyte::i32 f_int32_ {};
@@ -7761,8 +8035,16 @@ namespace test::ultimate {
         bool f_bool_ {};
         typename Config::String f_string_;
         typename Config::Bytes f_bytes_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated Scalars (packed and unpacked)
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Vector<::protocyte::i32> r_int32_unpacked_;
         typename Config::template Vector<::protocyte::i32> r_int32_packed_;
+        /**
+         *  implicit packed=true in proto3
+         */
         typename Config::template Vector<::protocyte::f64> r_double_;
         ::protocyte::i32 color_ {};
         typename Config::template Optional<::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>> nested1_;
@@ -7792,18 +8074,48 @@ namespace test::ultimate {
                 ::test::ultimate::UltimateComplexMessage_FixedRepeatedBytesHolder<Config>>
                 crazy_fixed_repeated_bytes_;
         } crazy_bytes_oneof_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Maps (all legal map key types)
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Map<typename Config::String, ::protocyte::i32> map_str_int32_;
         typename Config::template Map<::protocyte::i32, typename Config::String> map_int32_str_;
         typename Config::template Map<bool, typename Config::Bytes> map_bool_bytes_;
         typename Config::template Map<::protocyte::u64, ::test::ultimate::UltimateComplexMessage_NestedLevel1<Config>>
             map_uint64_msg_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Deeply Nested Maps & Messages
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Map<typename Config::String,
                                       ::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>>
             very_nested_map_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Messages referencing themselves (cycle)
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Box<::test::ultimate::UltimateComplexMessage<Config>> recursive_self_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Repeated messages + oneofs mixed
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Vector<::test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2<Config>>
             lots_of_nested_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Huge repeated enum list
+         *  -------------------------------------------------------------------------
+         */
         typename Config::template Vector<::protocyte::i32> colors_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Optional fields (proto3 style)
+         *  -------------------------------------------------------------------------
+         */
         ::protocyte::i32 opt_int32_ {};
         bool has_opt_int32_ {};
         typename Config::String opt_string_;
@@ -7811,6 +8123,12 @@ namespace test::ultimate {
         typename Config::template Optional<
             ::test::ultimate::UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE<Config>>
             extreme_nesting_;
+        /**
+         *  -------------------------------------------------------------------------
+         *  Fixed-size binary fields
+         *  -------------------------------------------------------------------------
+         *  SHA-256 digest stored inline as exactly 32 bytes, derived from constants.
+         */
         ::protocyte::FixedByteArray<32u> sha256_;
         ::protocyte::Array<::protocyte::i32, 8u> integer_array_;
         ::protocyte::ByteArray<4u> byte_array_;
@@ -7821,6 +8139,11 @@ namespace test::ultimate {
         ::protocyte::Array<typename Config::Bytes, 3u> fixed_repeated_byte_array_;
     };
 
+    /**
+     *  -------------------------------------------------------------------------
+     *  Extremely deep nesting
+     *  -------------------------------------------------------------------------
+     */
     template<typename Config> struct UltimateComplexMessage_LevelA {
         using Context = typename Config::Context;
         template<typename NestedConfig = Config> using LevelB = UltimateComplexMessage_LevelA_LevelB<NestedConfig>;
@@ -8658,6 +8981,11 @@ namespace test::ultimate {
         PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
     };
 
+    /**
+     *  -----------------------------------------------------------------------------
+     *  Additional Messages to Cross-Reference
+     *  -----------------------------------------------------------------------------
+     */
     template<typename Config> struct ExtraMessage {
         using Context = typename Config::Context;
         enum struct FieldNumber : ::protocyte::u32 {
