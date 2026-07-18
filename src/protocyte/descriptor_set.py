@@ -37,6 +37,11 @@ def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
 def validate_virtual_file_name(name: str) -> None:
     if not name:
         raise ProtocyteError("descriptor file name must not be empty")
+    if name.startswith("-"):
+        raise ProtocyteError(
+            "descriptor file name must not begin with '-' because protoc "
+            f"interprets it as an option: {name}"
+        )
     if "\0" in name:
         raise ProtocyteError(f"descriptor file name contains a null character: {name!r}")
     if "\\" in name:
@@ -387,10 +392,29 @@ def main(
         help="path to a binary protobuf FileDescriptorSet",
     )
 
+    dependency_parser = subparsers.add_parser(
+        "dependency-file",
+        help="write an escaped CMake depfile for an include-complete descriptor set",
+    )
+    dependency_parser.add_argument("descriptor_set", type=Path)
+    dependency_parser.add_argument("protoc_argument_file", type=Path)
+    dependency_parser.add_argument("output", type=Path)
+    dependency_parser.add_argument("target", type=Path)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "list":
             print(json.dumps(discover_files(load_descriptor_set(args.descriptor_set))))
+            return 0
+        if args.command == "dependency-file":
+            from protocyte.dependency_file import write_dependency_file
+
+            write_dependency_file(
+                load_descriptor_set(args.descriptor_set),
+                protoc_argument_file=args.protoc_argument_file,
+                output=args.output,
+                target=args.target,
+            )
             return 0
     except ProtocyteError as exc:
         parser.exit(1, f"protocyte: {exc}\n")

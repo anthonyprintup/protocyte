@@ -69,6 +69,12 @@ function(_protocyte_validate_descriptor_name name)
     if("${name}" STREQUAL "")
         message(FATAL_ERROR "descriptor file name must not be empty")
     endif()
+    if("${name}" MATCHES "^-")
+        message(
+            FATAL_ERROR
+            "descriptor file name must not begin with '-' because protoc interprets it as an option: ${name}"
+        )
+    endif()
     _protocyte_descriptor_name_is_unsafe(name_is_unsafe "${name}")
     if(name_is_unsafe)
         message(FATAL_ERROR "descriptor file name must be a relative virtual path using '/': ${name}")
@@ -458,6 +464,26 @@ function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_nam
             "${proto_name}"
             "${ARGV4}"
             "${ARGV5}"
+        )
+        string(TOLOWER "${normalized_generated_path}" normalized_generated_path_casefolded)
+        string(SHA256 generated_path_key "${normalized_generated_path_casefolded}")
+        if(DEFINED protocyte_generated_path_owner_${generated_path_key})
+            set(previous_proto_name "${protocyte_generated_path_owner_${generated_path_key}}")
+            set(previous_generated_path "${protocyte_generated_path_value_${generated_path_key}}")
+            string(TOLOWER "${previous_generated_path}" previous_generated_path_casefolded)
+            if(previous_generated_path_casefolded STREQUAL normalized_generated_path_casefolded)
+                message(
+                    FATAL_ERROR
+                    "generated file name collision after portable path normalization: descriptor files "
+                    "'${previous_proto_name}' and '${proto_name}' produce '${previous_generated_path}' and "
+                    "'${normalized_generated_path}', which collide on case-insensitive filesystems"
+                )
+            endif()
+        endif()
+        set(protocyte_generated_path_owner_${generated_path_key} "${proto_name}")
+        set(
+            protocyte_generated_path_value_${generated_path_key}
+            "${normalized_generated_path}"
         )
         set(protocyte_base "${out_dir}/${normalized_generated_path}")
         list(APPEND headers "${protocyte_base}.hpp")
@@ -1482,6 +1508,7 @@ function(protocyte_generate)
     endif()
 
     set(normalized_proto_files)
+    set(normalized_proto_names)
     if(protocyte_has_DESCRIPTOR_SET)
         foreach(proto_file IN LISTS protocyte_proto_files)
             _protocyte_validate_descriptor_name("${proto_file}")
@@ -1492,6 +1519,7 @@ function(protocyte_generate)
             set(protocyte_seen_proto_file_${proto_file_key} TRUE)
             string(REPLACE ";" "\\;" proto_file_list_element "${proto_file}")
             list(APPEND normalized_proto_files "${proto_file_list_element}")
+            list(APPEND normalized_proto_names "${proto_file_list_element}")
         endforeach()
     else()
         foreach(proto_file IN LISTS protocyte_proto_files)
@@ -1509,11 +1537,22 @@ function(protocyte_generate)
             if(proto_rel MATCHES "^[.][.]")
                 message(FATAL_ERROR "proto file '${proto_abs}' is outside PROTO_ROOT '${protocyte_proto_root}'")
             endif()
+            string(REPLACE "\\" "/" proto_rel "${proto_rel}")
 
-            list(APPEND normalized_proto_files "${proto_abs}")
+            string(REPLACE ";" "\\;" proto_abs_list_element "${proto_abs}")
+            string(REPLACE ";" "\\;" proto_rel_list_element "${proto_rel}")
+            list(APPEND normalized_proto_files "${proto_abs_list_element}")
+            list(APPEND normalized_proto_names "${proto_rel_list_element}")
         endforeach()
-        list(REMOVE_DUPLICATES normalized_proto_files)
-        list(SORT normalized_proto_files)
+        list(REMOVE_DUPLICATES normalized_proto_names)
+        list(SORT normalized_proto_names)
+        set(normalized_proto_files)
+        foreach(proto_name IN LISTS normalized_proto_names)
+            set(proto_abs "${protocyte_proto_root}/${proto_name}")
+            cmake_path(NORMAL_PATH proto_abs)
+            string(REPLACE ";" "\\;" proto_abs_list_element "${proto_abs}")
+            list(APPEND normalized_proto_files "${proto_abs_list_element}")
+        endforeach()
     endif()
 
     if(NOT protocyte_has_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
@@ -1576,32 +1615,14 @@ function(protocyte_generate)
 
     set(protocyte_generated_headers)
     set(protocyte_generated_sources)
-    if(protocyte_has_DESCRIPTOR_SET)
-        _protocyte_descriptor_outputs(
-            protocyte_generated_headers
-            protocyte_generated_sources
-            "${PROTOCYTE_OUT_DIR}"
-            normalized_proto_files
-            "${protocyte_generated_path_budget}"
-            "${protocyte_generated_directory_budget}"
-        )
-    else()
-        foreach(proto_file IN LISTS normalized_proto_files)
-            file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
-            string(REPLACE "\\" "/" proto_rel "${proto_rel}")
-            _protocyte_validate_descriptor_name("${proto_rel}")
-            _protocyte_normalize_generated_path(
-                normalized_generated_path
-                "${proto_rel}"
-                "${protocyte_generated_path_budget}"
-                "${protocyte_generated_directory_budget}"
-            )
-            set(protocyte_base "${PROTOCYTE_OUT_DIR}/${normalized_generated_path}")
-
-            list(APPEND protocyte_generated_headers "${protocyte_base}.hpp")
-            list(APPEND protocyte_generated_sources "${protocyte_base}.cpp")
-        endforeach()
-    endif()
+    _protocyte_descriptor_outputs(
+        protocyte_generated_headers
+        protocyte_generated_sources
+        "${PROTOCYTE_OUT_DIR}"
+        normalized_proto_names
+        "${protocyte_generated_path_budget}"
+        "${protocyte_generated_directory_budget}"
+    )
 
     if(PROTOCYTE_EMIT_RUNTIME)
         list(APPEND protocyte_generated_headers "${PROTOCYTE_OUT_DIR}/${runtime_prefix}/runtime.hpp")
@@ -1663,6 +1684,8 @@ function(protocyte_generate)
             set(dependency_descriptor_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.pb")
             set(dependency_depfile_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.d")
             set(dependency_descriptor "${CMAKE_CURRENT_BINARY_DIR}/${dependency_descriptor_rel}")
+            set(dependency_depfile "${CMAKE_CURRENT_BINARY_DIR}/${dependency_depfile_rel}")
+            set(dependency_depfile_target "${dependency_descriptor_rel}")
             set(dependency_response_content "")
             foreach(protoc_proto_path IN LISTS protoc_proto_paths)
                 _protocyte_append_protoc_response_argument(
@@ -1672,7 +1695,7 @@ function(protocyte_generate)
             endforeach()
             _protocyte_append_protoc_response_argument(
                 dependency_response_content
-                "--dependency_out=${dependency_depfile_rel}"
+                "--include_imports"
             )
             _protocyte_append_protoc_response_argument(
                 dependency_response_content
@@ -1689,6 +1712,40 @@ function(protocyte_generate)
                 "${dependency_response_content}"
             )
 
+            set(protocyte_dependency_depfile "${dependency_depfile_rel}")
+            set(protocyte_dependency_uses_untransformed_ninja_depfile FALSE)
+            if(CMAKE_GENERATOR MATCHES "^Ninja")
+                # CMake's CMP0116 transformation currently removes the escapes that
+                # Ninja requires for literal '#' and '$' path characters. The
+                # generated file already uses Ninja/GCC depfile syntax and absolute
+                # dependency paths, so pass it through unchanged.
+                file(
+                    RELATIVE_PATH
+                    dependency_depfile_target
+                    "${CMAKE_BINARY_DIR}"
+                    "${dependency_descriptor}"
+                )
+                string(REPLACE "\\" "/" dependency_depfile_target "${dependency_depfile_target}")
+                set(protocyte_dependency_depfile "${dependency_depfile}")
+                if(POLICY CMP0116)
+                    cmake_policy(PUSH)
+                    if(DEFINED CMAKE_WARN_DEPRECATED)
+                        set(protocyte_saved_warn_deprecated "${CMAKE_WARN_DEPRECATED}")
+                        set(protocyte_had_warn_deprecated TRUE)
+                    else()
+                        set(protocyte_had_warn_deprecated FALSE)
+                    endif()
+                    set(CMAKE_WARN_DEPRECATED FALSE)
+                    cmake_policy(SET CMP0116 OLD)
+                    if(protocyte_had_warn_deprecated)
+                        set(CMAKE_WARN_DEPRECATED "${protocyte_saved_warn_deprecated}")
+                    else()
+                        unset(CMAKE_WARN_DEPRECATED)
+                    endif()
+                    set(protocyte_dependency_uses_untransformed_ninja_depfile TRUE)
+                endif()
+            endif()
+
             add_custom_command(
                 OUTPUT "${dependency_descriptor}"
                 COMMAND "${CMAKE_COMMAND}" -E make_directory "${protocyte_dependency_dir}"
@@ -1700,16 +1757,28 @@ function(protocyte_generate)
                     "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
+                COMMAND
+                    "${protocyte_plugin_executable}"
+                    descriptor-set
+                    dependency-file
+                    "${dependency_descriptor_rel}"
+                    "${dependency_response_file_relative}"
+                    "${dependency_depfile_rel}"
+                    "${dependency_depfile_target}"
                 DEPENDS
                     "${proto_file}"
                     "${dependency_response_file}"
                     "${protocyte_dependency_scan_script}"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
-                DEPFILE "${dependency_depfile_rel}"
+                    "${protocyte_plugin_executable}"
+                DEPFILE "${protocyte_dependency_depfile}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
                 COMMENT "Scanning protobuf imports for ${proto_file}"
                 VERBATIM
             )
+            if(protocyte_dependency_uses_untransformed_ninja_depfile)
+                cmake_policy(POP)
+            endif()
             list(APPEND protocyte_dependency_outputs "${dependency_descriptor}")
         endforeach()
         list(APPEND protocyte_input_depends ${protocyte_dependency_outputs})

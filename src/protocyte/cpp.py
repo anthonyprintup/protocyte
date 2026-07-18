@@ -350,23 +350,29 @@ def generate_outputs(
     _validate_generated_cpp_names(model, options)
     output_budget = _OutputBudget(max_output_bytes)
     outputs: dict[str, str] = {}
+    output_owners: dict[str, tuple[str, str]] = {}
     if options.emit_runtime:
         for name, content in runtime_files(options.runtime_prefix).items():
             output_budget.consume(content)
             outputs[name] = content
+            output_owners[name.casefold()] = ("generated runtime", name)
     for file_model in model.generated_files():
         header_name = _header_name(file_model.name, options)
         source_name = _source_name(file_model.name, options)
         for name in (header_name, source_name):
-            collision = next(
-                (existing for existing in outputs if existing.casefold() == name.casefold()),
-                None,
-            )
+            collision = output_owners.get(name.casefold())
             if collision is not None:
+                collision_owner, collision_name = collision
                 raise ProtocyteError(
                     "generated file name collision after portable path normalization: "
-                    f"{collision!r} and {name!r}"
+                    f"{collision_owner} produces {collision_name!r}, while descriptor file "
+                    f"{file_model.name!r} produces {name!r}; these paths collide on "
+                    "case-insensitive filesystems"
                 )
+            output_owners[name.casefold()] = (
+                f"descriptor file {file_model.name!r}",
+                name,
+            )
         outputs[header_name] = generate_header(file_model, options, output_budget=output_budget)
         outputs[source_name] = generate_source(file_model, options, output_budget=output_budget)
     if not format_outputs:

@@ -473,6 +473,29 @@ def test_validate_virtual_file_name_rejects_unsafe_names(name: str) -> None:
         validate_virtual_file_name(name)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "-legacy.proto",
+        "--descriptor_set_out=escaped.proto",
+        "--plugin=protoc-gen-protocyte=other-plugin",
+    ],
+)
+def test_validate_virtual_file_name_rejects_protoc_option_names(name: str) -> None:
+    with pytest.raises(ProtocyteError, match="must not begin with '-'"):
+        validate_virtual_file_name(name)
+
+
+def test_discover_files_rejects_protoc_option_names() -> None:
+    descriptor_set = descriptor_pb2.FileDescriptorSet()
+    descriptor_set.file.extend(
+        [_file("--descriptor_set_out=escaped.proto"), _file("api/demo.proto")]
+    )
+
+    with pytest.raises(ProtocyteError, match="must not begin with '-'"):
+        discover_files(descriptor_set)
+
+
 @pytest.mark.parametrize("codepoint", [*range(1, 0x20), *range(0x7F, 0xA0)])
 def test_validate_virtual_file_name_accepts_protobuf_control_characters(codepoint: int) -> None:
     validate_virtual_file_name(f"api/control-{chr(codepoint)}.proto")

@@ -233,6 +233,19 @@ def test_response_rejects_portable_generated_path_collisions() -> None:
     response = generate_response(request)
 
     assert "generated file name collision" in response.error
+    assert "simple.proto" in response.error
+    assert "SIMPLE.proto" in response.error
+    assert not response.file
+
+
+def test_response_rejects_protoc_option_descriptor_name() -> None:
+    request = _basic_request(parameter="format=off")
+    request.file_to_generate[0] = "--descriptor_set_out=escaped.proto"
+    request.proto_file[0].name = request.file_to_generate[0]
+
+    response = generate_response(request)
+
+    assert "descriptor file name must not begin with '-'" in response.error
     assert not response.file
 
 
