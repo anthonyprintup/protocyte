@@ -210,9 +210,93 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in installed_config
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in source_config
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in installed_config
-    assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
     assert "PROTOCYTE_INTERNAL_VERSION" in source_config
     assert "PROTOCYTE_INTERNAL_VERSION" in installed_config
+    assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
+
+
+def test_explicit_plugin_override_must_exist(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    missing = tmp_path / "missing" / "protoc-gen-protocyte"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{missing.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "does not name an existing file" in output
+
+
+def test_explicit_plugin_override_must_match_package_version(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    plugin = _write_version_only_plugin(
+        tmp_path / "tools" / "protoc-gen-protocyte", "99.0.0"
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert f"CMake package {__version__}" in output
+    assert "plugin reported 99.0.0" in output
+
+
+def test_explicit_plugin_change_rechecks_version_on_build(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(explicit_plugin_reconfigure LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+                "add_custom_target(noop)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    original_mtime_ns = plugin.stat().st_mtime_ns
+    _write_version_only_plugin(plugin.with_suffix(""), "99.0.0")
+    changed_mtime_ns = max(plugin.stat().st_mtime_ns, original_mtime_ns + 2_000_000_000)
+    os.utime(plugin, ns=(changed_mtime_ns, changed_mtime_ns))
+
+    result = subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "noop"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert f"CMake package {__version__}" in output
+    assert "plugin reported 99.0.0" in output
 
 
 def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> None:
@@ -1335,47 +1419,6 @@ def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
-
-
-def test_explicit_plugin_override_must_exist(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    missing = tmp_path / "missing" / "protoc-gen-protocyte"
-    result = _configure_cmake_snippet(
-        tmp_path,
-        "\n".join(
-            [
-                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
-                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{missing.as_posix()}")',
-                "_protocyte_prepare_plugin()",
-            ]
-        ),
-    )
-
-    output = result.stdout + result.stderr
-    assert result.returncode != 0
-    assert "does not name an existing file" in output
-
-
-def test_explicit_plugin_override_must_match_package_version(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    plugin = _write_version_only_plugin(
-        tmp_path / "tools" / "protoc-gen-protocyte", "99.0.0"
-    )
-    result = _configure_cmake_snippet(
-        tmp_path,
-        "\n".join(
-            [
-                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
-                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
-                "_protocyte_prepare_plugin()",
-            ]
-        ),
-    )
-
-    output = " ".join((result.stdout + result.stderr).split())
-    assert result.returncode != 0
-    assert f"CMake package {__version__}" in output
-    assert "plugin reported 99.0.0" in output
 
 
 def test_descriptor_set_discover_uses_explicit_plugin_environment(

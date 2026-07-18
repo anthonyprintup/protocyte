@@ -302,6 +302,8 @@ function(_protocyte_validate_explicit_plugin out_var plugin_executable)
         message(FATAL_ERROR "PROTOCYTE_PLUGIN_EXECUTABLE does not name an existing file: ${plugin_path}")
     endif()
 
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${plugin_path}")
+
     _protocyte_get_internal(expected_version VERSION)
     if("${expected_version}" STREQUAL "")
         message(FATAL_ERROR "Protocyte's CMake package did not declare its expected plugin version")
