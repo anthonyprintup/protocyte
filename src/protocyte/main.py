@@ -47,8 +47,8 @@ def _help_parser() -> argparse.ArgumentParser:
             "  protoc --proto_path=. --protocyte_out=generated schema.proto\n\n"
             "To inspect a descriptor set:\n"
             "  protoc-gen-protocyte descriptor-set list descriptor_set.pb\n\n"
-            "Running this executable with no arguments is reserved for protoc's "
-            "plugin protocol."
+            "When protoc starts this executable with no arguments, it writes a "
+            "binary CodeGeneratorRequest to standard input."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -90,6 +90,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"Run '{_PROGRAM_NAME} --help' to see the available commands.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if sys.stdin.isatty():
+        print(
+            f"{_PROGRAM_NAME}: cannot read a binary CodeGeneratorRequest from "
+            "interactive standard input.",
+            file=sys.stderr,
+        )
+        print(
+            f"This plugin is normally launched by protoc; run "
+            f"'{_PROGRAM_NAME} --help' for usage.",
             file=sys.stderr,
         )
         return 2

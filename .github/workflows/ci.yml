@@ -94,6 +94,13 @@ jobs:
           uv venv build/quickstart-venv --python 3.12
           uv pip install --python build/quickstart-venv/bin/python dist/*.whl
 
+      - name: Verify installed CLI entry points
+        run: |
+          build/quickstart-venv/bin/protoc-gen-protocyte --help
+          build/quickstart-venv/bin/protoc-gen-protocyte --version
+          build/quickstart-venv/bin/python -m protocyte --help
+          build/quickstart-venv/bin/python -m protocyte --version
+
       - name: Configure quick-start example
         run: >
           cmake -S examples/quickstart -B build/quickstart
