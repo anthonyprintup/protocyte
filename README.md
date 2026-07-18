@@ -170,8 +170,13 @@ The plugin emits:
 Protobuf virtual descriptor names may contain characters that are not portable
 host-file names. Protocyte preserves ordinary path segments and hex-escapes
 nonportable UTF-8 bytes as `~HH` in generated paths; for example,
-`api/bad"name.proto` emits `api/bad~22name.protocyte.hpp`. A literal `~` is
-escaped too, so this mapping cannot alias an unescaped descriptor name.
+`api/bad"name.proto` emits `api/bad~22name.protocyte.hpp`, and semicolons are
+escaped as `~3B` so generated names remain safe in CMake lists. A literal `~`
+is escaped too, so this mapping cannot alias an unescaped descriptor name. If
+escaping would exceed a filesystem's common 255-byte component limit,
+Protocyte retains a readable prefix and appends the full SHA-256 digest of the
+original segment. The final segment also reserves room for
+`.protocyte.hpp`/`.protocyte.cpp`.
 
 Generate from a descriptor set when `.proto` source is not the authority:
 

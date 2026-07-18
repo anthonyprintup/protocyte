@@ -1,3 +1,4 @@
+import hashlib
 import math
 from pathlib import Path
 import struct
@@ -104,6 +105,7 @@ def test_response_file_names_keep_valid_runtime_prefix_relative() -> None:
     [
         ('api/bad"name.proto', "api/bad~22name.protocyte"),
         ("api/control-\n.proto", "api/control-~0A.protocyte"),
+        ("api/demo;legacy.proto", "api/demo~3Blegacy.protocyte"),
         ("CON.proto", "~43ON.protocyte"),
         ("api/literal~22.proto", "api/literal~7E22.protocyte"),
     ],
@@ -122,6 +124,27 @@ def test_response_file_names_normalize_nonportable_descriptor_paths(
         f"{generated_base}.cpp",
         f"{generated_base}.hpp",
     }
+
+
+def test_response_file_names_bound_long_escaped_path_components() -> None:
+    long_segment = "é" * 50
+    request = _basic_request(parameter="format=off")
+    request.file_to_generate[0] = f"{long_segment}/{long_segment}.proto"
+    request.proto_file[0].name = request.file_to_generate[0]
+
+    response = generate_response(request)
+
+    assert not response.error
+    digest = hashlib.sha256(long_segment.encode("utf-8")).hexdigest().upper()
+    for generated_file in response.file:
+        directory, filename = generated_file.name.split("/")
+        assert len(directory.encode("ascii")) == 255
+        assert directory.endswith(f"~{digest}")
+        assert len(filename.encode("ascii")) == 255
+        filename_stem, separator, extension = filename.rpartition(".protocyte.")
+        assert separator
+        assert extension in {"cpp", "hpp"}
+        assert filename_stem.endswith(f"~{digest}")
 
 
 def test_response_rejects_portable_generated_path_collisions() -> None:

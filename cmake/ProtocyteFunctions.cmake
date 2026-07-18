@@ -115,7 +115,7 @@ function(_protocyte_validate_forwarded_generator_options)
     endforeach()
 endfunction()
 
-function(_protocyte_normalize_generated_segment out_var segment)
+function(_protocyte_normalize_generated_segment out_var segment max_length)
     string(REGEX REPLACE "\\..*$" "" device_stem "${segment}")
     string(TOUPPER "${device_stem}" device_stem)
     if(device_stem MATCHES "^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$")
@@ -145,7 +145,6 @@ function(_protocyte_normalize_generated_segment out_var segment)
                 OR (byte_value GREATER_EQUAL 97 AND byte_value LESS_EQUAL 122)
                 OR byte_value EQUAL 45
                 OR byte_value EQUAL 46
-                OR byte_value EQUAL 59
                 OR byte_value EQUAL 95
             )
                 set(byte_is_safe TRUE)
@@ -166,23 +165,48 @@ function(_protocyte_normalize_generated_segment out_var segment)
             endif()
         endforeach()
     endif()
+
+    string(LENGTH "${normalized}" normalized_length)
+    if(normalized_length GREATER max_length)
+        string(SHA256 segment_digest "${segment}")
+        string(TOUPPER "${segment_digest}" segment_digest)
+        string(LENGTH "${segment_digest}" digest_length)
+        math(EXPR prefix_length "${max_length} - ${digest_length} - 1")
+        string(SUBSTRING "${normalized}" 0 ${prefix_length} normalized_prefix)
+        set(normalized "${normalized_prefix}~${segment_digest}")
+    endif()
     set(${out_var} "${normalized}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_normalize_generated_path out_var proto_name)
+    set(max_component_length 255)
+    string(LENGTH ".protocyte.hpp" generated_file_suffix_length)
+    math(
+        EXPR
+        max_final_stem_length
+        "${max_component_length} - ${generated_file_suffix_length}"
+    )
     string(REGEX REPLACE "\\.proto$" "" remaining "${proto_name}")
     set(normalized "")
     while(TRUE)
         string(FIND "${remaining}" "/" separator)
         if(separator EQUAL -1)
-            _protocyte_normalize_generated_segment(normalized_segment "${remaining}")
+            _protocyte_normalize_generated_segment(
+                normalized_segment
+                "${remaining}"
+                ${max_final_stem_length}
+            )
             string(APPEND normalized "${normalized_segment}")
             break()
         endif()
         string(SUBSTRING "${remaining}" 0 ${separator} segment)
         math(EXPR next_segment "${separator} + 1")
         string(SUBSTRING "${remaining}" ${next_segment} -1 remaining)
-        _protocyte_normalize_generated_segment(normalized_segment "${segment}")
+        _protocyte_normalize_generated_segment(
+            normalized_segment
+            "${segment}"
+            ${max_component_length}
+        )
         string(APPEND normalized "${normalized_segment}/")
     endwhile()
     set(${out_var} "${normalized}.protocyte" PARENT_SCOPE)
@@ -212,10 +236,8 @@ function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_nam
         _protocyte_validate_descriptor_name("${proto_name}")
         _protocyte_normalize_generated_path(normalized_generated_path "${proto_name}")
         set(protocyte_base "${out_dir}/${normalized_generated_path}")
-        string(REPLACE ";" "\\;" protocyte_header "${protocyte_base}.hpp")
-        string(REPLACE ";" "\\;" protocyte_source "${protocyte_base}.cpp")
-        list(APPEND headers "${protocyte_header}")
-        list(APPEND sources "${protocyte_source}")
+        list(APPEND headers "${protocyte_base}.hpp")
+        list(APPEND sources "${protocyte_base}.cpp")
     endforeach()
     set(${out_headers} "${headers}" PARENT_SCOPE)
     set(${out_sources} "${sources}" PARENT_SCOPE)
@@ -1176,28 +1198,6 @@ function(protocyte_generate)
     endif()
 
     set(protocyte_command_outputs "${protocyte_outputs}")
-    set(protocyte_finalize_commands)
-    foreach(proto_file IN LISTS normalized_proto_files)
-        string(FIND "${proto_file}" ";" semicolon_index)
-        if(NOT semicolon_index EQUAL -1)
-            # CMake generators cannot represent semicolon-bearing custom-command outputs
-            # portably, so track this edge case through a safe stamp instead.
-            string(SHA256 stamp_key "${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}")
-            set(
-                protocyte_codegen_stamp
-                "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-${stamp_key}.stamp"
-            )
-            set(protocyte_command_outputs "${protocyte_codegen_stamp}")
-            list(
-                APPEND protocyte_finalize_commands
-                COMMAND "${CMAKE_COMMAND}" -E touch "${protocyte_codegen_stamp}"
-            )
-            foreach(protocyte_output IN LISTS protocyte_outputs)
-                set_source_files_properties("${protocyte_output}" PROPERTIES GENERATED TRUE)
-            endforeach()
-            break()
-        endif()
-    endforeach()
 
     add_custom_command(
         OUTPUT ${protocyte_command_outputs}
@@ -1208,7 +1208,6 @@ function(protocyte_generate)
             "--plugin=protoc-gen-protocyte=${protocyte_plugin_executable}"
             "${protocyte_out_arg}"
             ${normalized_proto_files}
-        ${protocyte_finalize_commands}
         DEPENDS
             ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
