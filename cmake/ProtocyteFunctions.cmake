@@ -229,6 +229,29 @@ function(_protocyte_validate_parsed_arguments function_name unparsed_arguments m
     endif()
 endfunction()
 
+function(_protocyte_validate_unique_one_value_keywords function_name one_value_keywords)
+    set(duplicate_keywords)
+    foreach(keyword IN LISTS one_value_keywords)
+        set(keyword_count 0)
+        foreach(argument IN LISTS ARGN)
+            if("${argument}" STREQUAL "${keyword}")
+                math(EXPR keyword_count "${keyword_count} + 1")
+            endif()
+        endforeach()
+        if(keyword_count GREATER 1)
+            list(APPEND duplicate_keywords "${keyword}")
+        endif()
+    endforeach()
+
+    if(duplicate_keywords)
+        list(JOIN duplicate_keywords ", " duplicate_keywords_text)
+        message(
+            FATAL_ERROR
+            "${function_name} received duplicate single-value keyword(s): ${duplicate_keywords_text}"
+        )
+    endif()
+endfunction()
+
 function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_names_var)
     set(headers)
     set(sources)
@@ -972,6 +995,7 @@ function(protocyte_generate)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
+    _protocyte_validate_unique_one_value_keywords("protocyte_generate" "${oneValueArgs}" ${ARGN})
     cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     _protocyte_validate_parsed_arguments(
         "protocyte_generate"
@@ -1305,6 +1329,7 @@ function(protocyte_add_proto_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
+    _protocyte_validate_unique_one_value_keywords("protocyte_add_proto_library" "${oneValueArgs}" ${ARGN})
     cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     _protocyte_validate_parsed_arguments(
         "protocyte_add_proto_library"
@@ -1472,6 +1497,11 @@ function(protocyte_add_descriptor_set_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs FILES DEPENDS OPTIONS)
+    _protocyte_validate_unique_one_value_keywords(
+        "protocyte_add_descriptor_set_library"
+        "${oneValueArgs}"
+        ${ARGN}
+    )
     cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     _protocyte_validate_parsed_arguments(
         "protocyte_add_descriptor_set_library"
