@@ -587,6 +587,7 @@ protocyte_add_proto_library(
     [ALIAS <alias-target>]
     [TYPE STATIC|SHARED|MODULE|OBJECT]
     [OUT_DIR <directory>]
+    [INSTALL_INCLUDE_DIR <relative-directory>]
 
     PROTO_ROOT <directory>
     # or: DESCRIPTOR_SET <file>
@@ -623,6 +624,11 @@ This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
 - `OUT_DIR` defaults to
   `${CMAKE_CURRENT_BINARY_DIR}/<TARGET>_protocyte`. Relative paths are resolved
   from `CMAKE_CURRENT_BINARY_DIR`; generator expressions are not accepted.
+- `INSTALL_INCLUDE_DIR` opts the target into install/export support. It must be
+  a normalized relative install path such as `${CMAKE_INSTALL_INCLUDEDIR}`.
+  The helper adds that path to the target's install interface and exposes every
+  generated header through the public `protocyte_generated_headers` file set.
+  With `EMIT_RUNTIME`, the file set also contains the emitted `runtime.hpp`.
 - `HOSTED_ALLOCATOR` selects hosted allocation support. With `EMIT_RUNTIME`, it
   adds `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1` to consumers of the emitted runtime.
   Otherwise, it selects the default `protocyte::runtime_hosted` target when no
@@ -638,10 +644,43 @@ This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
 - `GENERATED_TARGET_VAR` receives the internal
   `<TARGET>__protocyte_codegen` target in the caller's scope.
 
-The created library publicly exposes `OUT_DIR`, requires C++20, links
-`protocyte::codegen`, and depends on its generated target. When neither
-`EMIT_RUNTIME` nor `RUNTIME_TARGET` is supplied, it links `protocyte::runtime`
-or `protocyte::runtime_hosted` according to `HOSTED_ALLOCATOR`.
+The created library publicly exposes `OUT_DIR` in its build interface, requires
+C++20, links `protocyte::codegen`, and depends on its generated target. When
+neither `EMIT_RUNTIME` nor `RUNTIME_TARGET` is supplied, it links
+`protocyte::runtime` or `protocyte::runtime_hosted` according to
+`HOSTED_ALLOCATOR`.
+
+Without `INSTALL_INCLUDE_DIR`, the target remains build-only and does not expose
+generated headers in its install interface. For an installable target, install
+the helper's public file set to the same relative directory and export the
+target normally:
+
+```cmake
+include(GNUInstallDirs)
+
+protocyte_add_proto_library(
+    TARGET demo_proto
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    DISCOVER
+    INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+install(
+    TARGETS demo_proto
+    EXPORT demoTargets
+    FILE_SET protocyte_generated_headers
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+install(
+    EXPORT demoTargets
+    NAMESPACE demo::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/demo"
+)
+```
+
+The project package config that includes `demoTargets.cmake` must first make
+Protocyte available, normally with `find_dependency(protocyte CONFIG)`, because
+the exported library keeps its public Protocyte runtime/codegen dependencies.
 
 #### `protocyte_add_descriptor_set_library`
 
@@ -652,6 +691,7 @@ protocyte_add_descriptor_set_library(
     [ALIAS <alias-target>]
     [TYPE STATIC|SHARED|MODULE|OBJECT]
     [OUT_DIR <directory>]
+    [INSTALL_INCLUDE_DIR <relative-directory>]
 
     DISCOVER
     # or: FILES <virtual-descriptor-name>...

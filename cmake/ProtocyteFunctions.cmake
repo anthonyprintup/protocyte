@@ -1809,6 +1809,7 @@ function(protocyte_add_proto_library)
         RUNTIME_PREFIX
         NAMESPACE_PREFIX
         INCLUDE_PREFIX
+        INSTALL_INCLUDE_DIR
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
     _protocyte_validate_unique_one_value_keywords_from_argv(
@@ -1861,6 +1862,33 @@ function(protocyte_add_proto_library)
             message(
                 FATAL_ERROR
                 "protocyte_add_proto_library requires EMIT_RUNTIME or RUNTIME_TARGET when using a custom RUNTIME_PREFIX"
+            )
+        endif()
+    endif()
+    if(protocyte_has_INSTALL_INCLUDE_DIR)
+        if("${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "\\$<")
+            message(
+                FATAL_ERROR
+                "protocyte_add_proto_library INSTALL_INCLUDE_DIR must be a configure-time relative path, not a generator expression"
+            )
+        endif()
+        if(
+            IS_ABSOLUTE "${PROTOCYTE_INSTALL_INCLUDE_DIR}"
+            OR "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "^[A-Za-z]:"
+            OR "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "\\\\"
+        )
+            message(
+                FATAL_ERROR
+                "protocyte_add_proto_library INSTALL_INCLUDE_DIR must be a relative install path using '/': ${PROTOCYTE_INSTALL_INCLUDE_DIR}"
+            )
+        endif()
+        if(
+            "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "(^|/)(\\.|\\.\\.)(/|$)"
+            OR "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "(^/|//|/$)"
+        )
+            message(
+                FATAL_ERROR
+                "protocyte_add_proto_library INSTALL_INCLUDE_DIR contains an unsafe or non-normalized path segment: ${PROTOCYTE_INSTALL_INCLUDE_DIR}"
             )
         endif()
     endif()
@@ -1952,11 +1980,33 @@ function(protocyte_add_proto_library)
         "${PROTOCYTE_TARGET}"
         PRIVATE
             ${protocyte_generated_sources}
-            ${protocyte_generated_headers}
     )
+    if(protocyte_has_INSTALL_INCLUDE_DIR)
+        target_sources(
+            "${PROTOCYTE_TARGET}"
+            PUBLIC
+                FILE_SET protocyte_generated_headers
+                TYPE HEADERS
+                BASE_DIRS "${protocyte_out_dir}"
+                FILES ${protocyte_generated_headers}
+        )
+    else()
+        target_sources("${PROTOCYTE_TARGET}" PRIVATE ${protocyte_generated_headers})
+    endif()
     add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_generated_target}")
     target_compile_features("${PROTOCYTE_TARGET}" PUBLIC cxx_std_20)
-    target_include_directories("${PROTOCYTE_TARGET}" PUBLIC "${protocyte_out_dir}")
+    target_include_directories(
+        "${PROTOCYTE_TARGET}"
+        PUBLIC
+            "$<BUILD_INTERFACE:${protocyte_out_dir}>"
+    )
+    if(protocyte_has_INSTALL_INCLUDE_DIR)
+        target_include_directories(
+            "${PROTOCYTE_TARGET}"
+            PUBLIC
+                "$<INSTALL_INTERFACE:${PROTOCYTE_INSTALL_INCLUDE_DIR}>"
+        )
+    endif()
     target_link_libraries("${PROTOCYTE_TARGET}" PUBLIC protocyte::codegen)
 
     if(PROTOCYTE_EMIT_RUNTIME)
@@ -2012,6 +2062,7 @@ function(protocyte_add_descriptor_set_library)
         RUNTIME_PREFIX
         NAMESPACE_PREFIX
         INCLUDE_PREFIX
+        INSTALL_INCLUDE_DIR
     )
     set(multiValueArgs FILES DEPENDS OPTIONS)
     _protocyte_validate_unique_one_value_keywords_from_argv(
@@ -2052,7 +2103,7 @@ function(protocyte_add_descriptor_set_library)
         TARGET "${PROTOCYTE_TARGET}"
         DESCRIPTOR_SET "${PROTOCYTE_DESCRIPTOR_SET}"
     )
-    foreach(name IN ITEMS ALIAS TYPE OUT_DIR GENERATED_HEADERS_VAR GENERATED_SOURCES_VAR GENERATED_TARGET_VAR RUNTIME_TARGET RUNTIME_PREFIX NAMESPACE_PREFIX INCLUDE_PREFIX)
+    foreach(name IN ITEMS ALIAS TYPE OUT_DIR GENERATED_HEADERS_VAR GENERATED_SOURCES_VAR GENERATED_TARGET_VAR RUNTIME_TARGET RUNTIME_PREFIX NAMESPACE_PREFIX INCLUDE_PREFIX INSTALL_INCLUDE_DIR)
         if(protocyte_has_${name})
             list(APPEND args ${name} "${PROTOCYTE_${name}}")
         endif()
