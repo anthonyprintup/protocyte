@@ -18,7 +18,7 @@ The smoke project in this repository is both:
 
 Verify the command-line prerequisites before continuing:
 
-```powershell
+```console
 python --version
 uv --version
 cmake --version
@@ -34,7 +34,7 @@ directory to `PATH`. The official installation instructions are here:
 
 After that, this should work in a new shell:
 
-```powershell
+```console
 protoc --version
 ```
 
@@ -53,13 +53,13 @@ Protocyte is a Python `protoc` plugin. `protoc` talks to it through the
 `protoc-gen-protocyte` executable script that the Python package installs.
 All of the Python packaging paths below require Python 3.12 or newer.
 
-You have two normal ways to work with it.
+You have three normal ways to work with it.
 
 ### Option A: Use This Repository Checkout Directly
 
 From the repository root:
 
-```powershell
+```console
 uv sync
 ```
 
@@ -79,26 +79,43 @@ explicit `--plugin=...` path, prepend the virtual environment to `PATH`:
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 ```
 
+On a POSIX host, the plugin is `<repo>/.venv/bin/protoc-gen-protocyte`.
+Prepend that script directory in Bash with:
+
+```bash
+export PATH="$PWD/.venv/bin:$PATH"
+```
+
 ### Option B: Build A Wheel And Install It Somewhere Else
 
 From the repository root:
 
-```powershell
+```console
 uv build
 ```
 
 That produces a wheel under `dist/`. Install that wheel into the Python
-environment you want to use for code generation:
+environment you want to use for code generation. In PowerShell:
 
 ```powershell
-python -m pip install dist\protocyte-<version>-py3-none-any.whl
+$wheel = (Get-ChildItem dist\protocyte-*.whl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+python -m pip install $wheel
+```
+
+In Bash:
+
+```bash
+wheel=$(ls -t dist/protocyte-*.whl | head -n 1)
+python -m pip install "$wheel"
 ```
 
 `uv build` also produces a source distribution under `dist/`. Both the wheel
 and the sdist are plugin-only artifacts for `protoc-gen-protocyte`; they do
 not provide the CMake package used by `find_package(protocyte CONFIG REQUIRED)`.
 
-Published GitHub releases contain three different asset types:
+Protocyte has not published its first tag or
+[GitHub release](https://github.com/anthonyprintup/protocyte/releases) yet. The
+release workflow is prepared to publish these three asset types in the future:
 
 - `protocyte-X.Y.Z-py3-none-any.whl`: install this into Python 3.12+ when you
   want the plugin executable.
@@ -117,23 +134,33 @@ If you want downstream CMake projects to consume protocyte through
 `find_package(protocyte CONFIG REQUIRED)`, install the CMake package into a
 prefix:
 
-For published releases, you can download
+After the first release, you can download
 `protocyte-X.Y.Z-cmake-prefix.tar.gz` from GitHub Releases, unpack it, and use
-the extracted directory as your `CMAKE_PREFIX_PATH`.
+the extracted directory as your `CMAKE_PREFIX_PATH`. Until then, install from a
+source checkout with one of the following blocks.
+
+PowerShell:
 
 ```powershell
 cmake -S . -B build/protocyte
-cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
+cmake --install build/protocyte --prefix "$PWD\build\protocyte-prefix"
+```
+
+Bash:
+
+```bash
+cmake -S . -B build/protocyte
+cmake --install build/protocyte --prefix "$PWD/build/protocyte-prefix"
 ```
 
 That install prefix contains:
 
-- the `protocyte_generate(...)` CMake integration
+- the complete public CMake integration, including `protocyte_add_proto_library(...)`
 - an installable copy of the protocyte Python generator project and its pinned CMake constraints
 - `protocyte/options.proto`
 
-Downstream consumers then configure with
-`-DCMAKE_PREFIX_PATH=C:\path\to\protocyte-prefix` and call
+Downstream consumers then configure with the matching
+`-DCMAKE_PREFIX_PATH=<repo>/build/protocyte-prefix` and call
 `find_package(protocyte CONFIG REQUIRED)`.
 
 The installed package still expects a usable Python 3.12+ base interpreter at
@@ -165,7 +192,7 @@ In a local checkout, that directory is:
 
 In an installed Python environment, you can print it like this:
 
-```powershell
+```console
 python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
 ```
 
@@ -210,7 +237,12 @@ message SensorSample {
 }
 ```
 
-## 5. Run `protoc` With Protocyte
+## 5. Run `protoc` Directly (Optional)
+
+This is useful for checking the plugin or integrating with a non-CMake build.
+The high-level CMake helper in the next section runs `protoc` for you and uses a
+separate generated directory in the build tree, so normal CMake users can skip
+this direct step.
 
 Assume:
 
@@ -227,6 +259,7 @@ $outDir = "$PWD\generated"
 $protocyteProto = "$repo\src\protocyte\proto"
 $plugin = "$repo\.venv\Scripts\protoc-gen-protocyte.exe"
 $protoFiles = Get-ChildItem -Path $protoSrc -Recurse -Filter *.proto | ForEach-Object { $_.FullName }
+New-Item -ItemType Directory -Force $outDir | Out-Null
 
 protoc `
   --proto_path=$protoSrc `
@@ -234,6 +267,28 @@ protoc `
   --plugin=protoc-gen-protocyte=$plugin `
   --protocyte_out=runtime=emit:$outDir `
   $protoFiles
+```
+
+Bash example for the same checkout and proto tree:
+
+```bash
+repo="/path/to/protocyte"
+proto_src="$PWD/proto"
+out_dir="$PWD/generated"
+protocyte_proto="$repo/src/protocyte/proto"
+plugin="$repo/.venv/bin/protoc-gen-protocyte"
+proto_files=()
+while IFS= read -r -d '' file; do
+  proto_files+=("$file")
+done < <(find "$proto_src" -type f -name '*.proto' -print0)
+mkdir -p "$out_dir"
+
+protoc \
+  "--proto_path=$proto_src" \
+  "--proto_path=$protocyte_proto" \
+  "--plugin=protoc-gen-protocyte=$plugin" \
+  "--protocyte_out=runtime=emit:$out_dir" \
+  "${proto_files[@]}"
 ```
 
 If `protoc-gen-protocyte` is already on `PATH`, you can omit the
@@ -251,101 +306,54 @@ The generated layout mirrors the source-relative proto paths:
 the generated message code. For one generated-code bundle per build tree, that
 is usually the simplest setup for a header-only runtime.
 
-## 6. Use The Generated Files In CMake
+## 6. Generate And Link With CMake
 
-The recommended pattern is:
+Use `protocyte_add_proto_library(...)` as the primary integration. It owns the
+generated output list, code-generation target, generated C++ library, include
+directory, C++20 requirement, runtime linkage, and import dependencies. This is
+the complete minimal consumer after installing the CMake package from Option C:
 
-- Generate into the build directory, not into source control.
-- Treat the generated `.cpp` files as normal target sources.
-- Add the generated directory to the include path.
-- Make your consuming target depend on a dedicated codegen target.
-
-This is the minimal shape for a project that discovers every `.proto` file
-under `proto/` automatically, derives the generated output list from those
-files, and builds a static library from all generated translation units:
-
+<!-- ground-zero-cmake-start -->
 ```cmake
 cmake_minimum_required(VERSION 3.24)
 project(protocyte_demo LANGUAGES CXX)
 
-find_program(PROTOC_EXECUTABLE protoc REQUIRED)
+find_package(protocyte CONFIG REQUIRED)
 
-set(PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto")
-set(PROTOCYTE_PROTO_DIR "C:/path/to/protocyte/src/protocyte/proto")
-set(PROTOCYTE_PLUGIN "C:/path/to/protocyte/.venv/Scripts/protoc-gen-protocyte.exe")
-set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-
-file(GLOB_RECURSE PROJECT_PROTO_FILES CONFIGURE_DEPENDS "${PROTO_ROOT}/*.proto")
-list(SORT PROJECT_PROTO_FILES)
-
-if(NOT PROJECT_PROTO_FILES)
-    message(FATAL_ERROR "No .proto files were found under ${PROTO_ROOT}")
-endif()
-
-set(PROTOCYTE_GENERATED_HEADERS)
-set(PROTOCYTE_GENERATED_SOURCES)
-
-foreach(PROTO_FILE IN LISTS PROJECT_PROTO_FILES)
-    file(RELATIVE_PATH PROTO_REL "${PROTO_ROOT}" "${PROTO_FILE}")
-    get_filename_component(PROTO_REL_DIR "${PROTO_REL}" DIRECTORY)
-    get_filename_component(PROTO_STEM "${PROTO_REL}" NAME_WLE)
-
-    if(PROTO_REL_DIR STREQUAL "")
-        set(PROTOCYTE_BASE "${GENERATED_DIR}/${PROTO_STEM}.protocyte")
-    else()
-        set(PROTOCYTE_BASE "${GENERATED_DIR}/${PROTO_REL_DIR}/${PROTO_STEM}.protocyte")
-    endif()
-
-    list(APPEND PROTOCYTE_GENERATED_HEADERS "${PROTOCYTE_BASE}.hpp")
-    list(APPEND PROTOCYTE_GENERATED_SOURCES "${PROTOCYTE_BASE}.cpp")
-endforeach()
-
-set(PROTOCYTE_RUNTIME_HEADER "${GENERATED_DIR}/protocyte/runtime/runtime.hpp")
-set(PROTOCYTE_OUTPUTS
-    ${PROTOCYTE_GENERATED_HEADERS}
-    ${PROTOCYTE_GENERATED_SOURCES}
-    "${PROTOCYTE_RUNTIME_HEADER}"
+protocyte_add_proto_library(
+    TARGET sensor_proto
+    ALIAS demo::sensor_proto
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    DISCOVER
+    HOSTED_ALLOCATOR
 )
-
-add_custom_command(
-    OUTPUT ${PROTOCYTE_OUTPUTS}
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${GENERATED_DIR}"
-    COMMAND "${PROTOC_EXECUTABLE}"
-        "--proto_path=${PROTO_ROOT}"
-        "--proto_path=${PROTOCYTE_PROTO_DIR}"
-        "--plugin=protoc-gen-protocyte=${PROTOCYTE_PLUGIN}"
-        "--protocyte_out=runtime=emit:${GENERATED_DIR}"
-        ${PROJECT_PROTO_FILES}
-    DEPENDS
-        ${PROJECT_PROTO_FILES}
-        "${PROTOCYTE_PROTO_DIR}/protocyte/options.proto"
-        "${PROTOCYTE_PLUGIN}"
-    VERBATIM
-    COMMAND_EXPAND_LISTS
-)
-
-add_custom_target(protocyte_codegen DEPENDS ${PROTOCYTE_OUTPUTS})
-
-add_library(sensor_proto STATIC)
-target_sources(sensor_proto PRIVATE ${PROTOCYTE_GENERATED_SOURCES})
-add_dependencies(sensor_proto protocyte_codegen)
-target_include_directories(sensor_proto PUBLIC "${GENERATED_DIR}")
-target_compile_features(sensor_proto PUBLIC cxx_std_20)
 
 add_executable(app src/main.cpp)
-target_link_libraries(app PRIVATE sensor_proto)
+target_link_libraries(app PRIVATE demo::sensor_proto)
 ```
+<!-- ground-zero-cmake-end -->
 
-If your hosted build wants the default malloc-backed allocator helpers from the
-runtime, also add:
+Configure that project with
+`-DCMAKE_PREFIX_PATH=<repo>/build/protocyte-prefix`. For a local source checkout
+instead, replace `find_package(...)` with this block; the remaining target code
+stays unchanged:
 
 ```cmake
-target_compile_definitions(sensor_proto PUBLIC PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1)
+include(FetchContent)
+FetchContent_Declare(
+    protocyte
+    SOURCE_DIR "/absolute/path/to/protocyte"
+)
+FetchContent_MakeAvailable(protocyte)
 ```
 
-If you are targeting a freestanding or kernel environment, do not define that
-macro. Instead, provide your own allocator callbacks through the runtime config
-you instantiate in your C++ code.
+`DISCOVER` follows additions and removals under `PROTO_ROOT`. The helper also
+tracks transitive imports and generator inputs, creates `OUT_DIR`, and declares
+Protocyte's escaped or path-budgeted output names exactly as the generator will
+write them. `HOSTED_ALLOCATOR` selects the reusable malloc-backed runtime for
+this hosted example. Freestanding and kernel targets should omit it and provide
+their own allocator callbacks through the runtime config they instantiate.
 
 If you provide a non-default runtime `Config`, generated messages use:
 
@@ -400,26 +408,9 @@ Custom writers passed to generated serialization must provide
 required writer operation, not an optional packed-field optimization.
 `SliceWriter` accepts the same optional `base_offset` argument for subranges.
 
-If protocyte was installed to a prefix instead of being consumed directly from a
-checkout, the manual `protoc`/custom-command pattern above can be replaced with
-the installed package:
-
-```cmake
-find_package(protocyte CONFIG REQUIRED)
-
-protocyte_generate(
-    TARGET sensor_proto_codegen
-    PROTO_ROOT "${PROTO_ROOT}"
-    OUT_DIR "${GENERATED_DIR}"
-    DISCOVER
-    EMIT_RUNTIME
-    GENERATED_SOURCES_VAR PROTOCYTE_GENERATED_SOURCES
-)
-```
-
 Descriptor-set generation is the preferred path when descriptors were recovered
 from a binary and rendered `.proto` files are only inspection artifacts. First
-produce a descriptor set with imports:
+produce a descriptor set with imports. In PowerShell:
 
 ```powershell
 $protoRoot = "$PWD\proto"
@@ -436,11 +427,29 @@ protoc `
   "$protoRoot\sensors\sensor.proto"
 ```
 
+In Bash:
+
+```bash
+proto_root="$PWD/proto"
+protocyte_proto_dir=$(python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))")
+descriptor_set="$PWD/build/descriptor_set.pb"
+mkdir -p "$(dirname "$descriptor_set")"
+
+protoc \
+  "--proto_path=$proto_root" \
+  "--proto_path=$protocyte_proto_dir" \
+  --include_imports \
+  --include_source_info \
+  "--descriptor_set_out=$descriptor_set" \
+  "$proto_root/sensors/sensor.proto"
+```
+
 Then generate from descriptor names inside that set:
 
 ```cmake
 protocyte_add_descriptor_set_library(
     TARGET sensor_proto
+    ALIAS demo::sensor_proto
     DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb"
     FILES sensors/sensor.proto
     OUT_DIR "${GENERATED_DIR}"
@@ -509,46 +518,39 @@ int main() {
 
 That example assumes `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1` was defined for the
 target. If not, replace `protocyte::hosted_allocator()` with your own allocator
-callbacks.
+callbacks. Every failed `Status` or `Result<T>` exposes its structured
+`code`, `offset`, and `field_number` through `.error()`; the compiled
+[root quick-start example](../../examples/quickstart/main.cpp) demonstrates
+reporting those values instead of discarding the failure.
 
 ## 8. Keep Generated Code Up To Date Automatically
 
-The important part is not the `protoc` command itself. The important part is
-teaching your build graph what the generated files depend on.
+The high-level helper in section 6 teaches the build graph what generation owns:
 
-The pattern above works because:
+- `DISCOVER` reconfigures when `.proto` files are added or removed beneath
+  `PROTO_ROOT`.
+- Protocyte scans each selected source's transitive imports, so changing an
+  imported `.proto` reruns generation without duplicating that graph in
+  `DEPENDS`.
+- The selected plugin, generator Python sources, options schema, response file,
+  and `protoc` tool are generation inputs.
+- Generated paths use the same escaping and Visual Studio path budgeting as the
+  generator itself.
+- The generated library depends on its private code-generation target, so C++
+  compilation does not race stale or missing outputs.
 
-- `add_custom_command(OUTPUT ...)` tells CMake exactly which files generation
-  produces.
-- `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` lets CMake pick up newly added or
-  removed `.proto` files in the `proto/` tree on the next configure/build.
-- `DEPENDS` lists every input that should trigger regeneration.
-- The `foreach()` block turns the discovered proto list into the exact list of
-  generated `*.protocyte.hpp` and `*.protocyte.cpp` outputs.
-- `protocyte_codegen` gives you one stable target that can be depended on.
-- `sensor_proto` depends on `protocyte_codegen`, so compilation never starts
-  against stale generated sources.
-
-Whenever any `.proto` file under `proto/` changes, the next
-`cmake --build ...` reruns `protoc` before recompiling `sensor_proto`.
-
-In a real project, also add these to `DEPENDS` when they matter:
-
-- All imported `.proto` files from your project.
-- `protocyte/options.proto` if you use protocyte extensions.
-- The plugin executable or wrapper script you invoke with `--plugin=...`.
-- Local protocyte generator source files if you are developing protocyte and
-  the consumer in the same workspace.
-
-The smoke project's [`CMakeLists.txt`](./CMakeLists.txt) shows that last case:
-it makes regeneration depend on the generator's Python sources, so local
-changes to protocyte itself also refresh the checked outputs.
+Use the helper's `DEPENDS` argument only for project-specific prerequisites that
+Protocyte cannot infer, such as another target that creates a descriptor set.
+The lower-level `protocyte_generate(...)` API is available when a project needs
+to own the C++ target itself, but it should not be the first integration copied
+by a new user.
 
 ## 9. Run The Smoke Project In This Repository
 
-The smoke presets live in `tests/smoke/CMakePresets.json`, so run the
-preset-based configure, build, and test commands from the `tests/smoke/`
-directory.
+The repository's full smoke presets are Windows-specific and live in
+`tests/smoke/CMakePresets.json`. Run the preset-based configure, build, and test
+commands from the `tests/smoke/` directory. Linux and macOS users can run the
+portable quick-start commands in the root README; CI runs that path on Linux.
 
 On Windows, open a Visual Studio Developer PowerShell or otherwise initialize
 the MSVC developer environment first. The presets use the standard
@@ -584,8 +586,9 @@ cmake --build --preset windows-clangcl-ninja-driver
 Pop-Location
 ```
 
-If you want a concrete reference, the smoke project is the best place to copy
-from first:
+For downstream integration, copy the complete high-level example in section 6.
+The smoke project is a broader repository-internal reference for advanced
+fixtures and runtime coverage:
 
 - [`tests/smoke/CMakeLists.txt`](./CMakeLists.txt) shows regeneration wiring.
 - [`tests/smoke/proto/example.proto`](./proto/example.proto) shows protocyte options.

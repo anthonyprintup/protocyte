@@ -1091,6 +1091,54 @@ def test_public_cmake_functions_reject_mutually_exclusive_arguments(
 
 
 @pytest.mark.parametrize(
+    ("invocation", "expected_error"),
+    [
+        (
+            "protocyte_generate(TARGET demo OUT_DIR generated DISCOVER)",
+            "protocyte_generate requires either PROTO_ROOT or DESCRIPTOR_SET",
+        ),
+        (
+            "protocyte_generate(TARGET demo PROTO_ROOT proto OUT_DIR generated)",
+            "protocyte_generate requires either DISCOVER or PROTOS",
+        ),
+        (
+            "protocyte_add_proto_library(TARGET demo DISCOVER)",
+            "protocyte_add_proto_library requires either PROTO_ROOT or DESCRIPTOR_SET",
+        ),
+        (
+            "protocyte_add_proto_library(TARGET demo PROTO_ROOT proto)",
+            "protocyte_add_proto_library requires either DISCOVER or PROTOS",
+        ),
+        (
+            "protocyte_add_descriptor_set_library(DESCRIPTOR_SET descriptor_set.pb FILES demo.proto)",
+            "protocyte_add_descriptor_set_library requires TARGET",
+        ),
+        (
+            "protocyte_add_descriptor_set_library(TARGET demo DESCRIPTOR_SET descriptor_set.pb)",
+            "protocyte_add_descriptor_set_library requires either DISCOVER or FILES",
+        ),
+    ],
+)
+def test_public_cmake_functions_report_missing_input_modes_from_called_helper(
+    tmp_path: Path,
+    invocation: str,
+    expected_error: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        invocation,
+        files={
+            "descriptor_set.pb": "placeholder",
+            "proto/demo.proto": 'syntax = "proto3";\n',
+        },
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert expected_error in output
+
+
+@pytest.mark.parametrize(
     ("function_name", "one_value_keywords"),
     [
         (
