@@ -213,6 +213,103 @@ def _installed_protocyte_plugin() -> Path:
     return plugin
 
 
+def _managed_environment_executables(environment: Path) -> tuple[Path, Path]:
+    if os.name == "nt":
+        return (
+            environment / "Scripts" / "python.exe",
+            environment / "Scripts" / "protoc-gen-protocyte.exe",
+        )
+    return (
+        environment / "bin" / "python",
+        environment / "bin" / "protoc-gen-protocyte",
+    )
+
+
+def _write_managed_environment_consumer(
+    source_dir: Path,
+    environment_root: Path,
+    *,
+    barrier_marker: Path | None = None,
+    peer_marker: Path | None = None,
+) -> Path:
+    repo_root = Path(__file__).resolve().parents[1]
+    build_dir = source_dir.with_name(f"{source_dir.name}-build")
+    source_dir.mkdir(parents=True)
+    lines = [
+        "cmake_minimum_required(VERSION 3.24)",
+        "project(protocyte_managed_environment LANGUAGES NONE)",
+        f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+        f'set(PROTOCYTE_PYTHON_ENV_ROOT "{environment_root.as_posix()}")',
+        f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+    ]
+    if barrier_marker is not None and peer_marker is not None:
+        lines.extend(
+            [
+                f'file(MAKE_DIRECTORY "{barrier_marker.parent.as_posix()}")',
+                f'file(TOUCH "{barrier_marker.as_posix()}")',
+                "set(peer_reached_barrier FALSE)",
+                "foreach(attempt RANGE 300)",
+                f'    if(EXISTS "{peer_marker.as_posix()}")',
+                "        set(peer_reached_barrier TRUE)",
+                "        break()",
+                "    endif()",
+                '    execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 0.1)',
+                "endforeach()",
+                "if(NOT peer_reached_barrier)",
+                '    message(FATAL_ERROR "peer configure did not reach the provisioning barrier")',
+                "endif()",
+            ]
+        )
+    lines.extend(
+        [
+            "_protocyte_prepare_plugin()",
+            "_protocyte_get_internal(managed_plugin PLUGIN_EXECUTABLE)",
+            'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-plugin.txt" "${managed_plugin}")',
+            "",
+        ]
+    )
+    (source_dir / "CMakeLists.txt").write_text("\n".join(lines), encoding="utf-8")
+    return build_dir
+
+
+def _configure_managed_environment(
+    source_dir: Path,
+    build_dir: Path,
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=900,
+    )
+
+
+def _published_managed_environment(environment_root: Path) -> Path:
+    environments = [
+        candidate
+        for candidate in environment_root.iterdir()
+        if candidate.is_dir() and (candidate / ".protocyte-ready").is_file()
+    ]
+    assert len(environments) == 1, environments
+    return environments[0]
+
+
+def _assert_no_managed_environment_transaction_leftovers(
+    environment_root: Path,
+) -> None:
+    leftovers = [
+        candidate
+        for candidate in environment_root.iterdir()
+        if candidate.is_dir()
+        and (candidate.name.endswith(".staging") or candidate.name.endswith(".previous"))
+    ]
+    assert not leftovers, leftovers
+
+
 def _write_incompatible_protocyte_plugin(path: Path) -> Path:
     if os.name == "nt":
         plugin = path.with_suffix(".cmd")
@@ -4656,6 +4753,166 @@ def test_cmake_constraints_pin_the_private_environment() -> None:
         if package["name"] == "protobuf"
     )
     assert constraints["protobuf"] == locked_protobuf
+
+
+def test_shared_managed_environment_serializes_concurrent_configures(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "shared-environments"
+    barrier_dir = tmp_path / "barrier"
+    source_a = tmp_path / "project-a"
+    source_b = tmp_path / "project-b"
+    build_a = _write_managed_environment_consumer(
+        source_a,
+        environment_root,
+        barrier_marker=barrier_dir / "a",
+        peer_marker=barrier_dir / "b",
+    )
+    build_b = _write_managed_environment_consumer(
+        source_b,
+        environment_root,
+        barrier_marker=barrier_dir / "b",
+        peer_marker=barrier_dir / "a",
+    )
+
+    processes = [
+        subprocess.Popen(
+            ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for source_dir, build_dir in ((source_a, build_a), (source_b, build_b))
+    ]
+    completed: list[tuple[int, str]] = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=900)
+            completed.append((process.returncode, stdout + stderr))
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert all(returncode == 0 for returncode, _output in completed), "\n\n".join(
+        output for _returncode, output in completed
+    )
+    assert (
+        sum(
+            output.count("Provisioning Protocyte Python environment:")
+            for _returncode, output in completed
+        )
+        == 1
+    )
+
+    environment = _published_managed_environment(environment_root)
+    assert (environment_root / f".{environment.name}.lock").is_file()
+    _python, plugin = _managed_environment_executables(environment)
+    assert plugin.is_file()
+    assert subprocess.run(
+        [str(plugin), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == __version__
+    assert Path((build_a / "managed-plugin.txt").read_text(encoding="utf-8")) == plugin
+    assert Path((build_b / "managed-plugin.txt").read_text(encoding="utf-8")) == plugin
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
+
+
+def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    assert "Provisioning Protocyte Python environment:" in initial.stdout + initial.stderr
+
+    environment = _published_managed_environment(environment_root)
+    ready_marker = environment / ".protocyte-ready"
+    ready_contents = ready_marker.read_text(encoding="utf-8")
+    ready_mtime_ns = ready_marker.stat().st_mtime_ns
+    incremental = _configure_managed_environment(source_dir, build_dir)
+    assert incremental.returncode == 0, incremental.stdout + incremental.stderr
+    assert "Provisioning Protocyte Python environment:" not in (
+        incremental.stdout + incremental.stderr
+    )
+    assert ready_marker.stat().st_mtime_ns == ready_mtime_ns
+
+    python, plugin = _managed_environment_executables(environment)
+    package_init = Path(
+        subprocess.run(
+            [
+                str(python),
+                "-c",
+                "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).resolve())",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    original_package_init = package_init.read_text(encoding="utf-8")
+    expected_literal = f'__version__ = "{__version__}"'
+    assert expected_literal in original_package_init
+    package_init.write_text(
+        original_package_init.replace(expected_literal, '__version__ = "99.0.0"'),
+        encoding="utf-8",
+    )
+    shutil.rmtree(package_init.parent / "__pycache__", ignore_errors=True)
+    assert subprocess.run(
+        [str(plugin), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "99.0.0"
+
+    empty_pip_cache = tmp_path / "empty-pip-cache"
+    empty_pip_cache.mkdir()
+    offline_env = os.environ.copy()
+    offline_env.update(
+        PIP_CACHE_DIR=str(empty_pip_cache),
+        PIP_CONFIG_FILE=os.devnull,
+        PIP_NO_INDEX="1",
+    )
+    failed_repair = _configure_managed_environment(
+        source_dir,
+        build_dir,
+        env=offline_env,
+    )
+    assert failed_repair.returncode != 0
+    assert "Failed to install Protocyte's pinned Python build tools" in (
+        failed_repair.stdout + failed_repair.stderr
+    )
+    assert ready_marker.read_text(encoding="utf-8") == ready_contents
+    assert package_init.read_text(encoding="utf-8").count("99.0.0") == 1
+    assert subprocess.run(
+        [str(plugin), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == "99.0.0"
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
+
+    repaired = _configure_managed_environment(source_dir, build_dir)
+    assert repaired.returncode == 0, repaired.stdout + repaired.stderr
+    assert "Provisioning Protocyte Python environment:" in repaired.stdout + repaired.stderr
+    repaired_environment = _published_managed_environment(environment_root)
+    assert repaired_environment == environment
+    _repaired_python, repaired_plugin = _managed_environment_executables(
+        repaired_environment
+    )
+    assert subprocess.run(
+        [str(repaired_plugin), "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip() == __version__
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
 
 
 def test_cmake_fingerprint_inputs_trigger_automatic_reconfiguration(
