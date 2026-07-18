@@ -884,6 +884,8 @@ def generate_source(
     w.line(f'#include "{_header_name(file_model.name, options)}"')
     w.line()
     w.line("#if PROTOCYTE_ENABLE_REFLECTION")
+    w.line("#include <array>")
+    w.line()
     _open_namespace(w, _namespace_parts(file_model, options))
     w.line("namespace protocyte_reflection {")
     with w.indent():
@@ -893,14 +895,18 @@ def generate_source(
         w.line()
         for message in _ordered_messages(file_model):
             reflection_name = _cpp_suffix_identifier(message.cpp_name, "fields")
-            w.line(f"static const FieldInfo {reflection_name}[] = {{")
+            w.line(
+                "[[maybe_unused]] static const "
+                f"::std::array<FieldInfo, {len(message.fields)}> "
+                f"{reflection_name} {{{{"
+            )
             with w.indent():
                 for item in message.fields:
                     w.line(
                         f'{{"{_escape(item.name)}", {item.number}u, "{item.kind}", '
                         f"{_cpp_bool(item.repeated)}, {_cpp_bool(item.has_explicit_presence)}, {_cpp_bool(item.packed)}}},"
                     )
-            w.line("};")
+            w.line("}};")
             w.line()
     w.line("}  // namespace protocyte_reflection")
     _close_namespace(w, _namespace_parts(file_model, options))

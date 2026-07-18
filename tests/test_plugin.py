@@ -1113,6 +1113,47 @@ def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
     assert writer.render() == "root\n  child\n      grandchild\ntail\n"
 
 
+def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection.proto", package="demo", syntax="proto3"
+    )
+    file.message_type.add(name="Empty")
+    nonempty = file.message_type.add(name="NonEmpty")
+    nonempty.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    source = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.cpp"
+    )
+    assert "#if PROTOCYTE_ENABLE_REFLECTION\n#include <array>" in source
+    assert (
+        "[[maybe_unused]] static const ::std::array<FieldInfo, 0> "
+        "Empty_fields {{\n  }};"
+        in source
+    )
+    assert (
+        "[[maybe_unused]] static const ::std::array<FieldInfo, 1> "
+        "NonEmpty_fields {{\n"
+        '    {"value", 1u, "scalar", false, false, false},\n'
+        "  }};"
+        in source
+    )
+    assert "FieldInfo Empty_fields[]" not in source
+    assert "FieldInfo NonEmpty_fields[]" not in source
+
+
 def test_generates_proto3_files_and_runtime() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("simple.proto")

@@ -151,6 +151,13 @@ def _child(value, name):
     return lldb.SBValue()
 
 
+def _result_error(value):
+    error = _child(value, "error_")
+    if error.IsValid():
+        return error
+    return _child(_child(value, "storage_"), "error_")
+
+
 def _unsigned(value, default=0):
     if not value.IsValid():
         return default
@@ -503,16 +510,9 @@ def _raw_mode_child_at_index(provider, index):
 def status_summary(value, _internal_dict):
     if _is_raw_tree_value(value):
         return None
-    error = _child(value, "error_")
-    code = _child(error, "code")
-    code_name = code.GetValue() if code.IsValid() else None
-    if code_name and code_name.endswith("::ok"):
+    if _bool(_child(value, "ok_")):
         return "ok"
-    offset = _unsigned(_child(error, "offset"), 0)
-    field = _unsigned(_child(error, "field_number"), 0)
-    if code_name:
-        return f"code={code_name}, offset={offset}, field={field}"
-    return f"code=error, offset={offset}, field={field}"
+    return error_summary(_result_error(value), _internal_dict)
 
 
 def error_summary(value, _internal_dict):
@@ -531,7 +531,7 @@ def result_summary(value, _internal_dict):
     ok = _bool(_child(value, "ok_"))
     if ok:
         return "ok"
-    return "err, " + error_summary(_child(value, "error_"), _internal_dict)
+    return "err, " + error_summary(_result_error(value), _internal_dict)
 
 
 def optional_summary(value, _internal_dict):
@@ -828,6 +828,7 @@ class ResultSyntheticProvider:
             return
         self.ok = _bool(_child(self.value, "ok_"))
         self.value_ptr = _child(self.value, "value_")
+        self.error_value = _result_error(self.value)
         self.value_is_reference = _first_template_argument_is_lvalue_reference(
             self.value
         )
@@ -837,26 +838,30 @@ class ResultSyntheticProvider:
     def num_children(self):
         if self.raw_mode:
             return len(self.raw_mode_children)
-        return 1 + len(self.raw_children)
+        return self._result_child_count() + len(self.raw_children)
 
     def get_child_index(self, name):
         if self.raw_mode:
             return _raw_mode_child_index(self, name)
+        result_child_count = self._result_child_count()
         raw_index = _raw_child_index(self.raw_children, name)
         if raw_index >= 0:
-            return 1 + raw_index
-        if name == "value" and self.ok:
+            return result_child_count + raw_index
+        if name == "value" and self.ok and result_child_count:
             return 0
-        if name == "error" and not self.ok:
+        if name == "error" and not self.ok and result_child_count:
             return 0
         return -1
 
     def get_child_at_index(self, index):
         if self.raw_mode:
             return _raw_mode_child_at_index(self, index)
-        if 1 <= index < 1 + len(self.raw_children):
-            return self.raw_children[index - 1]
-        if index != 0:
+        result_child_count = self._result_child_count()
+        if result_child_count <= index < result_child_count + len(
+            self.raw_children
+        ):
+            return self.raw_children[index - result_child_count]
+        if index != 0 or not result_child_count:
             return lldb.SBValue()
         if self.ok:
             address = _pointer_value(self.value_ptr)
@@ -869,7 +874,11 @@ class ResultSyntheticProvider:
                     "value", address, self.value_pointee_type
                 )
             return _child(self.value, "value_")
-        return _child(self.value, "error_")
+        return _renamed_value(self.value, self.error_value, "error")
+
+    def _result_child_count(self):
+        child = self.value_ptr if self.ok else self.error_value
+        return 1 if child.IsValid() else 0
 
     def has_children(self):
         return True
