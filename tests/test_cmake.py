@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 from google.protobuf import descriptor_pb2
 
+from protocyte import __version__
+
 
 def _find_real_protoc(repo_root: Path) -> Path:
     candidates: list[Path] = []
@@ -26,6 +28,15 @@ def _find_real_protoc(repo_root: Path) -> Path:
             return candidate
 
     pytest.skip("real protoc executable is not available")
+
+
+def _find_protobuf_import_root(repo_root: Path) -> Path:
+    for root in (repo_root / "build", repo_root / "tests"):
+        for descriptor in root.glob(
+            "**/protobuf-src/src/google/protobuf/descriptor.proto"
+        ):
+            return descriptor.parents[2]
+    pytest.skip("protobuf source import tree is not available")
 
 
 def _configure_cmake_snippet(
@@ -105,13 +116,50 @@ def _write_incompatible_protocyte_plugin(path: Path) -> Path:
     if os.name == "nt":
         plugin = path.with_suffix(".cmd")
         plugin.write_text(
-            "@echo off\r\necho old plugin cannot discover 1>&2\r\nexit /b 4\r\n",
+            "\r\n".join(
+                [
+                    "@echo off",
+                    'if "%~1"=="--version" (',
+                    f"  echo {__version__}",
+                    "  exit /b 0",
+                    ")",
+                    "echo old plugin cannot discover 1>&2",
+                    "exit /b 4",
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
     else:
         plugin = path
         plugin.write_text(
-            "#!/usr/bin/env sh\necho 'old plugin cannot discover' >&2\nexit 4\n",
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'[ "$1" = "--version" ] && echo "{__version__}" && exit 0',
+                    "echo 'old plugin cannot discover' >&2",
+                    "exit 4",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        plugin.chmod(0o755)
+    return plugin
+
+
+def _write_version_only_plugin(path: Path, version: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        plugin = path.with_suffix(".cmd")
+        plugin.write_text(
+            f"@echo off\r\necho {version}\r\n",
+            encoding="utf-8",
+        )
+    else:
+        plugin = path
+        plugin.write_text(
+            f"#!/usr/bin/env sh\necho '{version}'\n",
             encoding="utf-8",
         )
         plugin.chmod(0o755)
@@ -133,6 +181,8 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in installed_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"' in source_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"' in installed_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/paths.py"' in source_config
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/paths.py"' in installed_config
     assert "PROTOCYTE_INTERNAL_PYTHON_PROJECT_ROOT" in source_config
     assert "PROTOCYTE_INTERNAL_PYTHON_PROJECT_ROOT" in installed_config
     assert "PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS" in source_config
@@ -140,6 +190,8 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in source_config
     assert "PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT" in installed_config
     assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
+    assert "PROTOCYTE_INTERNAL_VERSION" in source_config
+    assert "PROTOCYTE_INTERNAL_VERSION" in installed_config
 
 
 def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> None:
@@ -151,6 +203,34 @@ def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> N
     )[0]
 
     assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"' in generation_command
+    assert '"${protocyte_plugin_executable}"' in generation_command.split("DEPENDS", 1)[1]
+
+
+@pytest.mark.parametrize(
+    ("descriptor_name", "expected"),
+    [
+        ('api/bad"name.proto', "api/bad~22name.protocyte"),
+        ("api/café.proto", "api/caf~C3~A9.protocyte"),
+        ("CON.proto", "~43ON.protocyte"),
+        ("api/literal~22.proto", "api/literal~7E22.protocyte"),
+    ],
+)
+def test_cmake_normalizes_generated_paths_like_the_plugin(
+    tmp_path: Path, descriptor_name: str, expected: str
+) -> None:
+    output = tmp_path / "normalized.txt"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f"_protocyte_normalize_generated_path(normalized [==[{descriptor_name}]==])",
+                f'file(WRITE "{output.as_posix()}" "${{normalized}}")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == expected
 
 
 @pytest.mark.parametrize(
@@ -761,7 +841,9 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     proto_dir = source_dir / "proto"
     descriptor = source_dir / "protobuf" / "google" / "protobuf" / "descriptor.proto"
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
 
     proto_dir.mkdir(parents=True)
     (proto_dir / "demo.proto").write_text(
@@ -769,9 +851,8 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     )
     descriptor.parent.mkdir(parents=True)
     descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
-    protoc.parent.mkdir(parents=True)
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -806,10 +887,11 @@ def test_generate_accepts_descriptor_set_protos_without_proto_root(
     descriptor_set = source_dir / "descriptor_set.pb"
     descriptor_set.write_bytes(b"placeholder")
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
-    protoc.parent.mkdir(parents=True)
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -898,6 +980,48 @@ def test_generate_resolves_relative_out_dir_against_binary_directory(
     assert not (source_dir / "generated").exists()
 
 
+def test_source_mode_codegen_declares_normalized_generated_paths(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    (proto_dir / "café.proto").write_text(
+        'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+    )
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import = _find_protobuf_import_root(repo_root)
+    plugin = _installed_protocyte_plugin()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(source_mode_normalized_path LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/café.proto",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True
+    )
+
+    assert (build_dir / "generated" / "caf~C3~A9.protocyte.hpp").is_file()
+    assert (build_dir / "generated" / "caf~C3~A9.protocyte.cpp").is_file()
+
+
 def test_generate_descriptor_set_discover_skips_google_protobuf_files(
     tmp_path: Path,
 ) -> None:
@@ -941,7 +1065,7 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
     descriptor_set.write_bytes(file_set.SerializeToString())
     protoc = source_dir / "tools" / "protoc"
     plugin = _installed_protocyte_plugin()
-    protoc.parent.mkdir(parents=True)
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
@@ -973,13 +1097,21 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
     assert "generated/google/protobuf/timestamp.protocyte.hpp" in headers
 
 
-def test_descriptor_set_discover_preserves_semicolon_in_file_name(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("descriptor_name", "generated_stem"),
+    [
+        ("api/demo;legacy.proto", "api/demo;legacy.protocyte"),
+        ('api/demo"legacy.proto', "api/demo~22legacy.protocyte"),
+    ],
+)
+def test_descriptor_set_discover_generates_portable_file_names(
+    tmp_path: Path, descriptor_name: str, generated_stem: str
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
     source_dir.mkdir()
     descriptor_set = source_dir / "descriptor_set.pb"
-    descriptor_name = "api/demo;legacy.proto"
     file_set = descriptor_pb2.FileDescriptorSet()
     user = file_set.file.add()
     user.name = descriptor_name
@@ -1020,8 +1152,8 @@ def test_descriptor_set_discover_preserves_semicolon_in_file_name(tmp_path: Path
         ["cmake", "--build", str(build_dir), "--target", "demo_codegen"], check=True
     )
 
-    assert (build_dir / "generated" / "api" / "demo;legacy.protocyte.hpp").is_file()
-    assert (build_dir / "generated" / "api" / "demo;legacy.protocyte.cpp").is_file()
+    assert (build_dir / "generated" / f"{generated_stem}.hpp").is_file()
+    assert (build_dir / "generated" / f"{generated_stem}.cpp").is_file()
 
 
 def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
@@ -1040,7 +1172,7 @@ def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
     descriptor_set.write_bytes(file_set.SerializeToString())
     protoc = source_dir / "tools" / "protoc"
     plugin = _installed_protocyte_plugin()
-    protoc.parent.mkdir(parents=True)
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
@@ -1061,6 +1193,9 @@ def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
                 f'if(NOT "{descriptor_set.as_posix()}" IN_LIST configure_depends)',
                 '    message(FATAL_ERROR "descriptor-set DISCOVER did not track descriptor set as a configure input")',
                 "endif()",
+                f'if(NOT "{plugin.as_posix()}" IN_LIST configure_depends)',
+                '    message(FATAL_ERROR "descriptor-set DISCOVER did not track the plugin as a configure input")',
+                "endif()",
                 "",
             ]
         ),
@@ -1068,6 +1203,47 @@ def test_descriptor_set_discover_tracks_descriptor_set_as_configure_input(
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+def test_explicit_plugin_override_must_exist(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    missing = tmp_path / "missing" / "protoc-gen-protocyte"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{missing.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "does not name an existing file" in output
+
+
+def test_explicit_plugin_override_must_match_package_version(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    plugin = _write_version_only_plugin(
+        tmp_path / "tools" / "protoc-gen-protocyte", "99.0.0"
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert f"CMake package {__version__}" in output
+    assert "plugin reported 99.0.0" in output
 
 
 def test_descriptor_set_discover_uses_explicit_plugin_environment(
@@ -1100,7 +1276,7 @@ def test_descriptor_set_discover_uses_explicit_plugin_environment(
 
     protoc = source_dir / "tools" / "protoc"
     plugin = _installed_protocyte_plugin()
-    protoc.parent.mkdir(parents=True)
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
@@ -1141,7 +1317,7 @@ def test_descriptor_set_discover_reports_incompatible_explicit_plugin(
     user.message_type.add().name = "Demo"
     descriptor_set.write_bytes(file_set.SerializeToString())
     protoc = source_dir / "tools" / "protoc"
-    protoc.parent.mkdir(parents=True)
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
     plugin = _write_incompatible_protocyte_plugin(
         source_dir / "tools" / "protoc-gen-protocyte"
@@ -1189,10 +1365,11 @@ def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(
     descriptor_set = source_dir / "descriptor_set.pb"
     descriptor_set.write_bytes(b"placeholder")
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
-    protoc.parent.mkdir(parents=True)
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -1279,8 +1456,9 @@ def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_path
             encoding="utf-8",
         )
         protoc.chmod(0o755)
-    plugin = tools_dir / "protoc-gen-protocyte"
-    plugin.write_text("", encoding="utf-8")
+    plugin = _write_version_only_plugin(
+        tools_dir / "protoc-gen-protocyte", __version__
+    )
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [
@@ -1382,10 +1560,11 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
     descriptor_set = source_dir / "descriptor_set.pb"
     descriptor_set.write_bytes(b"placeholder")
     protoc = source_dir / "tools" / "protoc"
-    plugin = source_dir / "tools" / "protoc-gen-protocyte"
-    protoc.parent.mkdir(parents=True)
+    plugin = _write_version_only_plugin(
+        source_dir / "tools" / "protoc-gen-protocyte", __version__
+    )
+    protoc.parent.mkdir(parents=True, exist_ok=True)
     protoc.write_text("", encoding="utf-8")
-    plugin.write_text("", encoding="utf-8")
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
             [

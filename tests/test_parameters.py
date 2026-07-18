@@ -15,6 +15,20 @@ def test_parse_runtime_emit_with_prefix() -> None:
     assert options.include_prefix == "generated"
 
 
+def test_rejects_conflicting_runtime_prefix_parameters() -> None:
+    with pytest.raises(ProtocyteError, match="conflicts"):
+        parse_parameter("runtime=emit:first/runtime,runtime_prefix=second/runtime")
+
+
+def test_accepts_matching_runtime_prefix_parameters() -> None:
+    options = parse_parameter(
+        "runtime=emit:vendor/runtime,runtime_prefix=vendor/runtime"
+    )
+
+    assert options.emit_runtime is True
+    assert options.runtime_prefix == "vendor/runtime"
+
+
 def test_parse_defaults_to_no_runtime_emission() -> None:
     options = parse_parameter("")
 

@@ -25,6 +25,7 @@ from protocyte.model import (
     cpp_pascal_identifier,
 )
 from protocyte.parameters import GeneratorOptions
+from protocyte.paths import generated_file_base
 from protocyte.runtime import runtime_files
 
 
@@ -354,12 +355,20 @@ def generate_outputs(
             output_budget.consume(content)
             outputs[name] = content
     for file_model in model.generated_files():
-        outputs[_header_name(file_model.name)] = generate_header(
-            file_model, options, output_budget=output_budget
-        )
-        outputs[_source_name(file_model.name)] = generate_source(
-            file_model, options, output_budget=output_budget
-        )
+        header_name = _header_name(file_model.name)
+        source_name = _source_name(file_model.name)
+        for name in (header_name, source_name):
+            collision = next(
+                (existing for existing in outputs if existing.casefold() == name.casefold()),
+                None,
+            )
+            if collision is not None:
+                raise ProtocyteError(
+                    "generated file name collision after portable path normalization: "
+                    f"{collision!r} and {name!r}"
+                )
+        outputs[header_name] = generate_header(file_model, options, output_budget=output_budget)
+        outputs[source_name] = generate_source(file_model, options, output_budget=output_budget)
     if not format_outputs:
         if options.formatting_required:
             raise ProtocyteError(
@@ -3897,11 +3906,11 @@ def _walk_messages(messages: list[MessageModel]):
 
 
 def _header_name(proto_name: str) -> str:
-    return proto_name.removesuffix(".proto") + ".protocyte.hpp"
+    return generated_file_base(proto_name) + ".hpp"
 
 
 def _source_name(proto_name: str) -> str:
-    return proto_name.removesuffix(".proto") + ".protocyte.cpp"
+    return generated_file_base(proto_name) + ".cpp"
 
 
 def _include_path(proto_name: str, options: GeneratorOptions) -> str:

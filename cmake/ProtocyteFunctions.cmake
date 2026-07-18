@@ -115,6 +115,79 @@ function(_protocyte_validate_forwarded_generator_options)
     endforeach()
 endfunction()
 
+function(_protocyte_normalize_generated_segment out_var segment)
+    string(REGEX REPLACE "\\..*$" "" device_stem "${segment}")
+    string(TOUPPER "${device_stem}" device_stem)
+    if(device_stem MATCHES "^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$")
+        set(escape_first TRUE)
+    else()
+        set(escape_first FALSE)
+    endif()
+    if("${segment}" MATCHES "\\.$")
+        set(escape_last_dot TRUE)
+    else()
+        set(escape_last_dot FALSE)
+    endif()
+
+    string(HEX "${segment}" segment_hex)
+    string(LENGTH "${segment_hex}" segment_hex_length)
+    set(normalized "")
+    if(segment_hex_length GREATER 0)
+        math(EXPR segment_hex_last "${segment_hex_length} - 2")
+        foreach(offset RANGE 0 ${segment_hex_last} 2)
+            string(SUBSTRING "${segment_hex}" ${offset} 2 byte_hex)
+            math(EXPR byte_value "0x${byte_hex}")
+            math(EXPR byte_index "${offset} / 2")
+            set(byte_is_safe FALSE)
+            if(
+                (byte_value GREATER_EQUAL 48 AND byte_value LESS_EQUAL 57)
+                OR (byte_value GREATER_EQUAL 65 AND byte_value LESS_EQUAL 90)
+                OR (byte_value GREATER_EQUAL 97 AND byte_value LESS_EQUAL 122)
+                OR byte_value EQUAL 45
+                OR byte_value EQUAL 46
+                OR byte_value EQUAL 59
+                OR byte_value EQUAL 95
+            )
+                set(byte_is_safe TRUE)
+            endif()
+            if(byte_index EQUAL 0 AND escape_first)
+                set(byte_is_safe FALSE)
+            endif()
+            if(offset EQUAL segment_hex_last AND escape_last_dot)
+                set(byte_is_safe FALSE)
+            endif()
+
+            if(byte_is_safe)
+                string(SUBSTRING "${segment}" ${byte_index} 1 byte_character)
+                string(APPEND normalized "${byte_character}")
+            else()
+                string(TOUPPER "${byte_hex}" byte_hex)
+                string(APPEND normalized "~${byte_hex}")
+            endif()
+        endforeach()
+    endif()
+    set(${out_var} "${normalized}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_normalize_generated_path out_var proto_name)
+    string(REGEX REPLACE "\\.proto$" "" remaining "${proto_name}")
+    set(normalized "")
+    while(TRUE)
+        string(FIND "${remaining}" "/" separator)
+        if(separator EQUAL -1)
+            _protocyte_normalize_generated_segment(normalized_segment "${remaining}")
+            string(APPEND normalized "${normalized_segment}")
+            break()
+        endif()
+        string(SUBSTRING "${remaining}" 0 ${separator} segment)
+        math(EXPR next_segment "${separator} + 1")
+        string(SUBSTRING "${remaining}" ${next_segment} -1 remaining)
+        _protocyte_normalize_generated_segment(normalized_segment "${segment}")
+        string(APPEND normalized "${normalized_segment}/")
+    endwhile()
+    set(${out_var} "${normalized}.protocyte" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_validate_parsed_arguments function_name unparsed_arguments missing_values)
     if(NOT "${missing_values}" STREQUAL "")
         list(JOIN missing_values ", " missing_values_text)
@@ -137,13 +210,8 @@ function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_nam
     set(sources)
     foreach(proto_name IN LISTS ${proto_names_var})
         _protocyte_validate_descriptor_name("${proto_name}")
-        get_filename_component(proto_rel_dir "${proto_name}" DIRECTORY)
-        get_filename_component(proto_stem "${proto_name}" NAME_WLE)
-        if(proto_rel_dir STREQUAL "")
-            set(protocyte_base "${out_dir}/${proto_stem}.protocyte")
-        else()
-            set(protocyte_base "${out_dir}/${proto_rel_dir}/${proto_stem}.protocyte")
-        endif()
+        _protocyte_normalize_generated_path(normalized_generated_path "${proto_name}")
+        set(protocyte_base "${out_dir}/${normalized_generated_path}")
         string(REPLACE ";" "\\;" protocyte_header "${protocyte_base}.hpp")
         string(REPLACE ";" "\\;" protocyte_source "${protocyte_base}.cpp")
         list(APPEND headers "${protocyte_header}")
@@ -182,6 +250,7 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
     if("${protocyte_plugin_executable}" STREQUAL "")
         message(FATAL_ERROR "Protocyte descriptor discovery requires a prepared plugin executable")
     endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_plugin_executable}")
 
     execute_process(
         COMMAND
@@ -214,6 +283,53 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
     endif()
     _protocyte_parse_discovered_descriptor_names(discovered_list "${discovered}")
     set(${out_var} "${discovered_list}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_validate_explicit_plugin out_var plugin_executable)
+    if("${plugin_executable}" MATCHES "\\$<")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE must be a configure-time executable path, not a generator expression"
+        )
+    endif()
+    if(IS_ABSOLUTE "${plugin_executable}")
+        set(plugin_path "${plugin_executable}")
+    else()
+        get_filename_component(plugin_path "${plugin_executable}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+    cmake_path(NORMAL_PATH plugin_path)
+    if(NOT EXISTS "${plugin_path}" OR IS_DIRECTORY "${plugin_path}")
+        message(FATAL_ERROR "PROTOCYTE_PLUGIN_EXECUTABLE does not name an existing file: ${plugin_path}")
+    endif()
+
+    _protocyte_get_internal(expected_version VERSION)
+    if("${expected_version}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte's CMake package did not declare its expected plugin version")
+    endif()
+    execute_process(
+        COMMAND "${plugin_path}" --version
+        RESULT_VARIABLE version_result
+        OUTPUT_VARIABLE version_output
+        ERROR_VARIABLE version_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 15
+    )
+    if(NOT "${version_result}" STREQUAL "0")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE failed its required --version check: ${plugin_path}\n"
+            "Exit code: ${version_result}\nStandard output: ${version_output}\nStandard error: ${version_error}"
+        )
+    endif()
+    if(NOT "${version_output}" STREQUAL "${expected_version}")
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE version mismatch: CMake package ${expected_version}, "
+            "plugin reported ${version_output}\nPlugin: ${plugin_path}"
+        )
+    endif()
+    set(${out_var} "${plugin_path}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_get_internal out_var name)
@@ -688,7 +804,10 @@ function(_protocyte_prepare_plugin)
     endif()
 
     if(DEFINED PROTOCYTE_PLUGIN_EXECUTABLE AND NOT "${PROTOCYTE_PLUGIN_EXECUTABLE}" STREQUAL "")
-        set(protocyte_plugin_executable "${PROTOCYTE_PLUGIN_EXECUTABLE}")
+        _protocyte_validate_explicit_plugin(
+            protocyte_plugin_executable
+            "${PROTOCYTE_PLUGIN_EXECUTABLE}"
+        )
     else()
         _protocyte_ensure_python_environment(protocyte_python_executable protocyte_plugin_executable)
     endif()
@@ -962,14 +1081,10 @@ function(protocyte_generate)
     else()
         foreach(proto_file IN LISTS normalized_proto_files)
             file(RELATIVE_PATH proto_rel "${protocyte_proto_root}" "${proto_file}")
-            get_filename_component(proto_rel_dir "${proto_rel}" DIRECTORY)
-            get_filename_component(proto_stem "${proto_rel}" NAME_WLE)
-
-            if(proto_rel_dir STREQUAL "")
-                set(protocyte_base "${PROTOCYTE_OUT_DIR}/${proto_stem}.protocyte")
-            else()
-                set(protocyte_base "${PROTOCYTE_OUT_DIR}/${proto_rel_dir}/${proto_stem}.protocyte")
-            endif()
+            string(REPLACE "\\" "/" proto_rel "${proto_rel}")
+            _protocyte_validate_descriptor_name("${proto_rel}")
+            _protocyte_normalize_generated_path(normalized_generated_path "${proto_rel}")
+            set(protocyte_base "${PROTOCYTE_OUT_DIR}/${normalized_generated_path}")
 
             list(APPEND protocyte_generated_headers "${protocyte_base}.hpp")
             list(APPEND protocyte_generated_sources "${protocyte_base}.cpp")
@@ -1063,6 +1178,7 @@ function(protocyte_generate)
         DEPENDS
             ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
+            "${protocyte_plugin_executable}"
             "${protocyte_options_proto}"
             ${protocyte_generator_sources}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

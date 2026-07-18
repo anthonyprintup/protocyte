@@ -167,6 +167,12 @@ The plugin emits:
 - `foo.protocyte.cpp`
 - `protocyte/runtime/runtime.hpp` when runtime emission is enabled
 
+Protobuf virtual descriptor names may contain characters that are not portable
+host-file names. Protocyte preserves ordinary path segments and hex-escapes
+nonportable UTF-8 bytes as `~HH` in generated paths; for example,
+`api/bad"name.proto` emits `api/bad~22name.protocyte.hpp`. A literal `~` is
+escaped too, so this mapping cannot alias an unescaped descriptor name.
+
 Generate from a descriptor set when `.proto` source is not the authority:
 
 ```powershell

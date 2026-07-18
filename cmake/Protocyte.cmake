@@ -18,6 +18,7 @@ set(
     "${PROTOCYTE_PACKAGE_ROOT}/main.py"
     "${PROTOCYTE_PACKAGE_ROOT}/model.py"
     "${PROTOCYTE_PACKAGE_ROOT}/parameters.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/paths.py"
     "${PROTOCYTE_PACKAGE_ROOT}/plugin.py"
     "${PROTOCYTE_PACKAGE_ROOT}/runtime/__init__.py"
     "${PROTOCYTE_PACKAGE_ROOT}/runtime/runtime.hpp"
@@ -39,5 +40,10 @@ set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT "${PROTOCYTE_PYT
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${PROTOCYTE_PROTO_DIR}")
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_OPTIONS_PROTO "${PROTOCYTE_OPTIONS_PROTO}")
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "${PROTOCYTE_GENERATOR_SOURCES}")
+file(STRINGS "${PROTOCYTE_PACKAGE_ROOT}/__init__.py" protocyte_version_line REGEX "^__version__ = ")
+if(NOT protocyte_version_line MATCHES "^__version__ = \"([^\"]+)\"$")
+    message(FATAL_ERROR "Failed to read Protocyte's Python package version")
+endif()
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_VERSION "${CMAKE_MATCH_1}")
 
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteFunctions.cmake")

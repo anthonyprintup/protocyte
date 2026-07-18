@@ -99,6 +99,46 @@ def test_response_file_names_keep_valid_runtime_prefix_relative() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("descriptor_name", "generated_base"),
+    [
+        ('api/bad"name.proto', "api/bad~22name.protocyte"),
+        ("api/control-\n.proto", "api/control-~0A.protocyte"),
+        ("CON.proto", "~43ON.protocyte"),
+        ("api/literal~22.proto", "api/literal~7E22.protocyte"),
+    ],
+)
+def test_response_file_names_normalize_nonportable_descriptor_paths(
+    descriptor_name: str, generated_base: str
+) -> None:
+    request = _basic_request(parameter="format=off")
+    request.file_to_generate[0] = descriptor_name
+    request.proto_file[0].name = descriptor_name
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {file.name for file in response.file} == {
+        f"{generated_base}.cpp",
+        f"{generated_base}.hpp",
+    }
+
+
+def test_response_rejects_portable_generated_path_collisions() -> None:
+    request = _basic_request(parameter="format=off")
+    second = request.proto_file.add()
+    second.name = "SIMPLE.proto"
+    second.package = "other_demo"
+    second.syntax = "proto3"
+    second.message_type.add().name = "OtherSample"
+    request.file_to_generate.append(second.name)
+
+    response = generate_response(request)
+
+    assert "generated file name collision" in response.error
+    assert not response.file
+
+
 def test_generation_emits_source_documentation_and_field_deprecation_by_default() -> None:
     request = _basic_request(parameter="format=off")
     file = request.proto_file[0]

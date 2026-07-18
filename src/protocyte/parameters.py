@@ -281,6 +281,10 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         suffix = runtime.split(":", 1)[1]
         if not suffix:
             raise ProtocyteError("runtime prefix must not be empty")
+        if "runtime_prefix" in values and runtime_prefix != suffix:
+            raise ProtocyteError(
+                "runtime=emit:<prefix> conflicts with the separate runtime_prefix value"
+            )
         runtime_prefix = suffix
     elif runtime == "emit":
         emit_runtime = True

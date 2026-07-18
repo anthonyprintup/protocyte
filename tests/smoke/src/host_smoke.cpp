@@ -3215,6 +3215,12 @@ TEST_CASE("unknown field mutation is typed, ordered, and transactional", "[smoke
     const auto replaced_value = replaced->fixed64();
     REQUIRE(replaced_value);
     CHECK(*replaced_value == 0x0102030405060708ull);
+    const auto preserved = unknown.view().field(2u);
+    REQUIRE(preserved);
+    CHECK(preserved->field_number() == 202u);
+    const auto preserved_payload = preserved->length_delimited();
+    REQUIRE(preserved_payload);
+    CHECK(view_equal(*preserved_payload, view_of(payload)));
 
     CHECK(unknown.delete_by_number(200u) == 1u);
     REQUIRE(unknown.field_count() == 2u);

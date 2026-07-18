@@ -5165,7 +5165,7 @@ namespace protocyte {
                     return protocyte::unexpected(error);
                 }
                 value_size = 4u;
-                end_offset = offset + reader.position();
+                end_offset = reader.position();
                 break;
             }
             case WireType::EGROUP:
