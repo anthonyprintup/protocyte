@@ -3775,5 +3775,64 @@ def test_release_cmake_version_file_requires_exact_version() -> None:
         1
     ].split("\n    )", maxsplit=1)[0]
 
+    version_block = version_block.split("\n        )", maxsplit=1)[0]
+
     assert "COMPATIBILITY ExactVersion" in version_block
     assert "COMPATIBILITY SameMajorVersion" not in version_block
+    assert "ARCH_INDEPENDENT" in version_block
+
+
+def test_release_cmake_version_file_accepts_pointer_size_mismatch(
+    tmp_path: Path,
+) -> None:
+    cmake_lists = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+    version_block = cmake_lists.split("write_basic_package_version_file(", maxsplit=1)[
+        1
+    ].split("\n    )", maxsplit=1)[0]
+    version_block = version_block.split("\n        )", maxsplit=1)[0]
+    generate_script = tmp_path / "generate-version.cmake"
+    generate_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "include(CMakePackageConfigHelpers)",
+                'set(PROJECT_VERSION "0.1.0")',
+                'set(CMAKE_SIZEOF_VOID_P "8")',
+                'file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cmake")',
+                f"write_basic_package_version_file({version_block}",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["cmake", "-P", str(generate_script)],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    generated_version = tmp_path / "cmake" / "protocyteConfigVersion.cmake"
+    assert generated_version.is_file()
+    probe_script = tmp_path / "probe-version.cmake"
+    probe_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                'set(CMAKE_SIZEOF_VOID_P "4")',
+                'set(PACKAGE_FIND_VERSION "0.1.0")',
+                f'include("{generated_version.as_posix()}")',
+                "if(PACKAGE_VERSION_UNSUITABLE)",
+                '    message(FATAL_ERROR "architecture-independent package was rejected")',
+                "endif()",
+                "if(NOT PACKAGE_VERSION_COMPATIBLE OR NOT PACKAGE_VERSION_EXACT)",
+                '    message(FATAL_ERROR "exact package version did not match")',
+                "endif()",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["cmake", "-P", str(probe_script)], check=True)
