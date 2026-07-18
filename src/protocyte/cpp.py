@@ -22,6 +22,7 @@ from protocyte.model import (
     OneofModel,
     SourceDocumentation,
     cpp_identifier,
+    cpp_derivable_identifier,
     cpp_pascal_identifier,
 )
 from protocyte.parameters import GeneratorOptions
@@ -709,7 +710,7 @@ def _reserve_oneof_cpp_names(
     options: GeneratorOptions,
 ) -> None:
     del options
-    lower = cpp_identifier(oneof.name)
+    lower = cpp_derivable_identifier(oneof.name)
     if class_scope.owner(lower) is not None:
         raise ProtocyteError(
             f"{message.full_name}.{oneof.name}: oneof collides with generated API"
@@ -885,7 +886,8 @@ def generate_source(
         )
         w.line()
         for message in _ordered_messages(file_model):
-            w.line(f"static const FieldInfo {message.cpp_name}_fields[] = {{")
+            reflection_name = _cpp_suffix_identifier(message.cpp_name, "fields")
+            w.line(f"static const FieldInfo {reflection_name}[] = {{")
             with w.indent():
                 for item in message.fields:
                     w.line(
@@ -1004,7 +1006,7 @@ def _emit_message(
         w.line("}")
         w.line()
         for oneof in message.oneofs:
-            lower = cpp_identifier(oneof.name)
+            lower = cpp_derivable_identifier(oneof.name)
             _emit_documentation(w, oneof.documentation, options)
             w.line(
                 f"constexpr {oneof.cpp_name}Case {lower}_case() const noexcept {{ return {lower}_case_; }}"
@@ -1047,7 +1049,7 @@ def _emit_message(
                         continue
                     oneof = oneofs_by_name[item.oneof_name]
                     w.line(
-                        f"{oneof.cpp_name}Case {cpp_identifier(oneof.name)}_case_ {{{oneof.cpp_name}Case::none}};"
+                        f"{oneof.cpp_name}Case {_oneof_case_member(oneof.name)} {{{oneof.cpp_name}Case::none}};"
                     )
                     _emit_oneof_storage(w, oneof, options)
                     emitted_oneofs.add(item.oneof_name)
@@ -1159,7 +1161,7 @@ def _emit_special_members(
     with w.indent():
         w.line("if (this == &other) { return *this; }")
         for oneof in message.oneofs:
-            w.line(f"clear_{cpp_identifier(oneof.name)}();")
+            w.line(f"clear_{cpp_derivable_identifier(oneof.name)}();")
         w.line("ctx_ = other.ctx_;")
         w.line("unknown_fields_ = ::protocyte::move(other.unknown_fields_);")
         for item in message.fields:
@@ -1173,7 +1175,7 @@ def _emit_special_members(
     w.line(f"~{message.cpp_name}() noexcept {{")
     with w.indent():
         for oneof in message.oneofs:
-            w.line(f"clear_{cpp_identifier(oneof.name)}();")
+            w.line(f"clear_{cpp_derivable_identifier(oneof.name)}();")
     w.line("}")
 
 
@@ -1225,7 +1227,7 @@ def _emit_move_assignment_for_field(w: CppWriter, item: FieldModel) -> None:
 def _emit_move_oneof_from_other(
     w: CppWriter, oneof: OneofModel, options: GeneratorOptions, *, source: str
 ) -> None:
-    lower = cpp_identifier(oneof.name)
+    lower = cpp_derivable_identifier(oneof.name)
     case_type = oneof.cpp_name + "Case"
     w.line(f"switch ({source}.{lower}_case_) {{")
     with w.indent():
@@ -1445,7 +1447,7 @@ def _emit_copy_message_from_pointer(
 def _emit_copy_oneof_from_other(
     w: CppWriter, oneof: OneofModel, options: GeneratorOptions, *, source: str
 ) -> None:
-    lower = cpp_identifier(oneof.name)
+    lower = cpp_derivable_identifier(oneof.name)
     case_type = oneof.cpp_name + "Case"
     case_member = _oneof_case_member(oneof.name)
     w.line(f"switch ({source}.{case_member}) {{")
@@ -1921,7 +1923,7 @@ def _emit_oneof_accessors(
             w.line(
                 f"if (const auto st = temp.assign(*view); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
             )
-            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+            w.line(f"clear_{cpp_derivable_identifier(item.oneof_name)}();")
             w.line(
                 f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move(temp)}};"
             )
@@ -1944,7 +1946,7 @@ def _emit_oneof_accessors(
             w.line(f"return *{_member(item)};")
             w.pop()
             w.line("}")
-            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+            w.line(f"clear_{cpp_derivable_identifier(item.oneof_name)}();")
             w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
             w.line(f"auto ensured = {_member(item)}.ensure();")
             w.line("if (!ensured) {")
@@ -1962,7 +1964,7 @@ def _emit_oneof_accessors(
             return
         w.line(f"if (!has_{item.cpp_name}()) {{")
         w.push()
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"clear_{cpp_derivable_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
         w.pop()
         w.line("}")
@@ -2004,7 +2006,7 @@ def _emit_oneof_accessors(
             _closed_enum_invalid_condition(item, "value"),
             field_number=_field_number_u32(item),
         )
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"clear_{cpp_derivable_identifier(item.oneof_name)}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
         w.line(f"{case_member} = {case_type}::{item.cpp_name};")
         w.line("return {};")
@@ -2022,7 +2024,7 @@ def _emit_oneof_accessors(
     _emit_field_api_annotations(w, item, options)
     w.line(f"void set_{item.cpp_name}(const {typ} value) noexcept {{")
     w.push()
-    w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+    w.line(f"clear_{cpp_derivable_identifier(item.oneof_name)}();")
     w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
     w.line(f"{case_member} = {case_type}::{item.cpp_name};")
     w.pop()
@@ -2684,7 +2686,7 @@ def _emit_read_bounded_bytes(
         f"if (const auto st = {reader}.read(view.data(), view.size()); !st) {{ return st; }}"
     )
     if item.oneof_name:
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"clear_{cpp_derivable_identifier(item.oneof_name)}();")
         w.line(
             f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move({value_name})}};"
         )
@@ -2736,7 +2738,7 @@ def _emit_commit_oneof_value(
     w: CppWriter, item: FieldModel, value: str, options: GeneratorOptions
 ) -> None:
     assert item.oneof_name is not None
-    oneof_name = cpp_identifier(item.oneof_name)
+    oneof_name = cpp_derivable_identifier(item.oneof_name)
     case_type = _oneof_case_type(item.oneof_name)
     case_member = _oneof_case_member(item.oneof_name)
     if item.kind == "message":
@@ -3717,7 +3719,7 @@ def _oneof_case_type(oneof_name: str) -> str:
 
 
 def _oneof_case_member(oneof_name: str) -> str:
-    return f"{cpp_identifier(oneof_name)}_case_"
+    return f"{cpp_derivable_identifier(oneof_name)}_case_"
 
 
 def _oneof_storage_type(oneof: OneofModel) -> str:
@@ -3725,7 +3727,7 @@ def _oneof_storage_type(oneof: OneofModel) -> str:
 
 
 def _oneof_storage_member(oneof_name: str) -> str:
-    return f"{cpp_identifier(oneof_name)}_"
+    return f"{cpp_derivable_identifier(oneof_name)}_"
 
 
 def _oneof_member_name(item: FieldModel) -> str:
@@ -3934,11 +3936,17 @@ def _include_path(proto_name: str, options: GeneratorOptions) -> str:
 
 
 def _include_guard(proto_name: str) -> str:
-    sanitized = "".join(
+    raw_sanitized = "".join(
         ch if ch.isascii() and ch.isalnum() else "_" for ch in proto_name.upper()
     )
+    sanitized = "_".join(part for part in raw_sanitized.split("_") if part) or "FILE"
     digest = hashlib.sha1(proto_name.encode("utf-8")).hexdigest().upper()[:12]
     return f"PROTOCYTE_GENERATED_{sanitized}_{digest}_HPP"
+
+
+def _cpp_suffix_identifier(identifier: str, suffix: str) -> str:
+    separator = "" if identifier.endswith("_") else "_"
+    return f"{identifier}{separator}{suffix}"
 
 
 def _namespace_parts(file_model: FileModel, options: GeneratorOptions) -> list[str]:

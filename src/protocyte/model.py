@@ -179,6 +179,12 @@ CPP_KEYWORDS = {
     "xor_eq",
 }
 
+_CPP_NAME_COLLISION_CONTEXT = (
+    "after C++ identifier normalization and reserved-name escaping"
+)
+_CPP_RESERVED_IDENTIFIER_PREFIX = "protocyte_escaped_"
+_CPP_DERIVABLE_IDENTIFIER_SUFFIX = "protocyte"
+
 
 SCALAR_CPP_TYPES = {
     FieldDescriptorProto.TYPE_DOUBLE: "double",
@@ -1609,16 +1615,39 @@ def _find_extension(pool: descriptor_pool.DescriptorPool, name: str) -> object |
         return None
 
 
-def cpp_identifier(name: str) -> str:
+def _normalized_cpp_identifier(name: str) -> str:
     if not name:
         return "_"
     out = []
     for index, char in enumerate(name):
         valid = char == "_" or char.isalpha() or (char.isdigit() and index > 0)
         out.append(char if valid and ord(char) < 128 else "_")
-    ident = "".join(out)
+    return "".join(out)
+
+
+def cpp_identifier(name: str) -> str:
+    """Return a portable, non-reserved C++ identifier for an emitted name.
+
+    Protobuf identifiers may use spellings that C++ reserves to the
+    implementation, including leading underscores and double underscores, or
+    that collide with predefined macros such as ``__LINE__``.  Generated
+    storage names are formed from a separate derivable stem so direct uses can
+    retain the historical trailing-underscore spelling for C++ keywords.
+    """
+    ident = _normalized_cpp_identifier(name)
     if ident in CPP_KEYWORDS:
         return f"{ident}_"
+    if ident.startswith("_") or "__" in ident:
+        encoded = ident.encode("ascii").hex()
+        return f"{_CPP_RESERVED_IDENTIFIER_PREFIX}{encoded}"
+    return ident
+
+
+def cpp_derivable_identifier(name: str) -> str:
+    """Return an identifier safe for generated suffixes and storage names."""
+    ident = cpp_identifier(name)
+    if ident.endswith("_"):
+        return f"{ident}{_CPP_DERIVABLE_IDENTIFIER_SUFFIX}"
     return ident
 
 
@@ -1627,6 +1656,11 @@ def cpp_pascal_identifier(name: str) -> str:
     if not ident:
         return "_"
     return ident[0].upper() + ident[1:]
+
+
+def _join_cpp_type_identifiers(parent: str, child: str) -> str:
+    separator = "" if parent.endswith("_") else "_"
+    return f"{parent}{separator}{child}"
 
 
 def proto_full_name(file: descriptor_pb2.FileDescriptorProto, path: str) -> str:
@@ -1989,7 +2023,9 @@ def _build_enum(
     descriptor_path: tuple[int, ...],
     documentation: _SourceDocumentationIndex,
 ) -> EnumModel:
-    cpp_prefix = f"{parent.cpp_name}_" if parent else ""
+    cpp_name = cpp_pascal_identifier(enum.name)
+    if parent is not None:
+        cpp_name = _join_cpp_type_identifiers(parent.cpp_name, cpp_name)
     values = [
         EnumValueModel(
             name=value.name,
@@ -2004,7 +2040,7 @@ def _build_enum(
     ]
     return EnumModel(
         name=enum.name,
-        cpp_name=f"{cpp_prefix}{cpp_pascal_identifier(enum.name)}",
+        cpp_name=cpp_name,
         full_name=proto_full_name(file, path),
         file_name=file.name,
         package=file.package,
@@ -2022,10 +2058,12 @@ def _build_message_skeleton(
     descriptor_path: tuple[int, ...],
     documentation: _SourceDocumentationIndex,
 ) -> MessageModel:
-    cpp_prefix = f"{parent.cpp_name}_" if parent else ""
+    cpp_name = cpp_pascal_identifier(message.name)
+    if parent is not None:
+        cpp_name = _join_cpp_type_identifiers(parent.cpp_name, cpp_name)
     model = MessageModel(
         name=message.name,
-        cpp_name=f"{cpp_prefix}{cpp_pascal_identifier(message.name)}",
+        cpp_name=cpp_name,
         full_name=proto_full_name(file, path),
         file_name=file.name,
         package=file.package,
@@ -2150,6 +2188,10 @@ def _build_raw_constants(
     for raw in raw_constants:
         if not raw.name:
             raise ProtocyteError(f"{owner}: constant name must not be empty")
+        if _normalized_cpp_identifier(raw.name) == "_" and raw.name != "_":
+            raise ProtocyteError(
+                f"{owner}.{raw.name}: constant name is not a valid C++ identifier"
+            )
         if raw.kind is None or (raw.literal is None) == (raw.expr is None):
             raise ProtocyteError(
                 f"{owner}.{raw.name}: exactly one typed constant value must be set"
@@ -2169,7 +2211,7 @@ def _build_raw_constants(
 
 def _validate_constant_collisions(message: MessageModel) -> None:
     seen_names: set[str] = set()
-    seen_cpp_names: set[str] = set()
+    seen_cpp_names: dict[str, str] = {}
 
     for constant in message.constants:
         if constant.name in seen_names:
@@ -2182,15 +2224,17 @@ def _validate_constant_collisions(message: MessageModel) -> None:
                 f"{message.full_name}.{constant.name}: constant name is not a valid C++ identifier"
             )
         if constant.cpp_name in seen_cpp_names:
+            first = seen_cpp_names[constant.cpp_name]
             raise ProtocyteError(
-                f"{message.full_name}.{constant.name}: constant collides after C++ identifier normalization"
+                f"{message.full_name}.{constant.name}: constant collides with {first!r} "
+                f"{_CPP_NAME_COLLISION_CONTEXT}"
             )
-        seen_cpp_names.add(constant.cpp_name)
+        seen_cpp_names[constant.cpp_name] = constant.name
 
 
 def _validate_package_constant_collisions(file_model: FileModel) -> None:
     seen_names: set[str] = set()
-    seen_cpp_names: set[str] = set()
+    seen_cpp_names: dict[str, str] = {}
     for constant in file_model.constants:
         if constant.name in seen_names:
             raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
@@ -2200,10 +2244,12 @@ def _validate_package_constant_collisions(file_model: FileModel) -> None:
                 f"{constant.full_name}: constant name is not a valid C++ identifier"
             )
         if constant.cpp_name in seen_cpp_names:
+            first = seen_cpp_names[constant.cpp_name]
             raise ProtocyteError(
-                f"{constant.full_name}: constant collides after C++ identifier normalization"
+                f"{constant.full_name}: constant collides with {first!r} "
+                f"{_CPP_NAME_COLLISION_CONTEXT}"
             )
-        seen_cpp_names.add(constant.cpp_name)
+        seen_cpp_names[constant.cpp_name] = constant.name
 
 
 def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
@@ -2214,11 +2260,11 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
         reserved.update(_file_type_cpp_names(file_model))
 
     seen_names: dict[tuple[str, ...], set[str]] = {}
-    seen_cpp_names: dict[tuple[str, ...], set[str]] = {}
+    seen_cpp_names: dict[tuple[str, ...], dict[str, str]] = {}
     for file_model in files.values():
         package_key = _cpp_package_key(file_model.package)
         names = seen_names.setdefault(package_key, set())
-        cpp_names = seen_cpp_names.setdefault(package_key, set())
+        cpp_names = seen_cpp_names.setdefault(package_key, {})
         reserved = top_level_cpp_names[package_key]
         for constant in file_model.constants:
             if constant.name in names:
@@ -2227,14 +2273,16 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
                 )
             names.add(constant.name)
             if constant.cpp_name in cpp_names:
+                first = cpp_names[constant.cpp_name]
                 raise ProtocyteError(
-                    f"{constant.full_name}: constant collides after C++ identifier normalization"
+                    f"{constant.full_name}: constant collides with {first!r} "
+                    f"{_CPP_NAME_COLLISION_CONTEXT}"
                 )
             if constant.cpp_name in reserved:
                 raise ProtocyteError(
                     f"{constant.full_name}: constant collides with generated API"
                 )
-            cpp_names.add(constant.cpp_name)
+            cpp_names[constant.cpp_name] = constant.full_name
 
 
 def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
@@ -2248,7 +2296,8 @@ def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
             if value.cpp_name in seen_cpp_names:
                 first = seen_cpp_names[value.cpp_name]
                 raise ProtocyteError(
-                    f"{enum.full_name}.{value.name}: enum value collides with {first!r} after C++ identifier normalization"
+                    f"{enum.full_name}.{value.name}: enum value collides with {first!r} "
+                    f"{_CPP_NAME_COLLISION_CONTEXT}"
                 )
             seen_cpp_names[value.cpp_name] = value.name
 
@@ -2285,7 +2334,7 @@ def _reserve_type_cpp_name(
     if cpp_name in seen_cpp_names:
         first = seen_cpp_names[cpp_name]
         raise ProtocyteError(
-            f"{full_name}: type collides with {first!r} after C++ identifier normalization"
+            f"{full_name}: type collides with {first!r} {_CPP_NAME_COLLISION_CONTEXT}"
         )
     seen_cpp_names[cpp_name] = full_name
 
@@ -2300,7 +2349,8 @@ def _validate_nested_alias_collisions(message: MessageModel) -> None:
         if cpp_name in seen_cpp_names:
             first = seen_cpp_names[cpp_name]
             raise ProtocyteError(
-                f"{message.full_name}.{name}: nested type alias collides with {first!r} after C++ identifier normalization"
+                f"{message.full_name}.{name}: nested type alias collides with {first!r} "
+                f"{_CPP_NAME_COLLISION_CONTEXT}"
             )
         seen_cpp_names[cpp_name] = name
 
@@ -2311,7 +2361,7 @@ def _validate_oneof_collisions(message: MessageModel) -> None:
     seen_cpp_names: dict[str, str] = {}
 
     for oneof in message.oneofs:
-        lower = cpp_identifier(oneof.name)
+        lower = cpp_derivable_identifier(oneof.name)
         if not lower or lower == "_":
             raise ProtocyteError(
                 f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier"
@@ -2319,7 +2369,8 @@ def _validate_oneof_collisions(message: MessageModel) -> None:
         if lower in seen_cpp_names:
             first = seen_cpp_names[lower]
             raise ProtocyteError(
-                f"{message.full_name}.{oneof.name}: oneof collides with {first!r} after C++ identifier normalization"
+                f"{message.full_name}.{oneof.name}: oneof collides with {first!r} "
+                f"{_CPP_NAME_COLLISION_CONTEXT}"
             )
         seen_cpp_names[lower] = oneof.name
 
@@ -2345,7 +2396,8 @@ def _validate_field_collisions(message: MessageModel) -> None:
         if field_model.cpp_name in seen_cpp_names:
             first = seen_cpp_names[field_model.cpp_name]
             raise ProtocyteError(
-                f"{message.full_name}.{field_model.name}: field collides with {first!r} after C++ identifier normalization"
+                f"{message.full_name}.{field_model.name}: field collides with {first!r} "
+                f"{_CPP_NAME_COLLISION_CONTEXT}"
             )
         seen_cpp_names[field_model.cpp_name] = field_model.name
 
@@ -2477,7 +2529,7 @@ def _build_field(
 
     return FieldModel(
         name=proto.name,
-        cpp_name=cpp_identifier(proto.name),
+        cpp_name=cpp_derivable_identifier(proto.name),
         number=proto.number,
         proto_type=proto.type,
         label=proto.label,

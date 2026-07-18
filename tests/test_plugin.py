@@ -34,6 +34,9 @@ from protocyte.model import (
     _coerce_literal,
     _is_packed,
     build_model,
+    cpp_derivable_identifier,
+    cpp_identifier,
+    cpp_pascal_identifier,
 )
 from protocyte.plugin import GeneratorPolicy, generate_response
 from protocyte.paths import (
@@ -2970,7 +2973,7 @@ def test_rejects_field_cpp_name_collisions() -> None:
     file.syntax = "proto3"
     message = file.message_type.add()
     message.name = "Broken"
-    for number, name in enumerate(("class", "class_"), start=1):
+    for number, name in enumerate(("class", "class_protocyte"), start=1):
         field = message.field.add()
         field.name = name
         field.number = number
@@ -3076,6 +3079,130 @@ def test_rejects_cpp_namespace_type_collisions() -> None:
     assert "after C++ identifier normalization" in response.error
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("class", "class_"),
+        ("__LINE__", "protocyte_escaped_5f5f4c494e455f5f"),
+        ("value__gap", "protocyte_escaped_76616c75655f5f676170"),
+        ("_Upper", "protocyte_escaped_5f5570706572"),
+        ("trailing_", "trailing_"),
+        ("_", "protocyte_escaped_5f"),
+        ("", "protocyte_escaped_5f"),
+        ("1", "protocyte_escaped_5f"),
+    ],
+)
+def test_cpp_identifier_escapes_problematic_cpp_spellings(
+    name: str, expected: str
+) -> None:
+    actual = cpp_identifier(name)
+
+    assert actual == expected
+    assert not actual.startswith("_")
+    assert "__" not in actual
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("class", "class_protocyte"),
+        ("trailing_", "trailing_protocyte"),
+        ("ordinary", "ordinary"),
+    ],
+)
+def test_cpp_derivable_identifier_avoids_reserved_derived_names(
+    name: str, expected: str
+) -> None:
+    actual = cpp_derivable_identifier(name)
+
+    assert actual == expected
+    assert not actual.startswith("_")
+    assert not actual.endswith("_")
+    assert "__" not in actual
+
+
+@pytest.mark.parametrize(
+    "symbol_kind",
+    ["constant", "enum_value", "field", "nested_type", "oneof", "package", "type"],
+)
+def test_rejects_reserved_cpp_identifier_escape_collisions(
+    symbol_kind: str,
+) -> None:
+    reserved = "__LINE__"
+    escaped = (
+        cpp_pascal_identifier(reserved)
+        if symbol_kind in {"nested_type", "type"}
+        else cpp_identifier(reserved)
+    )
+
+    if symbol_kind == "constant":
+        request = _constant_collision_request(
+            "reserved_escape_collision.proto",
+            [(reserved, "i32", 1), (escaped, "i32", 2)],
+        )
+    else:
+        request = plugin_pb2.CodeGeneratorRequest()
+        if symbol_kind == "package":
+            package_escaped = cpp_identifier(reserved)
+            for index, package in enumerate((reserved, package_escaped), start=1):
+                file = request.proto_file.add()
+                file.name = f"reserved_package_collision_{index}.proto"
+                file.package = package
+                file.syntax = "proto3"
+                file.message_type.add().name = "Payload"
+                request.file_to_generate.append(file.name)
+            escaped = package_escaped
+        else:
+            request.file_to_generate.append("reserved_escape_collision.proto")
+            file = request.proto_file.add()
+            file.name = "reserved_escape_collision.proto"
+            file.package = "demo"
+            file.syntax = "proto3"
+
+            if symbol_kind == "type":
+                for name in (reserved, escaped):
+                    file.message_type.add().name = name
+            elif symbol_kind == "enum_value":
+                enum = file.enum_type.add()
+                enum.name = "Values"
+                for number, name in enumerate((reserved, escaped)):
+                    value = enum.value.add()
+                    value.name = name
+                    value.number = number
+            else:
+                message = file.message_type.add()
+                message.name = "Payload"
+                if symbol_kind == "field":
+                    for number, name in enumerate((reserved, escaped), start=1):
+                        field = message.field.add()
+                        field.name = name
+                        field.number = number
+                        field.label = F.LABEL_OPTIONAL
+                        field.type = F.TYPE_INT32
+                elif symbol_kind == "nested_type":
+                    for name in (reserved, escaped):
+                        message.nested_type.add().name = name
+                else:
+                    for index, name in enumerate((reserved, escaped)):
+                        message.oneof_decl.add().name = name
+                        field = message.field.add()
+                        field.name = f"choice_{index}"
+                        field.number = index + 1
+                        field.label = F.LABEL_OPTIONAL
+                        field.type = F.TYPE_INT32
+                        field.oneof_index = index
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert reserved in response.error
+    assert escaped in response.error
+    assert (
+        "after C++ identifier normalization and reserved-name escaping"
+        in response.error
+    )
+
+
 def test_generated_include_guards_are_unique_for_normalized_path_collisions() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     for proto_name, message_name in (
@@ -3127,6 +3254,24 @@ def test_generated_include_guards_use_portable_ascii_for_unicode_paths() -> None
         character == "_" or character.isascii() and character.isalnum()
         for character in guard
     )
+
+
+def test_generated_include_guards_do_not_emit_reserved_macro_identifiers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("__LINE__.proto")
+    file = request.proto_file.add()
+    file.name = "__LINE__.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.message_type.add().name = "Payload"
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    guard = header.split("#ifndef ", maxsplit=1)[1].splitlines()[0]
+    assert "__" not in guard
+    assert not guard.startswith("_")
 
 
 def test_nested_aliases_use_cpp_identifiers() -> None:
@@ -5211,7 +5356,10 @@ def test_rejects_constant_name_collisions() -> None:
     )
 
     assert "constant cannot be redefined" in duplicate_response.error
-    assert "collides after C++ identifier normalization" in normalized_response.error
+    assert (
+        "after C++ identifier normalization and reserved-name escaping"
+        in normalized_response.error
+    )
     assert "collides with generated API" in reserved_response.error
     assert "collides with generated API" in validate_reserved_response.error
 
@@ -5384,8 +5532,8 @@ def test_generated_header_uses_normalized_oneof_case_type() -> None:
         if file.name == "keyword_oneof.protocyte.hpp"
     )
     assert "enum struct And_Case" in header
-    assert "constexpr And_Case and__case() const noexcept" in header
-    assert "and__case_ == And_Case::value" in header
+    assert "constexpr And_Case and_protocyte_case() const noexcept" in header
+    assert "and_protocyte_case_ == And_Case::value" in header
     assert "AndCase" not in header
 
 
@@ -5411,7 +5559,7 @@ def test_rejects_oneof_fixed_generated_name_collisions(oneof_name: str) -> None:
     assert "oneof collides with generated API" in response.error
 
 
-@pytest.mark.parametrize("field_name", ["choice_case_", "none"])
+@pytest.mark.parametrize("field_name", ["none"])
 def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_member_collision.proto")
@@ -5425,7 +5573,7 @@ def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
 @pytest.mark.parametrize(
     ("oneof_name", "field_name"),
     [
-        ("class", "class_"),
+        ("class", "class_protocyte"),
         ("choice", "choice"),
     ],
 )
@@ -6964,7 +7112,7 @@ def _oneof_collision_file() -> descriptor_pb2.FileDescriptorProto:
 
     message = file.message_type.add()
     message.name = "Broken"
-    for name in ("and", "and_"):
+    for name in ("and", "and_protocyte"):
         message.oneof_decl.add().name = name
 
     for index, name in enumerate(("first", "second")):

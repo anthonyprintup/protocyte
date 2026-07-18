@@ -59,6 +59,14 @@ def main() -> int:
     proto2_required_request.proto_file.extend([options_file(), proto2_required_file()])
     requests.append(proto2_required_request)
 
+    reserved_identifiers_request = plugin_pb2.CodeGeneratorRequest()
+    reserved_identifiers_request.file_to_generate.append("reserved_identifiers.proto")
+    reserved_identifiers_request.parameter = _generator_parameter(*smoke_format_options)
+    reserved_identifiers_request.proto_file.extend(
+        [options_file(), reserved_identifiers_file()]
+    )
+    requests.append(reserved_identifiers_request)
+
     for request in requests:
         response = generate_response(request)
         if response.error:
@@ -877,6 +885,85 @@ def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
     shadowing.oneof_decl.add().name = "value"
     add_field(shadowing, "bool_value", 1, F.TYPE_BOOL, oneof_index=0)
 
+    return file
+
+
+def reserved_identifiers_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "reserved_identifiers.proto"
+    file.package = "_Package.__LINE__"
+    file.syntax = "proto3"
+    file.dependency.append("protocyte/options.proto")
+    file.options.ParseFromString(
+        package_constant_options_bytes(
+            [("__DATE__", "i32", 7), ("class", "i32", 8)]
+        )
+    )
+
+    top_level_enum = file.enum_type.add()
+    top_level_enum.name = "__FILE__"
+    for name, number in (("_Upper", 0), ("value__gap", 1)):
+        value = top_level_enum.value.add()
+        value.name = name
+        value.number = number
+
+    message = file.message_type.add()
+    message.name = "__LINE__"
+    message.options.ParseFromString(
+        constant_options_bytes([("__TIME__", "i32", 9)])
+    )
+
+    nested_enum = message.enum_type.add()
+    nested_enum.name = "_NestedEnum"
+    for name, number in (("__STDC__", 0), ("enum_trailing_", 1)):
+        value = nested_enum.value.add()
+        value.name = name
+        value.number = number
+
+    nested_message = message.nested_type.add()
+    nested_message.name = "Nested__Message"
+    add_field(nested_message, "_Inner", 1, F.TYPE_INT32)
+
+    message.oneof_decl.add().name = "_Choice"
+    add_field(message, "__FILE__", 1, F.TYPE_STRING, oneof_index=0)
+    add_field(message, "value__gap", 2, F.TYPE_INT32, oneof_index=0)
+    add_field(message, "_Upper", 3, F.TYPE_INT32)
+    add_field(message, "trailing_", 4, F.TYPE_INT32)
+    add_field(
+        message,
+        "enum__value",
+        5,
+        F.TYPE_ENUM,
+        type_name="._Package.__LINE__.__FILE__",
+    )
+    add_field(
+        message,
+        "class",
+        6,
+        F.TYPE_MESSAGE,
+        type_name="._Package.__LINE__.__LINE__.Nested__Message",
+    )
+    add_field(message, "_", 7, F.TYPE_INT32)
+
+    keyword_message = file.message_type.add()
+    keyword_message.name = "class"
+    keyword_enum = keyword_message.enum_type.add()
+    keyword_enum.name = "KeywordValues"
+    keyword_value = keyword_enum.value.add()
+    keyword_value.name = "class"
+    keyword_value.number = 0
+    nested_keyword_message = keyword_message.nested_type.add()
+    nested_keyword_message.name = "struct"
+    add_field(nested_keyword_message, "value", 1, F.TYPE_INT32)
+    keyword_message.oneof_decl.add().name = "and"
+    add_field(keyword_message, "value", 1, F.TYPE_INT32, oneof_index=0)
+    add_field(
+        keyword_message,
+        "nested",
+        2,
+        F.TYPE_MESSAGE,
+        type_name="._Package.__LINE__.class.struct",
+    )
     return file
 
 
