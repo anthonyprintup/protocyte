@@ -798,6 +798,247 @@ def test_public_cmake_functions_reject_keywords_without_values(
 
 
 @pytest.mark.parametrize(
+    "false_like_value", ["OFF", "NO", "FALSE", "0", "tool-NOTFOUND"]
+)
+def test_proto_library_rejects_false_like_type_instead_of_defaulting(
+    tmp_path: Path,
+    false_like_value: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        " ".join(
+            [
+                "protocyte_add_proto_library(",
+                "TARGET demo",
+                "PROTO_ROOT .",
+                f"TYPE {false_like_value}",
+                ")",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert (
+        "protocyte_add_proto_library TYPE must be one of: "
+        "STATIC, SHARED, MODULE, OBJECT"
+    ) in output
+
+
+def test_generate_preserves_false_like_scalar_and_list_arguments(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "function(_protocyte_setup_codegen_internal fetch_missing_import_sources)",
+                "endfunction()",
+                "function(_protocyte_encode_generator_parameter out_var value)",
+                '    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/options.txt" "${value}")',
+                '    set(${out_var} "" PARENT_SCOPE)',
+                "endfunction()",
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_OPTIONS_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/FALSE")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${CMAKE_COMMAND}")',
+                'set(PROTOCYTE_PROTOC_EXECUTABLE "${CMAKE_COMMAND}")',
+                'set(PROTOCYTE_PROTOC_DEPENDENCY "${CMAKE_COMMAND}")',
+                "protocyte_generate(",
+                "    TARGET OFF",
+                "    DESCRIPTOR_SET FALSE",
+                "    OUT_DIR NO",
+                "    PROTOS 0",
+                "    EMIT_RUNTIME",
+                "    RUNTIME_PREFIX OFF",
+                "    NAMESPACE_PREFIX NO",
+                "    INCLUDE_PREFIX FALSE",
+                "    GENERATED_HEADERS_VAR 0",
+                "    GENERATED_SOURCES_VAR generated-NOTFOUND",
+                "    GENERATED_TARGET_VAR FALSE",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/outputs.txt"',
+                '    "headers=${0}\nsources=${generated-NOTFOUND}\ntarget=${FALSE}\n"',
+                ")",
+            ]
+        ),
+        files={"FALSE": "descriptor set placeholder\n"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    options = (tmp_path / "build" / "options.txt").read_text(encoding="utf-8")
+    assert options.split(",")[:3] == [
+        "namespace_prefix=NO",
+        "include_prefix=FALSE",
+        "runtime=emit:OFF",
+    ]
+
+    outputs = (tmp_path / "build" / "outputs.txt").read_text(encoding="utf-8")
+    normalized_outputs = outputs.replace("\\", "/")
+    assert "/build/NO/0.protocyte.hpp" in normalized_outputs
+    assert "/build/NO/OFF/runtime.hpp" in normalized_outputs
+    assert "/build/NO/0.protocyte.cpp" in normalized_outputs
+    assert "target=OFF" in normalized_outputs
+
+
+def test_proto_library_forwards_false_like_scalar_and_list_arguments(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "enable_language(CXX)",
+                "add_library(protocyte_codegen INTERFACE)",
+                "add_library(protocyte::codegen ALIAS protocyte_codegen)",
+                "add_library(FALSE INTERFACE)",
+                "function(protocyte_generate)",
+                "    cmake_parse_arguments(",
+                "        CAP",
+                '        ""',
+                '        "TARGET;DESCRIPTOR_SET;PROTO_ROOT;OUT_DIR;GENERATED_HEADERS_VAR;GENERATED_SOURCES_VAR;GENERATED_TARGET_VAR;RUNTIME_PREFIX;NAMESPACE_PREFIX;INCLUDE_PREFIX"',
+                '        "PROTOS;IMPORT_DIRS;DEPENDS;OPTIONS"',
+                "        ${ARGN}",
+                "    )",
+                '    set(stub_header "${CMAKE_CURRENT_BINARY_DIR}/stub.hpp")',
+                '    set(stub_source "${CMAKE_CURRENT_BINARY_DIR}/stub.cpp")',
+                '    file(WRITE "${stub_header}" "#pragma once\n")',
+                '    file(WRITE "${stub_source}" "int protocyte_stub = 0;\n")',
+                '    add_custom_target("${CAP_TARGET}")',
+                '    set(${CAP_GENERATED_HEADERS_VAR} "${stub_header}" PARENT_SCOPE)',
+                '    set(${CAP_GENERATED_SOURCES_VAR} "${stub_source}" PARENT_SCOPE)',
+                '    set(${CAP_GENERATED_TARGET_VAR} "${CAP_TARGET}" PARENT_SCOPE)',
+                '    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/forwarded.txt"',
+                '        "TARGET=${CAP_TARGET}\nPROTO_ROOT=${CAP_PROTO_ROOT}\nOUT_DIR=${CAP_OUT_DIR}\n"',
+                '        "PROTOS=${CAP_PROTOS}\nIMPORT_DIRS=${CAP_IMPORT_DIRS}\n"',
+                '        "DEPENDS=${CAP_DEPENDS}\nOPTIONS=${CAP_OPTIONS}\n"',
+                '        "RUNTIME_PREFIX=${CAP_RUNTIME_PREFIX}\n"',
+                '        "NAMESPACE_PREFIX=${CAP_NAMESPACE_PREFIX}\n"',
+                '        "INCLUDE_PREFIX=${CAP_INCLUDE_PREFIX}\n"',
+                "    )",
+                "endfunction()",
+                "protocyte_add_proto_library(",
+                "    TARGET NO",
+                "    ALIAS alias-NOTFOUND",
+                "    TYPE STATIC",
+                "    PROTO_ROOT FALSE",
+                "    OUT_DIR OFF",
+                "    PROTOS OFF",
+                "    IMPORT_DIRS NO",
+                "    DEPENDS FALSE",
+                "    OPTIONS 0",
+                "    RUNTIME_TARGET FALSE",
+                "    RUNTIME_PREFIX 0",
+                "    NAMESPACE_PREFIX NO",
+                "    INCLUDE_PREFIX OFF",
+                "    GENERATED_HEADERS_VAR OFF",
+                "    GENERATED_SOURCES_VAR NO",
+                "    GENERATED_TARGET_VAR target-NOTFOUND",
+                ")",
+                "get_target_property(alias_target alias-NOTFOUND ALIASED_TARGET)",
+                "get_target_property(link_libraries NO LINK_LIBRARIES)",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/library.txt"',
+                '    "alias=${alias_target}\nlinks=${link_libraries}\n"',
+                '    "headers=${OFF}\nsources=${NO}\ntarget=${target-NOTFOUND}\n"',
+                ")",
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    forwarded = (tmp_path / "build" / "forwarded.txt").read_text(encoding="utf-8")
+    normalized_forwarded = forwarded.replace("\\", "/")
+    assert "TARGET=NO" in forwarded
+    assert "PROTO_ROOT=FALSE" in forwarded
+    assert "/build/OFF" in normalized_forwarded
+    assert "PROTOS=OFF" in forwarded
+    assert "IMPORT_DIRS=NO" in forwarded
+    assert "DEPENDS=FALSE" in forwarded
+    assert "OPTIONS=0" in forwarded
+    assert "RUNTIME_PREFIX=0" in forwarded
+    assert "NAMESPACE_PREFIX=NO" in forwarded
+    assert "INCLUDE_PREFIX=OFF" in forwarded
+
+    library = (tmp_path / "build" / "library.txt").read_text(encoding="utf-8")
+    assert "alias=NO" in library
+    assert "links=protocyte::codegen;FALSE" in library
+    assert "stub.hpp" in library
+    assert "stub.cpp" in library
+    assert "target=NO__protocyte_codegen" in library
+
+
+def test_descriptor_library_forwards_false_like_scalar_and_list_arguments(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "function(protocyte_add_proto_library)",
+                "    cmake_parse_arguments(",
+                "        CAP",
+                '        "DISCOVER;EMIT_RUNTIME;HOSTED_ALLOCATOR"',
+                '        "TARGET;ALIAS;TYPE;DESCRIPTOR_SET;OUT_DIR;GENERATED_HEADERS_VAR;GENERATED_SOURCES_VAR;GENERATED_TARGET_VAR;RUNTIME_TARGET;RUNTIME_PREFIX;NAMESPACE_PREFIX;INCLUDE_PREFIX"',
+                '        "PROTOS;DEPENDS;OPTIONS"',
+                "        ${ARGN}",
+                "    )",
+                '    set(${CAP_GENERATED_HEADERS_VAR} "headers" PARENT_SCOPE)',
+                '    set(${CAP_GENERATED_SOURCES_VAR} "sources" PARENT_SCOPE)',
+                '    set(${CAP_GENERATED_TARGET_VAR} "codegen" PARENT_SCOPE)',
+                '    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/forwarded.txt"',
+                '        "TARGET=${CAP_TARGET}\nALIAS=${CAP_ALIAS}\nTYPE=${CAP_TYPE}\n"',
+                '        "DESCRIPTOR_SET=${CAP_DESCRIPTOR_SET}\nOUT_DIR=${CAP_OUT_DIR}\n"',
+                '        "PROTOS=${CAP_PROTOS}\nDEPENDS=${CAP_DEPENDS}\nOPTIONS=${CAP_OPTIONS}\n"',
+                '        "RUNTIME_TARGET=${CAP_RUNTIME_TARGET}\n"',
+                '        "RUNTIME_PREFIX=${CAP_RUNTIME_PREFIX}\n"',
+                '        "NAMESPACE_PREFIX=${CAP_NAMESPACE_PREFIX}\n"',
+                '        "INCLUDE_PREFIX=${CAP_INCLUDE_PREFIX}\n"',
+                "    )",
+                "endfunction()",
+                "protocyte_add_descriptor_set_library(",
+                "    TARGET OFF",
+                "    ALIAS NO",
+                "    TYPE STATIC",
+                "    DESCRIPTOR_SET FALSE",
+                "    OUT_DIR 0",
+                "    FILES OFF",
+                "    DEPENDS NO",
+                "    OPTIONS FALSE",
+                "    RUNTIME_TARGET OFF",
+                "    RUNTIME_PREFIX NO",
+                "    NAMESPACE_PREFIX FALSE",
+                "    INCLUDE_PREFIX 0",
+                "    GENERATED_HEADERS_VAR output-NOTFOUND",
+                "    GENERATED_SOURCES_VAR OFF",
+                "    GENERATED_TARGET_VAR NO",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/outputs.txt"',
+                '    "headers=${output-NOTFOUND}\nsources=${OFF}\ntarget=${NO}\n"',
+                ")",
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    forwarded = (tmp_path / "build" / "forwarded.txt").read_text(encoding="utf-8")
+    assert "TARGET=OFF" in forwarded
+    assert "ALIAS=NO" in forwarded
+    assert "TYPE=STATIC" in forwarded
+    assert "DESCRIPTOR_SET=FALSE" in forwarded
+    assert "OUT_DIR=0" in forwarded
+    assert "PROTOS=OFF" in forwarded
+    assert "DEPENDS=NO" in forwarded
+    assert "OPTIONS=FALSE" in forwarded
+    assert "RUNTIME_TARGET=OFF" in forwarded
+    assert "RUNTIME_PREFIX=NO" in forwarded
+    assert "NAMESPACE_PREFIX=FALSE" in forwarded
+    assert "INCLUDE_PREFIX=0" in forwarded
+    assert (tmp_path / "build" / "outputs.txt").read_text(encoding="utf-8") == (
+        "headers=headers\nsources=sources\ntarget=codegen\n"
+    )
+
+
+@pytest.mark.parametrize(
     ("invocation", "expected_error"),
     [
         (
