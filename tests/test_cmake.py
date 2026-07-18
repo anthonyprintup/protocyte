@@ -5,6 +5,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Never
@@ -21,11 +22,20 @@ from protocyte.paths import (
 
 _CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
 _CI_REQUIRE_INCREMENTAL_TEST_ENV = "PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST"
+_CI_REQUIRE_MULTICONFIG_LOCKING_TEST_ENV = (
+    "PROTOCYTE_CI_REQUIRE_MULTICONFIG_LOCKING_TEST"
+)
 _CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV = "PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST"
 
 
 def _incremental_requirement_unavailable(message: str) -> Never:
     if os.environ.get(_CI_REQUIRE_INCREMENTAL_TEST_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _multiconfig_locking_requirement_unavailable(message: str) -> Never:
+    if os.environ.get(_CI_REQUIRE_MULTICONFIG_LOCKING_TEST_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
 
@@ -185,6 +195,136 @@ def _write_protoc_wrapper(path: Path, protoc: Path, invocation_log: Path) -> Pat
         )
         wrapper.chmod(0o755)
     return wrapper
+
+
+def _write_overlap_detecting_protoc_wrapper(
+    path: Path, protoc: Path, state_dir: Path
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    script = path.with_suffix(".py")
+    script.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "import os",
+                "import subprocess",
+                "import sys",
+                "import time",
+                "from pathlib import Path",
+                "",
+                f"REAL_PROTOC = Path({str(protoc)!r})",
+                f"STATE_DIR = Path({str(state_dir)!r})",
+                "",
+                "",
+                "def response_kind(argument: str) -> str | None:",
+                '    if not argument.startswith("@"):',
+                "        return None",
+                "    argument_file = Path(argument[1:])",
+                "    if not argument_file.is_absolute():",
+                "        argument_file = Path.cwd() / argument_file",
+                '    content = argument_file.read_text(encoding="utf-8")',
+                '    if "--dependency_out=" in content:',
+                '        return "dependency"',
+                '    if "--protocyte_out=" in content:',
+                '        return "generation"',
+                "    return None",
+                "",
+                "",
+                "kind = response_kind(sys.argv[1]) if len(sys.argv) == 2 else None",
+                "if kind is None:",
+                "    raise SystemExit(",
+                "        subprocess.run([str(REAL_PROTOC), *sys.argv[1:]], check=False).returncode",
+                "    )",
+                "",
+                "pid = os.getpid()",
+                '(STATE_DIR / f"attempt-{kind}-{pid}").write_text("attempt\\n", encoding="utf-8")',
+                'active = STATE_DIR / f"active-{kind}"',
+                "try:",
+                "    active_fd = os.open(",
+                "        active, os.O_CREAT | os.O_EXCL | os.O_WRONLY",
+                "    )",
+                "except FileExistsError:",
+                '    (STATE_DIR / f"overlap-{kind}-{pid}").write_text(',
+                '        "overlap\\n", encoding="utf-8"',
+                "    )",
+                '    sys.stderr.write(f"overlapping {kind} protoc invocation\\n")',
+                "    raise SystemExit(91)",
+                "",
+                "try:",
+                "    time.sleep(1.0)",
+                "    result = subprocess.run(",
+                "        [str(REAL_PROTOC), *sys.argv[1:]], check=False",
+                "    )",
+                "finally:",
+                "    os.close(active_fd)",
+                "    active.unlink(missing_ok=True)",
+                "",
+                '(STATE_DIR / f"complete-{kind}-{pid}").write_text(',
+                '    f"{result.returncode}\\n", encoding="utf-8"',
+                ")",
+                "raise SystemExit(result.returncode)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'"{sys.executable}" "{script}" %*',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
+def _write_synchronized_build_runner(path: Path) -> Path:
+    path.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "import subprocess",
+                "import sys",
+                "import time",
+                "from pathlib import Path",
+                "",
+                "ready = Path(sys.argv[1])",
+                "gate = Path(sys.argv[2])",
+                'ready.write_text("ready\\n", encoding="utf-8")',
+                "deadline = time.monotonic() + 30.0",
+                "while not gate.exists():",
+                "    if time.monotonic() >= deadline:",
+                "        raise SystemExit(92)",
+                "    time.sleep(0.01)",
+                "raise SystemExit(subprocess.run(sys.argv[3:], check=False).returncode)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _touch_newer_than(path: Path, output: Path) -> None:
@@ -386,10 +526,15 @@ def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> 
     generation_command = functions.split("add_custom_command(", 1)[1].split(
         "add_custom_target", 1
     )[0]
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    ).read_text(encoding="utf-8")
 
-    assert '"@${protocyte_response_file_relative}"' in generation_command
+    assert '"-DARGUMENT_FILE=${protocyte_response_file_relative}"' in generation_command
+    assert '"@${ARGUMENT_FILE}"' in generation_script
     assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in generation_command
-    assert "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=" in generation_command
+    assert '"-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"' in generation_command
+    assert "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=${SOURCE_DIRECTORY_HEX}" in generation_script
     assert '"${protocyte_plugin_executable}"' in generation_command.split("DEPENDS", 1)[1]
 
 
@@ -1480,6 +1625,7 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert (prefix / "include/protocyte/runtime/runtime.hpp").is_file()
     assert any(prefix.rglob("protocyteConfig.cmake"))
     assert any(prefix.rglob("ProtocyteDependencyScan.cmake"))
+    assert any(prefix.rglob("ProtocyteGenerate.cmake"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
 
 
@@ -2506,6 +2652,218 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
 
     no_change = subprocess.run(build_command, check=True, capture_output=True, text=True)
     assert "no work to do" in no_change.stdout.lower()
+
+
+def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    real_protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
+    if shutil.which("ninja") is None:
+        _multiconfig_locking_requirement_unavailable(
+            "Ninja is required to verify concurrent multi-config builds"
+        )
+    cmake_help = subprocess.run(
+        ["cmake", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "Ninja Multi-Config" not in cmake_help:
+        _multiconfig_locking_requirement_unavailable(
+            "CMake does not provide the Ninja Multi-Config generator"
+        )
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    tools_dir = source_dir / "tools"
+    state_dir = source_dir / "protoc-state"
+    proto_dir.mkdir(parents=True)
+    tools_dir.mkdir()
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; package demo; message Demo { string value = 1; }\n',
+        encoding="utf-8",
+    )
+    protoc = _write_overlap_detecting_protoc_wrapper(
+        tools_dir / "protoc", real_protoc, state_dir
+    )
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(multiconfig_codegen_locking LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja Multi-Config",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+        ],
+        check=True,
+    )
+
+    runner = _write_synchronized_build_runner(source_dir / "build_runner.py")
+    gate = source_dir / "start-builds"
+    processes: list[subprocess.Popen[str]] = []
+    for config in ("Debug", "Release"):
+        ready = source_dir / f"{config}.ready"
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(runner),
+                    str(ready),
+                    str(gate),
+                    "cmake",
+                    "--build",
+                    str(build_dir),
+                    "--config",
+                    config,
+                    "--target",
+                    "demo_codegen",
+                    "--parallel",
+                    "1",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+
+    ready_paths = [source_dir / "Debug.ready", source_dir / "Release.ready"]
+    deadline = time.monotonic() + 30.0
+    while not all(path.is_file() for path in ready_paths):
+        if any(process.poll() is not None for process in processes):
+            pytest.fail("a synchronized build runner exited before reaching the gate")
+        if time.monotonic() >= deadline:
+            pytest.fail("timed out waiting for the synchronized build runners")
+        time.sleep(0.01)
+    gate.write_text("start\n", encoding="utf-8")
+
+    build_outputs: list[str] = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=120)
+            build_outputs.append(stdout + stderr)
+            assert process.returncode == 0, stdout + stderr
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert not list(state_dir.glob("overlap-*")), "\n".join(build_outputs)
+    assert len(list(state_dir.glob("attempt-dependency-*"))) == 2
+    assert len(list(state_dir.glob("complete-dependency-*"))) == 2
+    assert len(list(state_dir.glob("attempt-generation-*"))) == 2
+    assert len(list(state_dir.glob("complete-generation-*"))) == 2
+    assert not list(state_dir.glob("active-*"))
+
+    dependency_descriptors = list(
+        (build_dir / "CMakeFiles" / "protocyte-dependencies").glob("*.pb")
+    )
+    dependency_depfiles = list(
+        (build_dir / "CMakeFiles" / "protocyte-dependencies").glob("*.d")
+    )
+    assert len(dependency_descriptors) == 1
+    assert len(dependency_depfiles) == 1
+    descriptor_set = descriptor_pb2.FileDescriptorSet()
+    descriptor_set.ParseFromString(dependency_descriptors[0].read_bytes())
+    assert [descriptor.name for descriptor in descriptor_set.file] == ["demo.proto"]
+    assert "demo.proto" in dependency_depfiles[0].read_text(encoding="utf-8")
+
+    generated_header = build_dir / "generated" / "demo.protocyte.hpp"
+    generated_source = build_dir / "generated" / "demo.protocyte.cpp"
+    assert "struct Demo" in generated_header.read_text(encoding="utf-8")
+    assert '"demo.protocyte.hpp"' in generated_source.read_text(encoding="utf-8")
+
+
+def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    if os.name == "nt":
+        failing_protoc = tmp_path / "failing-protoc.cmd"
+        failing_protoc.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    "echo captured generation output",
+                    "echo captured generation error 1>&2",
+                    "exit /b 23",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        failing_protoc = tmp_path / "failing-protoc"
+        failing_protoc.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    "echo 'captured generation output'",
+                    "echo 'captured generation error' >&2",
+                    "exit 23",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        failing_protoc.chmod(0o755)
+
+    argument_file = tmp_path / "arguments.rsp"
+    argument_file.write_text("", encoding="utf-8")
+    lock_manifest = tmp_path / "locks.list"
+    lock_manifest.write_text(f"{'0' * 64}\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            "cmake",
+            f"-DPROTOC_EXECUTABLE={failing_protoc}",
+            f"-DARGUMENT_FILE={argument_file}",
+            "-DGENERATION_TARGET=failing_codegen",
+            f"-DGENERATION_WORKING_DIRECTORY={tmp_path}",
+            f"-DLOCK_DIRECTORY={tmp_path / 'locks'}",
+            f"-DLOCK_MANIFEST={lock_manifest}",
+            "-DSOURCE_DIRECTORY_HEX=00",
+            "-P",
+            str(repo_root / "cmake" / "ProtocyteGenerate.cmake"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Failed to generate Protocyte sources for target 'failing_codegen'" in output
+    assert "Exit code: 23" in output
+    assert "captured generation output" in output
+    assert "captured generation error" in output
 
 
 @pytest.mark.parametrize("protoc_selection", ["relative_path", "imported_target"])
