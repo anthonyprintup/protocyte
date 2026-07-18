@@ -959,6 +959,13 @@ public `::protocyte::WriterLike` concept checks this contract.
 `SliceWriter(data, size, base_offset)` implements this contract and accepts the
 same optional absolute base for a subrange.
 
+`serialize(writer)` is incremental, not transactional. It validates the message
+before writing, but once writing begins, any later failure (including insufficient
+capacity or a failed `write_byte()` or `write()` call) leaves bytes from earlier
+successful calls committed; Protocyte does not rewind the writer. Callers that
+require all-or-nothing output should serialize into a contiguous staging buffer
+first or provide a writer that stages or rolls back its output.
+
 For contiguous writable bytes, `serialize(output)` accepts
 `::protocyte::Span<::protocyte::u8>` and compatible mutable lvalue ranges. It
 returns the number of bytes written. The helper computes the encoded size first,
