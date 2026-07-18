@@ -229,6 +229,16 @@ function(_protocyte_validate_parsed_arguments function_name unparsed_arguments m
     endif()
 endfunction()
 
+function(_protocyte_append_forwarded_values arguments_var keyword values_var)
+    set(arguments "${${arguments_var}}")
+    list(APPEND arguments "${keyword}")
+    foreach(value IN LISTS ${values_var})
+        string(REPLACE ";" "\\;" escaped_value "${value}")
+        list(APPEND arguments "${escaped_value}")
+    endforeach()
+    set(${arguments_var} "${arguments}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_descriptor_outputs out_headers out_sources out_dir proto_names_var)
     set(headers)
     set(sources)
@@ -972,7 +982,14 @@ function(protocyte_generate)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
-    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        "${options}"
+        "${oneValueArgs}"
+        "${multiValueArgs}"
+    )
     _protocyte_validate_parsed_arguments(
         "protocyte_generate"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
@@ -1063,7 +1080,7 @@ function(protocyte_generate)
     elseif(PROTOCYTE_DISCOVER)
         file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${protocyte_proto_root}/*.proto")
     else()
-        set(protocyte_proto_files ${PROTOCYTE_PROTOS})
+        set(protocyte_proto_files "${PROTOCYTE_PROTOS}")
     endif()
 
     if(NOT protocyte_proto_files)
@@ -1305,7 +1322,14 @@ function(protocyte_add_proto_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs PROTOS IMPORT_DIRS DEPENDS OPTIONS)
-    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        "${options}"
+        "${oneValueArgs}"
+        "${multiValueArgs}"
+    )
     _protocyte_validate_parsed_arguments(
         "protocyte_add_proto_library"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
@@ -1379,19 +1403,35 @@ function(protocyte_add_proto_library)
     if(PROTOCYTE_DISCOVER)
         list(APPEND protocyte_generate_args DISCOVER)
     else()
-        list(APPEND protocyte_generate_args PROTOS ${PROTOCYTE_PROTOS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            PROTOS
+            PROTOCYTE_PROTOS
+        )
     endif()
     if(PROTOCYTE_EMIT_RUNTIME)
         list(APPEND protocyte_generate_args EMIT_RUNTIME)
     endif()
     if(PROTOCYTE_IMPORT_DIRS)
-        list(APPEND protocyte_generate_args IMPORT_DIRS ${PROTOCYTE_IMPORT_DIRS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            IMPORT_DIRS
+            PROTOCYTE_IMPORT_DIRS
+        )
     endif()
     if(PROTOCYTE_DEPENDS)
-        list(APPEND protocyte_generate_args DEPENDS ${PROTOCYTE_DEPENDS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            DEPENDS
+            PROTOCYTE_DEPENDS
+        )
     endif()
     if(PROTOCYTE_OPTIONS)
-        list(APPEND protocyte_generate_args OPTIONS ${PROTOCYTE_OPTIONS})
+        _protocyte_append_forwarded_values(
+            protocyte_generate_args
+            OPTIONS
+            PROTOCYTE_OPTIONS
+        )
     endif()
     if(PROTOCYTE_RUNTIME_PREFIX)
         list(APPEND protocyte_generate_args RUNTIME_PREFIX "${PROTOCYTE_RUNTIME_PREFIX}")
@@ -1472,7 +1512,14 @@ function(protocyte_add_descriptor_set_library)
         INCLUDE_PREFIX
     )
     set(multiValueArgs FILES DEPENDS OPTIONS)
-    cmake_parse_arguments(PROTOCYTE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        "${options}"
+        "${oneValueArgs}"
+        "${multiValueArgs}"
+    )
     _protocyte_validate_parsed_arguments(
         "protocyte_add_descriptor_set_library"
         "${PROTOCYTE_UNPARSED_ARGUMENTS}"
@@ -1498,13 +1545,13 @@ function(protocyte_add_descriptor_set_library)
         endif()
     endforeach()
     if(PROTOCYTE_FILES)
-        list(APPEND args PROTOS ${PROTOCYTE_FILES})
+        _protocyte_append_forwarded_values(args PROTOS PROTOCYTE_FILES)
     endif()
     if(PROTOCYTE_DEPENDS)
-        list(APPEND args DEPENDS ${PROTOCYTE_DEPENDS})
+        _protocyte_append_forwarded_values(args DEPENDS PROTOCYTE_DEPENDS)
     endif()
     if(PROTOCYTE_OPTIONS)
-        list(APPEND args OPTIONS ${PROTOCYTE_OPTIONS})
+        _protocyte_append_forwarded_values(args OPTIONS PROTOCYTE_OPTIONS)
     endif()
 
     protocyte_add_proto_library(${args})
