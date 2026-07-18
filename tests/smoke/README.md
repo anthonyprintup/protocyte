@@ -19,11 +19,15 @@ The smoke project in this repository is both:
 Verify the command-line prerequisites before continuing:
 
 ```console
-python --version
 uv --version
+uv python find 3.12
 cmake --version
 protoc --version
 ```
+
+Using `uv python find` avoids assuming that a POSIX installation exposes a
+bare `python` command; many valid installations expose only `python3`. The
+environment commands below always use an explicit `uv`-managed interpreter.
 
 ## 1. Install `protoc`
 
@@ -42,10 +46,14 @@ If you prefer, you can also install protobuf through your normal system package
 manager instead of downloading a release archive manually. The important part
 is that `protoc` is on `PATH` before you try to run code generation yourself.
 
-For this repository's smoke project only, `cmake` can also fetch and build
-protobuf for the regeneration target when `protoc` is not already installed.
-That fallback is convenient for the smoke tests, but for normal downstream
-projects you should assume that `protoc` is an explicit tool dependency.
+Direct `protoc` commands always require a host-runnable compiler supplied by the
+user. CMake source consumers using `FetchContent` or `add_subdirectory` default
+`PROTOCYTE_FETCH_PROTOBUF` to `ON`, so they can fetch protobuf only when no host
+compiler or required import sources are available. Installed
+`find_package(protocyte CONFIG REQUIRED)` consumers default that option to
+`OFF` and must opt in explicitly. This repository's smoke regeneration and
+benchmark paths expose the same fallback through
+`PROTOCYTE_SMOKE_FETCH_PROTOBUF`.
 
 ## 2. Build And Install The Protocyte Python Package
 
@@ -95,19 +103,29 @@ uv build
 ```
 
 That produces a wheel under `dist/`. Install that wheel into the Python
-environment you want to use for code generation. In PowerShell:
+environment you want to use for code generation. The following commands create
+an isolated environment rather than modifying an ambient or system-managed
+Python installation. In PowerShell:
 
 ```powershell
 $wheel = (Get-ChildItem dist\protocyte-*.whl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-python -m pip install $wheel
+uv venv build\plugin-venv --python 3.12
+$python = "$PWD\build\plugin-venv\Scripts\python.exe"
+uv pip install --python $python $wheel
 ```
 
 In Bash:
 
 ```bash
 wheel=$(ls -t dist/protocyte-*.whl | head -n 1)
-python -m pip install "$wheel"
+uv venv build/plugin-venv --python 3.12
+python="$PWD/build/plugin-venv/bin/python"
+uv pip install --python "$python" "$wheel"
 ```
+
+The corresponding plugin entry point is
+`build\plugin-venv\Scripts\protoc-gen-protocyte.exe` on Windows and
+`build/plugin-venv/bin/protoc-gen-protocyte` on POSIX hosts.
 
 `uv build` also produces a source distribution under `dist/`. Both the wheel
 and the sdist are plugin-only artifacts for `protoc-gen-protocyte`; they do
@@ -190,13 +208,16 @@ In a local checkout, that directory is:
 <repo>\src\protocyte\proto
 ```
 
-In an installed Python environment, you can print it like this:
+With Option A's checkout environment, print it without relying on an ambient
+Python command:
 
 ```console
-python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
+uv run python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
 ```
 
-Use the printed path as one of your `--proto_path` values.
+With Option B, run the same `-c` argument through the explicit `$python` or
+`"$python"` interpreter created above. Use the printed path as one of your
+`--proto_path` values.
 
 ## 4. Write A Proto Tree
 
@@ -414,7 +435,7 @@ produce a descriptor set with imports. In PowerShell:
 
 ```powershell
 $protoRoot = "$PWD\proto"
-$protocyteProtoDir = python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
+$protocyteProtoDir = uv run python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))"
 $descriptorSet = "$PWD\build\descriptor_set.pb"
 New-Item -ItemType Directory -Force (Split-Path -Parent $descriptorSet) | Out-Null
 
@@ -431,7 +452,7 @@ In Bash:
 
 ```bash
 proto_root="$PWD/proto"
-protocyte_proto_dir=$(python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))")
+protocyte_proto_dir=$(uv run python -c "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).with_name('proto'))")
 descriptor_set="$PWD/build/descriptor_set.pb"
 mkdir -p "$(dirname "$descriptor_set")"
 
@@ -452,7 +473,7 @@ protocyte_add_descriptor_set_library(
     ALIAS demo::sensor_proto
     DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/descriptor_set.pb"
     FILES sensors/sensor.proto
-    OUT_DIR "${GENERATED_DIR}"
+    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
     HOSTED_ALLOCATOR
 )
 ```

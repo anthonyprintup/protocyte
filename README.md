@@ -247,6 +247,14 @@ Only names that exceed that remaining budget are folded into a readable prefix
 plus a SHA-256 digest of the complete descriptor name. Ninja and other
 non-Visual-Studio generators retain the ordinary component-bounded mapping.
 
+Descriptor names beginning with `-` are rejected, including during
+descriptor-set inspection, because protoc interprets selected names as
+command-line options. Distinct descriptor names whose normalized generated
+paths differ only by letter case are also rejected, even on case-sensitive
+hosts, because those outputs would alias on case-insensitive filesystems. The
+collision diagnostic identifies both descriptor names and the shared generated
+path.
+
 The CMake helpers pass protoc options and file names through protoc's UTF-8
 response-file interface. Non-ASCII characters and spaces are retained in
 descriptor names and source, tool, and output paths; semicolons and quotes in
@@ -263,7 +271,7 @@ New-Item -ItemType Directory -Force generated | Out-Null
 protoc `
   --descriptor_set_in=descriptor_set.pb `
   --plugin=protoc-gen-protocyte=path\to\protoc-gen-protocyte `
-  --protocyte_out=generated `
+  --protocyte_out=runtime=emit:generated `
   core.proto messages.proto settings.proto
 ```
 
@@ -274,7 +282,7 @@ mkdir -p generated
 protoc \
   --descriptor_set_in=descriptor_set.pb \
   --plugin=protoc-gen-protocyte="$(command -v protoc-gen-protocyte)" \
-  --protocyte_out=generated \
+  --protocyte_out=runtime=emit:generated \
   core.proto messages.proto settings.proto
 ```
 
@@ -1613,8 +1621,17 @@ view API in Protocyte's no-exceptions runtime surface.
 Hosted users who want standard-library interoperability can opt in:
 
 ```cmake
-target_compile_definitions(my_target PRIVATE PROTOCYTE_ENABLE_STD_STRING_VIEW=1)
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_STD_STRING_VIEW=1)
 ```
+
+Apply the definition to the target that compiles the generated sources, such as
+the target passed to `protocyte_add_proto_library`, and propagate it to every
+consumer. `PROTOCYTE_ENABLE_STD_STRING_VIEW` changes the public
+`::protocyte::StringView` type used by generated signatures and constants, so
+all translation units in that target graph must compile with the same value.
+When generated files are added directly to an application target instead of a
+library, define the macro consistently on that owning target and every target
+that includes its generated headers.
 
 When `PROTOCYTE_ENABLE_STD_STRING_VIEW` is set to a nonzero value, the runtime
 includes `<string_view>` and both `::protocyte::Span<char>` / `Span<const char>`

@@ -44,11 +44,11 @@ def _help_parser() -> argparse.ArgumentParser:
         epilog=(
             "Most users generate code by running protoc, which starts this plugin "
             "automatically:\n"
-            "  protoc --proto_path=. --protocyte_out=generated schema.proto\n\n"
+            "  protoc --proto_path=. --protocyte_out=runtime=emit:. schema.proto\n\n"
             "To inspect a descriptor set:\n"
             "  protoc-gen-protocyte descriptor-set list descriptor_set.pb\n\n"
-            "When protoc starts this executable with no arguments, it writes a "
-            "binary CodeGeneratorRequest to standard input."
+            "When protoc starts this executable with no arguments, protoc writes a "
+            "binary CodeGeneratorRequest to the plugin's standard input."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

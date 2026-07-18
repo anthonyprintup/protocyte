@@ -138,8 +138,96 @@ def test_direct_generation_examples_create_output_directories() -> None:
         ]
         assert powershell_blocks
         assert posix_blocks
-        assert all("New-Item -ItemType Directory -Force" in block for block in powershell_blocks)
+        assert all(
+            "New-Item -ItemType Directory -Force" in block
+            for block in powershell_blocks
+        )
         assert all("mkdir -p" in block for block in posix_blocks)
+        assert all(
+            "--protocyte_out=runtime=emit:" in block
+            for block in powershell_blocks
+        )
+        assert all("--protocyte_out=runtime=emit:" in block for block in posix_blocks)
+
+
+def test_ground_zero_python_commands_use_uv_managed_environments() -> None:
+    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+    prerequisites = guide.split("## 1. Install `protoc`", maxsplit=1)[0]
+    wheel_install = guide.split(
+        "### Option B: Build A Wheel And Install It Somewhere Else", maxsplit=1
+    )[1].split("### Option C: Install The CMake Package", maxsplit=1)[0]
+
+    assert "uv python find 3.12" in prerequisites
+    assert "python --version" not in prerequisites
+    assert "uv venv build\\plugin-venv --python 3.12" in wheel_install
+    assert "uv venv build/plugin-venv --python 3.12" in wheel_install
+    assert "uv pip install --python $python $wheel" in wheel_install
+    assert 'uv pip install --python "$python" "$wheel"' in wheel_install
+    assert "python -m pip" not in wheel_install
+    assert "uv run python -c" in guide
+
+
+def test_descriptor_set_cmake_example_uses_a_defined_output_directory() -> None:
+    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+    descriptor_example = next(
+        block
+        for block in _fenced_blocks(guide, "cmake")
+        if "protocyte_add_descriptor_set_library(" in block
+    )
+
+    assert 'OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"' in descriptor_example
+    assert "${GENERATED_DIR}" not in descriptor_example
+
+
+def test_readme_propagates_public_string_view_configuration() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    string_views = readme.split("### String Views", maxsplit=1)[1].split(
+        "### Parse Atomicity", maxsplit=1
+    )[0]
+
+    assert (
+        "target_compile_definitions(demo_proto PUBLIC "
+        "PROTOCYTE_ENABLE_STD_STRING_VIEW=1)"
+    ) in string_views
+    assert "PRIVATE PROTOCYTE_ENABLE_STD_STRING_VIEW" not in string_views
+    assert "all translation units in that target graph" in string_views
+
+
+def test_documented_protobuf_fallback_defaults_match_cmake_modes() -> None:
+    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+    source_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    installed_config = (ROOT / "cmake" / "protocyteConfig.cmake.in").read_text(
+        encoding="utf-8"
+    )
+
+    source_option = source_cmake.split(
+        "option(\n    PROTOCYTE_FETCH_PROTOBUF", maxsplit=1
+    )[1].split("\n)", maxsplit=1)[0]
+    installed_default = installed_config.split(
+        "if(NOT DEFINED PROTOCYTE_FETCH_PROTOBUF)", maxsplit=1
+    )[1].split("endif()", maxsplit=1)[0]
+
+    assert "\n    ON" in source_option
+    assert "\n        OFF" in installed_default
+    assert (
+        "CMake source consumers using `FetchContent` or `add_subdirectory` default"
+        in guide
+    )
+    assert (
+        "Installed\n`find_package(protocyte CONFIG REQUIRED)` consumers default "
+        "that option to\n`OFF`"
+    ) in guide
+
+
+def test_readme_documents_descriptor_name_portability_rejections() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    descriptor_paths = readme.split(
+        "Protobuf virtual descriptor names", maxsplit=1
+    )[1].split("Generate from a descriptor set", maxsplit=1)[0]
+
+    assert "Descriptor names beginning with `-` are rejected" in descriptor_paths
+    assert "differ only by letter case" in descriptor_paths
+    assert "case-insensitive filesystems" in descriptor_paths
 
 
 def test_release_guidance_does_not_claim_unpublished_assets_exist() -> None:
