@@ -952,6 +952,7 @@ function(_protocyte_ensure_protobuf)
 endfunction()
 
 function(protocyte_setup_codegen)
+    _protocyte_validate_parsed_arguments("protocyte_setup_codegen" "${ARGN}" "")
     _protocyte_prepare_plugin()
     _protocyte_ensure_protobuf()
 endfunction()

@@ -443,6 +443,33 @@ def test_public_cmake_functions_reject_unknown_arguments(
 
 
 @pytest.mark.parametrize(
+    ("arguments", "expected_arguments"),
+    [
+        ("TYPO_IS_SILENTLY_IGNORED", "TYPO_IS_SILENTLY_IGNORED"),
+        (
+            "PROTOC_EXECUTABLE fake-protoc",
+            "PROTOC_EXECUTABLE, fake-protoc",
+        ),
+    ],
+)
+def test_setup_codegen_rejects_all_arguments_before_provisioning(
+    tmp_path: Path,
+    arguments: str,
+    expected_arguments: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f"protocyte_setup_codegen({arguments})",
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert (
+        f"protocyte_setup_codegen received unknown argument(s): {expected_arguments}"
+    ) in output
+
+
+@pytest.mark.parametrize(
     ("function_name", "invocation"),
     [
         (
