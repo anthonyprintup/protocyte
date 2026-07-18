@@ -676,6 +676,7 @@ class EnumValueModel:
     name: str
     cpp_name: str
     number: int
+    deprecated: bool
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -1994,6 +1995,7 @@ def _build_enum(
             name=value.name,
             cpp_name=cpp_identifier(value.name),
             number=value.number,
+            deprecated=value.options.deprecated,
             documentation=documentation.get(
                 (*descriptor_path, _ENUM_VALUE_PATH, index)
             ),

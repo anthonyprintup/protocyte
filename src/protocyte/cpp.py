@@ -903,7 +903,8 @@ def _emit_enums(
         with w.indent():
             for value in enum.values:
                 _emit_documentation(w, value.documentation, options)
-                w.line(f"{value.cpp_name} = {value.number},")
+                deprecated = " [[deprecated]]" if value.deprecated else ""
+                w.line(f"{value.cpp_name}{deprecated} = {value.number},")
         w.line("};")
         w.line()
 
