@@ -39,6 +39,27 @@ def _find_protobuf_import_root(repo_root: Path) -> Path:
     pytest.skip("protobuf source import tree is not available")
 
 
+def _find_protobuf_import_dir(repo_root: Path, protoc: Path) -> Path:
+    candidates = [
+        protoc.parent.parent / "include",
+        protoc.parent.parent / "protobuf-src" / "src",
+        protoc.parents[2] / "include",
+    ]
+    for root in (repo_root / "build", repo_root / "tests"):
+        if not root.exists():
+            continue
+        candidates.extend(
+            descriptor.parents[2]
+            for descriptor in root.glob("**/google/protobuf/descriptor.proto")
+        )
+
+    for candidate in candidates:
+        if (candidate / "google" / "protobuf" / "descriptor.proto").is_file():
+            return candidate
+
+    pytest.skip("protobuf import directory is not available")
+
+
 def _configure_cmake_snippet(
     tmp_path: Path,
     snippet: str,
@@ -81,7 +102,7 @@ def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
                 [
                     "@echo off",
                     f'set "PYTHONPATH={repo_root / "src"};%PYTHONPATH%"',
-                    f'"{sys.executable}" -m protocyte.main',
+                    f'"{sys.executable}" -m protocyte.main %*',
                     "",
                 ]
             ),
@@ -93,7 +114,7 @@ def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
             "\n".join(
                 [
                     "#!/usr/bin/env sh",
-                    f'PYTHONPATH="{repo_root / "src"}:$PYTHONPATH" exec "{sys.executable}" -m protocyte.main',
+                    f'PYTHONPATH="{repo_root / "src"}:$PYTHONPATH" exec "{sys.executable}" -m protocyte.main "$@"',
                     "",
                 ]
             ),
@@ -444,6 +465,7 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert (prefix / "share/consumer/consumer-marker.txt").is_file()
     assert (prefix / "include/protocyte/runtime/runtime.hpp").is_file()
     assert any(prefix.rglob("protocyteConfig.cmake"))
+    assert any(prefix.rglob("ProtocyteDependencyScan.cmake"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
 
 
@@ -875,6 +897,116 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+def test_source_codegen_regenerates_when_transitive_import_changes(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required to verify an incremental build")
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    import_dir = source_dir / "imports"
+    tools_dir = source_dir / "tools"
+    proto_dir.mkdir(parents=True)
+    import_dir.mkdir()
+    tools_dir.mkdir()
+
+    imported_proto = import_dir / "base.proto"
+    imported_proto.write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package demo;",
+                'import "protocyte/options.proto";',
+                'option (protocyte.package_constant) = { name: "CAPACITY" u32: 2 };',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (proto_dir / "consumer.proto").write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package demo;",
+                'import "base.proto";',
+                'import "protocyte/options.proto";',
+                'option (protocyte.package_constant) = { name: "DERIVED" u32_expr: "demo.CAPACITY + 1" };',
+                "message Consumer {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (proto_dir / "standalone.proto").write_text(
+        'syntax = "proto3"; package demo; message Standalone {}\n',
+        encoding="utf-8",
+    )
+    plugin = _write_python_plugin_wrapper(
+        tools_dir / "protoc-gen-protocyte", repo_root
+    )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(transitive_import_regeneration LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/consumer.proto proto/standalone.proto",
+                '    IMPORT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/imports"',
+                "    EMIT_RUNTIME",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
+    subprocess.run(build_command, check=True)
+    generated_header = build_dir / "generated" / "consumer.protocyte.hpp"
+    initial_header = generated_header.read_text(encoding="utf-8")
+    assert "DERIVED {3u}" in initial_header
+    assert (
+        build_dir / "generated" / "protocyte" / "runtime" / "runtime.hpp"
+    ).is_file()
+
+    imported_proto.write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package demo;",
+                'import "protocyte/options.proto";',
+                'option (protocyte.package_constant) = { name: "CAPACITY" u32: 5 };',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(build_command, check=True)
+    updated_header = generated_header.read_text(encoding="utf-8")
+    assert "DERIVED {6u}" in updated_header
+    assert updated_header != initial_header
+
+    no_change = subprocess.run(build_command, check=True, capture_output=True, text=True)
+    assert "no work to do" in no_change.stdout.lower()
 
 
 def test_generate_accepts_descriptor_set_protos_without_proto_root(

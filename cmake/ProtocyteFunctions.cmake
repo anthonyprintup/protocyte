@@ -1130,6 +1130,38 @@ function(protocyte_generate)
         foreach(import_dir IN LISTS protocyte_import_dirs)
             list(APPEND protoc_proto_paths "--proto_path=${import_dir}")
         endforeach()
+
+        set(protocyte_dependency_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-dependencies")
+        set(protocyte_dependency_scan_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteDependencyScan.cmake")
+        set(protocyte_dependency_outputs)
+        foreach(proto_file IN LISTS normalized_proto_files)
+            string(SHA256 dependency_key "${PROTOCYTE_TARGET}|${proto_file}")
+            set(dependency_descriptor_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.pb")
+            set(dependency_depfile_rel "CMakeFiles/protocyte-dependencies/${dependency_key}.d")
+            set(dependency_descriptor "${CMAKE_CURRENT_BINARY_DIR}/${dependency_descriptor_rel}")
+
+            add_custom_command(
+                OUTPUT "${dependency_descriptor}"
+                COMMAND "${CMAKE_COMMAND}" -E make_directory "${protocyte_dependency_dir}"
+                COMMAND
+                    "${CMAKE_COMMAND}"
+                    "-DPROTOC_EXECUTABLE=${PROTOCYTE_PROTOC_EXECUTABLE}"
+                    "-DPROTO_PATH_ARGUMENTS=${protoc_proto_paths}"
+                    "-DDEPENDENCY_OUT=${dependency_depfile_rel}"
+                    "-DDESCRIPTOR_SET_OUT=${dependency_descriptor_rel}"
+                    "-DPROTO_FILE=${proto_file}"
+                    "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+                    -P "${protocyte_dependency_scan_script}"
+                COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
+                DEPENDS "${proto_file}" "${protocyte_dependency_scan_script}"
+                DEPFILE "${dependency_depfile_rel}"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+                COMMENT "Scanning protobuf imports for ${proto_file}"
+                VERBATIM
+            )
+            list(APPEND protocyte_dependency_outputs "${dependency_descriptor}")
+        endforeach()
+        list(APPEND protocyte_input_depends ${protocyte_dependency_outputs})
     else()
         list(APPEND protoc_descriptor_args "--descriptor_set_in=${protocyte_descriptor_set}")
         list(APPEND protocyte_input_depends "${protocyte_descriptor_set}")

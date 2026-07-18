@@ -363,6 +363,10 @@ resolved from the calling `CMakeLists.txt`. In descriptor-set mode,
 `DESCRIPTOR_SET` is a filesystem input, while `FILES`/`PROTOS` entries remain
 virtual descriptor names and are not checked as filesystem paths.
 
+Source-mode generation tracks each selected file's transitive protobuf imports.
+Changing an imported `.proto` therefore regenerates the affected target without
+requiring callers to repeat the import graph through `DEPENDS`.
+
 Pin a published release tag for downstream builds instead of tracking `main`.
 
 ### Installed Package
