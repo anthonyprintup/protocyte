@@ -111,6 +111,41 @@ def _run_lldb_commands(debugger, commands, *, context, ignored_errors=None):
     return None
 
 
+def _command_output(result):
+    get_output = getattr(result, "GetOutput", None)
+    if not callable(get_output):
+        return ""
+    try:
+        return get_output() or ""
+    except Exception:
+        return ""
+
+
+def _ensure_frame_registration_stop_hook(debugger):
+    command = "protocyte-register-frame-types"
+    interpreter = debugger.GetCommandInterpreter()
+    result = lldb.SBCommandReturnObject()
+    interpreter.HandleCommand("target stop-hook list", result)
+    if result.Succeeded() and any(
+        line.strip() == command for line in _command_output(result).splitlines()
+    ):
+        return None
+
+    add_command = f'target stop-hook add -o "{command}"'
+    return _run_lldb_commands(
+        debugger,
+        [add_command],
+        context="Protocyte frame formatter stop-hook registration",
+        ignored_errors={
+            add_command: (
+                "invalid target",
+                "no target",
+                "requires a target",
+            )
+        },
+    )
+
+
 def _is_unsupported_option_error(error):
     lowered_error = error.lower()
     return "unknown or ambiguous option" in lowered_error or "unknown option" in lowered_error
@@ -337,7 +372,7 @@ def _optional_payload(value, name="value"):
 def _value_label(value):
     if not value.IsValid():
         return "<invalid>"
-    typename = value.GetTypeName() or ""
+    typename = _canonical_type_name(value.GetTypeName() or "")
     if typename.startswith("protocyte::String<"):
         return string_summary(value, None)
     if typename.startswith("protocyte::Bytes<"):
@@ -515,6 +550,18 @@ def status_summary(value, _internal_dict):
     return error_summary(_result_error(value), _internal_dict)
 
 
+def _structured_error_summary(value):
+    code = _child(value, "code")
+    offset_value = _child(value, "offset")
+    field_value = _child(value, "field_number")
+    if not (code.IsValid() and offset_value.IsValid() and field_value.IsValid()):
+        return None
+    code_name = code.GetValue()
+    offset = _unsigned(offset_value, 0)
+    field = _unsigned(field_value, 0)
+    return f"code={code_name or 'error'}, offset={offset}, field={field}"
+
+
 def error_summary(value, _internal_dict):
     if _is_raw_tree_value(value):
         return None
@@ -531,7 +578,11 @@ def result_summary(value, _internal_dict):
     ok = _bool(_child(value, "ok_"))
     if ok:
         return "ok"
-    return "err, " + error_summary(_result_error(value), _internal_dict)
+    error = _result_error(value)
+    structured = _structured_error_summary(error)
+    if structured is not None:
+        return "err, " + structured
+    return "err, error=" + _value_label(error)
 
 
 def optional_summary(value, _internal_dict):
@@ -694,7 +745,7 @@ class ByteSpanSyntheticProvider:
     def update(self):
         if _set_raw_mode(self):
             return
-        typename = self.value.GetTypeName() or ""
+        typename = _canonical_type_name(self.value.GetTypeName() or "")
         if typename.startswith("protocyte::Bytes<"):
             self.data, self.size_value, _capacity = _bytes_storage(self.value)
             context = _bytes_context(self.value)
@@ -1318,7 +1369,6 @@ def __lldb_init_module(debugger, _internal_dict):
     delete_register_frame_types_command = (
         "command script delete protocyte-register-frame-types"
     )
-    stop_hook_command = 'target stop-hook add -o "protocyte-register-frame-types"'
     commands = [
         disable_command,
         delete_command,
@@ -1359,7 +1409,6 @@ def __lldb_init_module(debugger, _internal_dict):
         "command script add -f protocyte_lldb.protocyte_register_type protocyte-register-type",
         delete_register_frame_types_command,
         "command script add -f protocyte_lldb.protocyte_register_frame_types protocyte-register-frame-types",
-        stop_hook_command,
     ]
     recognizer_commands = [
         "type summary add -w protocyte -p --python-function protocyte_lldb.result_summary --recognizer-function protocyte_lldb.is_result_type",
@@ -1405,15 +1454,13 @@ def __lldb_init_module(debugger, _internal_dict):
             delete_bytes_command: _SCRIPT_DELETE_IGNORED_ERRORS,
             delete_register_type_command: _SCRIPT_DELETE_IGNORED_ERRORS,
             delete_register_frame_types_command: _SCRIPT_DELETE_IGNORED_ERRORS,
-            stop_hook_command: (
-                "invalid target",
-                "no target",
-                "requires a target",
-            ),
         },
     )
     if error:
         raise RuntimeError(error)
+    stop_hook_error = _ensure_frame_registration_stop_hook(debugger)
+    if stop_hook_error:
+        raise RuntimeError(stop_hook_error)
     recognizer_error = _run_lldb_commands(
         debugger,
         recognizer_commands,
