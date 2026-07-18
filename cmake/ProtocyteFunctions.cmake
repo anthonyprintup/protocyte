@@ -57,6 +57,46 @@ function(
     set(${out_relative_path} "${response_relative_path}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_output_lock_key out_var output_path)
+    set(output_identity "${output_path}")
+    cmake_path(NORMAL_PATH output_identity)
+    if(WIN32)
+        string(TOLOWER "${output_identity}" output_identity)
+    endif()
+    string(SHA256 output_lock_key "${output_identity}")
+    set(${out_var} "${output_lock_key}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_write_lock_manifest_file
+    out_absolute_path
+    identity
+    lock_keys_var
+)
+    string(SHA256 manifest_key "${identity}")
+    set(manifest_path "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-locks/${manifest_key}.list")
+    cmake_path(GET manifest_path PARENT_PATH manifest_directory)
+    file(MAKE_DIRECTORY "${manifest_directory}")
+
+    set(manifest_content "")
+    foreach(lock_key IN LISTS ${lock_keys_var})
+        string(APPEND manifest_content "${lock_key}\n")
+    endforeach()
+
+    set(write_manifest TRUE)
+    if(EXISTS "${manifest_path}")
+        file(READ "${manifest_path}" existing_content)
+        if(existing_content STREQUAL manifest_content)
+            set(write_manifest FALSE)
+        endif()
+    endif()
+    if(write_manifest)
+        file(WRITE "${manifest_path}" "${manifest_content}")
+    endif()
+
+    set(${out_absolute_path} "${manifest_path}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_descriptor_name_is_unsafe out_var name)
     if(IS_ABSOLUTE "${name}" OR "${name}" MATCHES "^[A-Za-z]:" OR "${name}" MATCHES "\\\\")
         set(${out_var} TRUE PARENT_SCOPE)
@@ -2152,6 +2192,7 @@ function(protocyte_generate)
         endforeach()
 
         set(protocyte_dependency_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-dependencies")
+        set(protocyte_lock_dir "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-locks")
         set(protocyte_dependency_scan_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteDependencyScan.cmake")
         set(protocyte_dependency_outputs)
         set(protocyte_dependency_file_format_args)
@@ -2169,6 +2210,8 @@ function(protocyte_generate)
             set(dependency_descriptor "${CMAKE_CURRENT_BINARY_DIR}/${dependency_descriptor_rel}")
             set(dependency_depfile "${CMAKE_CURRENT_BINARY_DIR}/${dependency_depfile_rel}")
             set(dependency_depfile_target "${dependency_descriptor_rel}")
+            _protocyte_output_lock_key(dependency_lock_key "${dependency_descriptor}")
+            set(dependency_lock_file "${protocyte_lock_dir}/${dependency_lock_key}.lock")
             set(dependency_response_content "")
             foreach(protoc_proto_path IN LISTS protoc_proto_paths)
                 _protocyte_append_protoc_response_argument(
@@ -2236,6 +2279,7 @@ function(protocyte_generate)
                     "${CMAKE_COMMAND}"
                     "-DPROTOC_EXECUTABLE=${PROTOCYTE_PROTOC_EXECUTABLE}"
                     "-DARGUMENT_FILE=${dependency_response_file_relative}"
+                    "-DLOCK_FILE=${dependency_lock_file}"
                     "-DPROTO_FILE=${proto_file_display}"
                     "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
                     -P "${protocyte_dependency_scan_script}"
@@ -2316,20 +2360,41 @@ function(protocyte_generate)
         "generation|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
         "${protocyte_response_content}"
     )
+    set(protocyte_lock_dir "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-locks")
+    set(protocyte_generation_lock_keys)
+    foreach(command_output IN LISTS protocyte_command_outputs)
+        _protocyte_output_lock_key(output_lock_key "${command_output}")
+        list(APPEND protocyte_generation_lock_keys "${output_lock_key}")
+    endforeach()
+    list(REMOVE_DUPLICATES protocyte_generation_lock_keys)
+    list(SORT protocyte_generation_lock_keys)
+    _protocyte_write_lock_manifest_file(
+        protocyte_generation_lock_manifest
+        "generation|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+        protocyte_generation_lock_keys
+    )
+    set(protocyte_generation_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerate.cmake")
     string(HEX "${CMAKE_CURRENT_SOURCE_DIR}" protocyte_source_directory_hex)
 
     add_custom_command(
         OUTPUT ${protocyte_command_outputs}
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROTOCYTE_OUT_DIR}"
         COMMAND
-            "${CMAKE_COMMAND}" -E env
-            "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=${protocyte_source_directory_hex}"
-            "${PROTOCYTE_PROTOC_EXECUTABLE}"
-            "@${protocyte_response_file_relative}"
+            "${CMAKE_COMMAND}"
+            "-DPROTOC_EXECUTABLE=${PROTOCYTE_PROTOC_EXECUTABLE}"
+            "-DARGUMENT_FILE=${protocyte_response_file_relative}"
+            "-DGENERATION_TARGET=${PROTOCYTE_TARGET}"
+            "-DGENERATION_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+            "-DLOCK_DIRECTORY=${protocyte_lock_dir}"
+            "-DLOCK_MANIFEST=${protocyte_generation_lock_manifest}"
+            "-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"
+            -P "${protocyte_generation_script}"
         DEPENDS
             ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
             "${protocyte_response_file}"
+            "${protocyte_generation_lock_manifest}"
+            "${protocyte_generation_script}"
             "${PROTOCYTE_PROTOC_DEPENDENCY}"
             "${protocyte_plugin_executable}"
             "${protocyte_options_proto}"

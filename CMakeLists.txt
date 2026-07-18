@@ -160,6 +160,7 @@ if(PROTOCYTE_INSTALL)
         FILES
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteDependencyScan.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteSourceDependency.cmake"
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteGenerate.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"
             "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfig.cmake"
             "${CMAKE_CURRENT_BINARY_DIR}/cmake/protocyteConfigVersion.cmake"
