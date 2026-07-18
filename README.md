@@ -335,7 +335,9 @@ By default, the protocyte CMake project fetches protobuf when protobuf CMake
 targets are not already available, then exposes:
 
 - `protocyte_add_proto_library(...)` for the common target-oriented workflow
+- `protocyte_add_descriptor_set_library(...)` as the descriptor-set-specific wrapper
 - `protocyte_generate(...)` as the lower-level codegen primitive
+- `protocyte_setup_codegen()` to prepare the generator and `protoc` eagerly
 - `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
 
 The fallback protobuf revision is the exact commit recorded in
@@ -345,17 +347,6 @@ defaults for protobuf's build options, including `protobuf_INSTALL=OFF`, so
 protobuf, Abseil, upb, utf8_range, and protoc do not leak into the consumer's
 install tree. Parent-defined protobuf option values remain authoritative and
 Protocyte does not force or persist them in the parent cache.
-
-`TARGET` must be a real CMake target name without `::`. `ALIAS` can use any
-valid alias target name; namespaced aliases like `demo::proto` are recommended
-for downstream linkage.
-
-All public CMake helpers reject unknown arguments and keywords without values
-during configuration. In source mode, `PROTO_ROOT`, every explicit `PROTOS`
-file, and every `IMPORT_DIRS` directory must already exist; relative paths are
-resolved from the calling `CMakeLists.txt`. In descriptor-set mode,
-`DESCRIPTOR_SET` is a filesystem input, while `FILES`/`PROTOS` entries remain
-virtual descriptor names and are not checked as filesystem paths.
 
 Pin a published release tag for downstream builds instead of tracking `main`.
 
@@ -407,7 +398,7 @@ requests; pin the prerelease prefix itself and use the unversioned
 
 The installed CMake package installs:
 
-- the `protocyte_add_proto_library(...)` and `protocyte_generate(...)` CMake integration
+- the complete public CMake API documented below
 - the exported `protocyte::codegen`, `protocyte::runtime`, and `protocyte::runtime_hosted` targets
 - an installable protocyte Python project and pinned constraints used to provision the managed plugin environment
 - the reusable C++ runtime headers and targets
@@ -446,6 +437,202 @@ generated translation units, are in [tests/smoke/README.md](tests/smoke/README.m
 Descriptor-set mode intentionally does not require a protobuf include tree for
 descriptors already present in the set. Source-mode generation still uses
 `PROTO_ROOT`/`IMPORT_DIRS` and still needs import roots for source parsing.
+
+### CMake API Reference
+
+These functions are available after either `FetchContent_MakeAvailable(protocyte)`
+or `find_package(protocyte CONFIG REQUIRED)`. Keyword order does not matter.
+In the signatures below, `<value>` is a placeholder, `...` means that a keyword
+accepts multiple values, and commented `or` lines identify mutually exclusive
+choices rather than literal CMake syntax.
+
+#### `protocyte_setup_codegen`
+
+```cmake
+protocyte_setup_codegen()
+```
+
+Prepares the Protocyte plugin and locates or provisions `protoc`. Generation
+helpers call it automatically, so most projects do not need to call it. Use it
+when configuration should perform that setup eagerly, before any generation
+target is declared. It has no options.
+
+#### `protocyte_generate`
+
+```text
+protocyte_generate(
+    TARGET <codegen-target>
+    OUT_DIR <directory>
+
+    PROTO_ROOT <directory>
+    # or: DESCRIPTOR_SET <file>
+
+    DISCOVER
+    # or: PROTOS <source-file-or-descriptor-name>...
+
+    [IMPORT_DIRS <directory>...]
+    [DEPENDS <file-or-target>...]
+    [OPTIONS <plugin-option>...]
+    [EMIT_RUNTIME]
+    [RUNTIME_PREFIX <virtual-directory>]
+    [NAMESPACE_PREFIX <c++-namespace>]
+    [INCLUDE_PREFIX <virtual-directory>]
+    [GENERATED_HEADERS_VAR <variable>]
+    [GENERATED_SOURCES_VAR <variable>]
+    [GENERATED_TARGET_VAR <variable>]
+)
+```
+
+This is the lower-level primitive. It creates the custom target named by
+`TARGET`, but it does not create a C++ library.
+
+- `TARGET` is the required code-generation target name.
+- `OUT_DIR` is required. A relative path is resolved from
+  `CMAKE_CURRENT_BINARY_DIR`.
+- `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
+  `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
+  must exist during configuration, and must be inside `PROTO_ROOT`.
+- `DESCRIPTOR_SET` selects descriptor-set mode and is mutually exclusive with
+  `PROTO_ROOT`. It must name an existing file; relative paths are resolved from
+  `CMAKE_CURRENT_SOURCE_DIR`. In this mode, `PROTOS` entries are relative virtual
+  descriptor names inside the set rather than filesystem paths.
+- `DISCOVER` is mutually exclusive with `PROTOS`. In source mode it recursively
+  discovers `*.proto` beneath `PROTO_ROOT` and reconfigures when that set changes.
+  In descriptor-set mode it asks the Protocyte plugin to select every supported
+  non-runtime descriptor, including referenced runtime types when required.
+- `IMPORT_DIRS` adds source-mode protobuf import roots. Entries must be existing
+  directories and are resolved from `CMAKE_CURRENT_SOURCE_DIR`. It is rejected
+  in descriptor-set mode.
+- `DEPENDS` adds dependencies to the generation custom command. Entries are
+  passed to CMake's `add_custom_command(DEPENDS ...)`; prefer absolute file paths
+  or CMake targets. Use it for project-specific prerequisite files or targets
+  that Protocyte does not otherwise track.
+- `OPTIONS` forwards non-runtime [plugin parameters](#plugin-parameters).
+  Do not pass `runtime` or `runtime_prefix` here; use `EMIT_RUNTIME` and
+  `RUNTIME_PREFIX` so CMake can declare the generated runtime output correctly.
+  Names beginning with `_protocyte_` are reserved. Do not duplicate
+  `NAMESPACE_PREFIX` or `INCLUDE_PREFIX` through `OPTIONS`; duplicate plugin
+  parameter names are rejected.
+- `EMIT_RUNTIME` emits `runtime.hpp` into `OUT_DIR`. The default location is
+  `protocyte/runtime/runtime.hpp`.
+- `RUNTIME_PREFIX` changes the runtime's relative virtual directory. With
+  `EMIT_RUNTIME`, it controls both the emitted path and generated include. Without
+  `EMIT_RUNTIME`, it changes only the generated include path.
+- `NAMESPACE_PREFIX` prepends a C++ namespace to generated declarations.
+- `INCLUDE_PREFIX` prepends a relative virtual directory to imported generated
+  header includes.
+- `GENERATED_HEADERS_VAR` receives the generated header paths in the caller's
+  scope.
+- `GENERATED_SOURCES_VAR` receives the generated source paths in the caller's
+  scope.
+- `GENERATED_TARGET_VAR` receives `TARGET` in the caller's scope.
+
+`RUNTIME_PREFIX` and `INCLUDE_PREFIX` are virtual include directories, not host
+filesystem paths. They must be normalized, relative, `/`-separated paths and
+must not contain `.`/`..` segments, Windows device names, or characters unsafe
+in generated includes.
+
+#### `protocyte_add_proto_library`
+
+```text
+protocyte_add_proto_library(
+    TARGET <library-target>
+    [ALIAS <alias-target>]
+    [TYPE STATIC|SHARED|MODULE|OBJECT]
+    [OUT_DIR <directory>]
+
+    PROTO_ROOT <directory>
+    # or: DESCRIPTOR_SET <file>
+
+    DISCOVER
+    # or: PROTOS <source-file-or-descriptor-name>...
+
+    [IMPORT_DIRS <directory>...]
+    [DEPENDS <file-or-target>...]
+    [OPTIONS <plugin-option>...]
+    [EMIT_RUNTIME]
+    [HOSTED_ALLOCATOR]
+    [RUNTIME_TARGET <target>]
+    [RUNTIME_PREFIX <virtual-directory>]
+    [NAMESPACE_PREFIX <c++-namespace>]
+    [INCLUDE_PREFIX <virtual-directory>]
+    [GENERATED_HEADERS_VAR <variable>]
+    [GENERATED_SOURCES_VAR <variable>]
+    [GENERATED_TARGET_VAR <variable>]
+)
+```
+
+This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
+`DESCRIPTOR_SET`, `DISCOVER`, `PROTOS`, `IMPORT_DIRS`, `DEPENDS`, `OPTIONS`,
+`EMIT_RUNTIME`, `RUNTIME_PREFIX`, `NAMESPACE_PREFIX`, and `INCLUDE_PREFIX` to
+`protocyte_generate`, then compiles the generated sources as a C++20 library.
+
+- `TARGET` is required and must be a real target name without `::`.
+- `ALIAS` optionally creates an alias for `TARGET`; namespaced aliases such as
+  `demo::proto` are recommended for downstream linkage. The alias must not
+  already exist.
+- `TYPE` accepts `STATIC`, `SHARED`, `MODULE`, or `OBJECT` and defaults to
+  `STATIC`.
+- `OUT_DIR` defaults to
+  `${CMAKE_CURRENT_BINARY_DIR}/<TARGET>_protocyte`. Relative paths are resolved
+  from `CMAKE_CURRENT_BINARY_DIR`.
+- `HOSTED_ALLOCATOR` selects hosted allocation support. With `EMIT_RUNTIME`, it
+  adds `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1` to consumers of the emitted runtime.
+  Otherwise, it selects the default `protocyte::runtime_hosted` target when no
+  explicit `RUNTIME_TARGET` is supplied.
+- `RUNTIME_TARGET` selects an existing runtime target instead of the default
+  `protocyte::runtime` or `protocyte::runtime_hosted`. It is mutually exclusive
+  with `EMIT_RUNTIME`; the supplied target owns its allocator configuration.
+- A custom `RUNTIME_PREFIX` requires either `EMIT_RUNTIME` or a matching custom
+  `RUNTIME_TARGET`; this prevents generated includes from disagreeing with the
+  linked reusable runtime.
+- `GENERATED_HEADERS_VAR` and `GENERATED_SOURCES_VAR` receive the generated path
+  lists in the caller's scope.
+- `GENERATED_TARGET_VAR` receives the internal
+  `<TARGET>__protocyte_codegen` target in the caller's scope.
+
+The created library publicly exposes `OUT_DIR`, requires C++20, links
+`protocyte::codegen`, and depends on its generated target. When neither
+`EMIT_RUNTIME` nor `RUNTIME_TARGET` is supplied, it links `protocyte::runtime`
+or `protocyte::runtime_hosted` according to `HOSTED_ALLOCATOR`.
+
+#### `protocyte_add_descriptor_set_library`
+
+```text
+protocyte_add_descriptor_set_library(
+    TARGET <library-target>
+    DESCRIPTOR_SET <file>
+    [ALIAS <alias-target>]
+    [TYPE STATIC|SHARED|MODULE|OBJECT]
+    [OUT_DIR <directory>]
+
+    DISCOVER
+    # or: FILES <virtual-descriptor-name>...
+
+    [DEPENDS <file-or-target>...]
+    [OPTIONS <plugin-option>...]
+    [EMIT_RUNTIME]
+    [HOSTED_ALLOCATOR]
+    [RUNTIME_TARGET <target>]
+    [RUNTIME_PREFIX <virtual-directory>]
+    [NAMESPACE_PREFIX <c++-namespace>]
+    [INCLUDE_PREFIX <virtual-directory>]
+    [GENERATED_HEADERS_VAR <variable>]
+    [GENERATED_SOURCES_VAR <variable>]
+    [GENERATED_TARGET_VAR <variable>]
+)
+```
+
+This convenience wrapper requires `DESCRIPTOR_SET` and otherwise has the same
+library, runtime, `DEPENDS`, `OPTIONS`, prefix, and output-variable behavior as
+`protocyte_add_proto_library`. `FILES` is the descriptor-set-specific spelling
+of `PROTOS`: each entry is a relative virtual descriptor name inside the set.
+Choose exactly one of `DISCOVER` or `FILES`. `PROTO_ROOT` and `IMPORT_DIRS` do
+not apply because the descriptor set already carries its dependency descriptors.
+
+`protocyte_generate`, `protocyte_add_proto_library`, and
+`protocyte_add_descriptor_set_library` reject unknown arguments and keywords
+without values during configuration.
 
 ## Debugging
 
