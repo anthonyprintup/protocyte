@@ -32,6 +32,7 @@ add_custom_command(
         "${PROTO_FILE}"
     DEPENDS
         "${PROTO_FILE}"
+        "${PROTOC_EXECUTABLE}"
         "${PROTOCYTE_PLUGIN_EXECUTABLE}"
     COMMENT "Generating the Protocyte quick-start message"
     VERBATIM

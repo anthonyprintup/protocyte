@@ -779,17 +779,54 @@ function(_protocyte_resolve_protobuf_import_dir)
         endforeach()
     endforeach()
 
+    set(protoc_import_executable "${PROTOCYTE_PROTOC_EXECUTABLE}")
     if(
-        DEFINED Protobuf_PROTOC_EXECUTABLE
+        (protoc_import_executable STREQUAL "" OR protoc_import_executable MATCHES "\\$<")
+        AND DEFINED Protobuf_PROTOC_EXECUTABLE
         AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
-        AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
+        AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$|\\$<"
     )
-        cmake_path(GET Protobuf_PROTOC_EXECUTABLE PARENT_PATH protoc_bin_dir)
+        set(protoc_import_executable "${Protobuf_PROTOC_EXECUTABLE}")
+    endif()
+
+    if(NOT protoc_import_executable STREQUAL "" AND NOT protoc_import_executable MATCHES "\\$<")
+        cmake_path(
+            ABSOLUTE_PATH protoc_import_executable
+            BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            NORMALIZE
+            OUTPUT_VARIABLE protoc_import_executable
+        )
+        cmake_path(GET protoc_import_executable PARENT_PATH protoc_bin_dir)
         _protocyte_set_protobuf_import_dir("${protoc_bin_dir}/../include")
         if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
             return()
         endif()
     endif()
+endfunction()
+
+function(_protocyte_resolve_protoc_path out_executable out_dependency candidate)
+    if("${candidate}" MATCHES "\\$<")
+        set(${out_executable} "${candidate}" PARENT_SCOPE)
+        set(${out_dependency} "${candidate}" PARENT_SCOPE)
+        return()
+    endif()
+
+    cmake_path(
+        ABSOLUTE_PATH candidate
+        BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        NORMALIZE
+        OUTPUT_VARIABLE resolved_candidate
+    )
+    if(NOT EXISTS "${resolved_candidate}" OR IS_DIRECTORY "${resolved_candidate}")
+        message(
+            FATAL_ERROR
+            "Protobuf_PROTOC_EXECUTABLE '${candidate}' resolves to '${resolved_candidate}', "
+            "which does not name an existing file"
+        )
+    endif()
+
+    set(${out_executable} "${resolved_candidate}" PARENT_SCOPE)
+    set(${out_dependency} "${resolved_candidate}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_prepare_plugin)
@@ -820,8 +857,10 @@ endfunction()
 function(_protocyte_ensure_protobuf)
     if(TARGET protobuf::protoc)
         set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
+        set(protoc_dependency protobuf::protoc)
     elseif(TARGET protoc)
         set(protoc_executable "$<TARGET_FILE:protoc>")
+        set(protoc_dependency protoc)
     else()
         find_package(Protobuf CONFIG QUIET)
         if(
@@ -838,12 +877,17 @@ function(_protocyte_ensure_protobuf)
 
         if(TARGET protobuf::protoc)
             set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
+            set(protoc_dependency protobuf::protoc)
         elseif(
             DEFINED Protobuf_PROTOC_EXECUTABLE
             AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
             AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
         )
-            set(protoc_executable "${Protobuf_PROTOC_EXECUTABLE}")
+            _protocyte_resolve_protoc_path(
+                protoc_executable
+                protoc_dependency
+                "${Protobuf_PROTOC_EXECUTABLE}"
+            )
         elseif(PROTOCYTE_FETCH_PROTOBUF)
             if(NOT DEFINED protobuf_BUILD_TESTS)
                 set(protobuf_BUILD_TESTS OFF)
@@ -869,12 +913,19 @@ function(_protocyte_ensure_protobuf)
             FetchContent_GetProperties(protobuf SOURCE_DIR protobuf_source_dir)
             _protocyte_set_protobuf_import_dir("${protobuf_source_dir}/src")
             set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
+            set(protoc_dependency protobuf::protoc)
         else()
             find_program(protoc_executable protoc REQUIRED)
+            _protocyte_resolve_protoc_path(
+                protoc_executable
+                protoc_dependency
+                "${protoc_executable}"
+            )
         endif()
     endif()
 
     set(PROTOCYTE_PROTOC_EXECUTABLE "${protoc_executable}" CACHE INTERNAL "protoc executable for protocyte")
+    set(PROTOCYTE_PROTOC_DEPENDENCY "${protoc_dependency}" CACHE INTERNAL "protoc dependency for protocyte")
     _protocyte_resolve_protobuf_import_dir()
 endfunction()
 
@@ -1155,7 +1206,10 @@ function(protocyte_generate)
                     "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
-                DEPENDS "${proto_file}" "${protocyte_dependency_scan_script}"
+                DEPENDS
+                    "${proto_file}"
+                    "${protocyte_dependency_scan_script}"
+                    "${PROTOCYTE_PROTOC_DEPENDENCY}"
                 DEPFILE "${dependency_depfile_rel}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
                 COMMENT "Scanning protobuf imports for ${proto_file}"
@@ -1212,6 +1266,7 @@ function(protocyte_generate)
         DEPENDS
             ${protocyte_input_depends}
             ${PROTOCYTE_DEPENDS}
+            "${PROTOCYTE_PROTOC_DEPENDENCY}"
             "${protocyte_plugin_executable}"
             "${protocyte_options_proto}"
             ${protocyte_generator_sources}
