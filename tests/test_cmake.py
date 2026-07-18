@@ -2764,7 +2764,112 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
     assert "DERIVED {6u}" in updated_header
     assert updated_header != initial_header
 
-    no_change = subprocess.run(build_command, check=True, capture_output=True, text=True)
+    no_change = subprocess.run(
+        build_command, check=True, capture_output=True, text=True
+    )
+    assert "no work to do" in no_change.stdout.lower()
+
+
+def test_source_codegen_tracks_special_character_paths_incrementally(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    if shutil.which("ninja") is None:
+        _incremental_requirement_unavailable(
+            "Ninja is required to verify an incremental build"
+        )
+
+    source_dir = tmp_path / "source space #$"
+    build_dir = tmp_path / "build space #$"
+    proto_dir = source_dir / "proto space #$"
+    import_dir = source_dir / "imports space #$"
+    proto_dir.mkdir(parents=True)
+    import_dir.mkdir()
+
+    imported_proto = import_dir / "base value #$.proto"
+
+    def write_imported(capacity: int) -> None:
+        imported_proto.write_text(
+            "\n".join(
+                [
+                    'syntax = "proto3";',
+                    "package demo;",
+                    'import "protocyte/options.proto";',
+                    "option (protocyte.package_constant) = "
+                    f'{{ name: "CAPACITY" u32: {capacity} }};',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    write_imported(2)
+    source_proto = proto_dir / "consumer #$.proto"
+    source_proto.write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package demo;",
+                'import "base value #$.proto";',
+                'import "protocyte/options.proto";',
+                "option (protocyte.package_constant) = "
+                '{ name: "DERIVED" u32_expr: "demo.CAPACITY + 1" };',
+                "message Consumer {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    plugin = _installed_protocyte_plugin()
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(special_path_incremental LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto space #$"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS [==[proto space #$/consumer #$.proto]==]",
+                '    IMPORT_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/imports space #$"',
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
+    subprocess.run(build_command, check=True)
+
+    generated_header = (
+        build_dir / "generated" / f"{generated_file_base('consumer #$.proto')}.hpp"
+    )
+    assert "DERIVED {3u}" in generated_header.read_text(encoding="utf-8")
+    no_change = subprocess.run(
+        build_command, check=True, capture_output=True, text=True
+    )
+    assert "no work to do" in no_change.stdout.lower()
+
+    write_imported(7)
+    subprocess.run(build_command, check=True)
+    assert "DERIVED {8u}" in generated_header.read_text(encoding="utf-8")
+
+    no_change = subprocess.run(
+        build_command, check=True, capture_output=True, text=True
+    )
     assert "no work to do" in no_change.stdout.lower()
 
 
@@ -3309,10 +3414,10 @@ def test_source_mode_codegen_declares_normalized_generated_paths(tmp_path: Path)
         (build_dir / "CMakeFiles" / "protocyte-arguments").glob("*.rsp")
     )
     assert any(
-        f"{(proto_dir / 'café.proto').as_posix()}\n" in response.read_text(
-            encoding="utf-8"
-        )
-        and "--dependency_out=" in response.read_text(encoding="utf-8")
+        f"{(proto_dir / 'café.proto').as_posix()}\n"
+        in response.read_text(encoding="utf-8")
+        and "--include_imports\n" in response.read_text(encoding="utf-8")
+        and "--dependency_out=" not in response.read_text(encoding="utf-8")
         for response in response_files
     )
 
@@ -3657,6 +3762,192 @@ def test_descriptor_set_rejects_unsafe_descriptor_name_at_configure_time(
         "descriptor file name contains an unsafe path segment: nested/./demo.proto"
         in (result.stdout + result.stderr)
     )
+
+
+@pytest.mark.parametrize("selection_mode", ["discover", "explicit"])
+def test_descriptor_set_rejects_protoc_option_name_without_mutating_files(
+    tmp_path: Path,
+    selection_mode: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    escaped_dir = tmp_path / "escaped"
+    source_dir.mkdir()
+    escaped_dir.mkdir()
+    victim = escaped_dir / "victim.proto"
+    victim.write_text("sentinel\n", encoding="utf-8")
+    injected_name = f"--descriptor_set_out={victim.as_posix()}"
+
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    injected = file_set.file.add()
+    injected.name = injected_name
+    injected.syntax = "proto3"
+    injected.message_type.add().name = "Injected"
+    api = file_set.file.add()
+    api.name = "api.proto"
+    api.syntax = "proto3"
+    api.message_type.add().name = "Api"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    protoc = _find_real_protoc(repo_root)
+    plugin = _installed_protocyte_plugin()
+    selection = (
+        "    DISCOVER"
+        if selection_mode == "discover"
+        else f"    PROTOS [==[{injected_name}]==] api.proto"
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_option_injection LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET generated",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                selection,
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "descriptor file name must not begin with '-'" in (
+        result.stdout + result.stderr
+    )
+    assert victim.read_text(encoding="utf-8") == "sentinel\n"
+    assert not (build_dir / "generated").exists()
+
+
+def test_descriptor_set_rejects_casefolded_generated_output_collision(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    for name, message_name in (
+        ("api/demo.proto", "LowerDemo"),
+        ("API/DEMO.proto", "UpperDemo"),
+    ):
+        file = file_set.file.add()
+        file.name = name
+        file.syntax = "proto3"
+        file.message_type.add().name = message_name
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    protoc = _find_real_protoc(repo_root)
+    plugin = _installed_protocyte_plugin()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_output_collision LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET generated",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS api/demo.proto API/DEMO.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "generated file name collision" in output
+    assert "api/demo.proto" in output
+    assert "API/DEMO.proto" in output
+
+
+def test_source_codegen_rejects_casefolded_generated_output_collision(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    lower_proto = source_dir / "api" / "demo.proto"
+    lower_proto.parent.mkdir(parents=True)
+    lower_proto.write_text(
+        'syntax = "proto3"; package lower; message Demo {}\n', encoding="utf-8"
+    )
+    if os.name != "nt":
+        upper_proto = source_dir / "API" / "DEMO.proto"
+        upper_proto.parent.mkdir(parents=True)
+        upper_proto.write_text(
+            'syntax = "proto3"; package upper; message Demo {}\n', encoding="utf-8"
+        )
+
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    plugin = _installed_protocyte_plugin()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(source_output_collision LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET generated",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS api/demo.proto API/DEMO.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "generated file name collision" in output
+    assert "api/demo.proto" in output
+    assert "API/DEMO.proto" in output
 
 
 def test_descriptor_set_codegen_target_uses_descriptor_set_in_without_proto_paths(
