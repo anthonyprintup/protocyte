@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from protocyte.errors import ProtocyteError
+from protocyte.paths import MIN_HASHED_GENERATED_FILE_PATH_BYTES
 
 
 _CPP_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -152,6 +153,8 @@ class GeneratorOptions:
     format_mode: str = "auto"
     clang_format: str | None = None
     clang_format_config: str | None = None
+    generated_path_max_bytes: int | None = None
+    generated_directory_max_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _validate_namespace_prefix(self.namespace_prefix)
@@ -168,6 +171,21 @@ class GeneratorOptions:
             raise ProtocyteError("clang_format must not be empty")
         if self.clang_format_config == "":
             raise ProtocyteError("clang_format_config must not be empty")
+        if (
+            self.generated_path_max_bytes is not None
+            and self.generated_path_max_bytes < MIN_HASHED_GENERATED_FILE_PATH_BYTES
+        ):
+            raise ProtocyteError(
+                "internal generated path budget must be at least "
+                f"{MIN_HASHED_GENERATED_FILE_PATH_BYTES} bytes"
+            )
+        if (
+            self.generated_directory_max_bytes is not None
+            and self.generated_directory_max_bytes < 0
+        ):
+            raise ProtocyteError(
+                "internal generated directory budget must not be negative"
+            )
         if self.format_mode == "off" and (
             self.clang_format is not None or self.clang_format_config is not None
         ):
@@ -269,6 +287,8 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "format",
         "clang_format",
         "clang_format_config",
+        "_protocyte_generated_path_max_bytes",
+        "_protocyte_generated_directory_max_bytes",
     }
     if unknown:
         joined = ", ".join(sorted(unknown))
@@ -322,6 +342,30 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         )
     if clang_format is not None or clang_format_config is not None:
         format_mode = "required"
+    generated_path_max_bytes = None
+    if raw_generated_path_max_bytes := values.get(
+        "_protocyte_generated_path_max_bytes"
+    ):
+        try:
+            generated_path_max_bytes = int(raw_generated_path_max_bytes)
+        except ValueError as exc:
+            raise ProtocyteError(
+                "internal generated path budget must be an integer"
+            ) from exc
+    elif "_protocyte_generated_path_max_bytes" in values:
+        raise ProtocyteError("internal generated path budget must not be empty")
+    generated_directory_max_bytes = None
+    if raw_generated_directory_max_bytes := values.get(
+        "_protocyte_generated_directory_max_bytes"
+    ):
+        try:
+            generated_directory_max_bytes = int(raw_generated_directory_max_bytes)
+        except ValueError as exc:
+            raise ProtocyteError(
+                "internal generated directory budget must be an integer"
+            ) from exc
+    elif "_protocyte_generated_directory_max_bytes" in values:
+        raise ProtocyteError("internal generated directory budget must not be empty")
 
     return GeneratorOptions(
         emit_runtime=emit_runtime,
@@ -332,6 +376,8 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         format_mode=format_mode,
         clang_format=clang_format,
         clang_format_config=clang_format_config,
+        generated_path_max_bytes=generated_path_max_bytes,
+        generated_directory_max_bytes=generated_directory_max_bytes,
     )
 
 

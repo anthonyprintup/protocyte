@@ -36,6 +36,10 @@ from protocyte.model import (
     build_model,
 )
 from protocyte.plugin import GeneratorPolicy, generate_response
+from protocyte.paths import (
+    MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    generated_file_base,
+)
 from protocyte.runtime import runtime_files
 
 
@@ -145,6 +149,76 @@ def test_response_file_names_bound_long_escaped_path_components() -> None:
         assert separator
         assert extension in {"cpp", "hpp"}
         assert filename_stem.endswith(f"~{digest}")
+
+
+@pytest.mark.parametrize(
+    "path_budget",
+    [MIN_HASHED_GENERATED_FILE_PATH_BYTES, 120, 510, 511],
+)
+def test_response_file_names_respect_complete_path_budget(path_budget: int) -> None:
+    long_segment = "é" * 50
+    descriptor_name = f"{long_segment}/{long_segment}.proto"
+    raw_parameter = f"format=off,_protocyte_generated_path_max_bytes={path_budget}"
+    request = _basic_request(
+        parameter=f"_protocyte_options_hex={raw_parameter.encode('utf-8').hex()}"
+    )
+    request.file_to_generate[0] = descriptor_name
+    request.proto_file[0].name = descriptor_name
+
+    response = generate_response(request)
+
+    assert not response.error
+    expected_base = generated_file_base(
+        descriptor_name, max_output_path_bytes=path_budget
+    )
+    assert {file.name for file in response.file} == {
+        f"{expected_base}.cpp",
+        f"{expected_base}.hpp",
+    }
+    assert all(len(file.name.encode("ascii")) <= path_budget for file in response.file)
+    if path_budget < len(generated_file_base(descriptor_name) + ".hpp"):
+        digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
+        assert "/" not in expected_base
+        assert expected_base.endswith(f"~{digest}.protocyte")
+    else:
+        assert "/" in expected_base
+
+
+def test_complete_path_budget_distinguishes_matching_leaf_names() -> None:
+    first = generated_file_base(
+        f"{'first/' * 20}shared.proto",
+        max_output_path_bytes=MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    )
+    second = generated_file_base(
+        f"{'second/' * 20}shared.proto",
+        max_output_path_bytes=MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    )
+
+    assert first != second
+    assert len(first + ".hpp") == MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    assert len(second + ".hpp") == MIN_HASHED_GENERATED_FILE_PATH_BYTES
+
+
+def test_generated_directory_budget_folds_nested_path_at_boundary() -> None:
+    descriptor_name = f"{'readable/' * 12}leaf.proto"
+    ordinary_base = generated_file_base(descriptor_name)
+    ordinary_directory = ordinary_base.rpartition("/")[0]
+
+    at_boundary = generated_file_base(
+        descriptor_name,
+        max_output_path_bytes=255,
+        max_output_directory_bytes=len(ordinary_directory),
+    )
+    over_boundary = generated_file_base(
+        descriptor_name,
+        max_output_path_bytes=255,
+        max_output_directory_bytes=len(ordinary_directory) - 1,
+    )
+
+    assert at_boundary == ordinary_base
+    assert "/" not in over_boundary
+    digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
+    assert over_boundary.endswith(f"~{digest}.protocyte")
 
 
 def test_response_rejects_portable_generated_path_collisions() -> None:

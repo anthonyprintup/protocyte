@@ -355,8 +355,8 @@ def generate_outputs(
             output_budget.consume(content)
             outputs[name] = content
     for file_model in model.generated_files():
-        header_name = _header_name(file_model.name)
-        source_name = _source_name(file_model.name)
+        header_name = _header_name(file_model.name, options)
+        source_name = _source_name(file_model.name, options)
         for name in (header_name, source_name):
             collision = next(
                 (existing for existing in outputs if existing.casefold() == name.casefold()),
@@ -874,7 +874,7 @@ def generate_source(
     output_budget: _OutputBudget | None = None,
 ) -> str:
     w = CppWriter(output_budget=output_budget)
-    w.line(f'#include "{_header_name(file_model.name)}"')
+    w.line(f'#include "{_header_name(file_model.name, options)}"')
     w.line()
     w.line("#if PROTOCYTE_ENABLE_REFLECTION")
     _open_namespace(w, _namespace_parts(file_model, options))
@@ -3906,16 +3906,30 @@ def _walk_messages(messages: list[MessageModel]):
         yield from _walk_messages(message.nested_messages)
 
 
-def _header_name(proto_name: str) -> str:
-    return generated_file_base(proto_name) + ".hpp"
+def _header_name(proto_name: str, options: GeneratorOptions) -> str:
+    return (
+        generated_file_base(
+            proto_name,
+            max_output_path_bytes=options.generated_path_max_bytes,
+            max_output_directory_bytes=options.generated_directory_max_bytes,
+        )
+        + ".hpp"
+    )
 
 
-def _source_name(proto_name: str) -> str:
-    return generated_file_base(proto_name) + ".cpp"
+def _source_name(proto_name: str, options: GeneratorOptions) -> str:
+    return (
+        generated_file_base(
+            proto_name,
+            max_output_path_bytes=options.generated_path_max_bytes,
+            max_output_directory_bytes=options.generated_directory_max_bytes,
+        )
+        + ".cpp"
+    )
 
 
 def _include_path(proto_name: str, options: GeneratorOptions) -> str:
-    path = _header_name(proto_name)
+    path = _header_name(proto_name, options)
     return f"{options.include_prefix}/{path}" if options.include_prefix else path
 
 
