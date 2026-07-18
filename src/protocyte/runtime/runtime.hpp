@@ -2719,8 +2719,13 @@ namespace protocyte {
             if constexpr (::std::is_trivially_copyable_v<T>) {
                 return assign(other);
             } else {
-                clear();
-                if (const auto st = reserve(other.size_); !st) {
+                if (other.empty()) {
+                    clear();
+                    return {};
+                }
+                Vector temp {ctx_};
+                const usize target_capacity {capacity_ > other.size_ ? capacity_ : other.size_};
+                if (const auto st = temp.reserve(target_capacity); !st) {
                     return st;
                 }
                 for (const auto &value : other) {
@@ -2728,10 +2733,11 @@ namespace protocyte {
                     if (!copied) {
                         return copied.status();
                     }
-                    if (const auto st = push_back(protocyte::move(*copied)); !st) {
+                    if (const auto st = temp.push_back(protocyte::move(*copied)); !st) {
                         return st;
                     }
                 }
+                *this = protocyte::move(temp);
                 return {};
             }
         }
@@ -3084,16 +3090,21 @@ namespace protocyte {
             if constexpr (::std::is_trivially_copyable_v<T>) {
                 return assign(other);
             } else {
-                clear();
+                if (other.empty()) {
+                    clear();
+                    return {};
+                }
+                Array temp {context()};
                 for (const auto &value : other) {
                     auto copied = protocyte::copy_value(context(), value);
                     if (!copied) {
                         return copied.status();
                     }
-                    if (const auto st = push_back(protocyte::move(*copied)); !st) {
+                    if (const auto st = temp.push_back(protocyte::move(*copied)); !st) {
                         return st;
                     }
                 }
+                *this = protocyte::move(temp);
                 return {};
             }
         }
@@ -3709,11 +3720,18 @@ namespace protocyte {
             if (this == &other) {
                 return {};
             }
-            clear();
             if (other.size_ == 0u) {
+                clear();
                 return {};
             }
-            if (const auto st = reserve(other.size_); !st) {
+            const auto minimum_bucket_count = bucket_count_for(other.size_);
+            if (!minimum_bucket_count) {
+                return minimum_bucket_count.status();
+            }
+            HashMap temp {ctx_};
+            const usize target_bucket_count {buckets_.size() > *minimum_bucket_count ? buckets_.size() :
+                                                                                       *minimum_bucket_count};
+            if (const auto st = temp.buckets_.resize_default(target_bucket_count); !st) {
                 return st;
             }
             for (const auto entry : other) {
@@ -3725,31 +3743,25 @@ namespace protocyte {
                 if (!copied_value) {
                     return copied_value.status();
                 }
-                if (const auto st = insert_or_assign(protocyte::move(*copied_key), protocyte::move(*copied_value));
+                if (const auto st = temp.insert_or_assign(protocyte::move(*copied_key), protocyte::move(*copied_value));
                     !st) {
                     return st;
                 }
             }
+            *this = protocyte::move(temp);
             return {};
         }
 
         Status reserve(const usize count) noexcept {
-            if (count > max_size()) {
-                return protocyte::unexpected(ErrorCode::count_limit, {});
+            const auto desired = bucket_count_for(count);
+            if (!desired) {
+                return desired.status();
             }
-            usize desired {8u};
-            const usize target {count * 2u};
-            while (desired < target) {
-                if (desired > Config::template Vector<Bucket>::max_size() / 2u) {
-                    return protocyte::unexpected(ErrorCode::count_limit, {});
-                }
-                desired *= 2u;
-            }
-            if (desired <= buckets_.size()) {
+            if (*desired <= buckets_.size()) {
                 return {};
             }
             HashMap next {ctx_};
-            if (const auto st = next.buckets_.resize_default(desired); !st) {
+            if (const auto st = next.buckets_.resize_default(*desired); !st) {
                 return st;
             }
             for (auto &bucket : buckets_) {
@@ -3797,6 +3809,21 @@ namespace protocyte {
         }
 
     protected:
+        static Result<usize> bucket_count_for(const usize count) noexcept {
+            if (count > max_size()) {
+                return protocyte::unexpected(ErrorCode::count_limit, {});
+            }
+            usize desired {8u};
+            const usize target {count * 2u};
+            while (desired < target) {
+                if (desired > Config::template Vector<Bucket>::max_size() / 2u) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                desired *= 2u;
+            }
+            return desired;
+        }
+
         Status ensure_capacity_for_one_more() noexcept {
             const auto next_size = checked_add(size_, 1u);
             if (!next_size) {
