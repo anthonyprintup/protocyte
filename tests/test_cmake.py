@@ -125,6 +125,131 @@ def _configure_cmake_snippet(
     )
 
 
+def _configure_runtime_ownership_project(
+    tmp_path: Path,
+    *,
+    api: str,
+    first_out_dir: str,
+    second_out_dir: str,
+    first_prefix: str | None = None,
+    second_prefix: str | None = None,
+    first_options: tuple[str, ...] = ("format=off",),
+    second_options: tuple[str, ...] = ("format=off",),
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for runtime output ownership coverage")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    (source_dir / "descriptor_set.pb").write_bytes(b"placeholder")
+
+    if api == "generate":
+        project_languages = "NONE"
+        function_name = "protocyte_generate"
+        file_keyword = "PROTOS"
+        first_target = "first_codegen"
+        second_target = "second_codegen"
+    elif api == "proto_library":
+        project_languages = "CXX"
+        function_name = "protocyte_add_proto_library"
+        file_keyword = "PROTOS"
+        first_target = "first_library"
+        second_target = "second_library"
+    elif api == "descriptor_library":
+        project_languages = "CXX"
+        function_name = "protocyte_add_descriptor_set_library"
+        file_keyword = "FILES"
+        first_target = "first_library"
+        second_target = "second_library"
+    else:
+        raise AssertionError(f"unsupported runtime ownership API: {api}")
+
+    def render_invocation(
+        target: str,
+        descriptor_name: str,
+        out_dir: str,
+        prefix: str | None,
+        options: tuple[str, ...],
+        headers_var: str,
+    ) -> list[str]:
+        lines = [
+            f"{function_name}(",
+            f"    TARGET {target}",
+            '    DESCRIPTOR_SET "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb"',
+            f'    OUT_DIR "${{CMAKE_CURRENT_BINARY_DIR}}/{out_dir}"',
+            f"    {file_keyword} {descriptor_name}",
+            "    EMIT_RUNTIME",
+        ]
+        if prefix is not None:
+            lines.append(f"    RUNTIME_PREFIX {prefix}")
+        if options:
+            lines.append("    OPTIONS")
+            lines.extend(f"        {option}" for option in options)
+        lines.extend([f"    GENERATED_HEADERS_VAR {headers_var}", ")"])
+        return lines
+
+    cmake_lines = [
+        "cmake_minimum_required(VERSION 3.24)",
+        f"project(runtime_output_ownership LANGUAGES {project_languages})",
+        f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+        "function(_protocyte_setup_codegen_internal fetch_missing_import_sources)",
+        "endfunction()",
+        'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")',
+        'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_OPTIONS_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb")',
+        'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "")',
+        'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${CMAKE_COMMAND}")',
+        'set(PROTOCYTE_PROTOC_EXECUTABLE "${CMAKE_COMMAND}")',
+        'set(PROTOCYTE_PROTOC_DEPENDENCY "${CMAKE_COMMAND}")',
+    ]
+    if api != "generate":
+        cmake_lines.extend(
+            [
+                "add_library(protocyte_codegen INTERFACE)",
+                "add_library(protocyte::codegen ALIAS protocyte_codegen)",
+            ]
+        )
+    cmake_lines.extend(
+        render_invocation(
+            first_target,
+            "first.proto",
+            first_out_dir,
+            first_prefix,
+            first_options,
+            "first_headers",
+        )
+    )
+    cmake_lines.extend(
+        render_invocation(
+            second_target,
+            "second.proto",
+            second_out_dir,
+            second_prefix,
+            second_options,
+            "second_headers",
+        )
+    )
+    headers_output = build_dir / "headers.txt"
+    cmake_lines.extend(
+        [
+            f'file(WRITE "{headers_output.as_posix()}" "first=${{first_headers}}\nsecond=${{second_headers}}\n")',
+            "",
+        ]
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(cmake_lines), encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result, headers_output
+
+
 def _write_python_plugin_wrapper(path: Path, repo_root: Path) -> Path:
     if os.name == "nt":
         wrapper = path.with_suffix(".cmd")
@@ -1088,6 +1213,110 @@ def test_public_cmake_functions_reject_mutually_exclusive_arguments(
     assert result.returncode != 0
     output = " ".join((result.stdout + result.stderr).split())
     assert expected_error in output
+
+
+@pytest.mark.parametrize(
+    ("api", "first_owner", "second_owner"),
+    [
+        ("generate", "first_codegen", "second_codegen"),
+        (
+            "proto_library",
+            "first_library__protocyte_codegen",
+            "second_library__protocyte_codegen",
+        ),
+        (
+            "descriptor_library",
+            "first_library__protocyte_codegen",
+            "second_library__protocyte_codegen",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "second_options",
+    [
+        pytest.param(("format=off",), id="same-options"),
+        pytest.param(("comments=off",), id="different-options"),
+    ],
+)
+def test_cmake_rejects_multiple_owners_for_one_emitted_runtime(
+    tmp_path: Path,
+    api: str,
+    first_owner: str,
+    second_owner: str,
+    second_options: tuple[str, ...],
+) -> None:
+    result, _ = _configure_runtime_ownership_project(
+        tmp_path,
+        api=api,
+        first_out_dir="shared",
+        second_out_dir="shared",
+        second_options=second_options,
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert "runtime output" in output
+    assert "shared/protocyte/runtime/runtime.hpp" in output.replace("\\", "/")
+    assert f"already owned by code generation target '{first_owner}'" in output
+    assert f"target '{second_owner}' cannot also use EMIT_RUNTIME" in output
+    assert "RUNTIME_TARGET" in output
+
+
+@pytest.mark.parametrize("api", ["generate", "proto_library", "descriptor_library"])
+@pytest.mark.parametrize(
+    (
+        "first_out_dir",
+        "second_out_dir",
+        "first_prefix",
+        "second_prefix",
+        "expected_first_runtime",
+        "expected_second_runtime",
+    ),
+    [
+        pytest.param(
+            "shared",
+            "shared",
+            "runtime/first",
+            "runtime/second",
+            "shared/runtime/first/runtime.hpp",
+            "shared/runtime/second/runtime.hpp",
+            id="different-prefixes",
+        ),
+        pytest.param(
+            "first-output",
+            "second-output",
+            None,
+            None,
+            "first-output/protocyte/runtime/runtime.hpp",
+            "second-output/protocyte/runtime/runtime.hpp",
+            id="different-output-directories",
+        ),
+    ],
+)
+def test_cmake_allows_distinct_emitted_runtime_outputs(
+    tmp_path: Path,
+    api: str,
+    first_out_dir: str,
+    second_out_dir: str,
+    first_prefix: str | None,
+    second_prefix: str | None,
+    expected_first_runtime: str,
+    expected_second_runtime: str,
+) -> None:
+    result, headers_output = _configure_runtime_ownership_project(
+        tmp_path,
+        api=api,
+        first_out_dir=first_out_dir,
+        second_out_dir=second_out_dir,
+        first_prefix=first_prefix,
+        second_prefix=second_prefix,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    headers = headers_output.read_text(encoding="utf-8").replace("\\", "/")
+    first_headers, second_headers = headers.splitlines()
+    assert expected_first_runtime in first_headers
+    assert expected_second_runtime in second_headers
 
 
 @pytest.mark.parametrize(
@@ -2394,6 +2623,94 @@ def test_generate_accepts_relative_proto_root_at_configure_time(tmp_path: Path) 
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+def test_proto_libraries_build_with_distinct_emitted_runtime_outputs(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for emitted runtime ownership build coverage")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    plugin = _installed_protocyte_plugin()
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    for name in ("first", "second", "separate"):
+        (proto_dir / f"{name}.proto").write_text(
+            f'syntax = "proto3"; package demo; message {name.title()} {{}}\n',
+            encoding="utf-8",
+        )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(distinct_runtime_outputs LANGUAGES CXX)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                "add_library(protocyte_codegen INTERFACE)",
+                "add_library(protocyte::codegen ALIAS protocyte_codegen)",
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_add_proto_library(",
+                "    TARGET first_library",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shared"',
+                "    PROTOS proto/first.proto",
+                "    EMIT_RUNTIME",
+                "    RUNTIME_PREFIX runtime/first",
+                "    OPTIONS format=off",
+                ")",
+                "protocyte_add_proto_library(",
+                "    TARGET second_library",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/shared"',
+                "    PROTOS proto/second.proto",
+                "    EMIT_RUNTIME",
+                "    RUNTIME_PREFIX runtime/second",
+                "    OPTIONS format=off",
+                ")",
+                "protocyte_add_proto_library(",
+                "    TARGET separate_library",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/separate"',
+                "    PROTOS proto/separate.proto",
+                "    EMIT_RUNTIME",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--target",
+            "first_library",
+            "second_library",
+            "separate_library",
+        ],
+        check=True,
+    )
+
+    assert (build_dir / "shared" / "runtime" / "first" / "runtime.hpp").is_file()
+    assert (build_dir / "shared" / "runtime" / "second" / "runtime.hpp").is_file()
+    assert (
+        build_dir / "separate" / "protocyte" / "runtime" / "runtime.hpp"
+    ).is_file()
 
 
 def test_source_codegen_regenerates_when_transitive_import_changes(

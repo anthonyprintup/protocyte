@@ -561,7 +561,11 @@ This is the lower-level primitive. It creates the custom target named by
   `NAMESPACE_PREFIX` or `INCLUDE_PREFIX` through `OPTIONS`; duplicate plugin
   parameter names are rejected.
 - `EMIT_RUNTIME` emits `runtime.hpp` into `OUT_DIR`. The default location is
-  `protocyte/runtime/runtime.hpp`.
+  `protocyte/runtime/runtime.hpp`. Each emitted runtime path must have exactly
+  one code-generation owner. Multiple `EMIT_RUNTIME` calls may share `OUT_DIR`
+  only when their `RUNTIME_PREFIX` values select different runtime paths.
+  Otherwise, emit the runtime once or omit `EMIT_RUNTIME` and select a shared
+  runtime target through `RUNTIME_TARGET` in the library helpers.
 - `RUNTIME_PREFIX` changes the runtime's relative virtual directory. With
   `EMIT_RUNTIME`, it controls both the emitted path and generated include. Without
   `EMIT_RUNTIME`, it changes only the generated include path.
