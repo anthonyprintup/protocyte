@@ -2062,7 +2062,9 @@ def _emit_wire_api(
         f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {{"
     )
     with w.indent():
-        w.line("::protocyte::SliceReader reader {input.data(), input.size()};")
+        w.line("const auto checked_input = ::protocyte::checked_span_of(input);")
+        w.line("if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }")
+        w.line("::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};")
         w.line("return parse(ctx, reader);")
     w.line("}")
     w.line()

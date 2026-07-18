@@ -162,7 +162,11 @@ namespace protocyte_smoke::test::compat {
 
         static ::protocyte::Result<EncodingMatrix_Inner>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -1163,7 +1167,11 @@ namespace protocyte_smoke::test::compat {
 
         static ::protocyte::Result<EncodingMatrix> parse(Context &ctx,
                                                          ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 

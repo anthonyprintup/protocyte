@@ -990,7 +990,7 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
     assert "ByteArray(ByteArray &&other) noexcept" not in runtime_header
     assert "Status assign(const Span<const u8> view) noexcept" in array_body
-    assert "copy_bytes(data(), view.data(), view.size());" in array_body
+    assert "copy_bytes(data(), checked_view->data(), checked_view->size());" in array_body
     assert "Span<const u8> view() const noexcept" in array_body
     assert "Span<u8> mutable_view() noexcept" in array_body
     assert "const usize old_size {size_};" in array_body
@@ -1003,11 +1003,10 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
         in fixed_byte_array_body
     )
     assert "return bytes_.resize_for_overwrite(count);" in bytes_body
-    assert "copy_bytes(temp.data(), view.data(), view.size());" in bytes_body
+    assert "copy_bytes(temp.data(), checked_view->data(), checked_view->size());" in bytes_body
     assert "constexpr operator ::std::string_view() const noexcept" in span_body
     assert "requires(::std::same_as<::std::remove_cv_t<T>, char>)" in span_body
-    assert "return ::std::string_view {data_, size_};" in span_body
-    assert "data_ == nullptr ? ::std::string_view {}" not in span_body
+    assert "return size_ == 0u ? ::std::string_view {} : ::std::string_view {data_, size_};" in span_body
     assert (
         "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n    using StringView = ::std::string_view;\n#else\n    using StringView = Span<const char>;\n#endif"
         in runtime_header
@@ -1024,7 +1023,10 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
         "#if PROTOCYTE_ENABLE_FMT_FORMAT\n    template<class Config> std::string_view format_as(const String<Config> &value) noexcept"
         in runtime_header
     )
-    assert "return ::std::string_view {value.data(), value.size()};" in runtime_header
+    assert (
+        "return value.empty() ? ::std::string_view {} : ::std::string_view {value.data(), value.size()};"
+        in runtime_header
+    )
     assert (
         "#if PROTOCYTE_ENABLE_STD_FORMAT && defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\nnamespace std {"
         in runtime_header
@@ -1385,7 +1387,15 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "void bind(Context *ctx) noexcept { ctx_ = ctx; }"
+        "Status bind(Context *ctx) noexcept {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "if (ctx_ == ctx) {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "if (data_ != nullptr) {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1393,7 +1403,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "if (ctx_ != nullptr && view.size() > ctx_->limits.max_string_bytes) {"
+        "if (ctx_ != nullptr && checked_view->size() > ctx_->limits.max_string_bytes) {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1660,9 +1670,9 @@ def test_runtime_string_assign_checks_size_limit_before_utf8_validation() -> Non
     )[1]
     assign_body = assign_body.split("Status validate() const noexcept", maxsplit=1)[0]
 
-    assert "if (const auto st = check_size_limit(view.size()); !st)" in assign_body
-    assert assign_body.index("check_size_limit(view.size())") < assign_body.index(
-        "validate_utf8(view)"
+    assert "if (const auto st = check_size_limit(checked_view->size()); !st)" in assign_body
+    assert assign_body.index("check_size_limit(checked_view->size())") < assign_body.index(
+        "validate_utf8(*checked_view)"
     )
     assert "Status assign_owned" not in header
 
@@ -2642,7 +2652,9 @@ def test_generated_header_contains_expected_field_api() -> None:
         "static ::protocyte::Result<Sample> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept"
         in header
     )
-    assert "::protocyte::SliceReader reader {input.data(), input.size()};" in header
+    assert "const auto checked_input = ::protocyte::checked_span_of(input);" in header
+    assert "if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }" in header
+    assert "::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};" in header
     assert "template <::protocyte::WriterLike Writer>" in header
     assert (
         "::protocyte::Result<::protocyte::usize> serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept"

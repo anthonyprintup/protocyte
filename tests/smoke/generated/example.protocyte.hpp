@@ -220,7 +220,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -689,7 +693,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -1068,7 +1076,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -1348,7 +1360,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -1630,7 +1646,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -2102,7 +2122,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -4044,7 +4068,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -7926,7 +7954,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -8133,7 +8165,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -8343,7 +8379,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -8557,7 +8597,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -8826,7 +8870,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<ExtraMessage> parse(Context &ctx,
                                                        ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -9190,7 +9238,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<CrossMessageConstants_Nested>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -9548,7 +9600,11 @@ namespace test::ultimate {
 
         static ::protocyte::Result<CrossMessageConstants>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
