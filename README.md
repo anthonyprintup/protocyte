@@ -638,9 +638,9 @@ of `PROTOS`: each entry is a relative virtual descriptor name inside the set.
 Choose exactly one of `DISCOVER` or `FILES`. `PROTO_ROOT` and `IMPORT_DIRS` do
 not apply because the descriptor set already carries its dependency descriptors.
 
+All public helpers reject unknown arguments during configuration.
 `protocyte_generate`, `protocyte_add_proto_library`, and
-`protocyte_add_descriptor_set_library` reject unknown arguments and keywords
-without values during configuration.
+`protocyte_add_descriptor_set_library` also reject keywords without values.
 
 ## Debugging
 
