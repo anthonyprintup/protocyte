@@ -11,6 +11,7 @@ import pytest
 from google.protobuf import descriptor_pb2
 
 from protocyte import __version__
+from protocyte.paths import generated_file_base
 
 
 def _find_real_protoc(repo_root: Path) -> Path:
@@ -316,6 +317,7 @@ def test_cmake_generation_uses_consumer_source_directory_for_style_lookup() -> N
     [
         ('api/bad"name.proto', "api/bad~22name.protocyte"),
         ("api/café.proto", "api/caf~C3~A9.protocyte"),
+        ("api/demo;legacy.proto", "api/demo~3Blegacy.protocyte"),
         ("CON.proto", "~43ON.protocyte"),
         ("api/literal~22.proto", "api/literal~7E22.protocyte"),
     ],
@@ -336,6 +338,30 @@ def test_cmake_normalizes_generated_paths_like_the_plugin(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert output.read_text(encoding="utf-8") == expected
+
+
+def test_cmake_bounds_long_generated_components_like_the_plugin(
+    tmp_path: Path,
+) -> None:
+    long_segment = "é" * 50
+    descriptor_name = f"{long_segment}/{long_segment}.proto"
+    expected = generated_file_base(descriptor_name)
+    output = tmp_path / "normalized.txt"
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f"_protocyte_normalize_generated_path(normalized [==[{descriptor_name}]==])",
+                f'file(WRITE "{output.as_posix()}" "${{normalized}}")',
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text(encoding="utf-8") == expected
+    directory, filename_base = expected.split("/")
+    assert len(directory.encode("ascii")) == 255
+    assert len(f"{filename_base}.hpp".encode("ascii")) == 255
 
 
 @pytest.mark.parametrize(
@@ -1316,7 +1342,7 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
 @pytest.mark.parametrize(
     ("descriptor_name", "generated_stem"),
     [
-        ("api/demo;legacy.proto", "api/demo;legacy.protocyte"),
+        ("api/demo;legacy.proto", "api/demo~3Blegacy.protocyte"),
         ('api/demo"legacy.proto', "api/demo~22legacy.protocyte"),
     ],
 )
@@ -1777,6 +1803,80 @@ def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) 
     )
 
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+
+@pytest.mark.parametrize(
+    ("descriptor_name", "message_name", "generator"),
+    [
+        ("api/demo;legacy.proto", "SemicolonName", None),
+        ("é" * 50 + "/unicode.proto", "LongUnicodePath", "Ninja"),
+    ],
+)
+def test_descriptor_set_library_builds_portable_descriptor_name(
+    tmp_path: Path,
+    descriptor_name: str,
+    message_name: str,
+    generator: str | None,
+) -> None:
+    if generator == "Ninja" and shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for portable long-path integration coverage")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = descriptor_name
+    user.package = "demo"
+    user.syntax = "proto3"
+    user.message_type.add().name = message_name
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    protoc = _find_real_protoc(repo_root)
+    plugin = _installed_protocyte_plugin()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_portable_library LANGUAGES CXX)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'add_subdirectory("{repo_root.as_posix()}" "${{CMAKE_CURRENT_BINARY_DIR}}/protocyte")',
+                "protocyte_add_descriptor_set_library(",
+                "    TARGET portable_proto",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                "    DISCOVER",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configure_command = ["cmake", "-S", str(source_dir), "-B", str(build_dir)]
+    if generator is not None:
+        configure_command.extend(["-G", generator])
+    subprocess.run(configure_command, check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "portable_proto"],
+        check=True,
+    )
+
+    generated_base = generated_file_base(descriptor_name)
+    assert (
+        build_dir / "portable_proto_protocyte" / f"{generated_base}.hpp"
+    ).is_file()
+    assert (
+        build_dir / "portable_proto_protocyte" / f"{generated_base}.cpp"
+    ).is_file()
+    if ";" in descriptor_name:
+        assert generated_base == "api/demo~3Blegacy.protocyte"
+    else:
+        long_generated_directory = generated_base.split("/", 1)[0]
+        assert len(long_generated_directory.encode("ascii")) == 255
 
 
 def test_cmake_constraints_pin_the_private_environment() -> None:
