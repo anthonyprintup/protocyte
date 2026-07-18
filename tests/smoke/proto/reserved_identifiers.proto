@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package _Package.__LINE__;
+
+import "protocyte/options.proto";
+
+option (protocyte.package_constant) = { name: "__DATE__" i32: 7 };
+option (protocyte.package_constant) = { name: "class" i32: 8 };
+
+enum __FILE__ {
+  _Upper = 0;
+  value__gap = 1;
+}
+
+message __LINE__ {
+  option (protocyte.constant) = { name: "__TIME__" i32: 9 };
+
+  enum _NestedEnum {
+    __STDC__ = 0;
+    enum_trailing_ = 1;
+  }
+
+  message Nested__Message {
+    int32 _Inner = 1;
+  }
+
+  oneof _Choice {
+    string __FILE__ = 1;
+    int32 value__gap = 2;
+  }
+
+  int32 _Upper = 3;
+  int32 trailing_ = 4;
+  __FILE__ enum__value = 5;
+  Nested__Message class = 6;
+  int32 _ = 7;
+}
+
+message class {
+  enum KeywordValues {
+    class = 0;
+  }
+
+  message struct {
+    int32 value = 1;
+  }
+
+  oneof and {
+    int32 value = 1;
+  }
+
+  struct nested = 2;
+}

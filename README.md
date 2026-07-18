@@ -832,6 +832,19 @@ components are portable, non-reserved C++ identifiers. Empty components, C++
 keywords, leading underscores, extra colons, surrounding component whitespace,
 control characters, and non-ASCII identifier characters are rejected.
 
+Generated schema identifiers are escaped when their normalized spelling starts
+with an underscore or contains a double underscore, including predefined macro
+names such as `__LINE__`. The stable escaped form is
+`protocyte_escaped_<lowercase-ascii-hex>`. Direct uses of C++ keywords retain
+the historical trailing underscore (`class` becomes `class_`). Fields and
+oneofs use a `protocyte`-suffixed stem only when that trailing underscore would
+otherwise combine with generated storage or API suffixes into a reserved
+double-underscore identifier. Consequently, only schemas whose old output
+contained implementation-reserved identifiers receive source-level API name
+changes; ordinary generated names and safely emitted keyword names are
+unchanged. Generation rejects collisions between an escaped name and an
+existing schema name with both owners in the diagnostic.
+
 Formatting uses `format=auto` by default. If `clang-format` is on `PATH`,
 protocyte uses it for generated C++ output. If it is unavailable and no
 explicit formatter setting is supplied, protocyte still emits generated files
