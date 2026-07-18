@@ -5,12 +5,19 @@ project(protocyte_quickstart LANGUAGES CXX)
 set(PROTOC_EXECUTABLE "" CACHE FILEPATH "Path to protoc")
 set(PROTOCYTE_PLUGIN_EXECUTABLE "" CACHE FILEPATH "Path to protoc-gen-protocyte")
 
-if(NOT EXISTS "${PROTOC_EXECUTABLE}")
-    message(FATAL_ERROR "Set PROTOC_EXECUTABLE to an existing protoc executable")
-endif()
-if(NOT EXISTS "${PROTOCYTE_PLUGIN_EXECUTABLE}")
-    message(FATAL_ERROR "Set PROTOCYTE_PLUGIN_EXECUTABLE to an existing protoc-gen-protocyte executable")
-endif()
+foreach(tool_variable IN ITEMS PROTOC_EXECUTABLE PROTOCYTE_PLUGIN_EXECUTABLE)
+    set(tool_path "${${tool_variable}}")
+    cmake_path(
+        ABSOLUTE_PATH tool_path
+        BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        NORMALIZE
+        OUTPUT_VARIABLE resolved_tool_path
+    )
+    if(NOT EXISTS "${resolved_tool_path}" OR IS_DIRECTORY "${resolved_tool_path}")
+        message(FATAL_ERROR "Set ${tool_variable} to an existing executable file")
+    endif()
+    set(${tool_variable} "${resolved_tool_path}")
+endforeach()
 
 set(PROTO_FILE "${CMAKE_CURRENT_SOURCE_DIR}/quickstart.proto")
 set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")

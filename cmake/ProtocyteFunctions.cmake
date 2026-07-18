@@ -737,7 +737,39 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
     set(${out_plugin} "${protocyte_plugin_executable}" PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_set_protobuf_import_dir candidate_dir)
+function(_protocyte_resolve_stable_filesystem_path out_var candidate namespace)
+    if(IS_ABSOLUTE "${candidate}")
+        cmake_path(NORMAL_PATH candidate OUTPUT_VARIABLE resolved_candidate)
+    else()
+        string(SHA256 candidate_key "${namespace}|${candidate}")
+        set(property_name "PROTOCYTE_INTERNAL_RESOLVED_${namespace}_${candidate_key}")
+        get_property(candidate_was_resolved GLOBAL PROPERTY "${property_name}" SET)
+        if(candidate_was_resolved)
+            get_property(resolved_candidate GLOBAL PROPERTY "${property_name}")
+        else()
+            cmake_path(
+                ABSOLUTE_PATH candidate
+                BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                NORMALIZE
+                OUTPUT_VARIABLE resolved_candidate
+            )
+            set_property(GLOBAL PROPERTY "${property_name}" "${resolved_candidate}")
+        endif()
+    endif()
+
+    set(${out_var} "${resolved_candidate}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_set_resolved_protobuf_import_dir candidate_dir)
+    set(
+        PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR
+        "${candidate_dir}"
+        CACHE INTERNAL
+        "resolved protobuf import root for the active protocyte toolchain"
+    )
+endfunction()
+
+function(_protocyte_set_protobuf_import_dir candidate_dir toolchain_identity)
     if("${candidate_dir}" STREQUAL "")
         return()
     endif()
@@ -758,22 +790,108 @@ function(_protocyte_set_protobuf_import_dir candidate_dir)
         CACHE INTERNAL
         "protobuf import root containing google/protobuf/descriptor.proto"
     )
+    set(
+        PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR
+        "${candidate_dir}"
+        CACHE INTERNAL
+        "automatically discovered protobuf import root"
+    )
+    set(
+        PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN
+        "${toolchain_identity}"
+        CACHE INTERNAL
+        "toolchain associated with the automatically discovered protobuf import root"
+    )
+    unset(PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR CACHE)
+    _protocyte_set_resolved_protobuf_import_dir("${candidate_dir}")
 endfunction()
 
-function(_protocyte_resolve_protobuf_import_dir)
-    if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+function(_protocyte_resolve_protobuf_import_dir out_explicit toolchain_identity)
+    set(${out_explicit} FALSE PARENT_SCOPE)
+    unset(PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR CACHE)
+    unset(PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR CACHE)
+    set(protobuf_toolchain_changed FALSE)
+
+    set(configured_import_dir "${PROTOCYTE_PROTOBUF_IMPORT_DIR}")
+    if(NOT configured_import_dir STREQUAL "")
+        _protocyte_resolve_stable_filesystem_path(
+            resolved_configured_import_dir
+            "${configured_import_dir}"
+            PROTOBUF_IMPORT
+        )
+        set(auto_import_dir "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR}")
+        if(
+            NOT auto_import_dir STREQUAL ""
+            AND resolved_configured_import_dir STREQUAL auto_import_dir
+        )
+            if(
+                "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN}" STREQUAL "${toolchain_identity}"
+                AND EXISTS "${auto_import_dir}/google/protobuf/descriptor.proto"
+            )
+                _protocyte_set_resolved_protobuf_import_dir("${auto_import_dir}")
+                return()
+            endif()
+
+            if(NOT "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN}" STREQUAL "${toolchain_identity}")
+                set(protobuf_toolchain_changed TRUE)
+                set(
+                    PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR
+                    "${auto_import_dir}"
+                    CACHE INTERNAL
+                    "protobuf import root associated with the previously selected protoc toolchain"
+                )
+            endif()
+            unset(PROTOCYTE_PROTOBUF_IMPORT_DIR CACHE)
+            unset(PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR CACHE)
+            unset(PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN CACHE)
+        else()
+            set(${out_explicit} TRUE PARENT_SCOPE)
+            if(
+                IS_DIRECTORY "${resolved_configured_import_dir}"
+                AND EXISTS "${resolved_configured_import_dir}/google/protobuf/descriptor.proto"
+            )
+                _protocyte_set_resolved_protobuf_import_dir("${resolved_configured_import_dir}")
+            endif()
+            return()
+        endif()
+    endif()
+
+    set(protoc_import_executable "${PROTOCYTE_PROTOC_EXECUTABLE}")
+    if(NOT protoc_import_executable STREQUAL "" AND NOT protoc_import_executable MATCHES "\\$<")
+        cmake_path(GET protoc_import_executable PARENT_PATH protoc_bin_dir)
+        _protocyte_set_protobuf_import_dir(
+            "${protoc_bin_dir}/../include"
+            "${toolchain_identity}"
+        )
+        if(DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR)
+            return()
+        endif()
+    endif()
+
+    if(protobuf_toolchain_changed)
+        # Protobuf_INCLUDE_DIRS, protobuf_SOURCE_DIR, and protobuf library targets
+        # may still describe the previous toolchain. Reusing those values would
+        # silently pair a new compiler with stale import definitions. Callers can
+        # opt into a shared root through PROTOCYTE_PROTOBUF_IMPORT_DIR, while the
+        # fetch fallback below provides a package-controlled shared source tree.
         return()
     endif()
 
     if(DEFINED protobuf_SOURCE_DIR AND EXISTS "${protobuf_SOURCE_DIR}/src/google/protobuf/descriptor.proto")
-        _protocyte_set_protobuf_import_dir("${protobuf_SOURCE_DIR}/src")
+        _protocyte_set_protobuf_import_dir(
+            "${protobuf_SOURCE_DIR}/src"
+            "${toolchain_identity}"
+        )
         return()
     endif()
 
     if(DEFINED Protobuf_INCLUDE_DIRS)
         foreach(include_dir IN LISTS Protobuf_INCLUDE_DIRS)
-            _protocyte_set_protobuf_import_dir("${include_dir}")
-            if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+            _protocyte_set_protobuf_import_dir(
+                "${include_dir}"
+                "${toolchain_identity}"
+            )
+            if(DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR)
                 return()
             endif()
         endforeach()
@@ -794,36 +912,15 @@ function(_protocyte_resolve_protobuf_import_dir)
                 continue()
             endif()
 
-            _protocyte_set_protobuf_import_dir("${include_dir}")
-            if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
+            _protocyte_set_protobuf_import_dir(
+                "${include_dir}"
+                "${toolchain_identity}"
+            )
+            if(DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR)
                 return()
             endif()
         endforeach()
     endforeach()
-
-    set(protoc_import_executable "${PROTOCYTE_PROTOC_EXECUTABLE}")
-    if(
-        (protoc_import_executable STREQUAL "" OR protoc_import_executable MATCHES "\\$<")
-        AND DEFINED Protobuf_PROTOC_EXECUTABLE
-        AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
-        AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$|\\$<"
-    )
-        set(protoc_import_executable "${Protobuf_PROTOC_EXECUTABLE}")
-    endif()
-
-    if(NOT protoc_import_executable STREQUAL "" AND NOT protoc_import_executable MATCHES "\\$<")
-        cmake_path(
-            ABSOLUTE_PATH protoc_import_executable
-            BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            NORMALIZE
-            OUTPUT_VARIABLE protoc_import_executable
-        )
-        cmake_path(GET protoc_import_executable PARENT_PATH protoc_bin_dir)
-        _protocyte_set_protobuf_import_dir("${protoc_bin_dir}/../include")
-        if(DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL "")
-            return()
-        endif()
-    endif()
 endfunction()
 
 function(_protocyte_resolve_protoc_path out_executable out_dependency candidate)
@@ -833,11 +930,10 @@ function(_protocyte_resolve_protoc_path out_executable out_dependency candidate)
         return()
     endif()
 
-    cmake_path(
-        ABSOLUTE_PATH candidate
-        BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        NORMALIZE
-        OUTPUT_VARIABLE resolved_candidate
+    _protocyte_resolve_stable_filesystem_path(
+        resolved_candidate
+        "${candidate}"
+        PROTOC
     )
     if(NOT EXISTS "${resolved_candidate}" OR IS_DIRECTORY "${resolved_candidate}")
         message(
@@ -849,6 +945,24 @@ function(_protocyte_resolve_protoc_path out_executable out_dependency candidate)
 
     set(${out_executable} "${resolved_candidate}" PARENT_SCOPE)
     set(${out_dependency} "${resolved_candidate}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_fetch_protobuf_import_sources toolchain_identity)
+    FetchContent_Declare(
+        protocyte_protobuf_imports
+        GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+        GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
+        SOURCE_SUBDIR _protocyte_import_sources_only
+    )
+    FetchContent_MakeAvailable(protocyte_protobuf_imports)
+    FetchContent_GetProperties(
+        protocyte_protobuf_imports
+        SOURCE_DIR protocyte_protobuf_imports_source_dir
+    )
+    _protocyte_set_protobuf_import_dir(
+        "${protocyte_protobuf_imports_source_dir}/src"
+        "${toolchain_identity}"
+    )
 endfunction()
 
 function(_protocyte_prepare_plugin)
@@ -876,7 +990,7 @@ function(_protocyte_prepare_plugin)
     set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${protocyte_plugin_executable}")
 endfunction()
 
-function(_protocyte_ensure_protobuf)
+function(_protocyte_ensure_protobuf fetch_missing_import_sources)
     if(TARGET protobuf::protoc)
         set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
         set(protoc_dependency protobuf::protoc)
@@ -932,8 +1046,7 @@ function(_protocyte_ensure_protobuf)
                 GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
             )
             FetchContent_MakeAvailable(protobuf)
-            FetchContent_GetProperties(protobuf SOURCE_DIR protobuf_source_dir)
-            _protocyte_set_protobuf_import_dir("${protobuf_source_dir}/src")
+            FetchContent_GetProperties(protobuf SOURCE_DIR protobuf_SOURCE_DIR)
             set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
             set(protoc_dependency protobuf::protoc)
         else()
@@ -948,13 +1061,58 @@ function(_protocyte_ensure_protobuf)
 
     set(PROTOCYTE_PROTOC_EXECUTABLE "${protoc_executable}" CACHE INTERNAL "protoc executable for protocyte")
     set(PROTOCYTE_PROTOC_DEPENDENCY "${protoc_dependency}" CACHE INTERNAL "protoc dependency for protocyte")
-    _protocyte_resolve_protobuf_import_dir()
+    set(protoc_toolchain_identity "${protoc_dependency}|${protoc_executable}")
+    if(TARGET "${protoc_dependency}")
+        get_target_property(protoc_target_is_imported "${protoc_dependency}" IMPORTED)
+        if(protoc_target_is_imported)
+            get_target_property(protoc_imported_location "${protoc_dependency}" IMPORTED_LOCATION)
+            if(protoc_imported_location)
+                string(APPEND protoc_toolchain_identity "|${protoc_imported_location}")
+            endif()
+            get_target_property(
+                protoc_imported_configurations
+                "${protoc_dependency}"
+                IMPORTED_CONFIGURATIONS
+            )
+            foreach(protoc_configuration IN LISTS protoc_imported_configurations)
+                string(TOUPPER "${protoc_configuration}" protoc_configuration_upper)
+                get_target_property(
+                    protoc_configuration_location
+                    "${protoc_dependency}"
+                    "IMPORTED_LOCATION_${protoc_configuration_upper}"
+                )
+                if(protoc_configuration_location)
+                    string(
+                        APPEND
+                        protoc_toolchain_identity
+                        "|${protoc_configuration_upper}=${protoc_configuration_location}"
+                    )
+                endif()
+            endforeach()
+        endif()
+    endif()
+    _protocyte_resolve_protobuf_import_dir(
+        protocyte_import_dir_is_explicit
+        "${protoc_toolchain_identity}"
+    )
+    if(
+        NOT DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR
+        AND NOT protocyte_import_dir_is_explicit
+        AND fetch_missing_import_sources
+        AND PROTOCYTE_FETCH_PROTOBUF
+    )
+        _protocyte_fetch_protobuf_import_sources("${protoc_toolchain_identity}")
+    endif()
+endfunction()
+
+function(_protocyte_setup_codegen_internal fetch_missing_import_sources)
+    _protocyte_prepare_plugin()
+    _protocyte_ensure_protobuf("${fetch_missing_import_sources}")
 endfunction()
 
 function(protocyte_setup_codegen)
     _protocyte_validate_parsed_arguments("protocyte_setup_codegen" "${ARGN}" "")
-    _protocyte_prepare_plugin()
-    _protocyte_ensure_protobuf()
+    _protocyte_setup_codegen_internal(TRUE)
 endfunction()
 
 function(protocyte_generate)
@@ -1033,6 +1191,7 @@ function(protocyte_generate)
     endif()
 
     set(protocyte_user_import_dirs)
+    set(protocyte_needs_fallback_import_sources FALSE)
     if(NOT PROTOCYTE_DESCRIPTOR_SET)
         if(NOT IS_DIRECTORY "${protocyte_proto_root}")
             message(FATAL_ERROR "protocyte_generate PROTO_ROOT must be an existing directory: ${protocyte_proto_root}")
@@ -1054,11 +1213,18 @@ function(protocyte_generate)
             list(APPEND protocyte_user_import_dirs "${import_dir_abs}")
         endforeach()
         list(REMOVE_DUPLICATES protocyte_user_import_dirs)
+        set(protocyte_needs_fallback_import_sources TRUE)
+        foreach(import_dir IN LISTS protocyte_proto_root protocyte_user_import_dirs)
+            if(EXISTS "${import_dir}/google/protobuf/descriptor.proto")
+                set(protocyte_needs_fallback_import_sources FALSE)
+                break()
+            endif()
+        endforeach()
     endif()
 
     if(PROTOCYTE_DESCRIPTOR_SET AND PROTOCYTE_DISCOVER)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_descriptor_set}")
-        protocyte_setup_codegen()
+        _protocyte_setup_codegen_internal(FALSE)
         _protocyte_discover_descriptor_set(protocyte_proto_files "${protocyte_descriptor_set}")
     elseif(PROTOCYTE_DISCOVER)
         file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${protocyte_proto_root}/*.proto")
@@ -1106,7 +1272,11 @@ function(protocyte_generate)
     endif()
 
     if(NOT PROTOCYTE_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
-        protocyte_setup_codegen()
+        if(PROTOCYTE_DESCRIPTOR_SET)
+            _protocyte_setup_codegen_internal(FALSE)
+        else()
+            _protocyte_setup_codegen_internal("${protocyte_needs_fallback_import_sources}")
+        endif()
     endif()
     _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
     _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
@@ -1183,7 +1353,7 @@ function(protocyte_generate)
             "${protocyte_proto_root}"
             ${protocyte_user_import_dirs}
             "${protocyte_proto_dir}"
-            "${PROTOCYTE_PROTOBUF_IMPORT_DIR}"
+            "${PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}"
         )
         list(REMOVE_DUPLICATES protocyte_import_dirs)
 
@@ -1196,11 +1366,21 @@ function(protocyte_generate)
         endforeach()
 
         if(NOT has_protobuf_descriptor_proto)
-            message(
-                FATAL_ERROR
-                "protocyte_generate could not locate google/protobuf/descriptor.proto. "
-                "Install protobuf headers or configure a matching import root via PROTOCYTE_PROTOBUF_IMPORT_DIR/IMPORT_DIRS."
-            )
+            if(DEFINED PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR)
+                message(
+                    FATAL_ERROR
+                    "protocyte_generate selected a different protoc toolchain, but the previously auto-discovered "
+                    "protobuf import root belongs to the old toolchain: ${PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR}. "
+                    "Set PROTOCYTE_PROTOBUF_IMPORT_DIR or IMPORT_DIRS explicitly to share an import root, "
+                    "or enable PROTOCYTE_FETCH_PROTOBUF to provision matching import sources."
+                )
+            else()
+                message(
+                    FATAL_ERROR
+                    "protocyte_generate could not locate google/protobuf/descriptor.proto. "
+                    "Install protobuf headers or configure a matching import root via PROTOCYTE_PROTOBUF_IMPORT_DIR/IMPORT_DIRS."
+                )
+            endif()
         endif()
 
         foreach(import_dir IN LISTS protocyte_import_dirs)
