@@ -3636,6 +3636,123 @@ def test_source_codegen_preserves_semicolon_proto_path_end_to_end(
     assert "Generating generated/" in rebuilt_output
     assert "LegacyUpdated" in generated_header.read_text(encoding="utf-8")
 
+    final_no_op = subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    final_no_op_output = final_no_op.stdout + final_no_op.stderr
+    assert "Scanning protobuf imports" not in final_no_op_output
+    assert "Generating generated/" not in final_no_op_output
+
+
+def test_ninja_reuses_semicolon_source_proxy_between_codegen_targets(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ninja") is None:
+        _incremental_requirement_unavailable(
+            "Ninja is required to verify shared semicolon source proxies"
+        )
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    proto_file = proto_dir / "shared;legacy.proto"
+    proto_file.write_text(
+        'syntax = "proto3"; package demo; message Shared {}\n', encoding="utf-8"
+    )
+    plugin = _installed_protocyte_plugin()
+
+    generation_blocks: list[str] = []
+    for target, output_directory in (
+        ("first_codegen", "first-generated"),
+        ("second_codegen", "second-generated"),
+    ):
+        generation_blocks.extend(
+            [
+                "protocyte_generate(",
+                f"    TARGET {target}",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                f'    OUT_DIR "${{CMAKE_CURRENT_BINARY_DIR}}/{output_directory}"',
+                "    PROTOS [==[proto/shared;legacy.proto]==]",
+                "    OPTIONS format=off",
+                ")",
+            ]
+        )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(shared_semicolon_source LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                *generation_blocks,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    build_command = [
+        "cmake",
+        "--build",
+        str(build_dir),
+        "--target",
+        "first_codegen",
+        "second_codegen",
+    ]
+    subprocess.run(build_command, check=True)
+
+    headers = [
+        build_dir / output_directory / "shared~3Blegacy.protocyte.hpp"
+        for output_directory in ("first-generated", "second-generated")
+    ]
+    assert all(header.is_file() for header in headers)
+    proxy_dir = build_dir / "CMakeFiles" / "protocyte-source-dependencies"
+    assert len(list(proxy_dir.glob("*.proto"))) == 1
+
+    no_op = subprocess.run(
+        build_command, check=True, capture_output=True, text=True
+    )
+    no_op_output = no_op.stdout + no_op.stderr
+    assert "Scanning protobuf imports" not in no_op_output
+    assert "Generating " not in no_op_output
+
+    proto_file.write_text(
+        'syntax = "proto3"; package demo; message SharedUpdated {}\n',
+        encoding="utf-8",
+    )
+    latest_output = max(headers, key=lambda path: path.stat().st_mtime_ns)
+    _touch_newer_than(proto_file, latest_output)
+    rebuilt = subprocess.run(
+        build_command, check=True, capture_output=True, text=True
+    )
+    rebuilt_output = rebuilt.stdout + rebuilt.stderr
+    assert rebuilt_output.count("Scanning protobuf imports") == 2
+    assert rebuilt_output.count("Generating ") == 2
+    assert all(
+        "SharedUpdated" in header.read_text(encoding="utf-8")
+        for header in headers
+    )
+
+    final_no_op = subprocess.run(
+        build_command, check=True, capture_output=True, text=True
+    )
+    final_no_op_output = final_no_op.stdout + final_no_op.stderr
+    assert "Scanning protobuf imports" not in final_no_op_output
+    assert "Generating " not in final_no_op_output
+
 
 def test_source_codegen_accepts_in_root_dotdot_prefixed_filename(
     tmp_path: Path,
@@ -4243,6 +4360,221 @@ def test_owned_output_cleanup_preserves_files_transferred_between_targets(
 
     assert shared_header.is_file()
     assert not (build_dir / "generated" / "second.protocyte.hpp").exists()
+
+
+def test_removed_source_codegen_target_cleans_only_unchanged_owned_outputs(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    if shutil.which("ninja") is None:
+        _incremental_requirement_unavailable(
+            "Ninja is required to verify removed-target output cleanup"
+        )
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    first_dir = source_dir / "first"
+    second_dir = source_dir / "second"
+    first_proto_dir = first_dir / "proto"
+    second_proto_dir = second_dir / "proto"
+    first_proto_dir.mkdir(parents=True)
+    second_proto_dir.mkdir(parents=True)
+    (first_proto_dir / "removed.proto").write_text(
+        'syntax = "proto3"; package demo; message Removed {}\n',
+        encoding="utf-8",
+    )
+    (second_proto_dir / "kept.proto").write_text(
+        'syntax = "proto3"; package demo; message Kept {}\n',
+        encoding="utf-8",
+    )
+    plugin = _installed_protocyte_plugin()
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(removed_source_target LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "add_subdirectory(first)",
+                "add_subdirectory(second)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def write_codegen(directory: Path, target: str, proto_name: str) -> None:
+        (directory / "CMakeLists.txt").write_text(
+            "\n".join(
+                [
+                    "protocyte_generate(",
+                    f"    TARGET {target}",
+                    '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                    '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                    f"    PROTOS proto/{proto_name}",
+                    "    OPTIONS format=off",
+                    ")",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    write_codegen(first_dir, "removed_codegen", "removed.proto")
+    write_codegen(second_dir, "kept_codegen", "kept.proto")
+    configure_command = [
+        "cmake",
+        "-G",
+        "Ninja",
+        "-S",
+        str(source_dir),
+        "-B",
+        str(build_dir),
+    ]
+    subprocess.run(configure_command, check=True)
+    subprocess.run(
+        [
+            "cmake",
+            "--build",
+            str(build_dir),
+            "--target",
+            "removed_codegen",
+            "kept_codegen",
+        ],
+        check=True,
+    )
+
+    first_generated = build_dir / "first" / "generated"
+    second_generated = build_dir / "second" / "generated"
+    removed_header = first_generated / "removed.protocyte.hpp"
+    removed_source = first_generated / "removed.protocyte.cpp"
+    kept_header = second_generated / "kept.protocyte.hpp"
+    unrelated = first_generated / "consumer-owned.protocyte.hpp"
+    kept_contents = kept_header.read_bytes()
+    removed_header.write_text("consumer modification\n", encoding="utf-8")
+    unrelated.write_text("keep\n", encoding="utf-8")
+
+    manifest_root = build_dir / "CMakeFiles" / "protocyte-owned-outputs"
+    assert len(list(manifest_root.glob("*/*.sha256"))) == 4
+
+    (first_dir / "CMakeLists.txt").write_text(
+        "# The first code generation target was removed.\n",
+        encoding="utf-8",
+    )
+    subprocess.run(configure_command, check=True)
+
+    assert removed_header.read_text(encoding="utf-8") == "consumer modification\n"
+    assert not removed_source.exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep\n"
+    assert kept_header.read_bytes() == kept_contents
+    assert (second_generated / "kept.protocyte.cpp").is_file()
+    assert len([path for path in manifest_root.iterdir() if path.is_dir()]) == 1
+
+    (second_dir / "CMakeLists.txt").write_text(
+        "# The final code generation target was removed.\n",
+        encoding="utf-8",
+    )
+    subprocess.run(configure_command, check=True)
+
+    assert not kept_header.exists()
+    assert not (second_generated / "kept.protocyte.cpp").exists()
+    assert removed_header.read_text(encoding="utf-8") == "consumer modification\n"
+    assert not [path for path in manifest_root.iterdir() if path.is_dir()]
+
+
+def test_renamed_descriptor_codegen_target_retires_its_obsolete_manifest(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    if shutil.which("ninja") is None:
+        _incremental_requirement_unavailable(
+            "Ninja is required to verify renamed-target output cleanup"
+        )
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    plugin = _installed_protocyte_plugin()
+
+    def write_descriptor_set(*file_names: str) -> None:
+        file_set = descriptor_pb2.FileDescriptorSet()
+        for index, file_name in enumerate(file_names):
+            descriptor = file_set.file.add()
+            descriptor.name = file_name
+            descriptor.package = "demo"
+            descriptor.syntax = "proto3"
+            descriptor.message_type.add().name = f"Message{index}"
+        descriptor_set.write_bytes(file_set.SerializeToString())
+
+    def write_project(target: str) -> None:
+        (source_dir / "CMakeLists.txt").write_text(
+            "\n".join(
+                [
+                    "cmake_minimum_required(VERSION 3.24)",
+                    "project(renamed_descriptor_target LANGUAGES NONE)",
+                    f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                    f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                    f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                    "protocyte_generate(",
+                    f"    TARGET {target}",
+                    f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                    '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                    "    DISCOVER",
+                    "    OPTIONS format=off",
+                    ")",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    write_descriptor_set("shared.proto", "removed.proto")
+    write_project("old_codegen")
+    configure_command = [
+        "cmake",
+        "-G",
+        "Ninja",
+        "-S",
+        str(source_dir),
+        "-B",
+        str(build_dir),
+    ]
+    subprocess.run(configure_command, check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "old_codegen"],
+        check=True,
+    )
+
+    generated_dir = build_dir / "generated"
+    shared_header = generated_dir / "shared.protocyte.hpp"
+    shared_contents = shared_header.read_bytes()
+    unrelated = generated_dir / "consumer-owned.protocyte.hpp"
+    unrelated.write_text("keep\n", encoding="utf-8")
+
+    write_descriptor_set("shared.proto", "added.proto")
+    write_project("new_codegen")
+    subprocess.run(configure_command, check=True)
+
+    assert shared_header.read_bytes() == shared_contents
+    assert not (generated_dir / "removed.protocyte.hpp").exists()
+    assert not (generated_dir / "removed.protocyte.cpp").exists()
+    assert unrelated.read_text(encoding="utf-8") == "keep\n"
+    manifest_root = build_dir / "CMakeFiles" / "protocyte-owned-outputs"
+    assert len([path for path in manifest_root.iterdir() if path.is_dir()]) == 1
+
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "new_codegen"],
+        check=True,
+    )
+    assert (generated_dir / "added.protocyte.hpp").is_file()
+    assert (generated_dir / "added.protocyte.cpp").is_file()
 
 
 def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(

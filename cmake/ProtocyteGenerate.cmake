@@ -82,3 +82,58 @@ if(NOT "${protoc_result}" STREQUAL "0")
         "Standard error:\n${protoc_error}"
     )
 endif()
+
+if(
+    DEFINED OWNERSHIP_MANIFEST_DIR
+    AND NOT "${OWNERSHIP_MANIFEST_DIR}" STREQUAL ""
+    AND IS_DIRECTORY "${OWNERSHIP_MANIFEST_DIR}"
+)
+    set(output_root_file "${OWNERSHIP_MANIFEST_DIR}/output-root.path")
+    if(EXISTS "${output_root_file}")
+        file(READ "${output_root_file}" output_root)
+        file(GLOB output_markers LIST_DIRECTORIES FALSE "${OWNERSHIP_MANIFEST_DIR}/*.path")
+        list(REMOVE_ITEM output_markers "${output_root_file}")
+        foreach(output_marker IN LISTS output_markers)
+            cmake_path(GET output_marker STEM output_key)
+            file(READ "${output_marker}" owned_output)
+            cmake_path(NORMAL_PATH owned_output OUTPUT_VARIABLE normalized_owned_output)
+            set(output_identity "${normalized_owned_output}")
+            if(CMAKE_HOST_WIN32)
+                string(TOLOWER "${output_identity}" output_identity)
+            endif()
+            string(SHA256 recorded_output_key "${output_identity}")
+            set(output_is_safe FALSE)
+            if(IS_ABSOLUTE "${normalized_owned_output}" AND IS_ABSOLUTE "${output_root}")
+                cmake_path(
+                    IS_PREFIX output_root
+                    "${normalized_owned_output}"
+                    NORMALIZE
+                    output_is_under_root
+                )
+                if(
+                    output_is_under_root
+                    AND normalized_owned_output MATCHES
+                        "([.]protocyte[.](hpp|cpp)|/runtime[.]hpp)$"
+                )
+                    set(output_is_safe TRUE)
+                endif()
+            endif()
+            if(
+                output_is_safe
+                AND recorded_output_key STREQUAL output_key
+                AND EXISTS "${normalized_owned_output}"
+                AND NOT IS_DIRECTORY "${normalized_owned_output}"
+            )
+                # Make successful custom-command completion newer than its
+                # dependency scan even when the generator kept identical bytes.
+                file(TOUCH_NOCREATE "${normalized_owned_output}")
+                file(SHA256 "${normalized_owned_output}" output_hash)
+                file(
+                    WRITE
+                    "${OWNERSHIP_MANIFEST_DIR}/${output_key}.sha256"
+                    "${output_hash}"
+                )
+            endif()
+        endforeach()
+    endif()
+endif()
