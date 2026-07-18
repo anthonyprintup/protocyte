@@ -218,6 +218,7 @@ def test_main_preserves_existing_destination_when_staged_protoc_probe_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    asset = install_protoc.resolve_platform_asset()
     destination = tmp_path / "protoc"
     destination.mkdir()
     marker = destination / "known-good"
@@ -236,9 +237,12 @@ def test_main_preserves_existing_destination_when_staged_protoc_probe_fails(
     def fake_download(_url: str, archive_path: Path) -> str:
         _write_archive(
             archive_path,
-            ["bin/protoc", "include/google/protobuf/descriptor.proto"],
+            [
+                f"bin/{asset.executable_name}",
+                "include/google/protobuf/descriptor.proto",
+            ],
         )
-        return install_protoc.load_default_sha256()
+        return install_protoc.load_default_sha256(asset)
 
     monkeypatch.setattr(install_protoc, "download_archive", fake_download)
     monkeypatch.setattr(
@@ -302,15 +306,157 @@ def test_replace_destination_restores_previous_if_staging_rename_fails(
 
 
 def test_resolve_release_requires_digest_for_version_override() -> None:
+    asset = install_protoc.resolve_platform_asset("Linux", "x86_64")
     with pytest.raises(RuntimeError, match="--sha256 is required"):
-        install_protoc.resolve_release("999.0", None)
+        install_protoc.resolve_release("999.0", None, asset)
 
 
-def test_configured_release_digest_matches_upstream_asset() -> None:
-    version, sha256 = install_protoc.resolve_release(None, None)
+@pytest.mark.parametrize(
+    ("system", "machine", "archive_suffix", "checksum_variable", "executable_name"),
+    [
+        (
+            "Linux",
+            "AMD64",
+            "linux-x86_64",
+            "PROTOCYTE_PROTOBUF_LINUX_X86_64_SHA256",
+            "protoc",
+        ),
+        (
+            "Windows",
+            "x86_64",
+            "win64",
+            "PROTOCYTE_PROTOBUF_WINDOWS_X86_64_SHA256",
+            "protoc.exe",
+        ),
+    ],
+)
+def test_resolve_platform_asset_selects_supported_x86_64_archive(
+    system: str,
+    machine: str,
+    archive_suffix: str,
+    checksum_variable: str,
+    executable_name: str,
+) -> None:
+    asset = install_protoc.resolve_platform_asset(system, machine)
+
+    assert asset == install_protoc.ProtocAsset(
+        archive_suffix=archive_suffix,
+        checksum_variable=checksum_variable,
+        executable_name=executable_name,
+    )
+
+
+@pytest.mark.parametrize(
+    ("system", "machine"),
+    [
+        ("Darwin", "arm64"),
+        ("Linux", "aarch64"),
+        ("Windows", "x86"),
+    ],
+)
+def test_resolve_platform_asset_rejects_unsupported_host(
+    system: str,
+    machine: str,
+) -> None:
+    with pytest.raises(RuntimeError, match="unsupported protoc prebuilt platform"):
+        install_protoc.resolve_platform_asset(system, machine)
+
+
+@pytest.mark.parametrize(
+    ("system", "machine", "expected_sha256"),
+    [
+        (
+            "Linux",
+            "x86_64",
+            "af27ea66cd26938fe48587804ca7d4817457a08350021a1c6e23a27ccc8c6904",
+        ),
+        (
+            "Windows",
+            "AMD64",
+            "6d7ebdc75e9c1f0026d4fb28f17ef1d0aae77d36744d83a9e052d79ba493724f",
+        ),
+    ],
+)
+def test_configured_release_digests_match_upstream_assets(
+    system: str,
+    machine: str,
+    expected_sha256: str,
+) -> None:
+    asset = install_protoc.resolve_platform_asset(system, machine)
+    version, sha256 = install_protoc.resolve_release(None, None, asset)
 
     assert version == "34.1"
-    assert sha256 == "af27ea66cd26938fe48587804ca7d4817457a08350021a1c6e23a27ccc8c6904"
+    assert sha256 == expected_sha256
+
+
+@pytest.mark.parametrize(
+    ("system", "machine"),
+    [
+        ("Linux", "x86_64"),
+        ("Windows", "AMD64"),
+    ],
+)
+def test_main_installs_selected_platform_asset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    machine: str,
+) -> None:
+    asset = install_protoc.resolve_platform_asset(system, machine)
+    destination = tmp_path / "protoc"
+    github_output = tmp_path / "github-output"
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        install_protoc,
+        "parse_args",
+        lambda: install_protoc.argparse.Namespace(
+            version=None,
+            sha256=None,
+            dest=destination,
+        ),
+    )
+    monkeypatch.setattr(install_protoc, "resolve_platform_asset", lambda: asset)
+
+    def fake_download(url: str, archive_path: Path) -> str:
+        observed["url"] = url
+        _write_archive(
+            archive_path,
+            [
+                f"bin/{asset.executable_name}",
+                "include/google/protobuf/descriptor.proto",
+            ],
+        )
+        return install_protoc.load_default_sha256(asset)
+
+    def fake_run(command: list[str], *, check: bool) -> None:
+        observed["command"] = command
+        observed["check"] = check
+
+    monkeypatch.setattr(install_protoc, "download_archive", fake_download)
+    monkeypatch.setattr(install_protoc.subprocess, "run", fake_run)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+
+    assert install_protoc.main() == 0
+
+    archive_name = f"protoc-34.1-{asset.archive_suffix}.zip"
+    assert observed["url"] == (
+        "https://github.com/protocolbuffers/protobuf/releases/download/"
+        f"v34.1/{archive_name}"
+    )
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert Path(command[0]).name == asset.executable_name
+    assert command[1:] == ["--version"]
+    assert observed["check"] is True
+    assert (destination / "bin" / asset.executable_name).is_file()
+    assert (
+        destination / "include" / "google" / "protobuf" / "descriptor.proto"
+    ).is_file()
+    outputs = github_output.read_text(encoding="utf-8").splitlines()
+    assert "version=34.1" in outputs
+    assert f"root={destination.as_posix()}" in outputs
+    assert f"protoc={(destination / 'bin' / asset.executable_name).as_posix()}" in outputs
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import hmac
 import os
+import platform
 import queue
 import re
 import shutil
@@ -13,6 +14,7 @@ import threading
 import time
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import NamedTuple
 from urllib.request import urlopen
 
 
@@ -24,6 +26,45 @@ MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 4_096
 MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+
+
+class ProtocAsset(NamedTuple):
+    archive_suffix: str
+    checksum_variable: str
+    executable_name: str
+
+
+_SUPPORTED_ASSETS = {
+    ("linux", "x86_64"): ProtocAsset(
+        archive_suffix="linux-x86_64",
+        checksum_variable="PROTOCYTE_PROTOBUF_LINUX_X86_64_SHA256",
+        executable_name="protoc",
+    ),
+    ("windows", "x86_64"): ProtocAsset(
+        archive_suffix="win64",
+        checksum_variable="PROTOCYTE_PROTOBUF_WINDOWS_X86_64_SHA256",
+        executable_name="protoc.exe",
+    ),
+}
+
+
+def resolve_platform_asset(
+    system: str | None = None,
+    machine: str | None = None,
+) -> ProtocAsset:
+    normalized_system = (system or platform.system()).casefold()
+    normalized_machine = (machine or platform.machine()).casefold()
+    if normalized_machine in {"amd64", "x86_64"}:
+        normalized_machine = "x86_64"
+
+    try:
+        return _SUPPORTED_ASSETS[(normalized_system, normalized_machine)]
+    except KeyError as error:
+        raise RuntimeError(
+            "unsupported protoc prebuilt platform: "
+            f"{system or platform.system()} {machine or platform.machine()}; "
+            "supported platforms are Linux x86-64 and Windows x86-64"
+        ) from error
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,10 +104,8 @@ def load_default_version() -> str:
     return _load_cmake_string("PROTOCYTE_PROTOBUF_VERSION")
 
 
-def load_default_sha256() -> str:
-    return _normalize_sha256(
-        _load_cmake_string("PROTOCYTE_PROTOBUF_LINUX_X86_64_SHA256")
-    )
+def load_default_sha256(asset: ProtocAsset) -> str:
+    return _normalize_sha256(_load_cmake_string(asset.checksum_variable))
 
 
 def _normalize_sha256(value: str) -> str:
@@ -78,7 +117,11 @@ def _normalize_sha256(value: str) -> str:
     return normalized
 
 
-def resolve_release(version: str | None, sha256: str | None) -> tuple[str, str]:
+def resolve_release(
+    version: str | None,
+    sha256: str | None,
+    asset: ProtocAsset,
+) -> tuple[str, str]:
     default_version = load_default_version()
     resolved_version = version or default_version
     if sha256 is not None:
@@ -87,7 +130,7 @@ def resolve_release(version: str | None, sha256: str | None) -> tuple[str, str]:
         raise RuntimeError(
             "--sha256 is required when --version overrides the configured release"
         )
-    return resolved_version, load_default_sha256()
+    return resolved_version, load_default_sha256(asset)
 
 
 def _content_length(response: object) -> int | None:
@@ -304,9 +347,10 @@ def replace_destination(staging: Path, destination: Path) -> None:
 
 def main() -> int:
     args = parse_args()
-    version, expected_sha256 = resolve_release(args.version, args.sha256)
+    asset = resolve_platform_asset()
+    version, expected_sha256 = resolve_release(args.version, args.sha256, asset)
     destination = args.dest.resolve()
-    archive_name = f"protoc-{version}-linux-x86_64.zip"
+    archive_name = f"protoc-{version}-{asset.archive_suffix}.zip"
     url = f"https://github.com/protocolbuffers/protobuf/releases/download/v{version}/{archive_name}"
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +365,7 @@ def main() -> int:
         with zipfile.ZipFile(archive_path) as archive:
             extract_archive_safely(archive, staging)
 
-        staged_protoc = staging / "bin" / "protoc"
+        staged_protoc = staging / "bin" / asset.executable_name
         staged_descriptor = (
             staging / "include" / "google" / "protobuf" / "descriptor.proto"
         )
@@ -339,7 +383,7 @@ def main() -> int:
         subprocess.run([str(staged_protoc), "--version"], check=True)
         replace_destination(staging, destination)
 
-    protoc = destination / "bin" / "protoc"
+    protoc = destination / "bin" / asset.executable_name
 
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:

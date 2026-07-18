@@ -61,6 +61,13 @@ set(
     CACHE STRING
     "SHA-256 for the protobuf Linux x86-64 release archive used by CI."
 )
+# SHA-256 reported by GitHub for the v34.1 protoc-34.1-win64.zip release asset.
+set(
+    PROTOCYTE_PROTOBUF_WINDOWS_X86_64_SHA256
+    "6d7ebdc75e9c1f0026d4fb28f17ef1d0aae77d36744d83a9e052d79ba493724f"
+    CACHE STRING
+    "SHA-256 for the protobuf Windows x86-64 release archive used by CI."
+)
 # protobuf release v34.1
 set(
     PROTOCYTE_PROTOBUF_GIT_TAG
