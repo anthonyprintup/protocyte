@@ -2008,15 +2008,18 @@ function(protocyte_generate)
             string(SHA256 proto_abs_key "${proto_abs}")
             set("protocyte_normalized_proto_file_${proto_abs_key}" "${proto_abs}")
             set("protocyte_normalized_proto_name_${proto_abs_key}" "${proto_rel}")
-            if(CMAKE_GENERATOR MATCHES "^Visual Studio" AND "${proto_abs}" MATCHES ";")
+            if(
+                CMAKE_GENERATOR MATCHES "^(Visual Studio|Ninja)"
+                AND "${proto_abs}" MATCHES ";"
+            )
                 file(MAKE_DIRECTORY "${protocyte_source_dependency_dir}")
                 set(
                     protocyte_source_dependency
                     "${protocyte_source_dependency_dir}/${proto_abs_key}.proto"
                 )
-                # Visual Studio cannot represent a literal semicolon in a
-                # CustomBuild AdditionalInputs list. An always-run checker
-                # updates this safe proxy only when the real source changes.
+                # Visual Studio and Ninja cannot reliably represent a literal
+                # semicolon throughout their dependency metadata. An always-run
+                # checker updates this safe proxy only when the real source changes.
                 file(COPY_FILE "${proto_abs}" "${protocyte_source_dependency}" ONLY_IF_DIFFERENT)
                 _protocyte_write_protoc_response_file(
                     protocyte_source_argument_file
@@ -2196,7 +2199,9 @@ function(protocyte_generate)
         set(protocyte_dependency_scan_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteDependencyScan.cmake")
         set(protocyte_dependency_outputs)
         set(protocyte_dependency_file_format_args)
-        if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+        if(CMAKE_GENERATOR MATCHES "^Ninja")
+            list(APPEND protocyte_dependency_file_format_args --ninja)
+        elseif(CMAKE_GENERATOR MATCHES "^Visual Studio")
             list(APPEND protocyte_dependency_file_format_args --msbuild)
         endif()
         foreach(proto_file IN LISTS normalized_proto_files)

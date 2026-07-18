@@ -405,6 +405,11 @@ def main(
         action="store_true",
         help="encode semicolons using MSBuild's percent escape",
     )
+    dependency_parser.add_argument(
+        "--ninja",
+        action="store_true",
+        help="emit Ninja-native dependency path syntax",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -420,6 +425,7 @@ def main(
                 output=args.output,
                 target=args.target,
                 msbuild=args.msbuild,
+                ninja=args.ninja,
             )
             return 0
     except ProtocyteError as exc:

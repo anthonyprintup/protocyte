@@ -81,6 +81,13 @@ def test_dependency_file_uses_msbuild_semicolon_escape() -> None:
     )
 
 
+def test_dependency_file_preserves_ninja_semicolon() -> None:
+    assert (
+        _escape_depfile_path(PurePosixPath("generated;legacy.pb"), ninja=True)
+        == "generated;legacy.pb"
+    )
+
+
 def test_msbuild_depfile_omits_direct_semicolon_input(tmp_path: Path) -> None:
     import_root = tmp_path / "imports"
     source = import_root / "demo;legacy.proto"
@@ -112,7 +119,18 @@ def test_msbuild_depfile_omits_direct_semicolon_input(tmp_path: Path) -> None:
     assert imported.as_posix() in content
 
 
-def test_msbuild_depfile_rejects_imported_semicolon_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("format_options", "backend"),
+    [
+        pytest.param({"msbuild": True}, "Visual Studio", id="msbuild"),
+        pytest.param({"ninja": True}, "Ninja", id="ninja"),
+    ],
+)
+def test_depfile_rejects_untrackable_imported_semicolon_path(
+    tmp_path: Path,
+    format_options: dict[str, bool],
+    backend: str,
+) -> None:
     import_root = tmp_path / "imports"
     source = import_root / "demo.proto"
     imported = import_root / "shared;legacy.proto"
@@ -129,13 +147,13 @@ def test_msbuild_depfile_rejects_imported_semicolon_path(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    with pytest.raises(ProtocyteError, match="Visual Studio.*imported.*contains ';'"):
+    with pytest.raises(ProtocyteError, match=rf"{backend}.*imported.*contains ';'"):
         write_dependency_file(
             descriptor_set,
             protoc_argument_file=argument_file,
             output=tmp_path / "dependencies.d",
             target="generated.pb",
-            msbuild=True,
+            **format_options,
         )
 
 

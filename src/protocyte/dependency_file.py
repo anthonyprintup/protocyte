@@ -17,6 +17,7 @@ def write_dependency_file(
     target: str | Path,
     working_directory: str | Path | None = None,
     msbuild: bool = False,
+    ninja: bool = False,
 ) -> None:
     """Write a CMake-compatible GCC depfile for an include-complete descriptor set."""
     roots, direct_input = _protoc_scan_context(
@@ -24,7 +25,8 @@ def write_dependency_file(
         working_directory=working_directory,
     )
     dependencies = _resolve_descriptor_files(descriptor_set, roots)
-    if msbuild:
+    if msbuild or ninja:
+        backend = "Visual Studio" if msbuild else "Ninja"
         direct_input_key = os.path.normcase(str(direct_input))
         tracked_dependencies: list[Path] = []
         for dependency in dependencies:
@@ -32,18 +34,20 @@ def write_dependency_file(
                 tracked_dependencies.append(dependency)
                 continue
             if os.path.normcase(str(dependency)) == direct_input_key:
-                # The direct input is already present in add_custom_command's
-                # dependency list using MSBuild's double percent escape.
+                # The direct input is already represented by a safe proxy in
+                # the build graph for generators that cannot encode it.
                 continue
             raise ProtocyteError(
-                "Visual Studio cannot track an imported protobuf dependency "
-                f"whose path contains ';': {dependency}. Use a Ninja generator "
-                "or rename the imported file."
+                f"{backend} cannot track an imported protobuf dependency "
+                f"whose path contains ';': {dependency}. Use a generator that can "
+                "track this path or rename the imported file."
             )
         dependencies = tracked_dependencies
-    escaped_target = _escape_depfile_path(Path(target), msbuild=msbuild)
+    escaped_target = _escape_depfile_path(
+        Path(target), msbuild=msbuild, ninja=ninja
+    )
     escaped_dependencies = [
-        _escape_depfile_path(dependency, msbuild=msbuild)
+        _escape_depfile_path(dependency, msbuild=msbuild, ninja=ninja)
         for dependency in dependencies
     ]
     content = escaped_target + ":"
@@ -138,7 +142,14 @@ def _resolve_descriptor_files(
     return sorted(resolved.values(), key=lambda path: path.as_posix().casefold())
 
 
-def _escape_depfile_path(path: PurePath, *, msbuild: bool = False) -> str:
+def _escape_depfile_path(
+    path: PurePath,
+    *,
+    msbuild: bool = False,
+    ninja: bool = False,
+) -> str:
+    if msbuild and ninja:
+        raise ProtocyteError("dependency file format cannot be both MSBuild and Ninja")
     value = path.as_posix()
     if any(character in value for character in "\r\n\t"):
         raise ProtocyteError(
@@ -165,4 +176,6 @@ def _escape_depfile_path(path: PurePath, *, msbuild: bool = False) -> str:
         .replace("#", "\\#")
         .replace(" ", "\\ ")
     )
+    if ninja:
+        return value
     return value.replace(";", "%25253B" if msbuild else "\\;")

@@ -3530,9 +3530,19 @@ def test_source_codegen_normalizes_equivalent_proto_paths_before_deduplication(
     assert "/nested/../" not in "\n".join(response_texts).replace("\\", "/")
 
 
+@pytest.mark.parametrize(
+    "generator",
+    [
+        pytest.param(None, id="default-generator"),
+        pytest.param("Ninja", id="ninja"),
+    ],
+)
 def test_source_codegen_preserves_semicolon_proto_path_end_to_end(
     tmp_path: Path,
+    generator: str | None,
 ) -> None:
+    if generator == "Ninja" and shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for the Ninja semicolon-path regression")
     repo_root = Path(__file__).resolve().parents[1]
     protoc = _find_real_protoc(repo_root)
     protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
@@ -3569,7 +3579,10 @@ def test_source_codegen_preserves_semicolon_proto_path_end_to_end(
         encoding="utf-8",
     )
 
-    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+    configure_command = ["cmake", "-S", str(source_dir), "-B", str(build_dir)]
+    if generator is not None:
+        configure_command.extend(["-G", generator])
+    subprocess.run(configure_command, check=True)
     first_build = subprocess.run(
         ["cmake", "--build", str(build_dir), "--target", "demo_codegen"],
         check=True,
