@@ -1009,12 +1009,6 @@ function(_protocyte_set_protobuf_import_dir candidate_dir toolchain_identity)
     endif()
 
     set(
-        PROTOCYTE_PROTOBUF_IMPORT_DIR
-        "${candidate_dir}"
-        CACHE INTERNAL
-        "protobuf import root containing google/protobuf/descriptor.proto"
-    )
-    set(
         PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR
         "${candidate_dir}"
         CACHE INTERNAL
@@ -1036,6 +1030,7 @@ function(_protocyte_resolve_protobuf_import_dir out_explicit toolchain_identity)
     unset(PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR CACHE)
     set(protobuf_toolchain_changed FALSE)
 
+    set(auto_import_dir "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR}")
     set(configured_import_dir "${PROTOCYTE_PROTOBUF_IMPORT_DIR}")
     if(NOT configured_import_dir STREQUAL "")
         _protocyte_resolve_stable_filesystem_path(
@@ -1043,31 +1038,30 @@ function(_protocyte_resolve_protobuf_import_dir out_explicit toolchain_identity)
             "${configured_import_dir}"
             PROTOBUF_IMPORT
         )
-        set(auto_import_dir "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR}")
+
+        set(migrate_legacy_auto_import FALSE)
         if(
             NOT auto_import_dir STREQUAL ""
             AND resolved_configured_import_dir STREQUAL auto_import_dir
+            AND DEFINED CACHE{PROTOCYTE_PROTOBUF_IMPORT_DIR}
         )
-            if(
-                "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN}" STREQUAL "${toolchain_identity}"
-                AND EXISTS "${auto_import_dir}/google/protobuf/descriptor.proto"
+            get_property(
+                configured_import_cache_type
+                CACHE PROTOCYTE_PROTOBUF_IMPORT_DIR
+                PROPERTY TYPE
             )
-                _protocyte_set_resolved_protobuf_import_dir("${auto_import_dir}")
-                return()
+            if(configured_import_cache_type STREQUAL "INTERNAL")
+                set(migrate_legacy_auto_import TRUE)
             endif()
+        endif()
 
-            if(NOT "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN}" STREQUAL "${toolchain_identity}")
-                set(protobuf_toolchain_changed TRUE)
-                set(
-                    PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR
-                    "${auto_import_dir}"
-                    CACHE INTERNAL
-                    "protobuf import root associated with the previously selected protoc toolchain"
-                )
-            endif()
+        if(migrate_legacy_auto_import)
+            # Older Protocyte releases exposed automatically discovered roots
+            # through the public cache entry. Remove that legacy mirror so any
+            # new public value is unambiguously caller-owned. A typed cache
+            # override (for example :PATH) remains explicit even when it names
+            # the same directory as the previous automatic root.
             unset(PROTOCYTE_PROTOBUF_IMPORT_DIR CACHE)
-            unset(PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR CACHE)
-            unset(PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN CACHE)
         else()
             set(${out_explicit} TRUE PARENT_SCOPE)
             if(
@@ -1078,6 +1072,28 @@ function(_protocyte_resolve_protobuf_import_dir out_explicit toolchain_identity)
             endif()
             return()
         endif()
+    endif()
+
+    if(NOT auto_import_dir STREQUAL "")
+        if(
+            "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN}" STREQUAL "${toolchain_identity}"
+            AND EXISTS "${auto_import_dir}/google/protobuf/descriptor.proto"
+        )
+            _protocyte_set_resolved_protobuf_import_dir("${auto_import_dir}")
+            return()
+        endif()
+
+        if(NOT "${PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN}" STREQUAL "${toolchain_identity}")
+            set(protobuf_toolchain_changed TRUE)
+            set(
+                PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR
+                "${auto_import_dir}"
+                CACHE INTERNAL
+                "protobuf import root associated with the previously selected protoc toolchain"
+            )
+        endif()
+        unset(PROTOCYTE_INTERNAL_AUTO_PROTOBUF_IMPORT_DIR CACHE)
+        unset(PROTOCYTE_INTERNAL_AUTO_PROTOBUF_TOOLCHAIN CACHE)
     endif()
 
     set(protoc_import_executable "${PROTOCYTE_PROTOC_EXECUTABLE}")
@@ -1215,12 +1231,23 @@ function(_protocyte_prepare_plugin)
 endfunction()
 
 function(_protocyte_ensure_protobuf fetch_missing_import_sources)
-    if(TARGET protobuf::protoc)
+    set(protoc_executable "")
+    set(protoc_dependency "")
+    set(protocyte_path_protoc "protocyte_path_protoc-NOTFOUND")
+
+    if(
+        DEFINED Protobuf_PROTOC_EXECUTABLE
+        AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
+        AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
+    )
+        _protocyte_resolve_protoc_path(
+            protoc_executable
+            protoc_dependency
+            "${Protobuf_PROTOC_EXECUTABLE}"
+        )
+    elseif(TARGET protobuf::protoc)
         set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
         set(protoc_dependency protobuf::protoc)
-    elseif(TARGET protoc)
-        set(protoc_executable "$<TARGET_FILE:protoc>")
-        set(protoc_dependency protoc)
     else()
         find_package(Protobuf CONFIG QUIET)
         if(
@@ -1248,38 +1275,70 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
                 protoc_dependency
                 "${Protobuf_PROTOC_EXECUTABLE}"
             )
-        elseif(PROTOCYTE_FETCH_PROTOBUF)
-            if(NOT DEFINED protobuf_BUILD_TESTS)
-                set(protobuf_BUILD_TESTS OFF)
-            endif()
-            if(NOT DEFINED protobuf_BUILD_CONFORMANCE)
-                set(protobuf_BUILD_CONFORMANCE OFF)
-            endif()
-            if(NOT DEFINED protobuf_BUILD_EXAMPLES)
-                set(protobuf_BUILD_EXAMPLES OFF)
-            endif()
-            if(NOT DEFINED protobuf_BUILD_PROTOBUF_BINARIES)
-                set(protobuf_BUILD_PROTOBUF_BINARIES ON)
-            endif()
-            if(NOT DEFINED protobuf_INSTALL)
-                set(protobuf_INSTALL OFF)
-            endif()
-            FetchContent_Declare(
-                protobuf
-                GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
-                GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
-            )
-            FetchContent_MakeAvailable(protobuf)
-            FetchContent_GetProperties(protobuf SOURCE_DIR protobuf_SOURCE_DIR)
-            set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
-            set(protoc_dependency protobuf::protoc)
         else()
-            find_program(protoc_executable protoc REQUIRED)
-            _protocyte_resolve_protoc_path(
-                protoc_executable
-                protoc_dependency
-                "${protoc_executable}"
+            find_program(
+                protocyte_path_protoc
+                NAMES protoc
+                NO_CACHE
+                NO_CMAKE_FIND_ROOT_PATH
             )
+        endif()
+
+        if(protoc_executable STREQUAL "")
+            if(protocyte_path_protoc)
+                _protocyte_resolve_protoc_path(
+                    protoc_executable
+                    protoc_dependency
+                    "${protocyte_path_protoc}"
+                )
+            elseif(PROTOCYTE_FETCH_PROTOBUF)
+                if(CMAKE_CROSSCOMPILING)
+                    message(
+                        FATAL_ERROR
+                        "Protocyte could not find a host protoc executable while cross-compiling. "
+                        "Set Protobuf_PROTOC_EXECUTABLE to a host-runnable protoc or add one to PATH; "
+                        "the protobuf FetchContent fallback cannot build a host tool with the target toolchain."
+                    )
+                endif()
+                if(NOT DEFINED protobuf_BUILD_TESTS)
+                    set(protobuf_BUILD_TESTS OFF)
+                endif()
+                if(NOT DEFINED protobuf_BUILD_CONFORMANCE)
+                    set(protobuf_BUILD_CONFORMANCE OFF)
+                endif()
+                if(NOT DEFINED protobuf_BUILD_EXAMPLES)
+                    set(protobuf_BUILD_EXAMPLES OFF)
+                endif()
+                if(NOT DEFINED protobuf_BUILD_PROTOBUF_BINARIES)
+                    set(protobuf_BUILD_PROTOBUF_BINARIES ON)
+                endif()
+                if(NOT DEFINED protobuf_INSTALL)
+                    set(protobuf_INSTALL OFF)
+                endif()
+                FetchContent_Declare(
+                    protobuf
+                    GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+                    GIT_TAG "${PROTOCYTE_PROTOBUF_GIT_TAG}"
+                )
+                FetchContent_MakeAvailable(protobuf)
+                if(NOT TARGET protobuf::protoc)
+                    message(
+                        FATAL_ERROR
+                        "Protocyte fetched protobuf, but the protobuf::protoc target is unavailable. "
+                        "When configuring offline, pre-populate the protobuf FetchContent source or "
+                        "set Protobuf_PROTOC_EXECUTABLE to a host-runnable protoc."
+                    )
+                endif()
+                FetchContent_GetProperties(protobuf SOURCE_DIR protobuf_SOURCE_DIR)
+                set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
+                set(protoc_dependency protobuf::protoc)
+            else()
+                message(
+                    FATAL_ERROR
+                    "Protocyte could not find protoc. Set Protobuf_PROTOC_EXECUTABLE to a host-runnable "
+                    "compiler, add protoc to PATH, or enable PROTOCYTE_FETCH_PROTOBUF."
+                )
+            endif()
         endif()
     endif()
 

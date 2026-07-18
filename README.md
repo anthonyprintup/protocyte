@@ -355,8 +355,14 @@ Formatter executable and config values in `OPTIONS` may use absolute Windows
 or POSIX paths. Generated include and runtime prefixes are not filesystem paths;
 they must use the normalized relative virtual-directory form documented below.
 
-By default, the protocyte CMake project fetches protobuf when protobuf CMake
-targets are not already available, then exposes:
+For its compiler, Protocyte first honors an explicit
+`Protobuf_PROTOC_EXECUTABLE`, then a package-provided `protobuf::protoc` target,
+then a host `protoc` on `PATH`. It does not capture an unrelated unnamespaced
+target named `protoc`. Only when no host compiler is available does the source
+project's default `PROTOCYTE_FETCH_PROTOBUF=ON` fallback fetch and build
+protobuf. The same option can fetch only protobuf's import sources when a host
+compiler exists but `google/protobuf/descriptor.proto` is unavailable. Protocyte
+then exposes:
 
 - `protocyte_add_proto_library(...)` for the common target-oriented workflow
 - `protocyte_add_descriptor_set_library(...)` as the descriptor-set-specific wrapper
@@ -440,15 +446,20 @@ find_package(protocyte CONFIG REQUIRED)
 ```
 
 The fallback can provision the protobuf import sources independently when a
-usable `protoc` executable or target is already available; it does not replace
-that selected compiler.
+usable host `protoc` executable or namespaced target is already available; it
+does not replace that selected compiler. Set `PROTOCYTE_FETCH_PROTOBUF=OFF` to
+forbid both fallback downloads. Cross builds must provide a host-runnable
+compiler through `Protobuf_PROTOC_EXECUTABLE`, a package-provided host target, or
+`PATH`; Protocyte does not try to build a host tool with the target toolchain.
 
 Public CMake variables exposed by the package:
 
 - `PROTOCYTE_PROTO_DIR`: the installed directory that contains `protocyte/options.proto`
 - `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
+- `PROTOCYTE_FETCH_PROTOBUF`: whether missing protobuf tools or import sources may be fetched
 - `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
-- `PROTOCYTE_PROTOBUF_IMPORT_DIR`: an optional explicit root containing `google/protobuf/descriptor.proto`
+- `PROTOCYTE_PROTOBUF_IMPORT_DIR`: an optional caller-owned root containing `google/protobuf/descriptor.proto`; automatically discovered roots remain internal
+- `Protobuf_PROTOC_EXECUTABLE`: an optional explicit host compiler path that takes precedence over ambient CMake targets and `PATH`
 - `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments
 - `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning
 
@@ -489,9 +500,11 @@ target is declared. It has no options.
 An ordinary relative `Protobuf_PROTOC_EXECUTABLE` value is anchored to the
 source directory of the first Protocyte setup call that consumes that exact
 value. Descendant and sibling directories reuse the resolved executable instead
-of rebasing the inherited token. Use an absolute path or a distinct relative
-value to select a different compiler in a subdirectory. Automatically discovered
-protobuf imports remain associated with their compiler; set
+of rebasing the inherited token. This explicit value takes precedence over
+package-provided targets and is the recommended way to select a host compiler
+for cross builds. Use an absolute path or a distinct relative value to select a
+different compiler in a subdirectory. Automatically discovered protobuf imports
+remain internal and associated with their compiler; set the public
 `PROTOCYTE_PROTOBUF_IMPORT_DIR` explicitly when different compilers should
 intentionally share one import root.
 

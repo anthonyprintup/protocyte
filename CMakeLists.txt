@@ -40,7 +40,7 @@ include(GNUInstallDirs)
 
 option(
     PROTOCYTE_FETCH_PROTOBUF
-    "Fetch protobuf when protobuf CMake targets are unavailable."
+    "Fetch protobuf tools or import sources when required inputs are unavailable."
     ON
 )
 option(

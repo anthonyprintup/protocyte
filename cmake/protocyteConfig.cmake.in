@@ -1,7 +1,12 @@
 @PACKAGE_INIT@
 
 if(NOT DEFINED PROTOCYTE_FETCH_PROTOBUF)
-    set(PROTOCYTE_FETCH_PROTOBUF OFF CACHE BOOL "Fetch protobuf when protobuf CMake targets are unavailable.")
+    set(
+        PROTOCYTE_FETCH_PROTOBUF
+        OFF
+        CACHE BOOL
+        "Fetch protobuf tools or import sources when required inputs are unavailable."
+    )
 endif()
 
 if(NOT DEFINED PROTOCYTE_PROTOBUF_GIT_TAG)
