@@ -674,9 +674,22 @@ This is the lower-level primitive. It creates the custom target named by
   `OUT_DIR` itself leaves too little room for a collision-resistant generated
   name; choose a shorter `OUT_DIR` or build directory in that case.
   Generated files in one configure must have exactly one current target owner,
-  including portable case-insensitive path aliases. Independent build trees may
-  share an absolute `OUT_DIR`: Protocyte coordinates only the generated files
-  they have in common through cross-process output locks.
+  including portable case-insensitive path aliases. One canonical `OUT_DIR`
+  belongs to one canonical CMake build tree. Targets and configurations in that
+  tree may share it, and generation remains protected by cross-process output
+  locks, but a different build tree is rejected before it can change the output.
+  Protocyte records the claim in a hashed sibling `.owner` file containing only
+  a format version and the SHA-256 identity of the owning build tree; no private
+  absolute path is stored. Each concrete generated file also has a path-keyed
+  owner record in the output-lock namespace. That second claim prevents
+  overlapping or nested `OUT_DIR` values from silently naming the same file.
+  Configuration performs a read-only conflict preflight. If multiple trees
+  configure while the outputs are still unclaimed, the first build to acquire
+  the locks publishes both claims; the other build fails without changing any
+  generated output. Claims are validated and published before Protocyte creates
+  `OUT_DIR` or runs `protoc`, and revalidated on later builds, so a previously
+  configured tree loses write access immediately after a deliberate ownership
+  transfer. A later unrelated CMake configuration failure cannot leave a claim.
 - `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.
@@ -746,12 +759,28 @@ target that declares it, back up any edits, delete the output, and build that ta
 once to establish a fingerprint before removing the output again.
 
 `PROTOCYTE_OUTPUT_LOCK_ROOT` optionally selects the output-lock namespace. It
-must be an absolute, configure-time path writable by every build tree that can
-generate the same absolute outputs. By default, Protocyte uses the current
-user's cache directory (`LOCALAPPDATA` on Windows, `XDG_CACHE_HOME` or
-`$HOME/.cache` elsewhere). Lock files use hashed absolute output identities, so
-unrelated outputs remain concurrent; stale lock files are harmless and may be
-removed while no Protocyte builds are running.
+must be an absolute, configure-time path shared by and writable to every build
+tree whose generated outputs could overlap. Using different namespaces opts
+those trees out of cross-tree collision detection and is unsafe for overlapping
+outputs. By default, Protocyte uses the current user's cache directory
+(`LOCALAPPDATA` on Windows, `XDG_CACHE_HOME` or `$HOME/.cache` elsewhere). Lock
+and owner-record names use hashed absolute output identities, so unrelated
+outputs remain concurrent and neither file contains private paths. Stale lock
+files are harmless and may be removed while no Protocyte builds are running.
+
+Deleting a build directory does not silently release its `OUT_DIR`: the hashed
+owner records deliberately remain so a build at a different canonical path
+cannot overwrite the same generated files. The owner identity is path-based, so
+recreating the build directory at the same canonical path is treated as the same
+owner. Malformed records are rejected rather than repaired automatically. To
+transfer an `OUT_DIR`, first stop every build that could use it and preserve any
+files you need. Then remove the matching sibling
+`.protocyte-out-dir-<sha256>.owner` record and each conflicting generated-output
+`.owner` record reported from the output-lock namespace before configuring the
+new tree. The `.lock` files may remain; they carry no ownership state. When a
+target retires an unchanged generated file, Protocyte removes that file and its
+matching owner record together while holding the output lock. Edited, malformed,
+or otherwise unverified stale claims remain for explicit manual resolution.
 
 Both `RUNTIME_PREFIX` and the lower-level `INCLUDE_PREFIX` value describe
 virtual include directories rather than host filesystem paths. They must be

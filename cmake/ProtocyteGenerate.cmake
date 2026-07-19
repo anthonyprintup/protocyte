@@ -9,6 +9,10 @@ foreach(
         GENERATION_WORKING_DIRECTORY
         LOCK_DIRECTORY
         LOCK_MANIFEST
+        OUTPUT_DIRECTORY
+        OUT_DIR_OWNER_MARKER
+        OUT_DIR_OWNER_LOCK
+        BUILD_OWNER_HASH
         SOURCE_DIRECTORY_HEX
 )
     if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
@@ -26,6 +30,12 @@ if(NOT output_lock_keys)
 endif()
 list(REMOVE_DUPLICATES output_lock_keys)
 list(SORT output_lock_keys)
+
+string(LENGTH "${BUILD_OWNER_HASH}" build_owner_hash_length)
+if(NOT build_owner_hash_length EQUAL 64 OR NOT BUILD_OWNER_HASH MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "Protocyte generation received an invalid build-owner identity")
+endif()
+set(expected_owner "version=1\nbuild-tree-sha256=${BUILD_OWNER_HASH}\n")
 
 file(MAKE_DIRECTORY "${LOCK_DIRECTORY}")
 foreach(output_lock_key IN LISTS output_lock_keys)
@@ -49,6 +59,92 @@ foreach(output_lock_key IN LISTS output_lock_keys)
         )
     endif()
 endforeach()
+
+function(_protocyte_publish_build_owner owner_marker)
+    set(owner_staging "${owner_marker}.${BUILD_OWNER_HASH}.tmp")
+    file(WRITE "${owner_staging}" "${expected_owner}")
+    file(
+        RENAME "${owner_staging}" "${owner_marker}"
+        NO_REPLACE
+        RESULT owner_publish_result
+    )
+    if(NOT "${owner_publish_result}" STREQUAL "0")
+        file(REMOVE "${owner_staging}")
+        message(
+            FATAL_ERROR
+            "Protocyte could not atomically publish ownership for target "
+            "'${GENERATION_TARGET}': ${owner_publish_result}"
+        )
+    endif()
+endfunction()
+
+set(missing_output_owner_keys)
+foreach(output_lock_key IN LISTS output_lock_keys)
+    set(output_owner_marker "${LOCK_DIRECTORY}/${output_lock_key}.owner")
+    if(EXISTS "${output_owner_marker}" OR IS_SYMLINK "${output_owner_marker}")
+        if(IS_DIRECTORY "${output_owner_marker}" OR IS_SYMLINK "${output_owner_marker}")
+            message(
+                FATAL_ERROR
+                "Generated-output ownership is malformed for target '${GENERATION_TARGET}'. "
+                "No generated output was changed."
+            )
+        endif()
+        file(READ "${output_owner_marker}" observed_output_owner LIMIT 256)
+        if(NOT observed_output_owner STREQUAL expected_owner)
+            message(
+                FATAL_ERROR
+                "Generated-output ownership belongs to a different build tree for target "
+                "'${GENERATION_TARGET}'. No generated output was changed."
+            )
+        endif()
+    else()
+        list(APPEND missing_output_owner_keys "${output_lock_key}")
+    endif()
+endforeach()
+
+cmake_path(GET OUT_DIR_OWNER_MARKER PARENT_PATH out_dir_owner_parent)
+file(MAKE_DIRECTORY "${out_dir_owner_parent}")
+file(
+    LOCK "${OUT_DIR_OWNER_LOCK}"
+    GUARD PROCESS
+    TIMEOUT 600
+    RESULT_VARIABLE owner_lock_result
+)
+if(NOT "${owner_lock_result}" STREQUAL "0")
+    message(
+        FATAL_ERROR
+        "Failed to lock OUT_DIR ownership for target '${GENERATION_TARGET}': ${owner_lock_result}"
+    )
+endif()
+set(root_owner_is_missing FALSE)
+if(EXISTS "${OUT_DIR_OWNER_MARKER}" OR IS_SYMLINK "${OUT_DIR_OWNER_MARKER}")
+    if(IS_DIRECTORY "${OUT_DIR_OWNER_MARKER}" OR IS_SYMLINK "${OUT_DIR_OWNER_MARKER}")
+        message(
+            FATAL_ERROR
+            "OUT_DIR ownership is malformed for target '${GENERATION_TARGET}'. "
+            "No generated output was changed."
+        )
+    endif()
+    file(READ "${OUT_DIR_OWNER_MARKER}" observed_owner LIMIT 256)
+    if(NOT observed_owner STREQUAL expected_owner)
+        message(
+            FATAL_ERROR
+            "OUT_DIR ownership belongs to a different build tree for target "
+            "'${GENERATION_TARGET}'. No generated output was changed."
+        )
+    endif()
+else()
+    set(root_owner_is_missing TRUE)
+endif()
+
+if(root_owner_is_missing)
+    _protocyte_publish_build_owner("${OUT_DIR_OWNER_MARKER}")
+endif()
+foreach(output_lock_key IN LISTS missing_output_owner_keys)
+    _protocyte_publish_build_owner("${LOCK_DIRECTORY}/${output_lock_key}.owner")
+endforeach()
+
+file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 
 execute_process(
     COMMAND
