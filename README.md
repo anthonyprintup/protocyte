@@ -1923,11 +1923,24 @@ The runtime provides:
 
 Reflection tables are emitted only when `PROTOCYTE_ENABLE_REFLECTION` is set to
 a nonzero value. Release builds do not get descriptor pools or dynamic
-reflection. Define the macro consistently while compiling both the generated
-`.protocyte.cpp` file and consumers of its generated header. Each message then
-exposes an externally linked `std::array<protocyte::ReflectionFieldInfo, N>` in
-the generated package's `protocyte_reflection` namespace, named
-`<GeneratedMessageName>_fields`.
+reflection. For a generated CMake library, define the macro on its target with
+PUBLIC visibility:
+
+```cmake
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_REFLECTION=1)
+```
+
+PUBLIC visibility is required so the generated `.protocyte.cpp` file and every
+consumer of its generated header see the same declaration surface. On Windows,
+`protocyte_add_proto_library(TYPE SHARED)` and
+`protocyte_add_descriptor_set_library(TYPE SHARED)` automatically give the
+reflection data a target-unique import/export macro; the DLL receives the
+private export definition and linked consumers import the data. Raw generator
+invocations do not add DLL visibility decoration, so callers that compile raw
+generated output into a Windows DLL must manage symbol visibility themselves.
+Each message exposes an externally linked
+`std::array<protocyte::ReflectionFieldInfo, N>` in the generated package's
+`protocyte_reflection` namespace, named `<GeneratedMessageName>_fields`.
 
 `ReflectionFieldInfo::label` preserves the protobuf descriptor label as
 `ReflectionFieldLabel::optional`, `required`, or `repeated`.

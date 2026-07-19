@@ -3275,6 +3275,9 @@ function(protocyte_generate)
         _protocyte_validate_virtual_directory_prefix("include prefix" "${PROTOCYTE_INCLUDE_PREFIX}")
         list(APPEND generator_options "include_prefix=${PROTOCYTE_INCLUDE_PREFIX}")
     endif()
+    if(DEFINED _protocyte_reflection_api_macro AND NOT "${_protocyte_reflection_api_macro}" STREQUAL "")
+        list(APPEND generator_options "_protocyte_reflection_api_macro=${_protocyte_reflection_api_macro}")
+    endif()
 
     if(PROTOCYTE_EMIT_RUNTIME)
         if(protocyte_has_RUNTIME_PREFIX)
@@ -3741,6 +3744,20 @@ function(protocyte_add_proto_library)
         message(FATAL_ERROR "protocyte_add_proto_library requires either DISCOVER or PROTOS")
     endif()
 
+    set(_protocyte_reflection_api_macro "")
+    if(WIN32 AND "${PROTOCYTE_TYPE}" STREQUAL "SHARED")
+        string(
+            SHA256
+            protocyte_reflection_api_hash
+            "${CMAKE_CURRENT_SOURCE_DIR}|${CMAKE_CURRENT_BINARY_DIR}|${PROTOCYTE_TARGET}"
+        )
+        string(TOUPPER "${protocyte_reflection_api_hash}" protocyte_reflection_api_hash)
+        set(
+            _protocyte_reflection_api_macro
+            "PROTOCYTE_REFLECTION_API_${protocyte_reflection_api_hash}"
+        )
+    endif()
+
     if(protocyte_has_OUT_DIR)
         if(IS_ABSOLUTE "${PROTOCYTE_OUT_DIR}")
             set(protocyte_include_root "${PROTOCYTE_OUT_DIR}")
@@ -3822,6 +3839,12 @@ function(protocyte_add_proto_library)
     protocyte_generate(${protocyte_generate_args})
 
     add_library("${PROTOCYTE_TARGET}" "${PROTOCYTE_TYPE}")
+    if(NOT "${_protocyte_reflection_api_macro}" STREQUAL "")
+        target_compile_definitions(
+            "${PROTOCYTE_TARGET}"
+            PRIVATE "${_protocyte_reflection_api_macro}_EXPORTS=1"
+        )
+    endif()
     target_sources(
         "${PROTOCYTE_TARGET}"
         PRIVATE

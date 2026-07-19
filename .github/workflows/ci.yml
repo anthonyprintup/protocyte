@@ -246,8 +246,20 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Install prebuilt protoc for MSVC shared reflection
+        id: windows-msvc-protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
       - name: Set up MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Verify MSVC shared-library reflection exports
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-msvc-protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST: "1"
+        run: >
+          uv run pytest -q
+          tests/test_cmake.py::test_msvc_shared_library_exports_reflection_to_consumer
 
       - name: Configure non-kernel smoke tests
         working-directory: tests/smoke

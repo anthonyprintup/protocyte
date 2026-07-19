@@ -920,16 +920,40 @@ def _reflection_label(item: FieldModel) -> str:
     return "optional"
 
 
-def _emit_reflection_declarations(w: CppWriter, file_model: FileModel) -> None:
+def _emit_reflection_api_macro(w: CppWriter, macro: str) -> None:
+    w.line(f"#if !defined({macro})")
+    w.line("#if defined(_WIN32)")
+    w.line(f"#if defined({macro}_EXPORTS)")
+    w.line(f"#define {macro} __declspec(dllexport)")
+    w.line("#else")
+    w.line(f"#define {macro} __declspec(dllimport)")
+    w.line("#endif")
+    w.line("#else")
+    w.line(f"#define {macro}")
+    w.line("#endif")
+    w.line("#endif")
+    w.line()
+
+
+def _emit_reflection_declarations(
+    w: CppWriter, file_model: FileModel, options: GeneratorOptions
+) -> None:
     messages = _ordered_messages(file_model)
     if not messages:
         return
     w.line("#if PROTOCYTE_ENABLE_REFLECTION")
+    if options.reflection_api_macro is not None:
+        _emit_reflection_api_macro(w, options.reflection_api_macro)
     w.line("namespace protocyte_reflection {")
     with w.indent():
         for message in messages:
+            api_macro = (
+                f"{options.reflection_api_macro} "
+                if options.reflection_api_macro is not None
+                else ""
+            )
             w.line(
-                "extern const "
+                f"extern {api_macro}const "
                 f"::std::array<::protocyte::ReflectionFieldInfo, {len(message.fields)}> "
                 f"{_reflection_name(message)};"
             )
@@ -967,7 +991,7 @@ def generate_header(
             w.line(include)
     w.line()
     _open_namespace(w, _namespace_parts(file_model, options))
-    _emit_reflection_declarations(w, file_model)
+    _emit_reflection_declarations(w, file_model, options)
     _emit_enums(w, file_model, options)
     _emit_file_constants(w, file_model)
     ordered_messages = _ordered_messages(file_model)
@@ -1003,8 +1027,14 @@ def generate_source(
     with w.indent():
         for message in _ordered_messages(file_model):
             reflection_name = _reflection_name(message)
+            api_macro = (
+                f"{options.reflection_api_macro} "
+                if options.reflection_api_macro is not None
+                else ""
+            )
             w.line(
-                f"extern const ::std::array<::protocyte::ReflectionFieldInfo, {len(message.fields)}> "
+                f"extern {api_macro}const "
+                f"::std::array<::protocyte::ReflectionFieldInfo, {len(message.fields)}> "
                 f"{reflection_name} {{{{"
             )
             with w.indent():

@@ -30,6 +30,9 @@ _CI_REQUIRE_MULTICONFIG_LOCKING_TEST_ENV = (
     "PROTOCYTE_CI_REQUIRE_MULTICONFIG_LOCKING_TEST"
 )
 _CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV = "PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST"
+_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST_ENV = (
+    "PROTOCYTE_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST"
+)
 _CI_REQUIRE_VISUAL_STUDIO_TEST_ENV = "PROTOCYTE_CI_REQUIRE_VISUAL_STUDIO_TEST"
 
 
@@ -67,6 +70,12 @@ def _multiconfig_locking_requirement_unavailable(message: str) -> Never:
 
 def _windows_transport_requirement_unavailable(message: str) -> Never:
     if os.environ.get(_CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
+
+
+def _windows_shared_reflection_requirement_unavailable(message: str) -> Never:
+    if os.environ.get(_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
 
@@ -8860,6 +8869,158 @@ def test_prebuilt_windows_protoc_receives_utf8_descriptor_arguments(
         assert sorted(descriptor_names) == sorted(
             response_lines[-len(descriptor_names) :]
         )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows shared-library regression")
+def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> None:
+    if shutil.which("ninja") is None:
+        _windows_shared_reflection_requirement_unavailable(
+            "Ninja is required for the MSVC shared reflection integration test"
+        )
+    if shutil.which("cl") is None:
+        _windows_shared_reflection_requirement_unavailable(
+            "an MSVC developer environment is required for the shared reflection integration test"
+        )
+
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(
+        repo_root,
+        additional_required_env=_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST_ENV,
+    )
+    protobuf_import_dir = _find_protobuf_import_dir(
+        repo_root,
+        protoc,
+        additional_required_env=_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST_ENV,
+    )
+    plugin = _installed_protocyte_plugin().resolve()
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; package api; message Demo { int32 id = 1; }\n',
+        encoding="utf-8",
+    )
+    (proto_dir / "other.proto").write_text(
+        'syntax = "proto3"; package other; message Other {}\n',
+        encoding="utf-8",
+    )
+    (source_dir / "main.cpp").write_text(
+        "\n".join(
+            [
+                '#include "demo.protocyte.hpp"',
+                "",
+                "int main() {",
+                "  const auto& fields = ::api::protocyte_reflection::Demo_fields;",
+                "  return fields.size() == 1u && fields[0].number == 1u ? 0 : 1;",
+                "}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_shared_reflection LANGUAGES CXX)",
+                "if(NOT MSVC)",
+                '    message(FATAL_ERROR "the test must compile with MSVC")',
+                "endif()",
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                "add_library(protocyte_codegen INTERFACE)",
+                "add_library(protocyte::codegen ALIAS protocyte_codegen)",
+                "protocyte_add_proto_library(",
+                "    TARGET reflection_proto",
+                "    TYPE SHARED",
+                "    EMIT_RUNTIME",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    PROTOS "${CMAKE_CURRENT_SOURCE_DIR}/proto/demo.proto"',
+                "    OPTIONS format=off",
+                ")",
+                "target_compile_definitions(",
+                "    reflection_proto PUBLIC PROTOCYTE_ENABLE_REFLECTION=1",
+                ")",
+                "protocyte_add_proto_library(",
+                "    TARGET other_reflection_proto",
+                "    TYPE SHARED",
+                "    EMIT_RUNTIME",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    PROTOS "${CMAKE_CURRENT_SOURCE_DIR}/proto/other.proto"',
+                "    OPTIONS format=off",
+                ")",
+                "set_target_properties(other_reflection_proto PROPERTIES EXCLUDE_FROM_ALL TRUE)",
+                "foreach(target IN ITEMS reflection_proto other_reflection_proto)",
+                "    get_target_property(definitions ${target} COMPILE_DEFINITIONS)",
+                "    set(reflection_exports ${definitions})",
+                "    list(",
+                "        FILTER reflection_exports INCLUDE",
+                '        REGEX "^PROTOCYTE_REFLECTION_API_[0-9A-F]+_EXPORTS=1$"',
+                "    )",
+                "    list(LENGTH reflection_exports export_count)",
+                "    if(NOT export_count EQUAL 1)",
+                '        message(FATAL_ERROR "${target} must have one private reflection export definition")',
+                "    endif()",
+                "    get_target_property(interface_definitions ${target} INTERFACE_COMPILE_DEFINITIONS)",
+                '    if("${interface_definitions}" MATCHES "_EXPORTS")',
+                '        message(FATAL_ERROR "${target} leaked its reflection export definition")',
+                "    endif()",
+                '    string(REGEX REPLACE "_EXPORTS=1$" "" ${target}_api "${reflection_exports}")',
+                "endforeach()",
+                'if("${reflection_proto_api}" STREQUAL "${other_reflection_proto_api}")',
+                '    message(FATAL_ERROR "reflection API macros must be target-unique")',
+                "endif()",
+                'file(WRITE "${CMAKE_BINARY_DIR}/reflection-api-macro.txt" "${reflection_proto_api}")',
+                "add_executable(reflection_consumer main.cpp)",
+                "target_link_libraries(reflection_consumer PRIVATE reflection_proto)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--target", "reflection_consumer"],
+        check=True,
+    )
+
+    macro = (build_dir / "reflection-api-macro.txt").read_text(
+        encoding="utf-8"
+    )
+    prefix = "PROTOCYTE_REFLECTION_API_"
+    assert macro.startswith(prefix)
+    digest = macro.removeprefix(prefix)
+    assert len(digest) == 64
+    assert set(digest) <= set("0123456789ABCDEF")
+    generated_header = (
+        build_dir / "reflection_proto_protocyte" / "demo.protocyte.hpp"
+    ).read_text(encoding="utf-8")
+    generated_source = (
+        build_dir / "reflection_proto_protocyte" / "demo.protocyte.cpp"
+    ).read_text(encoding="utf-8")
+    assert f"#if !defined({macro})" in generated_header
+    assert f"#if defined({macro}_EXPORTS)" in generated_header
+    assert f"#define {macro} __declspec(dllexport)" in generated_header
+    assert f"#define {macro} __declspec(dllimport)" in generated_header
+    assert f"extern {macro} const " in generated_header
+    assert f"extern {macro} const " in generated_source
+    subprocess.run([str(build_dir / "reflection_consumer.exe")], check=True)
 
 
 def test_cmake_constraints_pin_the_private_environment() -> None:

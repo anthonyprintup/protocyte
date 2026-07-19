@@ -8,6 +8,7 @@ from protocyte.paths import MIN_HASHED_GENERATED_FILE_PATH_BYTES
 
 
 _CPP_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_REFLECTION_API_MACRO = re.compile(r"PROTOCYTE_REFLECTION_API_[0-9A-F]{64}\Z")
 _CPP_KEYWORDS = frozenset(
     {
         "alignas",
@@ -143,12 +144,22 @@ def _validate_namespace_prefix(value: str) -> str:
     return value
 
 
+def _validate_reflection_api_macro(value: str) -> str:
+    if _REFLECTION_API_MACRO.fullmatch(value) is None:
+        raise ProtocyteError(
+            "internal reflection API macro must be "
+            "PROTOCYTE_REFLECTION_API_ followed by a 64-digit uppercase SHA-256 digest"
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class GeneratorOptions:
     emit_runtime: bool = False
     runtime_prefix: str = "protocyte/runtime"
     include_prefix: str = ""
     namespace_prefix: str = ""
+    reflection_api_macro: str | None = None
     emit_comments: bool = True
     format_mode: str = "auto"
     clang_format: str | None = None
@@ -158,6 +169,8 @@ class GeneratorOptions:
 
     def __post_init__(self) -> None:
         _validate_namespace_prefix(self.namespace_prefix)
+        if self.reflection_api_macro is not None:
+            _validate_reflection_api_macro(self.reflection_api_macro)
         validate_virtual_directory_prefix(
             self.runtime_prefix, parameter="runtime prefix"
         )
@@ -262,6 +275,8 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
                     prefix_parameter = "include prefix"
                 elif key == "namespace_prefix":
                     prefix_parameter = "namespace prefix"
+                elif key == "_protocyte_reflection_api_macro":
+                    prefix_parameter = "internal reflection API macro"
                 if prefix_parameter is not None:
                     if any(
                         ord(char) < 0x20 or ord(char) == 0x7F
@@ -287,6 +302,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "format",
         "clang_format",
         "clang_format_config",
+        "_protocyte_reflection_api_macro",
         "_protocyte_generated_path_max_bytes",
         "_protocyte_generated_directory_max_bytes",
     }
@@ -314,6 +330,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         raise ProtocyteError("runtime must be one of: emit, omit, emit:<prefix>")
 
     namespace_prefix = values.get("namespace_prefix", "")
+    reflection_api_macro = values.get("_protocyte_reflection_api_macro")
     comments = values.get("comments", "on")
     if comments not in {"on", "off"}:
         raise ProtocyteError("comments must be one of: on, off")
@@ -372,6 +389,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         runtime_prefix=runtime_prefix,
         include_prefix=include_prefix,
         namespace_prefix=namespace_prefix,
+        reflection_api_macro=reflection_api_macro,
         emit_comments=comments == "on",
         format_mode=format_mode,
         clang_format=clang_format,

@@ -1195,6 +1195,9 @@ def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages()
         for item in response.file
         if item.name == "reflection.protocyte.cpp"
     )
+    assert "PROTOCYTE_REFLECTION_API_" not in header
+    assert "__declspec" not in header
+    assert "PROTOCYTE_REFLECTION_API_" not in source
     assert "#if PROTOCYTE_ENABLE_REFLECTION\n#include <array>" in header
     assert (
         "extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> "
@@ -1217,6 +1220,53 @@ def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages()
         '    {"value", 1u, "scalar", '
         "::protocyte::ReflectionFieldLabel::optional, false, false},\n"
         "  }};"
+        in source
+    )
+
+
+def test_reflection_tables_use_opt_in_windows_shared_library_api_macro() -> None:
+    macro = f"PROTOCYTE_REFLECTION_API_{'A1' * 32}"
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection.proto", package="demo", syntax="proto3"
+    )
+    message = file.message_type.add(name="Message")
+    message.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name],
+        parameter=f"format=off,_protocyte_reflection_api_macro={macro}",
+        proto_file=[file],
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.hpp"
+    )
+    source = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.cpp"
+    )
+    assert f"#if !defined({macro})" in header
+    assert f"#if defined({macro}_EXPORTS)" in header
+    assert f"#define {macro} __declspec(dllexport)" in header
+    assert f"#define {macro} __declspec(dllimport)" in header
+    assert (
+        f"extern {macro} const "
+        "::std::array<::protocyte::ReflectionFieldInfo, 1> Message_fields;"
+        in header
+    )
+    assert (
+        f"extern {macro} const "
+        "::std::array<::protocyte::ReflectionFieldInfo, 1> Message_fields {{"
         in source
     )
 

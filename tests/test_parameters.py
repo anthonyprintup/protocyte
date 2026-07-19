@@ -36,10 +36,32 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.emit_runtime is False
     assert options.runtime_prefix == "protocyte/runtime"
     assert options.namespace_prefix == ""
+    assert options.reflection_api_macro is None
     assert options.emit_comments is True
     assert options.format_mode == "auto"
     assert options.clang_format is None
     assert options.clang_format_config is None
+
+
+def test_accepts_internal_sha_based_reflection_api_macro() -> None:
+    macro = f"PROTOCYTE_REFLECTION_API_{'A1' * 32}"
+
+    options = parse_parameter(f"_protocyte_reflection_api_macro={macro}")
+
+    assert options.reflection_api_macro == macro
+
+
+@pytest.mark.parametrize(
+    "macro",
+    [
+        "PROTOCYTE_REFLECTION_API_short",
+        f"PROTOCYTE_REFLECTION_API_{'a1' * 32}",
+        f"PROTOCYTE_REFLECTION_API_{'A1' * 31};INJECTED",
+    ],
+)
+def test_rejects_invalid_internal_reflection_api_macro(macro: str) -> None:
+    with pytest.raises(ProtocyteError, match="internal reflection API macro"):
+        parse_parameter(f"_protocyte_reflection_api_macro={macro}")
 
 
 def test_parse_accepts_clang_format_options() -> None:
