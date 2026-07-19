@@ -568,7 +568,10 @@ Public CMake variables exposed by the package:
 - `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
 - `PROTOCYTE_FETCH_PROTOBUF`: whether missing protobuf tools or import sources may be fetched
 - `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
-- `PROTOCYTE_PROTOBUF_IMPORT_DIR`: an optional caller-owned root containing `google/protobuf/descriptor.proto`; automatically discovered roots remain internal
+- `PROTOCYTE_PROTOBUF_IMPORT_DIR`: an optional caller-owned root containing
+  `google/protobuf/descriptor.proto`; Protocyte resolves and validates an
+  explicit value as soon as codegen setup consumes it, while automatically
+  discovered roots remain internal
 - `Protobuf_PROTOC_EXECUTABLE`: an optional explicit host compiler path that takes precedence over ambient CMake targets and `PATH`
 - `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments
 - `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning
@@ -666,13 +669,19 @@ This is the lower-level primitive. It creates the custom target named by
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.
 - `DESCRIPTOR_SET` selects descriptor-set mode and is mutually exclusive with
-  `PROTO_ROOT`. It must name an existing file; relative paths are resolved from
-  `CMAKE_CURRENT_SOURCE_DIR`. In this mode, `PROTOS` entries are relative virtual
-  descriptor names inside the set rather than filesystem paths.
+  `PROTO_ROOT`. It must be a concrete, configuration-independent path; generator
+  expressions are rejected because one code-generation declaration owns the
+  same outputs in every configuration. Relative paths are resolved from
+  `CMAKE_CURRENT_SOURCE_DIR`. The file must exist during configuration when
+  using `DISCOVER`. With explicit `PROTOS`, it may instead be a build-generated
+  file when `DEPENDS` names the file or target that produces it. In this mode,
+  `PROTOS` entries are relative virtual descriptor names inside the set rather
+  than filesystem paths.
 - `DISCOVER` is mutually exclusive with `PROTOS`. In source mode it recursively
   discovers `*.proto` beneath `PROTO_ROOT` and reconfigures when that set changes.
   In descriptor-set mode it asks the Protocyte plugin to select every supported
-  non-runtime descriptor, including referenced runtime types when required.
+  non-runtime descriptor, including referenced runtime types when required, so
+  the descriptor set must already exist at configure time.
 - `IMPORT_DIRS` adds source-mode protobuf import roots. Entries must be existing
   directories and are resolved from `CMAKE_CURRENT_SOURCE_DIR`. It is rejected
   in descriptor-set mode. Each selected source tracks its transitive imports,
@@ -683,14 +692,18 @@ This is the lower-level primitive. It creates the custom target named by
 - `DEPENDS` adds dependencies to the generation custom command. Entries are
   passed to CMake's `add_custom_command(DEPENDS ...)`; prefer absolute file paths
   or CMake targets. Use it for project-specific prerequisite files or targets
-  that Protocyte does not otherwise track.
+  that Protocyte does not otherwise track. This is also how explicit descriptor
+  names can consume a descriptor set produced during the build; its custom
+  command should declare the concrete, configuration-independent descriptor-set
+  file as an output or byproduct.
 - `OPTIONS` forwards non-runtime [plugin parameters](#plugin-parameters).
   Each entry must use `key=value`; bare entries are rejected during
   configuration.
   Do not pass `runtime` or `runtime_prefix` here; use `EMIT_RUNTIME` and
   `RUNTIME_PREFIX` so CMake can declare the generated runtime output correctly.
-  Names beginning with `_protocyte_` are reserved. Do not duplicate
-  `NAMESPACE_PREFIX` or `INCLUDE_PREFIX` through `OPTIONS`; duplicate plugin
+  Names beginning with `_protocyte_` are reserved. Do not pass `include_prefix`
+  here; use `INCLUDE_PREFIX` so CMake can model the generated-header layout.
+  Do not duplicate `NAMESPACE_PREFIX` through `OPTIONS`; duplicate plugin
   parameter names are rejected.
 - `EMIT_RUNTIME` emits `runtime.hpp` into `OUT_DIR`. The default location is
   `protocyte/runtime/runtime.hpp`. Each emitted runtime path must have exactly
@@ -703,7 +716,8 @@ This is the lower-level primitive. It creates the custom target named by
   `EMIT_RUNTIME`, it changes only the generated include path.
 - `NAMESPACE_PREFIX` prepends a C++ namespace to generated declarations.
 - `INCLUDE_PREFIX` prepends a relative virtual directory to imported generated
-  header includes.
+  header includes. At this lower level it does not move outputs: the caller must
+  arrange its output and include directories so that the virtual prefix resolves.
 - `GENERATED_HEADERS_VAR` receives the generated header paths in the caller's
   scope.
 - `GENERATED_SOURCES_VAR` receives the generated source paths in the caller's
@@ -727,10 +741,10 @@ user's cache directory (`LOCALAPPDATA` on Windows, `XDG_CACHE_HOME` or
 unrelated outputs remain concurrent; stale lock files are harmless and may be
 removed while no Protocyte builds are running.
 
-`RUNTIME_PREFIX` and `INCLUDE_PREFIX` are virtual include directories, not host
-filesystem paths. They must be normalized, relative, `/`-separated paths and
-must not contain `.`/`..` segments, Windows device names, or characters unsafe
-in generated includes.
+Both `RUNTIME_PREFIX` and the lower-level `INCLUDE_PREFIX` value describe
+virtual include directories rather than host filesystem paths. They must be
+normalized, relative, `/`-separated paths and must not contain `.`/`..`
+segments, Windows device names, or characters unsafe in generated includes.
 
 #### `protocyte_add_proto_library`
 
@@ -776,7 +790,10 @@ This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
   `STATIC`.
 - `OUT_DIR` defaults to
   `${CMAKE_CURRENT_BINARY_DIR}/<TARGET>_protocyte`. Relative paths are resolved
-  from `CMAKE_CURRENT_BINARY_DIR`; generator expressions are not accepted.
+  from `CMAKE_CURRENT_BINARY_DIR`; generator expressions are not accepted. It is
+  the library's public build include root. When `INCLUDE_PREFIX` is set,
+  generation is placed beneath `OUT_DIR/INCLUDE_PREFIX`, matching the include
+  spelling emitted by the plugin.
 - `INSTALL_INCLUDE_DIR` opts the target into install/export support. It must be
   a normalized relative install path such as `${CMAKE_INSTALL_INCLUDEDIR}`.
   The helper adds that path to the target's install interface and exposes every
@@ -792,6 +809,12 @@ This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
 - A custom `RUNTIME_PREFIX` requires either `EMIT_RUNTIME` or a matching custom
   `RUNTIME_TARGET`; this prevents generated includes from disagreeing with the
   linked reusable runtime.
+- `INCLUDE_PREFIX` gives generated headers a public virtual directory such as
+  `vendor/wire`. The helper preserves that directory in its header file set and
+  exposes the include roots needed by generated sources and emitted runtimes.
+  Install the file set directly to `INSTALL_INCLUDE_DIR`; consumers then include
+  headers as, for example, `vendor/wire/demo.protocyte.hpp`, including after the
+  package is relocated.
 - `GENERATED_HEADERS_VAR` and `GENERATED_SOURCES_VAR` receive the generated path
   lists in the caller's scope.
 - `GENERATED_TARGET_VAR` receives the internal
@@ -867,8 +890,11 @@ This convenience wrapper requires `DESCRIPTOR_SET` and otherwise has the same
 library, runtime, `DEPENDS`, `OPTIONS`, prefix, and output-variable behavior as
 `protocyte_add_proto_library`. `FILES` is the descriptor-set-specific spelling
 of `PROTOS`: each entry is a relative virtual descriptor name inside the set.
-Choose exactly one of `DISCOVER` or `FILES`. `PROTO_ROOT` and `IMPORT_DIRS` do
-not apply because the descriptor set already carries its dependency descriptors.
+Choose exactly one of `DISCOVER` or `FILES`. `DISCOVER` requires the descriptor
+set during configuration; `FILES` can consume a build-generated descriptor set
+when its producer is listed in `DEPENDS`, but the descriptor-set path must remain
+concrete and configuration-independent. `PROTO_ROOT` and `IMPORT_DIRS` do not
+apply because the descriptor set already carries its dependency descriptors.
 
 All public helpers reject unknown arguments during configuration.
 `protocyte_generate`, `protocyte_add_proto_library`, and

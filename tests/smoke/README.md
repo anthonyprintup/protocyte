@@ -533,14 +533,18 @@ The high-level helper in section 6 teaches the build graph what generation owns:
   imported `.proto` reruns generation without duplicating that graph in
   `DEPENDS`.
 - The selected plugin, generator Python sources, options schema, response file,
-  and `protoc` tool are generation inputs.
+  and `protoc` tool are dependency-scan and generation inputs.
 - Generated paths use the same escaping and Visual Studio path budgeting as the
   generator itself.
 - The generated library depends on its private code-generation target, so C++
   compilation does not race stale or missing outputs.
 
 Use the helper's `DEPENDS` argument only for project-specific prerequisites that
-Protocyte cannot infer, such as another target that creates a descriptor set.
+Protocyte cannot infer, such as another target that creates a descriptor set
+consumed through explicit `FILES`/`PROTOS`. Use a concrete,
+configuration-independent descriptor-set output; generator-expression paths are
+rejected. Descriptor-set `DISCOVER` needs the set to exist during configuration
+because it must inspect the file immediately.
 The lower-level `protocyte_generate(...)` API is available when a project needs
 to own the C++ target itself, but it should not be the first integration copied
 by a new user.

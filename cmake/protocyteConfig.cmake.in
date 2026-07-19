@@ -29,6 +29,7 @@ set(
     "${PROTOCYTE_PACKAGE_ROOT}/__init__.py"
     "${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"
     "${PROTOCYTE_PACKAGE_ROOT}/cpp.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/dependency_file.py"
     "${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"
     "${PROTOCYTE_PACKAGE_ROOT}/errors.py"
     "${PROTOCYTE_PACKAGE_ROOT}/extensions.py"

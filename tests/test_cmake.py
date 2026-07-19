@@ -2145,6 +2145,29 @@ def test_public_cmake_functions_reject_bare_forwarded_options(
         "protocyte_add_descriptor_set_library",
     ],
 )
+def test_public_cmake_functions_require_named_include_prefix_keyword(
+    tmp_path: Path,
+    function_name: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        f"{function_name}(OPTIONS include_prefix=vendor/wire)",
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert f"{function_name} OPTIONS must not set include_prefix" in output
+    assert "use INCLUDE_PREFIX" in output
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        "protocyte_generate",
+        "protocyte_add_proto_library",
+        "protocyte_add_descriptor_set_library",
+    ],
+)
 def test_public_cmake_functions_accept_forwarded_key_value_syntax(
     tmp_path: Path,
     function_name: str,
@@ -2245,6 +2268,104 @@ def test_protocyte_generate_rejects_missing_filesystem_inputs_at_configure_time(
     assert expected_error in output
 
 
+def test_descriptor_discover_requires_a_configure_time_descriptor_set(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "add_custom_target(descriptor_producer)",
+                "protocyte_generate(",
+                "    TARGET demo",
+                "    DESCRIPTOR_SET generated.pb",
+                "    OUT_DIR generated",
+                "    DISCOVER",
+                "    DEPENDS descriptor_producer",
+                ")",
+            ]
+        ),
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    assert "must exist during configuration when using DISCOVER" in output
+    assert "use explicit PROTOS/FILES with DEPENDS" in output
+
+
+@pytest.mark.parametrize(
+    "generator",
+    [
+        pytest.param(None, id="visual-studio-default"),
+        pytest.param("Ninja", id="ninja"),
+        pytest.param("Ninja Multi-Config", id="ninja-multi-config"),
+    ],
+)
+def test_descriptor_set_rejects_generator_expression_path(
+    tmp_path: Path,
+    generator: str | None,
+) -> None:
+    if generator is None and os.name != "nt":
+        pytest.skip("the default Visual Studio generator is only available on Windows")
+    if generator is not None and shutil.which("ninja") is None:
+        pytest.skip(f"{generator} requires Ninja")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_generator_expression LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "add_custom_target(descriptor_producer)",
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/descriptor-set.pb"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS api/demo.proto",
+                "    DEPENDS descriptor_producer",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configure_command = [
+        "cmake",
+        "-S",
+        str(source_dir),
+        "-B",
+        str(build_dir),
+    ]
+    environment = os.environ.copy()
+    if generator is None:
+        environment.pop("CMAKE_GENERATOR", None)
+    else:
+        configure_command[1:1] = ["-G", generator]
+
+    result = subprocess.run(
+        configure_command,
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    if generator is None:
+        assert "Building for: Visual Studio" in output
+    assert "DESCRIPTOR_SET must be a configure-time path" in output
+    assert "not a generator expression" in output
+    assert "concrete, config-independent descriptor-set output" in output
+    assert "explicit PROTOS/FILES" in output
+    assert "DEPENDS" in output
+
+
 def test_cmake_install_tree_contains_installable_python_project() -> None:
     cmake = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -2254,6 +2375,19 @@ def test_cmake_install_tree_contains_installable_python_project() -> None:
     assert '"${CMAKE_CURRENT_LIST_DIR}/pyproject.toml"' in cmake
     assert '"${CMAKE_CURRENT_LIST_DIR}/protocyte-cmake-constraints.txt"' in cmake
     assert 'DESTINATION "${PROTOCYTE_INSTALL_PYTHONDIR}"' in cmake
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    ["cmake/Protocyte.cmake", "cmake/protocyteConfig.cmake.in"],
+)
+def test_cmake_generator_source_manifests_track_dependency_file_module(
+    manifest: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    content = (repo_root / manifest).read_text(encoding="utf-8")
+
+    assert '"${PROTOCYTE_PACKAGE_ROOT}/dependency_file.py"' in content
 
 
 def _configure_fetchcontent_install_fixture(
@@ -2570,6 +2704,193 @@ def test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix(
     )
 
 
+def test_include_prefix_library_builds_installs_and_relocates_transitive_headers(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for the include-prefix integration test")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    (tmp_path / "tools").mkdir()
+    plugin = _write_python_plugin_wrapper(
+        tmp_path / "tools" / "protoc-gen-protocyte", repo_root
+    )
+    provider_source_dir = tmp_path / "provider"
+    provider_build_dir = tmp_path / "provider-build"
+    install_prefix = tmp_path / "install"
+    relocated_prefix = tmp_path / "relocated-install"
+    consumer_source_dir = tmp_path / "consumer"
+    consumer_build_dir = tmp_path / "consumer-build"
+
+    proto_dir = provider_source_dir / "proto"
+    proto_dir.mkdir(parents=True)
+    (proto_dir / "common.proto").write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package include_contract.common;",
+                "message Header { uint32 version = 1; }",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (proto_dir / "demo.proto").write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package include_contract.demo;",
+                'import "common.proto";',
+                "message Envelope { include_contract.common.Header header = 1; }",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (provider_source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(include_prefix_provider LANGUAGES CXX)",
+                "include(GNUInstallDirs)",
+                "set(PROTOCYTE_INSTALL ON)",
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                f'add_subdirectory("{repo_root.as_posix()}" protocyte-core)',
+                "protocyte_add_proto_library(",
+                "    TARGET include_prefix_proto",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    INCLUDE_PREFIX vendor/wire",
+                "    DISCOVER",
+                "    EMIT_RUNTIME",
+                "    HOSTED_ALLOCATOR",
+                '    INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}"',
+                "    OPTIONS format=off",
+                ")",
+                "set_target_properties(include_prefix_proto PROPERTIES EXPORT_NAME proto)",
+                "install(",
+                "    TARGETS include_prefix_proto",
+                "    EXPORT includePrefixTargets",
+                '    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"',
+                "    FILE_SET protocyte_generated_headers",
+                '        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"',
+                ")",
+                "install(",
+                "    EXPORT includePrefixTargets",
+                "    NAMESPACE include_prefix::",
+                '    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/include_prefix"',
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/include_prefixConfig.cmake" [=[',
+                "include(CMakeFindDependencyMacro)",
+                "find_dependency(protocyte CONFIG)",
+                'include("${CMAKE_CURRENT_LIST_DIR}/includePrefixTargets.cmake")',
+                "]=])",
+                "install(",
+                '    FILES "${CMAKE_CURRENT_BINARY_DIR}/include_prefixConfig.cmake"',
+                '    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/include_prefix"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(provider_source_dir),
+            "-B",
+            str(provider_build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_INSTALL_PREFIX={install_prefix}",
+        ],
+        check=True,
+    )
+    subprocess.run(["cmake", "--build", str(provider_build_dir)], check=True)
+    subprocess.run(["cmake", "--install", str(provider_build_dir)], check=True)
+
+    generated_root = provider_build_dir / "generated" / "vendor" / "wire"
+    assert (generated_root / "common.protocyte.hpp").is_file()
+    assert (generated_root / "demo.protocyte.hpp").is_file()
+    installed_header = install_prefix / "include/vendor/wire/demo.protocyte.hpp"
+    installed_common = install_prefix / "include/vendor/wire/common.protocyte.hpp"
+    installed_runtime = (
+        install_prefix / "include/vendor/wire/protocyte/runtime/runtime.hpp"
+    )
+    assert installed_header.is_file()
+    assert installed_common.is_file()
+    assert installed_runtime.is_file()
+    assert '#include "vendor/wire/common.protocyte.hpp"' in installed_header.read_text(
+        encoding="utf-8"
+    )
+    exported_targets = (
+        (install_prefix / "lib/cmake/include_prefix/includePrefixTargets.cmake")
+        .read_text(encoding="utf-8")
+        .replace("\\", "/")
+    )
+    assert provider_build_dir.as_posix() not in exported_targets
+
+    shutil.rmtree(provider_build_dir)
+    shutil.rmtree(provider_source_dir)
+    install_prefix.rename(relocated_prefix)
+
+    consumer_source_dir.mkdir()
+    (consumer_source_dir / "main.cpp").write_text(
+        "\n".join(
+            [
+                "#include <type_traits>",
+                '#include "vendor/wire/demo.protocyte.hpp"',
+                "static_assert(std::is_class_v<::include_contract::demo::Envelope<>>);",
+                "int main() { return 0; }",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (consumer_source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(include_prefix_consumer LANGUAGES CXX)",
+                "find_package(include_prefix CONFIG REQUIRED)",
+                "add_executable(consumer main.cpp)",
+                "target_link_libraries(consumer PRIVATE include_prefix::proto)",
+                "enable_testing()",
+                "add_test(NAME consumer COMMAND consumer)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            "Ninja",
+            "-S",
+            str(consumer_source_dir),
+            "-B",
+            str(consumer_build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_PREFIX_PATH={relocated_prefix}",
+        ],
+        check=True,
+    )
+    subprocess.run(["cmake", "--build", str(consumer_build_dir)], check=True)
+    subprocess.run(
+        ["ctest", "--test-dir", str(consumer_build_dir), "--output-on-failure"],
+        check=True,
+    )
+
+
 def test_protobuf_fallback_uses_parent_safe_function_scoped_defaults() -> None:
     functions = (
         Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteFunctions.cmake"
@@ -2657,6 +2978,48 @@ def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
         resolved_output.read_text(encoding="utf-8")
         == (tmp_path / "toolchain" / "include").as_posix()
     )
+
+
+@pytest.mark.parametrize(
+    ("files", "expected_error"),
+    [
+        ({}, "which is not an existing directory"),
+        (
+            {"protobuf/README.txt": "not a protobuf import tree\n"},
+            "does not contain google/protobuf/descriptor.proto",
+        ),
+        (
+            {
+                "protobuf/google/protobuf/descriptor.proto/marker.txt": (
+                    "descriptor.proto is a directory\n"
+                )
+            },
+            "google/protobuf/descriptor.proto' is a directory; an existing file is required",
+        ),
+    ],
+)
+def test_explicit_protobuf_import_root_reports_invalid_path_immediately(
+    tmp_path: Path,
+    files: dict[str, str],
+    expected_error: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "protobuf")',
+                '_protocyte_resolve_protobuf_import_dir(is_explicit "test-toolchain")',
+            ]
+        ),
+        files=files,
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    resolved = (tmp_path / "project" / "protobuf").as_posix()
+    assert result.returncode != 0
+    assert "PROTOCYTE_PROTOBUF_IMPORT_DIR 'protobuf' resolves to" in output
+    assert resolved in output.replace("\\", "/")
+    assert expected_error in output
 
 
 def test_relative_protoc_path_must_name_an_existing_file(tmp_path: Path) -> None:
@@ -5296,6 +5659,80 @@ def test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import() -> N
     ]
 
 
+def test_dependency_scan_reruns_when_generator_implementation_changes(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    if shutil.which("ninja") is None:
+        _incremental_requirement_unavailable(
+            "Ninja is required to verify dependency-scan invalidation"
+        )
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    tools_dir = source_dir / "tools"
+    proto_dir.mkdir(parents=True)
+    tools_dir.mkdir()
+    (proto_dir / "demo.proto").write_text(
+        'syntax = "proto3"; package scan_inputs; message Demo {}\n',
+        encoding="utf-8",
+    )
+    scan_implementation = source_dir / "scan-implementation.py"
+    scan_implementation.write_text(
+        "# dependency scan implementation v1\n", encoding="utf-8"
+    )
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(dependency_scan_inputs LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                "get_property(generator_sources GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES)",
+                'list(APPEND generator_sources "${CMAKE_CURRENT_SOURCE_DIR}/scan-implementation.py")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "${generator_sources}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
+    subprocess.run(build_command, check=True)
+    dependency_descriptors = list(
+        (build_dir / "CMakeFiles" / "protocyte-dependencies").glob("*.pb")
+    )
+    assert len(dependency_descriptors) == 1
+    dependency_descriptor = dependency_descriptors[0]
+    initial_mtime_ns = dependency_descriptor.stat().st_mtime_ns
+
+    scan_implementation.write_text(
+        "# dependency scan implementation v2\n", encoding="utf-8"
+    )
+    _touch_newer_than(scan_implementation, dependency_descriptor)
+    subprocess.run(build_command, check=True)
+
+    assert dependency_descriptor.stat().st_mtime_ns > initial_mtime_ns
+
+
 def test_source_codegen_tracks_special_character_paths_incrementally(
     tmp_path: Path,
 ) -> None:
@@ -7500,6 +7937,128 @@ def test_descriptor_set_codegen_builds_with_real_protoc_descriptor_set_in(
     assert header.is_file()
     assert source.is_file()
     assert "struct Demo" in header.read_text(encoding="utf-8")
+
+
+def test_descriptor_set_library_accepts_build_generated_input_with_files(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja is required for the build-generated descriptor-set test")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    tools_dir = source_dir / "tools"
+    (proto_dir / "api").mkdir(parents=True)
+    tools_dir.mkdir()
+    common_proto = proto_dir / "common.proto"
+    demo_proto = proto_dir / "api" / "demo.proto"
+    common_proto.write_text(
+        'syntax = "proto3"; package generated_input; message Common {}\n',
+        encoding="utf-8",
+    )
+    demo_proto.write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package generated_input;",
+                'import "common.proto";',
+                "message Demo { Common common = 1; }",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(build_generated_descriptor_set LANGUAGES CXX)",
+                "set(PROTOCYTE_INSTALL OFF)",
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                f'add_subdirectory("{repo_root.as_posix()}" protocyte-core)',
+                'set(descriptor_set "${CMAKE_CURRENT_BINARY_DIR}/generated/descriptor_set.pb")',
+                "add_custom_command(",
+                '    OUTPUT "${descriptor_set}"',
+                '    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                f'    COMMAND "{protoc.as_posix()}"',
+                '        "--proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '        "--descriptor_set_out=${descriptor_set}"',
+                "        --include_imports",
+                "        common.proto",
+                "        api/demo.proto",
+                f'    DEPENDS "{common_proto.as_posix()}" "{demo_proto.as_posix()}"',
+                '    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                "    VERBATIM",
+                ")",
+                'add_custom_target(descriptor_set_input DEPENDS "${descriptor_set}")',
+                "protocyte_add_descriptor_set_library(",
+                "    TARGET generated_proto",
+                '    DESCRIPTOR_SET "${descriptor_set}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/cpp"',
+                "    FILES common.proto api/demo.proto",
+                "    DEPENDS descriptor_set_input",
+                "    HOSTED_ALLOCATOR",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-G", "Ninja", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+    )
+    descriptor_set = build_dir / "generated" / "descriptor_set.pb"
+    assert not descriptor_set.exists()
+
+    build_command = [
+        "cmake",
+        "--build",
+        str(build_dir),
+        "--target",
+        "generated_proto",
+    ]
+    subprocess.run(build_command, check=True)
+
+    assert descriptor_set.is_file()
+    common_header = build_dir / "generated/cpp/common.protocyte.hpp"
+    assert common_header.is_file()
+    assert (build_dir / "generated/cpp/api/demo.protocyte.hpp").is_file()
+    assert (build_dir / "generated/cpp/api/demo.protocyte.cpp").is_file()
+    initial_descriptor_mtime_ns = descriptor_set.stat().st_mtime_ns
+    initial_header_mtime_ns = common_header.stat().st_mtime_ns
+    initial_header = common_header.read_text(encoding="utf-8")
+
+    no_change = subprocess.run(
+        build_command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "no work to do" in no_change.stdout.lower()
+
+    common_proto.write_text(
+        'syntax = "proto3"; package generated_input; message Common { uint32 version = 1; }\n',
+        encoding="utf-8",
+    )
+    _touch_newer_than(common_proto, descriptor_set)
+    _touch_newer_than(common_proto, common_header)
+    subprocess.run(build_command, check=True)
+
+    assert descriptor_set.stat().st_mtime_ns > initial_descriptor_mtime_ns
+    assert common_header.stat().st_mtime_ns > initial_header_mtime_ns
+    assert common_header.read_text(encoding="utf-8") != initial_header
 
 
 def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) -> None:
