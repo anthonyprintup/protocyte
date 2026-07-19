@@ -54,7 +54,9 @@ Then inspect values normally:
 (lldb) frame variable bytes[0] bytes[1]
 ```
 
-The previews inline at most 64 bytes to keep variable views responsive. Expanding a formatted value also exposes underlying object members as `raw.*` children, such as `raw.ctx_`, `raw.data_`, `raw.size_`, and `raw.capacity_`.
+The previews inline at most 64 bytes to keep variable views responsive. Types
+with synthetic expansion also expose a **Raw View** child. Expand it to inspect
+the underlying members such as `ctx_`, `data_`, `size_`, and `capacity_`.
 
 Generated oneofs are stored as a case tag plus payload fields, so the oneof formatter is opt-in per generated type regex. Register it after importing the formatter:
 
