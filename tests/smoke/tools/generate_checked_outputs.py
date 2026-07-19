@@ -6,13 +6,24 @@ import shutil
 import subprocess
 import sys
 import tomllib
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.message import DecodeError
 from protocyte import __version__
+
+
+_TRANSACTION_HELPERS = Path(__file__).resolve().parents[3] / ".github" / "scripts"
+if str(_TRANSACTION_HELPERS) not in sys.path:
+    sys.path.insert(0, str(_TRANSACTION_HELPERS))
+
+from owned_transactions import (  # noqa: E402
+    OwnedSibling,
+    create_owned_sibling,
+    locked_destination,
+    recover_owned_siblings,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -90,25 +101,27 @@ def _regenerate_checked_outputs(
     clang_format_config: Path,
 ) -> str | None:
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    _recover_interrupted_checked_output_swap(out_dir)
-    transaction = _create_checked_output_transaction(out_dir, "transaction")
-    try:
-        staged_out_dir = transaction / "generated"
-        staged_out_dir.mkdir()
-        error = _write_checked_outputs(
-            staged_out_dir,
-            clang_format,
-            clang_format_config,
-        )
-        if error is not None:
-            return error
+    with locked_destination(out_dir):
+        _recover_interrupted_checked_output_state(out_dir)
+        transaction_owner = _create_checked_output_transaction(out_dir, "transaction")
+        transaction = transaction_owner.path
+        try:
+            staged_out_dir = transaction / "generated"
+            staged_out_dir.mkdir()
+            error = _write_checked_outputs(
+                staged_out_dir,
+                clang_format,
+                clang_format_config,
+            )
+            if error is not None:
+                return error
 
-        _swap_checked_outputs(out_dir, staged_out_dir, transaction)
-        return None
-    finally:
-        _checked_output_swap_phase("before_cleanup")
-        _remove_checked_output_path(transaction)
-        _checked_output_swap_phase("after_cleanup")
+            _swap_checked_outputs(out_dir, staged_out_dir, transaction)
+            return None
+        finally:
+            _checked_output_swap_phase("before_cleanup")
+            transaction_owner.cleanup(_remove_checked_output_path)
+            _checked_output_swap_phase("after_cleanup")
 
 
 def _checked_output_swap_phase(_phase: str) -> None:
@@ -132,33 +145,28 @@ def _checked_output_rollback_path(out_dir: Path) -> Path:
     return out_dir.with_name(f".{out_dir.name}.protocyte-rollback")
 
 
-def _create_checked_output_transaction(out_dir: Path, purpose: str) -> Path:
+def _create_checked_output_transaction(out_dir: Path, purpose: str) -> OwnedSibling:
     # Path.mkdir uses the parent directory's normal ACL inheritance. tempfile's
     # Windows directories intentionally use a private DACL, which must never be
     # moved into the checked-out tree as the live generated directory.
-    while True:
-        transaction = out_dir.with_name(
-            f".{out_dir.name}.protocyte-{purpose}-{uuid.uuid4().hex}"
-        )
-        try:
-            transaction.mkdir()
-        except FileExistsError:
-            continue
-        return transaction
+    return create_owned_sibling(out_dir, purpose)
 
 
 def _restore_checked_output_rollback(out_dir: Path, rollback: Path) -> None:
-    recovery = _create_checked_output_transaction(out_dir, "recovery")
+    recovery_owner = _create_checked_output_transaction(out_dir, "recovery")
+    recovery = recovery_owner.path
     displaced = recovery / "interrupted-output"
     try:
         if _checked_output_path_exists(out_dir):
             out_dir.replace(displaced)
+        _checked_output_swap_phase("recovery_after_displace")
         rollback.replace(out_dir)
+        _checked_output_swap_phase("recovery_after_restore")
     finally:
         # Recovery is already durable once rollback.replace succeeds. Cleanup
         # must not mask the original interruption or endanger the restored tree.
         try:
-            _remove_checked_output_path(recovery)
+            recovery_owner.cleanup(_remove_checked_output_path)
         except OSError:
             pass
 
@@ -167,6 +175,17 @@ def _recover_interrupted_checked_output_swap(out_dir: Path) -> None:
     rollback = _checked_output_rollback_path(out_dir)
     if _checked_output_path_exists(rollback):
         _restore_checked_output_rollback(out_dir, rollback)
+
+
+def _recover_interrupted_checked_output_state(out_dir: Path) -> None:
+    # The fixed rollback is the only authoritative pre-commit copy, so restore
+    # it before deleting any dead UUID transaction or recovery directories.
+    _recover_interrupted_checked_output_swap(out_dir)
+    recover_owned_siblings(
+        out_dir,
+        ("transaction", "recovery"),
+        _remove_checked_output_path,
+    )
 
 
 def _swap_checked_outputs(
@@ -198,9 +217,9 @@ def _swap_checked_outputs(
         _checked_output_swap_phase("after_commit")
     except BaseException:
         if had_previous:
-            if not _checked_output_path_exists(rollback) and _checked_output_path_exists(
-                discard
-            ):
+            if not _checked_output_path_exists(
+                rollback
+            ) and _checked_output_path_exists(discard):
                 discard.replace(rollback)
             if _checked_output_path_exists(rollback):
                 _restore_checked_output_rollback(out_dir, rollback)
@@ -299,7 +318,9 @@ def _run_protoc(
     *,
     response_file: Path,
 ) -> str | None:
-    response_file.write_text("\n".join((*arguments, "")), encoding="utf-8", newline="\n")
+    response_file.write_text(
+        "\n".join((*arguments, "")), encoding="utf-8", newline="\n"
+    )
     result = subprocess.run(
         [str(protoc), f"@{response_file}"],
         cwd=SMOKE_PROTO_DIR,
@@ -478,14 +499,25 @@ def _clang_format_candidates() -> list[Path]:
             Path("/usr/local/opt/llvm/bin/clang-format"),
         ]
 
-    candidates.extend(sorted(Path("/usr/lib").glob("llvm-*/bin/clang-format"), reverse=True))
-    candidates.extend([Path("/usr/local/bin/clang-format"), Path("/usr/bin/clang-format")])
+    candidates.extend(
+        sorted(Path("/usr/lib").glob("llvm-*/bin/clang-format"), reverse=True)
+    )
+    candidates.extend(
+        [Path("/usr/local/bin/clang-format"), Path("/usr/bin/clang-format")]
+    )
     return candidates
 
 
-def _clang_format_file(path: Path, clang_format: str, clang_format_config: Path) -> None:
+def _clang_format_file(
+    path: Path, clang_format: str, clang_format_config: Path
+) -> None:
     subprocess.run(
-        [clang_format, f"-style=file:{clang_format_config.as_posix()}", "-i", path.as_posix()],
+        [
+            clang_format,
+            f"-style=file:{clang_format_config.as_posix()}",
+            "-i",
+            path.as_posix(),
+        ],
         check=True,
     )
 
@@ -597,9 +629,14 @@ def compat_cases_header(file: descriptor_pb2.FileDescriptorProto) -> str:
     cases.append(("map_runtime", message.SerializeToString()))
 
     cases.append(
-        ("map_duplicate_key", map_str_int32_entry("dup", 1) + map_str_int32_entry("dup", 2))
+        (
+            "map_duplicate_key",
+            map_str_int32_entry("dup", 1) + map_str_int32_entry("dup", 2),
+        )
     )
-    cases.append(("map_default_entries", map_int32_str_entry() + map_int32_str_entry(7)))
+    cases.append(
+        ("map_default_entries", map_int32_str_entry() + map_int32_str_entry(7))
+    )
     cases.append(
         (
             "map_unknown_entry_field",
