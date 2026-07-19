@@ -236,8 +236,10 @@ Protobuf virtual descriptor names may contain characters that are not portable
 host-file names. Protocyte preserves ordinary path segments and hex-escapes
 nonportable UTF-8 bytes as `~HH` in generated paths; for example,
 `api/bad"name.proto` emits `api/bad~22name.protocyte.hpp`, and semicolons are
-escaped as `~3B` so generated names remain safe in CMake lists. A literal `~`
-is escaped too, so this mapping cannot alias an unescaped descriptor name. If
+escaped as `~3B` so generated names remain safe in CMake lists. Relative POSIX
+names containing a colon are supported too: `a:b.proto` emits
+`a~3Ab.protocyte.hpp`. A literal `~` is escaped too, so this mapping cannot
+alias an unescaped descriptor name. If
 escaping would exceed a filesystem's common 255-byte component limit,
 Protocyte retains a readable prefix and appends the full SHA-256 digest of the
 original segment. The final segment also reserves room for
@@ -855,7 +857,8 @@ Supported `--protocyte_out=` parameters:
 - `include_prefix=<path>`: prefix includes for imported generated headers.
 - `comments=on|off`: emit schema comments as Doxygen documentation on generated
   C++ types and field APIs. The default is `on`. This setting does not suppress
-  `[[deprecated]]` attributes derived from protobuf field and enum-value options.
+  `[[deprecated]]` attributes derived from protobuf message, enum, field, and
+  enum-value options.
 - `format=auto|off|required`: control generated C++ formatting. `auto` is the
   default and formats when `clang-format` is available; `off` never launches a
   formatter; `required` reports an error when no formatter is available.
@@ -883,6 +886,9 @@ and must not be supplied through CMake `OPTIONS`.
 components are portable, non-reserved C++ identifiers. Empty components, C++
 keywords, leading underscores, extra colons, surrounding component whitespace,
 control characters, and non-ASCII identifier characters are rejected.
+The final generated namespace must not begin with `protocyte`, because
+`::protocyte` is owned by the runtime. For a schema package named `protocyte`,
+set an application-owned prefix such as `namespace_prefix=my_project::wire`.
 
 Generated schema identifiers are escaped when their normalized spelling starts
 with an underscore or contains a double underscore, including predefined macro
@@ -1316,6 +1322,15 @@ template <class Config = ::protocyte::DefaultConfig>
 struct Message;
 ```
 
+The displayed `Config` spelling is an implementation parameter name, not a
+reserved schema identifier. If a legal message or generated class-scope name
+would collide with `Config` (or with another internal template parameter such
+as `Reader`), Protocyte automatically chooses a collision-free internal name;
+the generated message type and its public protobuf-derived names stay unchanged.
+Generation reports schema fields or nested types that would collide with the
+enclosing C++ class's injected name, because C++ cannot represent those members
+without changing their protobuf-derived API name.
+
 The default config uses a caller-supplied allocator context. Construction is
 non-allocating, so `create(ctx)` returns the message directly. Primitive scalar
 setters also return `void`. Operations that can fail, including allocation,
@@ -1748,4 +1763,15 @@ The runtime provides:
 
 Reflection tables are emitted only when `PROTOCYTE_ENABLE_REFLECTION` is set to
 a nonzero value. Release builds do not get descriptor pools or dynamic
-reflection.
+reflection. Define the macro consistently while compiling both the generated
+`.protocyte.cpp` file and consumers of its generated header. Each message then
+exposes an externally linked `std::array<protocyte::ReflectionFieldInfo, N>` in
+the generated package's `protocyte_reflection` namespace, named
+`<GeneratedMessageName>_fields`.
+
+`ReflectionFieldInfo::label` preserves the protobuf descriptor label as
+`ReflectionFieldLabel::optional`, `required`, or `repeated`.
+`ReflectionFieldInfo::has_presence` is independent: it is true only when the
+field has a singular presence bit according to protobuf semantics, so required
+fields have presence while repeated fields (including repeated messages) do
+not. The remaining members are `name`, `number`, `kind`, and `packed`.

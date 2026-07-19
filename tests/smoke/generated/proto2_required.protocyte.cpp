@@ -1,59 +1,48 @@
 #include "proto2_required.protocyte.hpp"
 
 #if PROTOCYTE_ENABLE_REFLECTION
-#include <array>
-
 namespace test::required {
 
     namespace protocyte_reflection {
-        struct FieldInfo {
-            const char *name;
-            ::protocyte::u32 number;
-            const char *kind;
-            bool repeated;
-            bool optional;
-            bool packed;
-        };
-
-        [[maybe_unused]] static const ::std::array<FieldInfo, 2> RequiredChild_fields {{
-            {"id", 1u, "scalar", false, true, false},
-            {"note", 2u, "string", false, true, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> RequiredChild_fields {{
+            {"id", 1u, "scalar", ::protocyte::ReflectionFieldLabel::required, true, false},
+            {"note", 2u, "string", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 2> RequiredParent_fields {{
-            {"child", 1u, "message", false, true, false},
-            {"children", 2u, "message", true, true, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> RequiredParent_fields {{
+            {"child", 1u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"children", 2u, "message", ::protocyte::ReflectionFieldLabel::repeated, false, false},
         }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 2> Proto2ArrayDefaults_fields {{
-            {"bounded_bytes", 1u, "bytes", false, true, false},
-            {"fixed_bytes", 2u, "bytes", false, true, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Proto2ArrayDefaults_fields {{
+            {"bounded_bytes", 1u, "bytes", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"fixed_bytes", 2u, "bytes", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 19> Proto2DefaultValues_fields {{
-            {"double_value", 1u, "scalar", false, true, false},
-            {"float_value", 2u, "scalar", false, true, false},
-            {"int64_value", 3u, "scalar", false, true, false},
-            {"uint64_value", 4u, "scalar", false, true, false},
-            {"int32_value", 5u, "scalar", false, true, false},
-            {"fixed64_value", 6u, "scalar", false, true, false},
-            {"fixed32_value", 7u, "scalar", false, true, false},
-            {"bool_value", 8u, "scalar", false, true, false},
-            {"string_value", 9u, "string", false, true, false},
-            {"bytes_value", 10u, "bytes", false, true, false},
-            {"uint32_value", 11u, "scalar", false, true, false},
-            {"enum_value", 12u, "enum", false, true, false},
-            {"sfixed32_value", 13u, "scalar", false, true, false},
-            {"sfixed64_value", 14u, "scalar", false, true, false},
-            {"sint32_value", 15u, "scalar", false, true, false},
-            {"sint64_value", 16u, "scalar", false, true, false},
-            {"implicit_enum_value", 17u, "enum", false, true, false},
-            {"enum_values", 18u, "enum", true, false, true},
-            {"enum_by_name", 19u, "map", true, false, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 19> Proto2DefaultValues_fields {{
+            {"double_value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"float_value", 2u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"int64_value", 3u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"uint64_value", 4u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"int32_value", 5u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"fixed64_value", 6u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"fixed32_value", 7u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"bool_value", 8u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"string_value", 9u, "string", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"bytes_value", 10u, "bytes", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"uint32_value", 11u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"enum_value", 12u, "enum", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"sfixed32_value", 13u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"sfixed64_value", 14u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"sint32_value", 15u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"sint64_value", 16u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"implicit_enum_value", 17u, "enum", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"enum_values", 18u, "enum", ::protocyte::ReflectionFieldLabel::repeated, false, true},
+            {"enum_by_name", 19u, "map", ::protocyte::ReflectionFieldLabel::repeated, false, false},
         }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 1> OneofShadowingValue_fields {{
-            {"bool_value", 1u, "scalar", false, true, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> OneofShadowingValue_fields {{
+            {"bool_value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
     } // namespace protocyte_reflection

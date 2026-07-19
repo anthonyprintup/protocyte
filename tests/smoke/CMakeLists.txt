@@ -280,10 +280,10 @@ add_library(protocyte_runtime_strict_compile OBJECT src/runtime_strict_compile.c
 target_link_libraries(protocyte_runtime_strict_compile PRIVATE protocyte::runtime)
 target_compile_features(protocyte_runtime_strict_compile PRIVATE cxx_std_20)
 
-add_library(
+add_executable(
     protocyte_reflection_strict_compile
-    OBJECT
-        "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
+    src/reflection_strict_compile.cpp
+    "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
 )
 target_include_directories(
     protocyte_reflection_strict_compile
@@ -500,6 +500,7 @@ endif()
 
 enable_testing()
 include(Catch)
+add_test(NAME protocyte_reflection_strict COMMAND protocyte_reflection_strict_compile)
 catch_discover_tests(protocyte_host_smoke)
 if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     catch_discover_tests(protocyte_host_benchmark_smoke)

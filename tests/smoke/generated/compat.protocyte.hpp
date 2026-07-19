@@ -5,7 +5,18 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+#endif
+
 namespace protocyte_smoke::test::compat {
+
+#if PROTOCYTE_ENABLE_REFLECTION
+    namespace protocyte_reflection {
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> EncodingMatrix_Inner_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 29> EncodingMatrix_fields;
+    } // namespace protocyte_reflection
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct EncodingMatrix_Mode : ::protocyte::i32 {
         MODE_UNSPECIFIED = 0,

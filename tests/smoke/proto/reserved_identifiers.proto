@@ -51,3 +51,24 @@ message class {
 
   struct nested = 2;
 }
+
+message Config {
+  string text = 1;
+}
+
+message Reader {}
+
+enum LegacyMode {
+  option deprecated = true;
+
+  LEGACY_MODE_UNSPECIFIED = 0;
+}
+
+message LegacyPayload {
+  option deprecated = true;
+}
+
+message DeprecationCarrier {
+  LegacyMode legacy_mode = 1;
+  LegacyPayload legacy_payload = 2;
+}

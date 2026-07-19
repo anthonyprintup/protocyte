@@ -98,7 +98,7 @@ function(
 endfunction()
 
 function(_protocyte_descriptor_name_is_unsafe out_var name)
-    if(IS_ABSOLUTE "${name}" OR "${name}" MATCHES "^[A-Za-z]:" OR "${name}" MATCHES "\\\\")
+    if("${name}" MATCHES "^/" OR "${name}" MATCHES "^[A-Za-z]:/" OR "${name}" MATCHES "\\\\")
         set(${out_var} TRUE PARENT_SCOPE)
     else()
         set(${out_var} FALSE PARENT_SCOPE)

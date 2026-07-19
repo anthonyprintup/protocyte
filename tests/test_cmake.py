@@ -3173,7 +3173,33 @@ def test_cmake_discovery_json_preserves_semicolon_descriptor_name(tmp_path: Path
     assert output.read_text(encoding="utf-8") == "api/one;legacy.proto|api/two.proto|"
 
 
-def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(
+@pytest.mark.parametrize("name", ["a:b.proto", "C:foo.proto"])
+def test_cmake_descriptor_name_validator_accepts_relative_colon_names(
+    tmp_path: Path, name: str
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cmake_script = tmp_path / "descriptor_name_validator.cmake"
+    output = tmp_path / "unsafe.txt"
+
+    cmake_script.write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                f'_protocyte_descriptor_name_is_unsafe(unsafe "{name}")',
+                f'file(WRITE "{output.as_posix()}" "${{unsafe}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-P", str(cmake_script)], check=True)
+
+    assert output.read_text(encoding="utf-8") == "FALSE"
+
+
+def test_cmake_descriptor_name_validator_rejects_rooted_drive_path(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -3185,7 +3211,7 @@ def test_cmake_descriptor_name_validator_rejects_drive_relative_paths(
             [
                 "cmake_minimum_required(VERSION 3.24)",
                 f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
-                '_protocyte_descriptor_name_is_unsafe(unsafe "C:foo.proto")',
+                '_protocyte_descriptor_name_is_unsafe(unsafe "C:/foo.proto")',
                 f'file(WRITE "{output.as_posix()}" "${{unsafe}}")',
                 "",
             ]

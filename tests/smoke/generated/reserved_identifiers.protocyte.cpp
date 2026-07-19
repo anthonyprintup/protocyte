@@ -1,42 +1,44 @@
 #include "reserved_identifiers.protocyte.hpp"
 
 #if PROTOCYTE_ENABLE_REFLECTION
-#include <array>
-
 namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f {
 
     namespace protocyte_reflection {
-        struct FieldInfo {
-            const char *name;
-            ::protocyte::u32 number;
-            const char *kind;
-            bool repeated;
-            bool optional;
-            bool packed;
-        };
-
-        [[maybe_unused]] static const ::std::array<FieldInfo, 1>
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
             Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765_fields {{
-                {"_Inner", 1u, "scalar", false, false, false},
+                {"_Inner", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
             }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 7> Protocyte_escaped_5f5f4c494e455f5f_fields {{
-            {"__FILE__", 1u, "string", false, true, false},
-            {"value__gap", 2u, "scalar", false, true, false},
-            {"_Upper", 3u, "scalar", false, false, false},
-            {"trailing_", 4u, "scalar", false, false, false},
-            {"enum__value", 5u, "enum", false, false, false},
-            {"class", 6u, "message", false, true, false},
-            {"_", 7u, "scalar", false, false, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> Protocyte_escaped_5f5f4c494e455f5f_fields {{
+            {"__FILE__", 1u, "string", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"value__gap", 2u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"_Upper", 3u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
+            {"trailing_", 4u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
+            {"enum__value", 5u, "enum", ::protocyte::ReflectionFieldLabel::optional, false, false},
+            {"class", 6u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"_", 7u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 1> Class_Struct_fields {{
-            {"value", 1u, "scalar", false, false, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Class_Struct_fields {{
+            {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
-        [[maybe_unused]] static const ::std::array<FieldInfo, 2> Class_fields {{
-            {"value", 1u, "scalar", false, true, false},
-            {"nested", 2u, "message", false, true, false},
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Class_fields {{
+            {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
+            {"nested", 2u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
+        }};
+
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Config_fields {{
+            {"text", 1u, "string", ::protocyte::ReflectionFieldLabel::optional, false, false},
+        }};
+
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Reader_fields {{}};
+
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> LegacyPayload_fields {{}};
+
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> DeprecationCarrier_fields {{
+            {"legacy_mode", 1u, "enum", ::protocyte::ReflectionFieldLabel::optional, false, false},
+            {"legacy_payload", 2u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
     } // namespace protocyte_reflection

@@ -5,11 +5,33 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+#endif
+
 namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f {
+
+#if PROTOCYTE_ENABLE_REFLECTION
+    namespace protocyte_reflection {
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
+            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> Protocyte_escaped_5f5f4c494e455f5f_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Class_Struct_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Class_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Config_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Reader_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> LegacyPayload_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> DeprecationCarrier_fields;
+    } // namespace protocyte_reflection
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct Protocyte_escaped_5f5f46494c455f5f : ::protocyte::i32 {
         protocyte_escaped_5f5570706572 = 0,
         protocyte_escaped_76616c75655f5f676170 = 1,
+    };
+
+    enum struct [[deprecated]] LegacyMode : ::protocyte::i32 {
+        LEGACY_MODE_UNSPECIFIED = 0,
     };
 
     enum struct Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_5f4e6573746564456e756d : ::protocyte::i32 {
@@ -29,6 +51,10 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
     template<typename Config = ::protocyte::DefaultConfig> struct Protocyte_escaped_5f5f4c494e455f5f;
     template<typename Config = ::protocyte::DefaultConfig> struct Class_Struct_;
     template<typename Config = ::protocyte::DefaultConfig> struct Class_;
+    template<typename ProtocyteConfig = ::protocyte::DefaultConfig> struct Config;
+    template<typename Config = ::protocyte::DefaultConfig> struct Reader;
+    template<typename Config = ::protocyte::DefaultConfig> struct [[deprecated]] LegacyPayload;
+    template<typename Config = ::protocyte::DefaultConfig> struct DeprecationCarrier;
 
     template<typename Config>
     struct Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 {
@@ -1898,6 +1924,1112 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::Class_Struct_<Config>>
             nested_;
     };
+
+    template<typename ProtocyteConfig> struct Config {
+        using Context = typename ProtocyteConfig::Context;
+        enum struct FieldNumber : ::protocyte::u32 {
+            text = 1u,
+        };
+
+        explicit Config(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx}, text_ {&ctx} {}
+
+        static Config create(Context &ctx) noexcept { return Config {ctx}; }
+        Context *context() const noexcept { return ctx_; }
+        Config(Config &&) noexcept = default;
+        Config &operator=(Config &&) noexcept = default;
+        Config(const Config &) = delete;
+        Config &operator=(const Config &) = delete;
+
+        ::protocyte::Status copy_from(const Config &source) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            Config staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const Config &source, Config &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<Config> clone() const noexcept {
+            auto output = Config::create(*ctx_);
+            if (const auto st = clone(output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        ::protocyte::Status clone(Config &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(Config &value, Context &ctx) noexcept {
+            value.~Config();
+            new (&value) Config {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const Config &source) noexcept {
+            if (const auto st = set_text(source.text()); !st) {
+                return st;
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<ProtocyteConfig> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<ProtocyteConfig>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<ProtocyteConfig> {*ctx_, unknown_fields_};
+        }
+
+        ::protocyte::StringView text() const noexcept { return text_.view(); }
+        typename ProtocyteConfig::String &mutable_text() noexcept { return text_; }
+        template<class Value>::protocyte::Status set_text(const Value &value) noexcept
+            requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::byte_span_of(value);
+            if (!view) {
+                return ::protocyte::with_field(view.status(), static_cast<::protocyte::u32>(FieldNumber::text));
+            }
+            typename ProtocyteConfig::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::text));
+            }
+            text_ = ::protocyte::move(temp);
+            return {};
+        }
+        template<class Value>::protocyte::Status set_text(const Value &value) noexcept
+            requires(::protocyte::TextSource<Value>)
+        {
+            const auto view = ::protocyte::text_byte_span_of(value);
+            if (!view) {
+                return ::protocyte::with_field(view.status(), static_cast<::protocyte::u32>(FieldNumber::text));
+            }
+            typename ProtocyteConfig::String temp {ctx_};
+            if (const auto st = temp.assign(*view); !st) {
+                return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::text));
+            }
+            text_ = ::protocyte::move(temp);
+            return {};
+        }
+        void clear_text() noexcept { text_.clear(); }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<Config> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = Config::create(ctx);
+            if (const auto st = parse(reader, output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        static ::protocyte::Result<Config> parse(Context &ctx,
+                                                 ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Status parse(Reader &reader, Config &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return validate();
+        }
+
+    private:
+        template<typename Reader>::protocyte::Status merge_field_from_(Reader &reader,
+                                                                       const ::protocyte::u32 field_number,
+                                                                       const ::protocyte::WireType wire_type) noexcept {
+            switch (static_cast<FieldNumber>(field_number)) {
+                case FieldNumber::text: {
+                    if (wire_type != ::protocyte::WireType::LEN) {
+                        if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
+                            if (const auto st = ::protocyte::read_unknown_field<ProtocyteConfig>(
+                                    *ctx_, reader, wire_type, field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st =
+                                    ::protocyte::skip_field<ProtocyteConfig>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        break;
+                    }
+                    if (const auto st = ::protocyte::read_string_field<ProtocyteConfig>(*ctx_, reader, wire_type,
+                                                                                        field_number, text_);
+                        !st) {
+                        return st;
+                    }
+                    break;
+                }
+                default: {
+                    if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
+                        if (const auto st = ::protocyte::read_unknown_field<ProtocyteConfig>(
+                                *ctx_, reader, wire_type, field_number, unknown_fields_);
+                            !st) {
+                            return st;
+                        }
+                    } else {
+                        if (const auto st =
+                                ::protocyte::skip_field<ProtocyteConfig>(*ctx_, reader, wire_type, field_number);
+                            !st) {
+                            return st;
+                        }
+                    }
+                    break;
+                }
+            }
+            return {};
+        }
+
+    protected:
+        friend class ::protocyte::MessageParseAccess;
+
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                if (const auto st = merge_field_from_(reader, field_number, wire_type); !st) {
+                    return ::protocyte::with_field(st, field_number);
+                }
+            }
+            return {};
+        }
+
+    public:
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if (!text_.empty()) {
+                if (const auto st = ::protocyte::write_string_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::text), text_.view());
+                    !st) {
+                    return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::text));
+                }
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            if (!text_.empty()) {
+                const auto field_size_text = ::protocyte::length_delimited_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::text), text_.size());
+                if (!field_size_text) {
+                    return ::protocyte::unexpected(::protocyte::with_field(
+                        field_size_text.error(), static_cast<::protocyte::u32>(FieldNumber::text)));
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_text);
+                if (!st_size) {
+                    return ::protocyte::unexpected(
+                        ::protocyte::with_field(st_size.error(), static_cast<::protocyte::u32>(FieldNumber::text)));
+                }
+                total = *st_size;
+            }
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
+        }
+
+        ::protocyte::Status validate() const noexcept {
+            if (const auto st = text_.validate(); !st) {
+                return ::protocyte::unexpected(st.error().code, {}, static_cast<::protocyte::u32>(FieldNumber::text));
+            }
+            return {};
+        }
+    protected:
+        Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<ProtocyteConfig> unknown_fields_;
+        typename ProtocyteConfig::String text_;
+    };
+
+    template<typename Config> struct Reader {
+        using Context = typename Config::Context;
+        explicit Reader(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+
+        static Reader create(Context &ctx) noexcept { return Reader {ctx}; }
+        Context *context() const noexcept { return ctx_; }
+        Reader(Reader &&) noexcept = default;
+        Reader &operator=(Reader &&) noexcept = default;
+        Reader(const Reader &) = delete;
+        Reader &operator=(const Reader &) = delete;
+
+        ::protocyte::Status copy_from(const Reader &source) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            Reader staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const Reader &source, Reader &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<Reader> clone() const noexcept {
+            auto output = Reader::create(*ctx_);
+            if (const auto st = clone(output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        ::protocyte::Status clone(Reader &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(Reader &value, Context &ctx) noexcept {
+            value.~Reader();
+            new (&value) Reader {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const Reader &source) noexcept {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
+
+        template<::protocyte::ReaderLike ProtocyteReader>
+        static ::protocyte::Result<Reader> parse(Context &ctx, ProtocyteReader &reader) noexcept {
+            auto output = Reader::create(ctx);
+            if (const auto st = parse(reader, output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        static ::protocyte::Result<Reader> parse(Context &ctx,
+                                                 ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike ProtocyteReader>
+        static ::protocyte::Status parse(ProtocyteReader &reader, Reader &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+        template<::protocyte::ReaderLike ProtocyteReader>
+        ::protocyte::Status merge_from(ProtocyteReader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<ProtocyteReader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return validate();
+        }
+
+    private:
+        template<typename ProtocyteReader>
+        ::protocyte::Status merge_field_from_(ProtocyteReader &reader, const ::protocyte::u32 field_number,
+                                              const ::protocyte::WireType wire_type) noexcept {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type, field_number,
+                                                                            unknown_fields_);
+                    !st) {
+                    return st;
+                }
+            } else {
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    protected:
+        friend class ::protocyte::MessageParseAccess;
+
+        template<typename ProtocyteReader>::protocyte::Status merge_fields_from(ProtocyteReader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                if (const auto st = merge_field_from_(reader, field_number, wire_type); !st) {
+                    return ::protocyte::with_field(st, field_number);
+                }
+            }
+            return {};
+        }
+
+    public:
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
+        }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
+    protected:
+        Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
+    };
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    template<typename Config> struct [[deprecated]] LegacyPayload {
+        using Context = typename Config::Context;
+        explicit LegacyPayload(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+
+        static LegacyPayload create(Context &ctx) noexcept { return LegacyPayload {ctx}; }
+        Context *context() const noexcept { return ctx_; }
+        LegacyPayload(LegacyPayload &&) noexcept = default;
+        LegacyPayload &operator=(LegacyPayload &&) noexcept = default;
+        LegacyPayload(const LegacyPayload &) = delete;
+        LegacyPayload &operator=(const LegacyPayload &) = delete;
+
+        ::protocyte::Status copy_from(const LegacyPayload &source) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            LegacyPayload staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const LegacyPayload &source, LegacyPayload &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<LegacyPayload> clone() const noexcept {
+            auto output = LegacyPayload::create(*ctx_);
+            if (const auto st = clone(output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        ::protocyte::Status clone(LegacyPayload &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(LegacyPayload &value, Context &ctx) noexcept {
+            value.~LegacyPayload();
+            new (&value) LegacyPayload {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const LegacyPayload &source) noexcept {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<LegacyPayload> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = LegacyPayload::create(ctx);
+            if (const auto st = parse(reader, output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        static ::protocyte::Result<LegacyPayload> parse(Context &ctx,
+                                                        ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Status parse(Reader &reader, LegacyPayload &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return validate();
+        }
+
+    private:
+        template<typename Reader>::protocyte::Status merge_field_from_(Reader &reader,
+                                                                       const ::protocyte::u32 field_number,
+                                                                       const ::protocyte::WireType wire_type) noexcept {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type, field_number,
+                                                                            unknown_fields_);
+                    !st) {
+                    return st;
+                }
+            } else {
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    protected:
+        friend class ::protocyte::MessageParseAccess;
+
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                if (const auto st = merge_field_from_(reader, field_number, wire_type); !st) {
+                    return ::protocyte::with_field(st, field_number);
+                }
+            }
+            return {};
+        }
+
+    public:
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
+        }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
+    protected:
+        Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
+    };
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+    template<typename Config> struct DeprecationCarrier {
+        using Context = typename Config::Context;
+        enum struct FieldNumber : ::protocyte::u32 {
+            legacy_mode = 1u,
+            legacy_payload = 2u,
+        };
+
+        explicit DeprecationCarrier(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+
+        static DeprecationCarrier create(Context &ctx) noexcept { return DeprecationCarrier {ctx}; }
+        Context *context() const noexcept { return ctx_; }
+        DeprecationCarrier(DeprecationCarrier &&) noexcept = default;
+        DeprecationCarrier &operator=(DeprecationCarrier &&) noexcept = default;
+        DeprecationCarrier(const DeprecationCarrier &) = delete;
+        DeprecationCarrier &operator=(const DeprecationCarrier &) = delete;
+
+        ::protocyte::Status copy_from(const DeprecationCarrier &source) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            DeprecationCarrier staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const DeprecationCarrier &source, DeprecationCarrier &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<DeprecationCarrier> clone() const noexcept {
+            auto output = DeprecationCarrier::create(*ctx_);
+            if (const auto st = clone(output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        ::protocyte::Status clone(DeprecationCarrier &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(DeprecationCarrier &value, Context &ctx) noexcept {
+            value.~DeprecationCarrier();
+            new (&value) DeprecationCarrier {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const DeprecationCarrier &source) noexcept {
+            if (const auto st = set_legacy_mode_raw(source.legacy_mode_raw()); !st) {
+                return st;
+            }
+            if (source.has_legacy_payload()) {
+                const auto ensured_legacy_payload = ensure_legacy_payload();
+                if (!ensured_legacy_payload) {
+                    return ::protocyte::with_field(ensured_legacy_payload.status(),
+                                                   static_cast<::protocyte::u32>(FieldNumber::legacy_payload));
+                }
+                if (const auto st = ensured_legacy_payload->copy_from(*source.legacy_payload()); !st) {
+                    return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::legacy_payload));
+                }
+            } else {
+                clear_legacy_payload();
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
+
+        constexpr ::protocyte::i32 legacy_mode_raw() const noexcept { return legacy_mode_; }
+        constexpr ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyMode
+        legacy_mode() const noexcept {
+            return static_cast<::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyMode>(
+                legacy_mode_);
+        }
+        ::protocyte::Status set_legacy_mode_raw(const ::protocyte::i32 value) noexcept {
+            legacy_mode_ = value;
+            return {};
+        }
+        ::protocyte::Status set_legacy_mode(
+            const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyMode value) noexcept {
+            return set_legacy_mode_raw(static_cast<::protocyte::i32>(value));
+        }
+        constexpr void clear_legacy_mode() noexcept { legacy_mode_ = {}; }
+
+        bool has_legacy_payload() const noexcept { return legacy_payload_.has_value(); }
+        const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyPayload<Config> *
+        legacy_payload() const noexcept {
+            return has_legacy_payload() ? legacy_payload_.operator->() : nullptr;
+        }
+        ::protocyte::Result<
+            ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyPayload<Config> &>
+        ensure_legacy_payload() noexcept {
+            if (legacy_payload_.has_value()) {
+                return *legacy_payload_;
+            }
+            if (const auto st = legacy_payload_.emplace(*ctx_); !st) {
+                return ::protocyte::unexpected(
+                    ::protocyte::with_field(st.error(), static_cast<::protocyte::u32>(FieldNumber::legacy_payload)));
+            }
+            return *legacy_payload_;
+        }
+        void clear_legacy_payload() noexcept { legacy_payload_.reset(); }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<DeprecationCarrier> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = DeprecationCarrier::create(ctx);
+            if (const auto st = parse(reader, output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return ::protocyte::move(output);
+        }
+
+        static ::protocyte::Result<DeprecationCarrier> parse(Context &ctx,
+                                                             ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            ::protocyte::SliceReader reader {input.data(), input.size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Status parse(Reader &reader, DeprecationCarrier &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return validate();
+        }
+
+    private:
+        template<typename Reader>::protocyte::Status merge_field_from_(Reader &reader,
+                                                                       const ::protocyte::u32 field_number,
+                                                                       const ::protocyte::WireType wire_type) noexcept {
+            switch (static_cast<FieldNumber>(field_number)) {
+                case FieldNumber::legacy_mode: {
+                    if (wire_type != ::protocyte::WireType::VARINT) {
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        break;
+                    }
+                    const auto decoded_legacy_mode = ::protocyte::read_enum_field(reader, wire_type, field_number);
+                    if (!decoded_legacy_mode) {
+                        return decoded_legacy_mode.status();
+                    }
+                    legacy_mode_ = *decoded_legacy_mode;
+                    break;
+                }
+                case FieldNumber::legacy_payload: {
+                    if (wire_type != ::protocyte::WireType::LEN) {
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                        field_number, unknown_fields_);
+                                !st) {
+                                return st;
+                            }
+                        } else {
+                            if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                                !st) {
+                                return st;
+                            }
+                        }
+                        break;
+                    }
+                    if (wire_type != ::protocyte::WireType::LEN) {
+                        return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
+                                                       field_number);
+                    }
+                    ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyPayload<Config>
+                        legacy_payload_value {*ctx_};
+                    if (legacy_payload_.has_value()) {
+                        if (const auto st = legacy_payload_value.copy_from(*legacy_payload_); !st) {
+                            return st;
+                        }
+                    }
+                    if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, reader, field_number,
+                                                                                  legacy_payload_value);
+                        !st) {
+                        return st;
+                    }
+                    if (const auto st = legacy_payload_.emplace(::protocyte::move(legacy_payload_value)); !st) {
+                        return st;
+                    }
+                    break;
+                }
+                default: {
+                    if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                        if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type,
+                                                                                    field_number, unknown_fields_);
+                            !st) {
+                            return st;
+                        }
+                    } else {
+                        if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number);
+                            !st) {
+                            return st;
+                        }
+                    }
+                    break;
+                }
+            }
+            return {};
+        }
+
+    protected:
+        friend class ::protocyte::MessageParseAccess;
+
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                if (const auto st = merge_field_from_(reader, field_number, wire_type); !st) {
+                    return ::protocyte::with_field(st, field_number);
+                }
+            }
+            return {};
+        }
+
+    public:
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if (legacy_mode_ != 0) {
+                if (const auto st = ::protocyte::write_enum_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::legacy_mode), legacy_mode_);
+                    !st) {
+                    return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::legacy_mode));
+                }
+            }
+            if (legacy_payload_.has_value()) {
+                if (const auto st = ::protocyte::write_message_field(
+                        writer, static_cast<::protocyte::u32>(FieldNumber::legacy_payload), *legacy_payload_);
+                    !st) {
+                    return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::legacy_payload));
+                }
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            if (legacy_mode_ != 0) {
+                const auto st_size = ::protocyte::add_size(
+                    total, ::protocyte::tag_size(static_cast<::protocyte::u32>(FieldNumber::legacy_mode)) +
+                               ::protocyte::varint_size(static_cast<::protocyte::u64>(legacy_mode_)));
+                if (!st_size) {
+                    return ::protocyte::unexpected(::protocyte::with_field(
+                        st_size.error(), static_cast<::protocyte::u32>(FieldNumber::legacy_mode)));
+                }
+                total = *st_size;
+            }
+            if (legacy_payload_.has_value()) {
+                const auto field_size_legacy_payload = ::protocyte::message_field_size(
+                    static_cast<::protocyte::u32>(FieldNumber::legacy_payload), *legacy_payload_);
+                if (!field_size_legacy_payload) {
+                    return ::protocyte::unexpected(::protocyte::with_field(
+                        field_size_legacy_payload.error(), static_cast<::protocyte::u32>(FieldNumber::legacy_payload)));
+                }
+                const auto st_size = ::protocyte::add_size(total, *field_size_legacy_payload);
+                if (!st_size) {
+                    return ::protocyte::unexpected(::protocyte::with_field(
+                        st_size.error(), static_cast<::protocyte::u32>(FieldNumber::legacy_payload)));
+                }
+                total = *st_size;
+            }
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
+        }
+
+        ::protocyte::Status validate() const noexcept {
+            if (legacy_payload_.has_value()) {
+                if (const auto st = legacy_payload_->validate(); !st) {
+                    return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::legacy_payload));
+                }
+            }
+            return {};
+        }
+    protected:
+        Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
+        ::protocyte::i32 legacy_mode_ {};
+        typename Config::template Optional<
+            ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::LegacyPayload<Config>>
+            legacy_payload_;
+    };
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
