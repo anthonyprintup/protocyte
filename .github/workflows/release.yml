@@ -10,7 +10,9 @@ permissions:
 
 concurrency:
   group: Release-${{ github.ref }}
-  cancel-in-progress: true
+  # Publishing multiple release assets is not atomic. Never cancel a run after
+  # it may have started creating the public release.
+  cancel-in-progress: false
 
 jobs:
   validate-tag:

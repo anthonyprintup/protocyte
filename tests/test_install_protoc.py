@@ -1,8 +1,10 @@
 import hashlib
 import importlib.util
 import io
+import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -28,6 +30,157 @@ def _load_install_protoc_module():
 
 
 install_protoc = _load_install_protoc_module()
+owned_transactions = sys.modules[install_protoc.locked_destination.__module__]
+
+
+def test_default_transaction_state_directory_is_per_user_and_private(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(owned_transactions._STATE_DIRECTORY_ENV, raising=False)
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+
+    state_directory = owned_transactions._state_directory()
+
+    assert state_directory.parent == tmp_path
+    assert state_directory.name.startswith(
+        owned_transactions._STATE_DIRECTORY_NAME + "-"
+    )
+    assert state_directory.name != owned_transactions._STATE_DIRECTORY_NAME
+    if os.name != "nt":
+        assert stat.S_IMODE(state_directory.stat().st_mode) == 0o700
+
+
+def test_transaction_state_metadata_is_private_and_redacts_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "home" / "account" / "repo" / "generated"
+    destination.parent.mkdir(parents=True)
+    rollback = destination.with_name(".generated.protocyte-rollback")
+    rollback.mkdir()
+
+    with install_protoc.locked_destination(destination):
+        owner = install_protoc._create_install_transaction(
+            destination,
+            "transaction",
+        )
+        try:
+            owner.bind_path("rollback", rollback)
+            marker_paths = list(state_directory.rglob("*.owner"))
+            assert len(marker_paths) == 1
+            marker_path = marker_paths[0]
+            owner._lease._file.seek(0)
+            payload = json.loads(owner._lease._file.read().decode("utf-8"))
+            marker_mode = stat.S_IMODE(marker_path.stat().st_mode)
+        finally:
+            owner.cleanup(install_protoc._remove_path)
+
+    assert set(payload) == {
+        "schema",
+        "destination_key",
+        "kind",
+        "token",
+        "owned_paths",
+    }
+    assert payload["destination_key"] == owned_transactions._destination_key(
+        destination
+    )
+    rollback_identity = payload["owned_paths"]["rollback"]
+    assert set(rollback_identity) == {
+        "path_key",
+        "device",
+        "inode",
+        "type",
+        "reparse_tag",
+    }
+    assert rollback_identity["path_key"] == owned_transactions._destination_key(
+        rollback
+    )
+    serialized_payload = json.dumps(payload, sort_keys=True)
+    assert (
+        owned_transactions._normalized_destination(destination)
+        not in serialized_payload
+    )
+    assert (
+        owned_transactions._normalized_destination(rollback) not in serialized_payload
+    )
+
+    if os.name != "nt":
+        assert stat.S_IMODE(state_directory.stat().st_mode) == 0o700
+        assert marker_mode == 0o600
+        lock_paths = list(state_directory.rglob("*.lock"))
+        assert lock_paths
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in lock_paths)
+
+
+def test_transaction_state_directory_rejects_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    state_directory = tmp_path / "state"
+    try:
+        state_directory.symlink_to(target, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+
+    with pytest.raises(RuntimeError, match="linked transaction state directory"):
+        owned_transactions._state_directory()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ownership check")
+def test_transaction_state_directory_rejects_wrong_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    state_directory.mkdir(mode=0o700)
+    state_directory.chmod(0o700)
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    owner_id = state_directory.stat().st_uid
+    monkeypatch.setattr(
+        owned_transactions,
+        "_effective_user_id",
+        lambda: owner_id + 1,
+    )
+
+    with pytest.raises(RuntimeError, match="not owned by the current user"):
+        owned_transactions._state_directory()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission check")
+def test_transaction_state_directory_rejects_insecure_permissions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    state_directory.mkdir()
+    state_directory.chmod(0o755)
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+
+    with pytest.raises(RuntimeError, match="private 0700 permissions"):
+        owned_transactions._state_directory()
 
 
 def _write_archive(path: Path, members: list[str]) -> None:

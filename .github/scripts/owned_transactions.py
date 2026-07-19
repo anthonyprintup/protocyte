@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterator
 
 
-_MARKER_SCHEMA = 2
+_MARKER_SCHEMA = 3
 _STATE_DIRECTORY_ENV = "PROTOCYTE_TRANSACTION_STATE_DIR"
-_STATE_DIRECTORY_NAME = "protocyte-owned-transactions-v1"
+_STATE_DIRECTORY_NAME = "protocyte-owned-transactions-v2"
 
 
 class _KernelFileLock:
@@ -74,15 +74,101 @@ class _KernelFileLock:
         os.fsync(self._file.fileno())
 
 
+def _effective_user_id() -> int | None:
+    get_effective_user_id = getattr(os, "geteuid", None)
+    if get_effective_user_id is None:
+        return None
+    return int(get_effective_user_id())
+
+
+def _user_namespace() -> str:
+    effective_user_id = _effective_user_id()
+    if effective_user_id is not None:
+        return f"uid-{effective_user_id}"
+
+    identity = "\0".join(
+        (
+            os.environ.get("USERDOMAIN", ""),
+            os.environ.get("USERNAME", ""),
+            os.fspath(Path.home()),
+            tempfile.gettempdir(),
+        )
+    )
+    return "user-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+
+def _validate_state_directory(state: Path) -> None:
+    try:
+        state_stat = state.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"transaction state directory disappeared while opening it: {state}"
+        ) from exc
+
+    if stat.S_ISLNK(state_stat.st_mode) or int(
+        getattr(state_stat, "st_reparse_tag", 0)
+    ):
+        raise RuntimeError(
+            f"refusing to use a linked transaction state directory: {state}"
+        )
+    if not stat.S_ISDIR(state_stat.st_mode):
+        raise RuntimeError(f"transaction state path is not a directory: {state}")
+
+    if os.name != "nt":
+        effective_user_id = _effective_user_id()
+        if effective_user_id is None:
+            raise RuntimeError(
+                "cannot verify transaction state directory ownership on this platform"
+            )
+        if state_stat.st_uid != effective_user_id:
+            raise RuntimeError(
+                f"transaction state directory is not owned by the current user: {state}"
+            )
+        if stat.S_IMODE(state_stat.st_mode) != stat.S_IRWXU:
+            raise RuntimeError(
+                "transaction state directory must have private 0700 permissions: "
+                f"{state}"
+            )
+
+
 def _state_directory() -> Path:
     configured = os.environ.get(_STATE_DIRECTORY_ENV)
     state = (
         Path(configured)
         if configured
-        else Path(tempfile.gettempdir()) / _STATE_DIRECTORY_NAME
+        else Path(tempfile.gettempdir())
+        / f"{_STATE_DIRECTORY_NAME}-{_user_namespace()}"
     )
-    state.mkdir(parents=True, exist_ok=True)
+    try:
+        state.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except FileExistsError:
+        pass
+    _validate_state_directory(state)
     return state
+
+
+def _open_state_file(path: Path, flags: int) -> BinaryIO:
+    open_flags = flags | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, open_flags, 0o600)
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise RuntimeError(f"transaction state entry is not a regular file: {path}")
+        if os.name != "nt":
+            effective_user_id = _effective_user_id()
+            if effective_user_id is None or file_stat.st_uid != effective_user_id:
+                raise RuntimeError(
+                    f"transaction state entry is not owned by the current user: {path}"
+                )
+            mode = stat.S_IMODE(file_stat.st_mode)
+            if (mode & (stat.S_IRWXG | stat.S_IRWXO)) or (mode & 0o600) != 0o600:
+                raise RuntimeError(
+                    f"transaction state entry must have private 0600 permissions: {path}"
+                )
+        return os.fdopen(descriptor, "r+b", buffering=0)
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def _normalized_destination(destination: Path) -> str:
@@ -108,7 +194,7 @@ def _ensure_lock_byte(file: BinaryIO) -> None:
 @contextmanager
 def locked_destination(destination: Path) -> Iterator[None]:
     lock_path = _state_directory() / f"{_destination_key(destination)}.destination.lock"
-    file = lock_path.open("a+b", buffering=0)
+    file = _open_state_file(lock_path, os.O_RDWR | os.O_CREAT)
     lock = _KernelFileLock(file)
     try:
         _ensure_lock_byte(file)
@@ -137,7 +223,7 @@ def _marker_payload(
 ) -> dict[str, object]:
     return {
         "schema": _MARKER_SCHEMA,
-        "destination": _normalized_destination(destination),
+        "destination_key": _destination_key(destination),
         "kind": kind,
         "token": token,
         "owned_paths": owned_paths,
@@ -164,7 +250,7 @@ def _owned_path_identity(
 ) -> dict[str, object]:
     path_stat = path.lstat()
     return {
-        "path": _normalized_destination(recorded_path or path),
+        "path_key": _destination_key(recorded_path or path),
         "device": int(path_stat.st_dev),
         "inode": int(path_stat.st_ino),
         "type": int(stat.S_IFMT(path_stat.st_mode)),
@@ -194,8 +280,9 @@ def _read_owned_paths(
         isinstance(label, str)
         and re.fullmatch(r"[a-z][a-z0-9_]*", label) is not None
         and isinstance(identity, dict)
-        and set(identity) == {"path", "device", "inode", "type", "reparse_tag"}
-        and isinstance(identity["path"], str)
+        and set(identity) == {"path_key", "device", "inode", "type", "reparse_tag"}
+        and isinstance(identity["path_key"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", identity["path_key"]) is not None
         and all(
             isinstance(identity[field], int)
             for field in ("device", "inode", "type", "reparse_tag")
@@ -271,9 +358,18 @@ def create_owned_sibling(destination: Path, kind: str) -> OwnedSibling:
         token = uuid.uuid4().hex
         marker_path = _marker_path(destination, kind, token)
         try:
-            marker_file = marker_path.open("x+b", buffering=0)
+            marker_file = _open_state_file(
+                marker_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL,
+            )
         except FileExistsError:
             continue
+        except BaseException:
+            try:
+                marker_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
 
         lease = _KernelFileLock(marker_file)
         path = destination.with_name(f".{destination.name}.protocyte-{kind}-{token}")
@@ -309,7 +405,7 @@ def _claim_dead_owner(
 ) -> OwnedSibling | None:
     marker_path = _marker_path(destination, kind, token)
     try:
-        marker_file = marker_path.open("r+b", buffering=0)
+        marker_file = _open_state_file(marker_path, os.O_RDWR)
     except FileNotFoundError:
         return None
     lease = _KernelFileLock(marker_file)
@@ -318,15 +414,11 @@ def _claim_dead_owner(
             lease.close()
             return None
         marker_file.seek(0)
-        owned_paths = _read_owned_paths(
-            marker_file.read(), destination, kind, token
-        )
+        owned_paths = _read_owned_paths(marker_file.read(), destination, kind, token)
         if owned_paths is None:
             lease.close()
             return None
-        path = destination.with_name(
-            f".{destination.name}.protocyte-{kind}-{token}"
-        )
+        path = destination.with_name(f".{destination.name}.protocyte-{kind}-{token}")
         return OwnedSibling(
             destination,
             kind,
