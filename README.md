@@ -443,9 +443,11 @@ they must use the normalized relative virtual-directory form documented below.
 For its compiler, Protocyte first honors an explicit
 `Protobuf_PROTOC_EXECUTABLE`. Native builds then prefer a package-provided
 `protobuf::protoc` target before a host `protoc` on `PATH`. Cross builds reverse
-those implicit choices: they prefer a host `protoc` found outside the target
-sysroot and accept a package-provided imported compiler only when its concrete
-executable can run directly on the host. Protocyte does not capture an unrelated
+those implicit choices: they prefer a host `protoc` found directly on the
+configure process's `PATH`; `CMAKE_PROGRAM_PATH` and `CMAKE_PREFIX_PATH` do not
+participate in that host-tool lookup. They accept a package-provided imported
+compiler only when its mapped concrete executable can run directly on the host.
+Protocyte does not capture an unrelated
 unnamespaced target named `protoc`. Only when no host compiler is available does
 the source project's default `PROTOCYTE_FETCH_PROTOBUF=ON` fallback fetch and
 build protobuf for native builds. The same option can fetch only protobuf's
@@ -549,7 +551,10 @@ usable host `protoc` executable or namespaced target is already available; it
 does not replace that selected compiler. Set `PROTOCYTE_FETCH_PROTOBUF=OFF` to
 forbid both fallback downloads. Cross builds must provide a host-runnable
 compiler through a concrete `Protobuf_PROTOC_EXECUTABLE`, `PATH`, or an imported
-package target whose executable passes a configure-time `--version` probe.
+package target. Protocyte runs a configure-time `--version` probe for every
+concrete cross-build candidate, including normal, cache, and package-inherited
+`Protobuf_PROTOC_EXECUTABLE` values. For multi-config imported targets, the
+mapped concrete executable is also the file dependency tracked for regeneration.
 Protocyte does not try to build a host tool with the target toolchain and does
 not forward `CROSSCOMPILING_EMULATOR` through its dependency-scan and generation
 scripts. If emulation is required, point `Protobuf_PROTOC_EXECUTABLE` at a
@@ -606,8 +611,9 @@ value. Descendant and sibling directories reuse the resolved executable instead
 of rebasing the inherited token. This explicit value takes precedence over
 package-provided targets and `PATH`, and is the recommended way to select a host
 compiler for cross builds. Cross builds require a concrete path here; generator
-expressions and target emulators are not supported. Use an absolute path or a
-distinct relative value to select a different compiler in a subdirectory.
+expressions and target emulators are not supported, and configuration fails if
+the path does not pass a `--version` probe. Use an absolute path or a distinct
+relative value to select a different compiler in a subdirectory.
 Automatically discovered protobuf imports
 remain internal and associated with their compiler; set the public
 `PROTOCYTE_PROTOBUF_IMPORT_DIR` explicitly when different compilers should

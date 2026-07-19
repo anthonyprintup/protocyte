@@ -1673,6 +1673,25 @@ function(
     set(${out_diagnostic} "" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_find_host_protoc_on_path out_executable)
+    set(host_path_protoc "host_path_protoc-NOTFOUND")
+    if(NOT "$ENV{PATH}" STREQUAL "")
+        cmake_path(
+            CONVERT "$ENV{PATH}"
+            TO_CMAKE_PATH_LIST host_program_directories
+            NORMALIZE
+        )
+        find_program(
+            host_path_protoc
+            NAMES protoc
+            PATHS ${host_program_directories}
+            NO_DEFAULT_PATH
+            NO_CACHE
+        )
+    endif()
+    set(${out_executable} "${host_path_protoc}" PARENT_SCOPE)
+endfunction()
+
 function(
     _protocyte_try_imported_host_protoc_target
     out_available
@@ -1693,33 +1712,37 @@ function(
         return()
     endif()
 
-    set(imported_locations)
-    get_target_property(imported_location "${target_name}" IMPORTED_LOCATION)
-    if(imported_location)
-        list(APPEND imported_locations "${imported_location}")
+    # Generated outputs are shared by all project configurations, so select one
+    # concrete imported tool using the generator's default configuration.
+    set(project_configuration "")
+    if(NOT "${CMAKE_BUILD_TYPE}" STREQUAL "")
+        set(project_configuration "${CMAKE_BUILD_TYPE}")
+    elseif(NOT "${CMAKE_DEFAULT_BUILD_TYPE}" STREQUAL "")
+        set(project_configuration "${CMAKE_DEFAULT_BUILD_TYPE}")
+    elseif(CMAKE_CONFIGURATION_TYPES)
+        list(GET CMAKE_CONFIGURATION_TYPES 0 project_configuration)
     endif()
-    get_target_property(imported_configurations "${target_name}" IMPORTED_CONFIGURATIONS)
-    foreach(imported_configuration IN LISTS imported_configurations)
-        string(TOUPPER "${imported_configuration}" imported_configuration_upper)
-        get_target_property(
-            imported_configuration_location
-            "${target_name}"
-            "IMPORTED_LOCATION_${imported_configuration_upper}"
-        )
-        if(imported_configuration_location)
-            list(APPEND imported_locations "${imported_configuration_location}")
-        endif()
-    endforeach()
-    list(REMOVE_DUPLICATES imported_locations)
 
-    set(location_diagnostics)
-    foreach(imported_location IN LISTS imported_locations)
+    if(project_configuration STREQUAL "")
+        set(location_property LOCATION)
+        set(location_description "target '${target_name}'")
+    else()
+        string(TOUPPER "${project_configuration}" project_configuration_upper)
+        set(location_property "LOCATION_${project_configuration_upper}")
+        set(
+            location_description
+            "target '${target_name}' for project configuration '${project_configuration}'"
+        )
+    endif()
+    get_target_property(imported_location "${target_name}" "${location_property}")
+
+    if(imported_location)
         _protocyte_try_host_protoc_path(
             location_is_host_runnable
             resolved_imported_location
-            location_diagnostic
+            target_diagnostic
             "${imported_location}"
-            "target '${target_name}'"
+            "${location_description}"
         )
         if(location_is_host_runnable)
             set(${out_available} TRUE PARENT_SCOPE)
@@ -1727,14 +1750,13 @@ function(
             set(${out_diagnostic} "" PARENT_SCOPE)
             return()
         endif()
-        list(APPEND location_diagnostics "${location_diagnostic}")
-    endforeach()
-
-    if(NOT imported_locations)
-        set(target_diagnostic "target '${target_name}' does not expose an imported executable location")
     else()
-        list(JOIN location_diagnostics "; " target_diagnostic)
+        set(
+            target_diagnostic
+            "${location_description} does not expose an imported executable location"
+        )
     endif()
+
     get_target_property(target_emulator "${target_name}" CROSSCOMPILING_EMULATOR)
     if(target_emulator)
         string(
@@ -1814,13 +1836,26 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
             protoc_dependency
             "${Protobuf_PROTOC_EXECUTABLE}"
         )
+        if(CMAKE_CROSSCOMPILING)
+            _protocyte_try_host_protoc_path(
+                explicit_protoc_is_host_runnable
+                explicit_protoc_executable
+                explicit_protoc_diagnostic
+                "${protoc_executable}"
+                "Protobuf_PROTOC_EXECUTABLE"
+            )
+            if(NOT explicit_protoc_is_host_runnable)
+                message(
+                    FATAL_ERROR
+                    "Cross-compiling Protocyte requires Protobuf_PROTOC_EXECUTABLE to name a "
+                    "host-runnable compiler. ${explicit_protoc_diagnostic}"
+                )
+            endif()
+            set(protoc_executable "${explicit_protoc_executable}")
+            set(protoc_dependency "${explicit_protoc_executable}")
+        endif()
     elseif(CMAKE_CROSSCOMPILING)
-        find_program(
-            protocyte_path_protoc
-            NAMES protoc
-            NO_CACHE
-            NO_CMAKE_FIND_ROOT_PATH
-        )
+        _protocyte_find_host_protoc_on_path(protocyte_path_protoc)
         if(protocyte_path_protoc)
             _protocyte_try_host_protoc_path(
                 path_protoc_is_host_runnable
@@ -1894,7 +1929,7 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
                 )
                 if(target_protoc_is_host_runnable)
                     set(protoc_executable "${target_protoc_executable}")
-                    set(protoc_dependency protobuf::protoc)
+                    set(protoc_dependency "${target_protoc_executable}")
                 else()
                     list(APPEND protocyte_cross_candidate_diagnostics "${target_protoc_diagnostic}")
                 endif()
@@ -1914,12 +1949,7 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
                     "${Protobuf_PROTOC_EXECUTABLE}"
                 )
             else()
-                find_program(
-                    protocyte_path_protoc
-                    NAMES protoc
-                    NO_CACHE
-                    NO_CMAKE_FIND_ROOT_PATH
-                )
+                _protocyte_find_host_protoc_on_path(protocyte_path_protoc)
             endif()
         endif()
 
