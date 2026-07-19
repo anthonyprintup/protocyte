@@ -48,7 +48,7 @@ def validate_virtual_file_name(name: str) -> None:
         raise ProtocyteError(f"descriptor file name must use '/' separators: {name}")
 
     windows = PureWindowsPath(name)
-    if name.startswith("/") or windows.drive or windows.root:
+    if name.startswith("/") or windows.root:
         raise ProtocyteError(f"descriptor file name must be relative: {name}")
     if any(part in {"", ".", ".."} for part in name.split("/")):
         raise ProtocyteError(f"descriptor file name contains an unsafe path segment: {name}")

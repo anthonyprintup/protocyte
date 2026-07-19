@@ -113,6 +113,7 @@ def test_response_file_names_keep_valid_runtime_prefix_relative() -> None:
         ('api/bad"name.proto', "api/bad~22name.protocyte"),
         ("api/control-\n.proto", "api/control-~0A.protocyte"),
         ("api/demo;legacy.proto", "api/demo~3Blegacy.protocyte"),
+        ("a:b.proto", "a~3Ab.protocyte"),
         ("CON.proto", "~43ON.protocyte"),
         ("api/literal~22.proto", "api/literal~7E22.protocyte"),
     ],
@@ -319,6 +320,56 @@ def test_generation_preserves_enum_value_deprecation() -> None:
     assert "NESTED_MODE_CURRENT = 0," in header
     assert "NESTED_MODE_LEGACY [[deprecated]] = 1," in header
     assert header.count("[[deprecated]]") == 2
+
+
+def test_generation_preserves_message_and_enum_deprecation() -> None:
+    request = _basic_request(parameter="format=off,comments=off")
+    file = request.proto_file[0]
+
+    deprecated_enum = file.enum_type.add(name="LegacyMode")
+    deprecated_enum.options.deprecated = True
+    deprecated_enum.value.add(name="LEGACY_MODE_UNSPECIFIED", number=0)
+
+    deprecated_message = file.message_type.add(name="LegacyPayload")
+    deprecated_message.options.deprecated = True
+
+    carrier = file.message_type.add(name="Carrier")
+    enum_field = carrier.field.add(
+        name="legacy_mode",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_ENUM,
+        type_name=".demo.LegacyMode",
+    )
+    message_field = carrier.field.add(
+        name="legacy_payload",
+        number=2,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".demo.LegacyPayload",
+    )
+    assert enum_field and message_field
+
+    nested_enum = carrier.enum_type.add(name="NestedLegacyMode")
+    nested_enum.options.deprecated = True
+    nested_enum.value.add(name="NESTED_LEGACY_MODE_UNSPECIFIED", number=0)
+    nested_message = carrier.nested_type.add(name="NestedLegacyPayload")
+    nested_message.options.deprecated = True
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "enum struct [[deprecated]] LegacyMode" in header
+    assert "struct [[deprecated]] LegacyPayload;" in header
+    assert "struct [[deprecated]] LegacyPayload {" in header
+    assert "using NestedLegacyMode [[deprecated]] = Carrier_NestedLegacyMode;" in header
+    assert (
+        "using NestedLegacyPayload [[deprecated]] = Carrier_NestedLegacyPayload<NestedConfig>;"
+        in header
+    )
+    assert '#pragma clang diagnostic ignored "-Wdeprecated-declarations"' in header
+    assert "#pragma warning(disable : 4996)" in header
 
 
 def test_generation_maps_nested_enum_and_oneof_documentation() -> None:
@@ -1132,26 +1183,93 @@ def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages()
     response = generate_response(request)
 
     assert not response.error
+    header = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.hpp"
+    )
     source = next(
         item.content
         for item in response.file
         if item.name == "reflection.protocyte.cpp"
     )
-    assert "#if PROTOCYTE_ENABLE_REFLECTION\n#include <array>" in source
+    assert "#if PROTOCYTE_ENABLE_REFLECTION\n#include <array>" in header
     assert (
-        "[[maybe_unused]] static const ::std::array<FieldInfo, 0> "
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> "
+        "Empty_fields;"
+        in header
+    )
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> "
+        "NonEmpty_fields;"
+        in header
+    )
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> "
         "Empty_fields {{\n  }};"
         in source
     )
     assert (
-        "[[maybe_unused]] static const ::std::array<FieldInfo, 1> "
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> "
         "NonEmpty_fields {{\n"
-        '    {"value", 1u, "scalar", false, false, false},\n'
+        '    {"value", 1u, "scalar", '
+        "::protocyte::ReflectionFieldLabel::optional, false, false},\n"
         "  }};"
         in source
     )
-    assert "FieldInfo Empty_fields[]" not in source
-    assert "FieldInfo NonEmpty_fields[]" not in source
+
+
+def test_reflection_distinguishes_label_from_presence() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection_presence.proto", package="demo", syntax="proto2"
+    )
+    child = file.message_type.add(name="Child")
+    child.field.add(
+        name="id", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32
+    )
+    carrier = file.message_type.add(name="Carrier")
+    carrier.field.add(
+        name="optional_scalar",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    carrier.field.add(
+        name="required_scalar",
+        number=2,
+        label=F.LABEL_REQUIRED,
+        type=F.TYPE_INT32,
+    )
+    carrier.field.add(
+        name="repeated_child",
+        number=3,
+        label=F.LABEL_REPEATED,
+        type=F.TYPE_MESSAGE,
+        type_name=".demo.Child",
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    source = next(item.content for item in response.file if item.name.endswith(".cpp"))
+    assert (
+        '{"optional_scalar", 1u, "scalar", '
+        "::protocyte::ReflectionFieldLabel::optional, true, false},"
+        in source
+    )
+    assert (
+        '{"required_scalar", 2u, "scalar", '
+        "::protocyte::ReflectionFieldLabel::required, true, false},"
+        in source
+    )
+    assert (
+        '{"repeated_child", 3u, "message", '
+        "::protocyte::ReflectionFieldLabel::repeated, false, false},"
+        in source
+    )
 
 
 def test_generates_proto3_files_and_runtime() -> None:
@@ -5545,6 +5663,75 @@ def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
     assert field_number_scope.owner("text") == "field text number"
 
 
+def test_generated_internal_template_names_do_not_shadow_legal_message_names() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="internal_names.proto", package="demo", syntax="proto3"
+    )
+    config = file.message_type.add(name="Config")
+    config.field.add(
+        name="text", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_STRING
+    )
+    file.message_type.add(name="Reader")
+    file.message_type.add(name="Writer")
+    value = file.message_type.add(name="Value")
+    value.field.add(
+        name="text", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_STRING
+    )
+    generic = file.message_type.add(name="T")
+    generic.oneof_decl.add(name="choice")
+    generic.field.add(
+        name="text",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_STRING,
+        oneof_index=0,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "template <typename ProtocyteConfig = ::protocyte::DefaultConfig>" in header
+    assert "struct Config;" in header
+    assert "typename ProtocyteConfig::String text_;" in header
+    assert "template <::protocyte::ReaderLike ProtocyteReader>" in header
+    assert "struct Reader" in header
+    assert "template <::protocyte::WriterLike ProtocyteWriter>" in header
+    assert "struct Writer" in header
+    assert "template<class ProtocyteValue>" in header
+    assert "struct Value" in header
+    assert "template <typename ProtocyteT>" in header
+    assert "struct T" in header
+
+
+@pytest.mark.parametrize("collision_kind", ["field", "nested_message", "nested_enum"])
+def test_rejects_injected_class_name_collisions(collision_kind: str) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="injected_name.proto", package="demo", syntax="proto3"
+    )
+    message = file.message_type.add(name="Payload")
+    if collision_kind == "field":
+        message.field.add(
+            name="Payload", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32
+        )
+    elif collision_kind == "nested_message":
+        message.nested_type.add(name="Payload")
+    else:
+        nested_enum = message.enum_type.add(name="Payload")
+        nested_enum.value.add(name="PAYLOAD_UNSPECIFIED", number=0)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert "injected-class-name" in response.error
+    assert "Payload" in response.error
+
+
 def test_allows_serialize_to_field_after_span_overload_rename() -> None:
     request = _basic_request()
     message = request.proto_file[0].message_type[0]
@@ -5854,6 +6041,34 @@ def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
     assert "namespace test::protocyte {" in header
     assert "::protocyte::Status merge_from(Reader& reader) noexcept {" in header
     assert "::protocyte::Status serialize(Writer& writer) const noexcept {" in header
+
+
+@pytest.mark.parametrize(
+    ("package", "parameter"),
+    [
+        ("protocyte", "format=off"),
+        ("protocyte.user", "format=off"),
+        ("demo", "format=off,namespace_prefix=protocyte"),
+        ("demo", "format=off,namespace_prefix=protocyte::generated"),
+    ],
+)
+def test_rejects_generation_into_runtime_owned_namespace(
+    package: str, parameter: str
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="runtime_namespace.proto", package=package, syntax="proto3"
+    )
+    file.message_type.add(name="Status")
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter=parameter, proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert "runtime-owned ::protocyte namespace" in response.error
+    assert "namespace_prefix" in response.error
+    assert "my_project::wire" in response.error
+    assert not response.file
 
 
 def test_packaged_options_proto_is_the_only_repo_copy() -> None:

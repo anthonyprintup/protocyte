@@ -5,7 +5,37 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+#endif
+
 namespace test::ultimate {
+
+#if PROTOCYTE_ENABLE_REFLECTION
+    namespace protocyte_reflection {
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 3>
+            UltimateComplexMessage_NestedLevel1_NestedLevel2_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 3> UltimateComplexMessage_NestedLevel1_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
+            UltimateComplexMessage_RepeatedBytesHolder_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
+            UltimateComplexMessage_BoundedRepeatedBytesHolder_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
+            UltimateComplexMessage_FixedRepeatedBytesHolder_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 4>
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 49> UltimateComplexMessage_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> UltimateComplexMessage_LevelA_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> UltimateComplexMessage_LevelA_LevelB_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0>
+            UltimateComplexMessage_LevelA_LevelB_LevelC_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0>
+            UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> ExtraMessage_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> CrossMessageConstants_Nested_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 3> CrossMessageConstants_fields;
+    } // namespace protocyte_reflection
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct UltimateComplexMessage_Color : ::protocyte::i32 {
         COLOR_UNSPECIFIED = 0,

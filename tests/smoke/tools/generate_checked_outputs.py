@@ -1000,6 +1000,40 @@ def reserved_identifiers_file() -> descriptor_pb2.FileDescriptorProto:
         F.TYPE_MESSAGE,
         type_name="._Package.__LINE__.class.struct",
     )
+
+    config_message = file.message_type.add()
+    config_message.name = "Config"
+    add_field(config_message, "text", 1, F.TYPE_STRING)
+
+    file.message_type.add().name = "Reader"
+
+    legacy_mode = file.enum_type.add()
+    legacy_mode.name = "LegacyMode"
+    legacy_mode.options.deprecated = True
+    legacy_value = legacy_mode.value.add()
+    legacy_value.name = "LEGACY_MODE_UNSPECIFIED"
+    legacy_value.number = 0
+
+    legacy_payload = file.message_type.add()
+    legacy_payload.name = "LegacyPayload"
+    legacy_payload.options.deprecated = True
+
+    deprecation_carrier = file.message_type.add()
+    deprecation_carrier.name = "DeprecationCarrier"
+    add_field(
+        deprecation_carrier,
+        "legacy_mode",
+        1,
+        F.TYPE_ENUM,
+        type_name="._Package.__LINE__.LegacyMode",
+    )
+    add_field(
+        deprecation_carrier,
+        "legacy_payload",
+        2,
+        F.TYPE_MESSAGE,
+        type_name="._Package.__LINE__.LegacyPayload",
+    )
     return file
 
 

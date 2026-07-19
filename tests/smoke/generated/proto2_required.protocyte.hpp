@@ -5,7 +5,21 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+#endif
+
 namespace test::required {
+
+#if PROTOCYTE_ENABLE_REFLECTION
+    namespace protocyte_reflection {
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> RequiredChild_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> RequiredParent_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Proto2ArrayDefaults_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 19> Proto2DefaultValues_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> OneofShadowingValue_fields;
+    } // namespace protocyte_reflection
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct Proto2DefaultMode : ::protocyte::i32 {
         PROTO2_DEFAULT_MODE_UNKNOWN = 5,

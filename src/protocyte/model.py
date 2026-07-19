@@ -694,6 +694,7 @@ class EnumModel:
     file_name: str
     package: str
     values: list[EnumValueModel]
+    deprecated: bool = False
     parent: "MessageModel | None" = None
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
@@ -751,14 +752,22 @@ class FieldModel:
     default_cpp: str | None = None
     default_byte_size: int | None = None
     enum_closed: bool = False
+    config_cpp_name: str = "Config"
+    reader_cpp_name: str = "Reader"
+    writer_cpp_name: str = "Writer"
+    value_cpp_name: str = "Value"
+    generic_cpp_name: str = "T"
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
     @property
     def has_explicit_presence(self) -> bool:
         return (
-            self.explicit_presence
-            or self.oneof_name is not None
-            or self.kind == "message"
+            not self.repeated
+            and (
+                self.explicit_presence
+                or self.oneof_name is not None
+                or self.kind == "message"
+            )
         )
 
     @property
@@ -807,6 +816,12 @@ class MessageModel:
     descriptor: descriptor_pb2.DescriptorProto
     descriptor_path: tuple[int, ...]
     is_map_entry: bool = False
+    deprecated: bool = False
+    config_cpp_name: str = "Config"
+    reader_cpp_name: str = "Reader"
+    writer_cpp_name: str = "Writer"
+    value_cpp_name: str = "Value"
+    generic_cpp_name: str = "T"
     fields: list[FieldModel] = field(default_factory=list)
     oneofs: list[OneofModel] = field(default_factory=list)
     nested_messages: list["MessageModel"] = field(default_factory=list)
@@ -2045,6 +2060,7 @@ def _build_enum(
         file_name=file.name,
         package=file.package,
         values=values,
+        deprecated=enum.options.deprecated,
         parent=parent,
         documentation=documentation.get(descriptor_path),
     )
@@ -2071,6 +2087,7 @@ def _build_message_skeleton(
         descriptor=message,
         descriptor_path=descriptor_path,
         is_map_entry=message.options.map_entry,
+        deprecated=message.options.deprecated,
         documentation=documentation.get(descriptor_path),
     )
     for index, enum in enumerate(message.enum_type):

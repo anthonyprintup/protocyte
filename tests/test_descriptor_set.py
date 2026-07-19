@@ -464,6 +464,7 @@ def test_validate_descriptor_set_rejects_missing_import(tmp_path: Path) -> None:
         "demo.proto/",
         "a//b.proto",
         "/demo.proto",
+        "C:/demo.proto",
         r"C:\demo.proto",
         r"nested\demo.proto",
     ],
@@ -508,6 +509,10 @@ def test_validate_virtual_file_name_rejects_null_character() -> None:
 
 def test_validate_virtual_file_name_accepts_semicolon() -> None:
     validate_virtual_file_name("api/one.proto;api/two.proto")
+
+
+def test_validate_virtual_file_name_accepts_relative_colon_name() -> None:
+    validate_virtual_file_name("a:b.proto")
 
 
 def test_descriptor_set_list_encodes_transport_sensitive_names_as_json(

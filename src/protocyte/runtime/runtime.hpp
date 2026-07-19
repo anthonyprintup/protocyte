@@ -68,6 +68,21 @@ namespace protocyte {
     using uptr = ::std::uintptr_t;
     using ptr = uptr;
 
+    enum struct ReflectionFieldLabel : u8 {
+        optional,
+        required,
+        repeated,
+    };
+
+    struct ReflectionFieldInfo {
+        const char *name;
+        u32 number;
+        const char *kind;
+        ReflectionFieldLabel label;
+        bool has_presence;
+        bool packed;
+    };
+
     template<class T> struct Optional;
     template<class E> struct Unexpected;
     template<class T, class E> struct [[nodiscard]] Result;

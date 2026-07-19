@@ -5,7 +5,18 @@
 
 #include <protocyte/runtime/runtime.hpp>
 
+#if PROTOCYTE_ENABLE_REFLECTION
+#include <array>
+#endif
+
 namespace test::crosspkg {
+
+#if PROTOCYTE_ENABLE_REFLECTION
+    namespace protocyte_reflection {
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> CrossPackageConstants_Nested_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 3> CrossPackageConstants_fields;
+    } // namespace protocyte_reflection
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     inline constexpr ::protocyte::u32 FOREIGN_BASE {7u};
     inline constexpr ::protocyte::StringView FOREIGN_LABEL {"proto-xpkg", 10u};
