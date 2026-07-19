@@ -4,11 +4,39 @@ project(protocyte_fetchcontent_demo LANGUAGES CXX)
 
 include(FetchContent)
 
+set(PROTOCYTE_PYTHON_ENV_ROOT "consumer-managed-python")
 FetchContent_Declare(
     protocyte
     SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../.."
 )
 FetchContent_MakeAvailable(protocyte)
+
+set(expected_protocyte_python_env_root "${CMAKE_BINARY_DIR}/consumer-managed-python")
+cmake_path(NORMAL_PATH expected_protocyte_python_env_root)
+get_property(
+    protocyte_internal_python_env_root
+    GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT
+)
+get_property(
+    protocyte_cached_python_env_root
+    CACHE PROTOCYTE_PYTHON_ENV_ROOT
+    PROPERTY VALUE
+)
+foreach(
+    configured_root
+    IN ITEMS
+        "${PROTOCYTE_PYTHON_ENV_ROOT}"
+        "${protocyte_internal_python_env_root}"
+        "${protocyte_cached_python_env_root}"
+)
+    if(NOT configured_root STREQUAL expected_protocyte_python_env_root)
+        message(
+            FATAL_ERROR
+            "FetchContent did not publish one canonical PROTOCYTE_PYTHON_ENV_ROOT: "
+            "expected ${expected_protocyte_python_env_root}, got ${configured_root}"
+        )
+    endif()
+endforeach()
 
 set(FETCHCONTENT_PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto")
 set(FETCHCONTENT_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")

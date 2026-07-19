@@ -329,12 +329,16 @@ The initial configuration may access the configured Python package index.
 Subsequent configurations reuse the environment while the Python interpreter,
 protocyte sources, and package metadata remain unchanged. Set
 `PROTOCYTE_PYTHON_ENV_ROOT` before making protocyte available to choose another
-build-local environment directory. Set `PROTOCYTE_PLUGIN_EXECUTABLE` to a
-preinstalled plugin when dependency provisioning must be managed externally.
-The override must be version-compatible with the CMake package and support
-`--version` plus `descriptor-set list <file>`; descriptor-set `DISCOVER` uses
-that command so discovery and generation always run in the same Python
-environment.
+build-local environment directory. Relative values are normalized against
+`CMAKE_BINARY_DIR`, then the canonical absolute path is published back to the
+consumer scope and CMake cache. The environment root must not contain a semicolon. Set
+`PROTOCYTE_PLUGIN_EXECUTABLE` to a preinstalled plugin when dependency
+provisioning must be managed externally. Its path must also be semicolon-free;
+when the actual tool is beneath such a path, provide a wrapper from a
+semicolon-free location. The override must be version-compatible with the CMake
+package and support `--version` plus `descriptor-set list <file>`;
+descriptor-set `DISCOVER` uses that command so discovery and generation always
+run in the same Python environment.
 
 For prerelease tags `vX.Y.Z-rcN`, the Python packaging artifacts use the
 normalized version spelling `X.Y.ZrcN` in the wheel and sdist filenames,
@@ -573,8 +577,8 @@ Public CMake variables exposed by the package:
   explicit value as soon as codegen setup consumes it, while automatically
   discovered roots remain internal
 - `Protobuf_PROTOC_EXECUTABLE`: an optional explicit host compiler path that takes precedence over ambient CMake targets and `PATH`
-- `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments
-- `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning
+- `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments; relative values resolve against `CMAKE_BINARY_DIR`, and semicolons are rejected
+- `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning; use a semicolon-free executable or wrapper path
 
 `protocyte_add_proto_library(...)` links generated code against
 `protocyte::runtime` by default, or `protocyte::runtime_hosted` when

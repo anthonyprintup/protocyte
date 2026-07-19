@@ -153,6 +153,15 @@ def test_release_guidance_does_not_claim_unpublished_assets_exist() -> None:
     assert "GIT_TAG <full-commit-sha>" in readme
 
 
+def test_readme_documents_managed_tool_path_contracts() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "Relative values are normalized against\n`CMAKE_BINARY_DIR`" in readme
+    assert "published back to the\nconsumer scope and CMake cache" in readme
+    assert "The environment root must not contain a semicolon" in readme
+    assert "provide a wrapper from a\nsemicolon-free location" in readme
+
+
 def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     cmake = (ROOT / "cmake" / "ProtocyteFunctions.cmake").read_text(encoding="utf-8")

@@ -3,6 +3,39 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 
+function(_protocyte_configure_python_environment_root)
+    if(NOT DEFINED PROTOCYTE_PYTHON_ENV_ROOT OR "${PROTOCYTE_PYTHON_ENV_ROOT}" STREQUAL "")
+        message(FATAL_ERROR "PROTOCYTE_PYTHON_ENV_ROOT must name a non-empty filesystem path")
+    endif()
+
+    set(canonical_root "${PROTOCYTE_PYTHON_ENV_ROOT}")
+    cmake_path(
+        ABSOLUTE_PATH canonical_root
+        BASE_DIRECTORY "${CMAKE_BINARY_DIR}"
+        NORMALIZE
+        OUTPUT_VARIABLE canonical_root
+    )
+    string(FIND "${canonical_root}" ";" semicolon_index)
+    if(NOT semicolon_index EQUAL -1)
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PYTHON_ENV_ROOT must not contain ';' because CMake list expansion cannot "
+            "preserve semicolons safely during Python environment provisioning. Choose an environment "
+            "root without semicolons."
+        )
+    endif()
+
+    set(
+        PROTOCYTE_PYTHON_ENV_ROOT
+        "${canonical_root}"
+        CACHE PATH
+        "Directory for Protocyte-managed Python virtual environments."
+        FORCE
+    )
+    set(PROTOCYTE_PYTHON_ENV_ROOT "${canonical_root}" PARENT_SCOPE)
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT "${canonical_root}")
+endfunction()
+
 function(_protocyte_encode_generator_parameter out_var value)
     if("${value}" STREQUAL "")
         set(${out_var} "" PARENT_SCOPE)
@@ -1404,6 +1437,15 @@ function(_protocyte_validate_explicit_plugin out_var plugin_executable)
         get_filename_component(plugin_path "${plugin_executable}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
     cmake_path(NORMAL_PATH plugin_path)
+    string(FIND "${plugin_path}" ";" semicolon_index)
+    if(NOT semicolon_index EQUAL -1)
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_PLUGIN_EXECUTABLE must not contain ';' because CMake cannot safely preserve "
+            "semicolons in executable paths. Move the plugin to a semicolon-free path or provide a "
+            "wrapper from one."
+        )
+    endif()
     if(NOT EXISTS "${plugin_path}" OR IS_DIRECTORY "${plugin_path}")
         message(FATAL_ERROR "PROTOCYTE_PLUGIN_EXECUTABLE does not name an existing file: ${plugin_path}")
     endif()
