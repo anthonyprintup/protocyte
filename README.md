@@ -1322,6 +1322,12 @@ setters also return `void`. Operations that can fail, including allocation,
 parsing, serialization, strings, bytes, containers, and deep copies, return
 `[[nodiscard]]` `::protocyte::Status` or `::protocyte::Result<T>` values.
 
+`::protocyte::Vector::bind(ctx)` and `::protocyte::Bytes::bind(ctx)` also return
+`Status`. Binding the current context again always succeeds. Changing contexts
+succeeds only before backing storage has been allocated; retained capacity is
+still owned even when the container is empty, so a later context change returns
+`invalid_argument` and leaves both the value and its allocator ownership intact.
+
 ```cpp
 protocyte::DefaultConfig::Context ctx{/* allocator */, /* limits */};
 auto msg = demo::Sample<>::create(ctx);

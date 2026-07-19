@@ -1576,9 +1576,9 @@ namespace protocyte {
                 value.begin() == value.end() ? 0u : static_cast<usize>(value.end() - value.begin()))} {}
 
         constexpr iterator begin() const noexcept { return data_; }
-        constexpr iterator end() const noexcept { return data_ + size_; }
+        constexpr iterator end() const noexcept { return size_ == 0u ? data_ : data_ + size_; }
         constexpr const_iterator cbegin() const noexcept { return data_; }
-        constexpr const_iterator cend() const noexcept { return data_ + size_; }
+        constexpr const_iterator cend() const noexcept { return size_ == 0u ? data_ : data_ + size_; }
         constexpr reverse_iterator rbegin() const noexcept { return reverse_iterator {end()}; }
         constexpr reverse_iterator rend() const noexcept { return reverse_iterator {begin()}; }
         constexpr const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator {cend()}; }
@@ -1594,7 +1594,7 @@ namespace protocyte {
         constexpr operator ::std::string_view() const noexcept
             requires(::std::same_as<::std::remove_cv_t<T>, char>)
         {
-            return ::std::string_view {data_, size_};
+            return size_ == 0u ? ::std::string_view {} : ::std::string_view {data_, size_};
         }
 #endif
         template<usize Count> constexpr Span<T, Count> first() const noexcept
@@ -1606,9 +1606,13 @@ namespace protocyte {
         template<usize Count> constexpr Span<T, Count> last() const noexcept
             requires(Extent == dynamic_extent || Count <= Extent)
         {
-            return Span<T, Count> {data_ + (size_ - Count), Count};
+            const usize offset {size_ - Count};
+            return Span<T, Count> {offset == 0u ? data_ : data_ + offset, Count};
         }
-        constexpr Span<T> last(const usize count) const noexcept { return {data_ + (size_ - count), count}; }
+        constexpr Span<T> last(const usize count) const noexcept {
+            const usize offset {size_ - count};
+            return {offset == 0u ? data_ : data_ + offset, count};
+        }
         template<usize Offset, usize Count = dynamic_extent> constexpr auto subspan() const noexcept
             requires(Extent == dynamic_extent ||
                      (Offset <= Extent && (Count == dynamic_extent || Count <= Extent - Offset)))
@@ -1616,10 +1620,10 @@ namespace protocyte {
             constexpr usize subspan_extent {
                 Count != dynamic_extent ? Count : (Extent != dynamic_extent ? Extent - Offset : dynamic_extent)};
             const usize count {Count != dynamic_extent ? Count : size_ - Offset};
-            return Span<T, subspan_extent> {data_ + Offset, count};
+            return Span<T, subspan_extent> {Offset == 0u ? data_ : data_ + Offset, count};
         }
         constexpr Span<T> subspan(const usize offset, const usize count = dynamic_extent) const noexcept {
-            return {data_ + offset, count == dynamic_extent ? size_ - offset : count};
+            return {offset == 0u ? data_ : data_ + offset, count == dynamic_extent ? size_ - offset : count};
         }
 
     protected:
@@ -2511,7 +2515,18 @@ namespace protocyte {
         Vector &operator=(const Vector &) = delete;
         ~Vector() noexcept { destroy(); }
 
-        void bind(Context *ctx) noexcept { ctx_ = ctx; }
+        // Rebinding unallocated storage is safe. Live storage remains owned by its
+        // original context, so changing that context is rejected transactionally.
+        Status bind(Context *ctx) noexcept {
+            if (ctx_ == ctx) {
+                return {};
+            }
+            if (data_ != nullptr) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            ctx_ = ctx;
+            return {};
+        }
         static constexpr usize max_size() noexcept { return static_cast<usize>(~static_cast<usize>(0u)) / sizeof(T); }
         usize size() const noexcept { return size_; }
         usize capacity() const noexcept { return capacity_; }
@@ -2522,8 +2537,8 @@ namespace protocyte {
         const T &operator[](const usize index) const noexcept { return data_[index]; }
         iterator begin() noexcept { return data_; }
         const_iterator begin() const noexcept { return data_; }
-        iterator end() noexcept { return data_ + size_; }
-        const_iterator end() const noexcept { return data_ + size_; }
+        iterator end() noexcept { return size_ == 0u ? data_ : data_ + size_; }
+        const_iterator end() const noexcept { return size_ == 0u ? data_ : data_ + size_; }
         const_iterator cbegin() const noexcept { return begin(); }
         const_iterator cend() const noexcept { return end(); }
         reverse_iterator rbegin() noexcept { return reverse_iterator {end()}; }
@@ -2558,7 +2573,9 @@ namespace protocyte {
             }
             auto *next = static_cast<T *>(raw);
             if constexpr (::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>) {
-                ::std::memcpy(next, data_, size_ * sizeof(T));
+                if (size_ != 0u) {
+                    ::std::memcpy(next, data_, size_ * sizeof(T));
+                }
             } else {
                 for (usize i {}; i < size_; ++i) {
                     new (&next[i]) T {protocyte::move(data_[i])};
@@ -3007,11 +3024,15 @@ namespace protocyte {
         Status assign(const Span<const u8> view) noexcept
             requires(::std::same_as<T, u8>)
         {
-            if (view.size() > Max) {
+            const auto checked_view = checked_span_of(view);
+            if (!checked_view) {
+                return checked_view.status();
+            }
+            if (checked_view->size() > Max) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
-            copy_bytes(data(), view.data(), view.size());
-            size_ = view.size();
+            copy_bytes(data(), checked_view->data(), checked_view->size());
+            size_ = checked_view->size();
             return {};
         }
 
@@ -3287,10 +3308,14 @@ namespace protocyte {
         }
 
         Status assign(const Span<const u8> view) noexcept {
-            if (view.size() != Max) {
+            const auto checked_view = checked_span_of(view);
+            if (!checked_view) {
+                return checked_view.status();
+            }
+            if (checked_view->size() != Max) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
-            copy_bytes(bytes_, view.data(), Max);
+            copy_bytes(bytes_, checked_view->data(), Max);
             has_ = true;
             return {};
         }
@@ -3338,9 +3363,24 @@ namespace protocyte {
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
         void clear() noexcept { bytes_.clear(); }
-        void bind(Context *ctx) noexcept {
+        // Keep compatibility with custom vectors whose legacy bind hook returns
+        // void while making every context change conditional on unowned storage.
+        Status bind(Context *ctx) noexcept {
+            if (ctx_ == ctx) {
+                return {};
+            }
+            if (bytes_.data() != nullptr) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            if constexpr (::std::same_as<decltype(bytes_.bind(ctx)), void>) {
+                bytes_.bind(ctx);
+            } else {
+                if (const auto st = bytes_.bind(ctx); !st) {
+                    return st;
+                }
+            }
             ctx_ = ctx;
-            bytes_.bind(ctx);
+            return {};
         }
         Status resize(const usize count) noexcept {
             if (ctx_ != nullptr && count > ctx_->limits.max_string_bytes) {
@@ -3357,14 +3397,18 @@ namespace protocyte {
         }
 
         Status assign(const Span<const u8> view) noexcept {
-            if (ctx_ != nullptr && view.size() > ctx_->limits.max_string_bytes) {
+            const auto checked_view = checked_span_of(view);
+            if (!checked_view) {
+                return checked_view.status();
+            }
+            if (ctx_ != nullptr && checked_view->size() > ctx_->limits.max_string_bytes) {
                 return protocyte::unexpected(ErrorCode::size_limit, {});
             }
             Bytes temp {ctx_};
-            if (const auto st = temp.resize_for_overwrite(view.size()); !st) {
+            if (const auto st = temp.resize_for_overwrite(checked_view->size()); !st) {
                 return st;
             }
-            copy_bytes(temp.data(), view.data(), view.size());
+            copy_bytes(temp.data(), checked_view->data(), checked_view->size());
             *this = protocyte::move(temp);
             return {};
         }
@@ -3394,7 +3438,7 @@ namespace protocyte {
         Span<const char> view() const noexcept { return {data(), size()}; }
         Span<const u8> byte_view() const noexcept { return bytes_.view(); }
         const_iterator begin() const noexcept { return data(); }
-        const_iterator end() const noexcept { return data() + size(); }
+        const_iterator end() const noexcept { return size() == 0u ? data() : data() + size(); }
         const_iterator cbegin() const noexcept { return begin(); }
         const_iterator cend() const noexcept { return end(); }
         const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator {end()}; }
@@ -3428,13 +3472,17 @@ namespace protocyte {
         }
 
         Status assign(const Span<const u8> view) noexcept {
-            if (const auto st = check_size_limit(view.size()); !st) {
+            const auto checked_view = checked_span_of(view);
+            if (!checked_view) {
+                return checked_view.status();
+            }
+            if (const auto st = check_size_limit(checked_view->size()); !st) {
                 return st;
             }
-            if (!validate_utf8(view)) {
+            if (!validate_utf8(*checked_view)) {
                 return protocyte::unexpected(ErrorCode::invalid_utf8, {});
             }
-            return bytes_.assign(view);
+            return bytes_.assign(*checked_view);
         }
 
         Status validate() const noexcept {
@@ -3503,7 +3551,7 @@ namespace protocyte {
 
 #if PROTOCYTE_ENABLE_FMT_FORMAT
     template<class Config> std::string_view format_as(const String<Config> &value) noexcept {
-        return ::std::string_view {value.data(), value.size()};
+        return value.empty() ? ::std::string_view {} : ::std::string_view {value.data(), value.size()};
     }
 #endif
 
@@ -3881,6 +3929,9 @@ namespace protocyte {
             if (count > size_ - pos_) {
                 return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
+            if (count == 0u) {
+                return {};
+            }
             copy_bytes(out, data_ + pos_, count);
             pos_ += count;
             return {};
@@ -4204,6 +4255,9 @@ namespace protocyte {
             if (count > capacity_ - pos_) {
                 return protocyte::unexpected(ErrorCode::size_limit, position());
             }
+            if (count == 0u) {
+                return {};
+            }
             copy_bytes(data_ + pos_, data, count);
             pos_ += count;
             return {};
@@ -4216,14 +4270,18 @@ namespace protocyte {
     };
 
     template<class Message> Result<usize> serialize(const Message &message, const Span<u8> output) noexcept {
+        const auto checked_output = checked_span_of(output);
+        if (!checked_output) {
+            return protocyte::unexpected(checked_output.error());
+        }
         const auto size = message.encoded_size();
         if (!size) {
             return protocyte::unexpected(size.error());
         }
-        if (*size > output.size()) {
+        if (*size > checked_output->size()) {
             return protocyte::unexpected(ErrorCode::size_limit, {});
         }
-        SliceWriter writer {output.data(), output.size()};
+        SliceWriter writer {checked_output->data(), checked_output->size()};
         if (const auto st = message.serialize(writer); !st) {
             return protocyte::unexpected(st.error());
         }
@@ -5045,7 +5103,11 @@ namespace protocyte {
             if (wire_type() != WireType::VARINT) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            SliceReader reader {value_.data(), value_.size()};
+            const auto value = checked_value();
+            if (!value) {
+                return protocyte::unexpected(value.error());
+            }
+            SliceReader reader {value->data(), value->size()};
             const auto decoded = read_varint(reader);
             if (!decoded) {
                 return protocyte::unexpected(with_field(decoded.error(), field_number()));
@@ -5060,7 +5122,11 @@ namespace protocyte {
             if (wire_type() != WireType::I32) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            SliceReader reader {value_.data(), value_.size()};
+            const auto value = checked_value();
+            if (!value) {
+                return protocyte::unexpected(value.error());
+            }
+            SliceReader reader {value->data(), value->size()};
             return with_field(read_fixed32(reader), field_number());
         }
 
@@ -5068,7 +5134,11 @@ namespace protocyte {
             if (wire_type() != WireType::I64) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            SliceReader reader {value_.data(), value_.size()};
+            const auto value = checked_value();
+            if (!value) {
+                return protocyte::unexpected(value.error());
+            }
+            SliceReader reader {value->data(), value->size()};
             return with_field(read_fixed64(reader), field_number());
         }
 
@@ -5076,12 +5146,16 @@ namespace protocyte {
             if (wire_type() != WireType::LEN) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            return value_;
+            return checked_value();
         }
 
         Result<UnknownFieldRange> group() const noexcept;
 
     protected:
+        Result<Span<const u8>> checked_value() const noexcept {
+            return with_field(checked_span_of(value_), field_number());
+        }
+
         Tag tag_ {};
         Span<const u8> encoded_ {};
         Span<const u8> value_ {};
@@ -5096,6 +5170,10 @@ namespace protocyte {
     inline Result<DecodedUnknownField>
     decode_unknown_field_at(const Span<const u8> bytes, const usize offset,
                             const usize max_recursion_depth = Limits::default_max_recursion_depth) noexcept {
+        const auto checked_bytes = checked_span_of(bytes);
+        if (!checked_bytes) {
+            return protocyte::unexpected(checked_bytes.error());
+        }
         if (offset >= bytes.size()) {
             return protocyte::unexpected(ErrorCode::unexpected_eof, offset);
         }
@@ -5308,7 +5386,11 @@ namespace protocyte {
         if (wire_type() != WireType::SGROUP) {
             return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
         }
-        return UnknownFieldRange {value_, group_recursion_depth_};
+        const auto value = checked_value();
+        if (!value) {
+            return protocyte::unexpected(value.error());
+        }
+        return UnknownFieldRange {*value, group_recursion_depth_};
     }
 
     template<class Config> struct UnknownFieldWriter {
@@ -5359,9 +5441,13 @@ namespace protocyte {
 
     template<class Writer> Status write_canonical_unknown_fields(Writer &writer, const Span<const u8> bytes,
                                                                  const usize max_recursion_depth) noexcept {
+        const auto checked_bytes = checked_span_of(bytes);
+        if (!checked_bytes) {
+            return checked_bytes.status();
+        }
         usize offset {};
-        while (offset < bytes.size()) {
-            const auto decoded = decode_unknown_field_at(bytes, offset, max_recursion_depth);
+        while (offset < checked_bytes->size()) {
+            const auto decoded = decode_unknown_field_at(*checked_bytes, offset, max_recursion_depth);
             if (!decoded) {
                 return decoded.status();
             }
@@ -5597,11 +5683,15 @@ namespace protocyte {
         }
 
         Status add_length_delimited(const u32 field_number, const Span<const u8> value) noexcept {
+            const auto checked_value = checked_span_of(value);
+            if (!checked_value) {
+                return with_field(checked_value.status(), field_number);
+            }
             return append_field_transactional(field_number, WireType::LEN, [&](auto &writer) noexcept -> Status {
-                if (const auto st = write_varint(writer, static_cast<u64>(value.size())); !st) {
+                if (const auto st = write_varint(writer, static_cast<u64>(checked_value->size())); !st) {
                     return st;
                 }
-                return writer.write(value.data(), value.size());
+                return writer.write(checked_value->data(), checked_value->size());
             });
         }
 
@@ -5616,12 +5706,16 @@ namespace protocyte {
         }
 
         Status add_group(const u32 field_number, const UnknownFieldRange value) noexcept {
+            const auto checked_value = checked_span_of(value.encoded());
+            if (!checked_value) {
+                return with_field(checked_value.status(), field_number);
+            }
             if (!ctx_->limits.max_recursion_depth) {
                 return protocyte::unexpected(ErrorCode::recursion_limit, {}, field_number);
             }
             return append_field_transactional(field_number, WireType::SGROUP, [&](auto &writer) noexcept -> Status {
                 if (const auto st =
-                        write_canonical_unknown_fields(writer, value.encoded(), ctx_->limits.max_recursion_depth - 1u);
+                        write_canonical_unknown_fields(writer, *checked_value, ctx_->limits.max_recursion_depth - 1u);
                     !st) {
                     return st;
                 }
@@ -5630,7 +5724,11 @@ namespace protocyte {
         }
 
         Status merge_from(const UnknownFieldRange value) noexcept {
-            if (value.empty()) {
+            const auto checked_value = checked_span_of(value.encoded());
+            if (!checked_value) {
+                return checked_value.status();
+            }
+            if (checked_value->empty()) {
                 return {};
             }
             Storage output {ctx_};
@@ -5647,7 +5745,7 @@ namespace protocyte {
             }
             UnknownFieldWriter<Config> writer {output, ctx_->limits.max_unknown_field_bytes};
             if (const auto st =
-                    write_canonical_unknown_fields(writer, value.encoded(), ctx_->limits.max_recursion_depth);
+                    write_canonical_unknown_fields(writer, *checked_value, ctx_->limits.max_recursion_depth);
                 !st) {
                 return st;
             }
@@ -5963,18 +6061,26 @@ namespace protocyte {
     }
 
     template<class Writer> Status write_bytes(Writer &writer, const Span<const u8> view) noexcept {
-        if (const auto st = write_varint(writer, static_cast<u64>(view.size())); !st) {
+        const auto checked_view = checked_span_of(view);
+        if (!checked_view) {
+            return checked_view.status();
+        }
+        if (const auto st = write_varint(writer, static_cast<u64>(checked_view->size())); !st) {
             return st;
         }
-        return writer.write(view.data(), view.size());
+        return writer.write(checked_view->data(), checked_view->size());
     }
 
     template<class Writer>
     Status write_bytes_field(Writer &writer, const u32 field_number, const Span<const u8> view) noexcept {
+        const auto checked_view = checked_span_of(view);
+        if (!checked_view) {
+            return with_field(checked_view.status(), field_number);
+        }
         if (const auto st = write_tag(writer, field_number, WireType::LEN); !st) {
             return st;
         }
-        return with_field(write_bytes(writer, view), field_number);
+        return with_field(write_bytes(writer, *checked_view), field_number);
     }
 
     template<class Writer>
@@ -6015,8 +6121,8 @@ namespace std {
     template<class Config> struct formatter<::protocyte::String<Config>, char>
         : public ::std::formatter<::std::string_view, char> {
         template<class FormatContext> auto format(const ::protocyte::String<Config> &value, FormatContext &ctx) const {
-            return ::std::formatter<::std::string_view, char>::format(::std::string_view {value.data(), value.size()},
-                                                                      ctx);
+            return ::std::formatter<::std::string_view, char>::format(
+                value.empty() ? ::std::string_view {} : ::std::string_view {value.data(), value.size()}, ctx);
         }
     };
 

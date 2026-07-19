@@ -99,7 +99,7 @@ namespace {
             Vector(const Vector &) = delete;
             Vector &operator=(const Vector &) = delete;
 
-            void bind(Context *ctx) noexcept { inner_.bind(ctx); }
+            void bind(Context *ctx) noexcept { static_cast<void>(inner_.bind(ctx)); }
             protocyte::usize size() const noexcept { return inner_.size(); }
             protocyte::usize capacity() const noexcept { return inner_.capacity(); }
             bool empty() const noexcept { return inner_.empty(); }
@@ -2478,6 +2478,41 @@ TEST_CASE("message validation rejects invalid UTF-8 introduced by mutable access
 TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
     auto ctx = make_context();
 
+    SECTION("empty dynamic views and containers have stable iterator and subview endpoints") {
+        constexpr protocyte::Span<const protocyte::u8> empty_view {};
+        static_assert(empty_view.begin() == empty_view.end());
+        static_assert(empty_view.cbegin() == empty_view.cend());
+        static_assert(empty_view.last<0u>().data() == nullptr);
+        static_assert(empty_view.last(0u).data() == nullptr);
+        static_assert(empty_view.subspan<0u>().data() == nullptr);
+        static_assert(empty_view.subspan(0u).data() == nullptr);
+
+        Config::Vector<protocyte::i32> values(&ctx);
+        CHECK(values.begin() == values.end());
+        size_t visits {};
+        for ([[maybe_unused]] const auto value : values) { ++visits; }
+        CHECK(visits == 0u);
+
+        Config::Bytes bytes(&ctx);
+        CHECK(bytes.begin() == bytes.end());
+        for ([[maybe_unused]] const auto value : bytes) { ++visits; }
+
+        Config::String text(&ctx);
+        CHECK(text.begin() == text.end());
+        for ([[maybe_unused]] const auto value : text) { ++visits; }
+
+        Config::Map<protocyte::i32, protocyte::i32> entries(&ctx);
+        CHECK(entries.begin() == entries.end());
+        for ([[maybe_unused]] const auto entry : entries) { ++visits; }
+        CHECK(visits == 0u);
+
+        const auto allocated_before = ctx.total_allocated_bytes;
+        require_success(values.reserve(1u));
+        CHECK(values.empty());
+        CHECK(values.capacity() >= 1u);
+        CHECK(ctx.total_allocated_bytes > allocated_before);
+    }
+
     SECTION("vector and array support range and reverse traversal") {
         Config::Vector<protocyte::i32> values(&ctx);
         require_success(values.push_back(1));
@@ -2678,6 +2713,70 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
         auto text_view = overwritten_text.mutable_view_for_overwrite();
         for (size_t i {}; i < text_view.size(); ++i) { text_view.data()[i] = string_bytes[i]; }
         CHECK(view_equal(overwritten_text.view(), view_of(string_bytes)));
+    }
+}
+
+TEST_CASE("Runtime context rebinding preserves allocator ownership", "[smoke][runtime][allocator][bind]") {
+    SECTION("unallocated vectors can bind and live vectors reject context changes") {
+        auto first_ctx = make_context();
+        auto second_ctx = make_context();
+        {
+            Config::Vector<protocyte::i32> values;
+            require_success(values.bind(&first_ctx));
+            require_success(values.push_back(41));
+            REQUIRE(first_ctx.total_allocated_bytes != 0u);
+            const auto first_allocation = first_ctx.total_allocated_bytes;
+
+            require_success(values.bind(&first_ctx));
+            require_failure(values.bind(&second_ctx), protocyte::ErrorCode::invalid_argument);
+            require_failure(values.bind(nullptr), protocyte::ErrorCode::invalid_argument);
+            REQUIRE(values.size() == 1u);
+            CHECK(values[0] == 41);
+            CHECK(first_ctx.total_allocated_bytes == first_allocation);
+            CHECK(second_ctx.total_allocated_bytes == 0u);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+
+        {
+            Config::Vector<protocyte::i32> values(&first_ctx);
+            require_success(values.reserve(4u));
+            values.clear();
+            require_failure(values.bind(&second_ctx), protocyte::ErrorCode::invalid_argument);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+    }
+
+    SECTION("bytes rebinding is transactional and fresh bytes use the new context") {
+        auto first_ctx = make_context();
+        auto second_ctx = make_context();
+        {
+            Config::Bytes bytes(&first_ctx);
+            require_success(bytes.assign(view_of(bytes_data)));
+            const auto first_allocation = first_ctx.total_allocated_bytes;
+
+            require_success(bytes.bind(&first_ctx));
+            require_failure(bytes.bind(&second_ctx), protocyte::ErrorCode::invalid_argument);
+            require_failure(bytes.bind(nullptr), protocyte::ErrorCode::invalid_argument);
+            CHECK(bytes.context() == &first_ctx);
+            CHECK(view_equal(bytes.view(), view_of(bytes_data)));
+            CHECK(first_ctx.total_allocated_bytes == first_allocation);
+            CHECK(second_ctx.total_allocated_bytes == 0u);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+
+        {
+            Config::Bytes bytes(&first_ctx);
+            require_success(bytes.bind(&second_ctx));
+            CHECK(bytes.context() == &second_ctx);
+            require_success(bytes.assign(view_of(bytes_data)));
+            CHECK(first_ctx.total_allocated_bytes == 0u);
+            CHECK(second_ctx.total_allocated_bytes != 0u);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
     }
 }
 
@@ -4677,6 +4776,92 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     require_success(message.set_oneof_bytes(bounded_payload));
     CHECK(message.has_oneof_bytes());
     CHECK(view_equal(message.oneof_bytes(), *bounded_view));
+}
+
+TEST_CASE("Direct fallible Span APIs reject non-empty null inputs before mutation", "[smoke][runtime][span][invalid]") {
+    auto ctx = make_context();
+    constexpr protocyte::u8 seed[] {0x10u, 0x20u, 0x30u};
+    const protocyte::Span<const protocyte::u8> invalid_bytes {nullptr, 1u};
+
+    protocyte::ByteArray<4u> bounded;
+    require_success(bounded.assign(view_of(seed)));
+    require_failure(bounded.assign(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(view_equal(bounded.view(), view_of(seed)));
+
+    protocyte::FixedByteArray<sizeof(seed)> fixed;
+    require_success(fixed.assign(view_of(seed)));
+    const protocyte::Span<const protocyte::u8> invalid_fixed {nullptr, sizeof(seed)};
+    require_failure(fixed.assign(invalid_fixed), protocyte::ErrorCode::invalid_argument);
+    CHECK(view_equal(fixed.view(), view_of(seed)));
+
+    Config::Bytes bytes(&ctx);
+    require_success(bytes.assign(view_of(seed)));
+    const auto bytes_allocation = ctx.total_allocated_bytes;
+    require_failure(bytes.assign(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(view_equal(bytes.view(), view_of(seed)));
+    CHECK(ctx.total_allocated_bytes == bytes_allocation);
+
+    Config::String text(&ctx);
+    constexpr char text_seed[] {'o', 'k'};
+    require_success(text.assign(protocyte::Span<const char> {text_seed}));
+    const auto text_allocation = ctx.total_allocated_bytes;
+    require_failure(text.assign(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    require_failure(text.assign(protocyte::Span<const char> {nullptr, 1u}), protocyte::ErrorCode::invalid_argument);
+    CHECK(static_cast<std::string_view>(text) == std::string_view {text_seed, sizeof(text_seed)});
+    CHECK(ctx.total_allocated_bytes == text_allocation);
+
+    const auto parse_allocation = ctx.total_allocated_bytes;
+    require_failure(Message::parse(ctx, invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(ctx.total_allocated_bytes == parse_allocation);
+    require_success(Message::parse(ctx, protocyte::Span<const protocyte::u8> {}));
+
+    auto message = Message::create(ctx);
+    message.set_f_int32(1);
+    const protocyte::Span<protocyte::u8> invalid_output {nullptr, 64u};
+    require_failure(message.serialize(invalid_output), protocyte::ErrorCode::invalid_argument);
+    require_failure(protocyte::serialize(message, invalid_output), protocyte::ErrorCode::invalid_argument);
+
+    protocyte::u8 encoded[8] {};
+    protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+    require_failure(protocyte::write_bytes_field(writer, 1u, invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(writer.position() == 0u);
+    CHECK(encoded[0] == 0u);
+
+    require_failure(protocyte::validate_unknown_field_bytes(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    require_failure(protocyte::decode_unknown_field_at(invalid_bytes, 0u), protocyte::ErrorCode::invalid_argument);
+    const protocyte::UnknownFieldRange invalid_unknown_fields {invalid_bytes};
+    require_failure(invalid_unknown_fields.field(0u), protocyte::ErrorCode::invalid_argument);
+
+    const protocyte::UnknownFieldView invalid_varint {
+        protocyte::Tag {.field_number = 16u, .wire_type = protocyte::WireType::VARINT}, invalid_bytes, invalid_bytes};
+    require_failure(invalid_varint.varint(), protocyte::ErrorCode::invalid_argument);
+    const protocyte::UnknownFieldView invalid_group {
+        protocyte::Tag {.field_number = 17u, .wire_type = protocyte::WireType::SGROUP}, invalid_bytes, invalid_bytes};
+    require_failure(invalid_group.group(), protocyte::ErrorCode::invalid_argument);
+
+    protocyte::u8 canonical[8] {};
+    protocyte::SliceWriter canonical_writer {canonical, sizeof(canonical)};
+    require_failure(protocyte::write_canonical_unknown_fields(canonical_writer, invalid_bytes,
+                                                              protocyte::Limits::default_max_recursion_depth),
+                    protocyte::ErrorCode::invalid_argument);
+    CHECK(canonical_writer.position() == 0u);
+    CHECK(canonical[0] == 0u);
+
+    PreservingCompatMessage preserving(ctx);
+    auto unknown = preserving.mutable_unknown_fields();
+    require_failure(unknown.add_length_delimited(17u, invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(unknown.empty());
+
+    require_success(unknown.add_varint(16u, 23u));
+    const auto unknown_before = preserving.unknown_field_bytes();
+    const std::vector<protocyte::u8> expected_unknown {unknown_before.begin(), unknown_before.end()};
+    const auto unknown_allocation = ctx.total_allocated_bytes;
+    require_failure(unknown.add_group(17u, invalid_unknown_fields), protocyte::ErrorCode::invalid_argument);
+    require_failure(unknown.merge_from(invalid_unknown_fields), protocyte::ErrorCode::invalid_argument);
+    CHECK(unknown.field_count() == 1u);
+    CHECK(view_equal(preserving.unknown_field_bytes(),
+                     protocyte::Span<const protocyte::u8> {expected_unknown.data(), expected_unknown.size()}));
+    CHECK(ctx.total_allocated_bytes == unknown_allocation);
 }
 
 TEST_CASE("generated repeated fields accept contiguous range operations", "[smoke][runtime][repeated]") {

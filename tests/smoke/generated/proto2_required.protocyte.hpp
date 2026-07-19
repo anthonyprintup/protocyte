@@ -192,7 +192,11 @@ namespace test::required {
 
         static ::protocyte::Result<RequiredChild> parse(Context &ctx,
                                                         ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -542,7 +546,11 @@ namespace test::required {
 
         static ::protocyte::Result<RequiredParent> parse(Context &ctx,
                                                          ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -989,7 +997,11 @@ namespace test::required {
 
         static ::protocyte::Result<Proto2ArrayDefaults> parse(Context &ctx,
                                                               ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -1744,7 +1756,11 @@ namespace test::required {
 
         static ::protocyte::Result<Proto2DefaultValues> parse(Context &ctx,
                                                               ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -3246,7 +3262,11 @@ namespace test::required {
 
         static ::protocyte::Result<OneofShadowingValue> parse(Context &ctx,
                                                               ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
