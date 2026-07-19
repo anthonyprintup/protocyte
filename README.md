@@ -640,6 +640,10 @@ This is the lower-level primitive. It creates the custom target named by
   source-item limits. Configuration reports a targeted error if the absolute
   `OUT_DIR` itself leaves too little room for a collision-resistant generated
   name; choose a shorter `OUT_DIR` or build directory in that case.
+  Generated files in one configure must have exactly one current target owner,
+  including portable case-insensitive path aliases. Independent build trees may
+  share an absolute `OUT_DIR`: Protocyte coordinates only the generated files
+  they have in common through cross-process output locks.
 - `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.
@@ -655,7 +659,9 @@ This is the lower-level primitive. It creates the custom target named by
   directories and are resolved from `CMAKE_CURRENT_SOURCE_DIR`. It is rejected
   in descriptor-set mode. Each selected source tracks its transitive imports,
   so changing an imported `.proto` triggers regeneration without requiring the
-  import graph to be repeated through `DEPENDS`.
+  import graph to be repeated through `DEPENDS`. Adding or removing a `.proto`
+  can also change which file wins when import roots contain the same virtual
+  name; Protocyte tracks that topology and regenerates the affected command.
 - `DEPENDS` adds dependencies to the generation custom command. Entries are
   passed to CMake's `add_custom_command(DEPENDS ...)`; prefer absolute file paths
   or CMake targets. Use it for project-specific prerequisite files or targets
@@ -685,6 +691,14 @@ This is the lower-level primitive. It creates the custom target named by
 - `GENERATED_SOURCES_VAR` receives the generated source paths in the caller's
   scope.
 - `GENERATED_TARGET_VAR` receives `TARGET` in the caller's scope.
+
+`PROTOCYTE_OUTPUT_LOCK_ROOT` optionally selects the output-lock namespace. It
+must be an absolute, configure-time path writable by every build tree that can
+generate the same absolute outputs. By default, Protocyte uses the current
+user's cache directory (`LOCALAPPDATA` on Windows, `XDG_CACHE_HOME` or
+`$HOME/.cache` elsewhere). Lock files use hashed absolute output identities, so
+unrelated outputs remain concurrent; stale lock files are harmless and may be
+removed while no Protocyte builds are running.
 
 `RUNTIME_PREFIX` and `INCLUDE_PREFIX` are virtual include directories, not host
 filesystem paths. They must be normalized, relative, `/`-separated paths and

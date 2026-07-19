@@ -69,6 +69,24 @@ def _find_real_protoc(repo_root: Path) -> Path:
     _incremental_requirement_unavailable("real protoc executable is not available")
 
 
+def _find_visual_studio_generator() -> str:
+    if os.name != "nt":
+        pytest.skip("Visual Studio generator coverage is Windows-only")
+
+    cmake_help = subprocess.run(
+        ["cmake", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    for line in cmake_help.splitlines():
+        generator = line.split("=", maxsplit=1)[0].strip().removeprefix("* ").strip()
+        if generator.startswith("Visual Studio "):
+            return generator
+
+    pytest.skip("CMake does not provide a Visual Studio generator")
+
+
 def _find_protobuf_import_root(repo_root: Path) -> Path:
     for root in (repo_root / "build", repo_root / "tests"):
         for descriptor in root.glob(
@@ -1721,6 +1739,95 @@ def test_cmake_allows_distinct_emitted_runtime_outputs(
     first_headers, second_headers = headers.splitlines()
     assert expected_first_runtime in first_headers
     assert expected_second_runtime in second_headers
+
+
+@pytest.mark.parametrize(
+    ("first_descriptor", "second_descriptor"),
+    [
+        pytest.param("api/demo.proto", "api/demo.proto", id="exact-path"),
+        pytest.param("api/demo.proto", "API/DEMO.proto", id="casefolded-path"),
+    ],
+)
+def test_cmake_rejects_generated_outputs_owned_by_multiple_current_targets(
+    tmp_path: Path,
+    first_descriptor: str,
+    second_descriptor: str,
+) -> None:
+    snippet = "\n".join(
+        [
+            "function(_protocyte_setup_codegen_internal fetch_missing_import_sources)",
+            "endfunction()",
+            'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")',
+            'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_OPTIONS_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb")',
+            'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "")',
+            'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${CMAKE_COMMAND}")',
+            'set(PROTOCYTE_PROTOC_EXECUTABLE "${CMAKE_COMMAND}")',
+            'set(PROTOCYTE_PROTOC_DEPENDENCY "${CMAKE_COMMAND}")',
+            "protocyte_generate(",
+            "    TARGET first_codegen",
+            '    DESCRIPTOR_SET "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb"',
+            '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+            f"    PROTOS {first_descriptor}",
+            "    OPTIONS format=off",
+            ")",
+            "protocyte_generate(",
+            "    TARGET second_codegen",
+            '    DESCRIPTOR_SET "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb"',
+            '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+            f"    PROTOS {second_descriptor}",
+            "    OPTIONS format=off",
+            ")",
+        ]
+    )
+
+    result = _configure_cmake_snippet(
+        tmp_path,
+        snippet,
+        files={"descriptor_set.pb": "placeholder"},
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split()).replace("\\", "/")
+    assert "generated output" in output
+    assert "portable-equivalent output" in output
+    assert "first_codegen" in output
+    assert "second_codegen" in output
+    assert "api/demo.protocyte.hpp" in output.lower()
+
+
+@pytest.mark.parametrize(
+    ("lock_root", "expected_diagnostic"),
+    [
+        pytest.param(
+            "relative/locks",
+            "must be absolute so independent build trees use the same lock namespace",
+            id="relative",
+        ),
+        pytest.param(
+            "$<IF:$<BOOL:1>,locks,other>",
+            "must be a configure-time absolute path, not a generator expression",
+            id="generator-expression",
+        ),
+    ],
+)
+def test_cmake_rejects_unsafe_output_lock_root(
+    tmp_path: Path,
+    lock_root: str,
+    expected_diagnostic: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{lock_root}")',
+                "_protocyte_shared_output_lock_directory(lock_directory)",
+            ]
+        ),
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split())
+    assert expected_diagnostic in output
 
 
 @pytest.mark.parametrize(
@@ -3910,6 +4017,157 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
     assert "no work to do" in no_change.stdout.lower()
 
 
+@pytest.mark.parametrize("generator_kind", ["ninja", "visual-studio"])
+def test_source_codegen_tracks_import_shadow_addition_and_removal(
+    tmp_path: Path,
+    generator_kind: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    real_protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
+    if generator_kind == "ninja":
+        if shutil.which("ninja") is None:
+            _incremental_requirement_unavailable(
+                "Ninja is required to verify import-shadow topology changes"
+            )
+        generator = "Ninja"
+    else:
+        generator = _find_visual_studio_generator()
+
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    proto_dir = source_dir / "proto"
+    high_priority_import_dir = source_dir / "imports-high"
+    low_priority_import_dir = source_dir / "imports-low"
+    tools_dir = source_dir / "tools"
+    for directory in (
+        proto_dir,
+        high_priority_import_dir,
+        low_priority_import_dir,
+        tools_dir,
+    ):
+        directory.mkdir(parents=True)
+
+    def write_common(path: Path, capacity: int) -> None:
+        path.write_text(
+            "\n".join(
+                [
+                    'syntax = "proto3";',
+                    "package demo;",
+                    'import "protocyte/options.proto";',
+                    "option (protocyte.package_constant) = "
+                    f'{{ name: "CAPACITY" u32: {capacity} }};',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    low_priority_common = low_priority_import_dir / "common.proto"
+    high_priority_common = high_priority_import_dir / "common.proto"
+    write_common(low_priority_common, 2)
+    (proto_dir / "consumer.proto").write_text(
+        "\n".join(
+            [
+                'syntax = "proto3";',
+                "package demo;",
+                'import "common.proto";',
+                'import "protocyte/options.proto";',
+                "option (protocyte.package_constant) = "
+                '{ name: "DERIVED" u32_expr: "demo.CAPACITY + 1" };',
+                "message Consumer {}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    invocation_log = source_dir / "protoc-invocations.log"
+    protoc = _write_protoc_wrapper(tools_dir / "protoc", real_protoc, invocation_log)
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(import_shadow_topology LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS proto/consumer.proto",
+                "    IMPORT_DIRS",
+                '        "${CMAKE_CURRENT_SOURCE_DIR}/imports-high"',
+                '        "${CMAKE_CURRENT_SOURCE_DIR}/imports-low"',
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configure_environment = os.environ.copy()
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    if os.name == "nt":
+        configure_environment["LOCALAPPDATA"] = str(cache_root)
+    else:
+        configure_environment["XDG_CACHE_HOME"] = str(cache_root)
+    subprocess.run(
+        [
+            "cmake",
+            "-G",
+            generator,
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+        ],
+        check=True,
+        env=configure_environment,
+    )
+    build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
+    generated_header = build_dir / "generated" / "consumer.protocyte.hpp"
+
+    def invocation_count() -> int:
+        if not invocation_log.exists():
+            return 0
+        return len(invocation_log.read_text(encoding="utf-8").splitlines())
+
+    subprocess.run(build_command, check=True, env=configure_environment)
+    assert "DERIVED {3u}" in generated_header.read_text(encoding="utf-8")
+    initial_invocations = invocation_count()
+    assert initial_invocations == 2
+
+    if generator_kind == "ninja":
+        subprocess.run(build_command, check=True, env=configure_environment)
+        assert invocation_count() == initial_invocations
+
+    write_common(high_priority_common, 5)
+    subprocess.run(build_command, check=True, env=configure_environment)
+    assert "DERIVED {6u}" in generated_header.read_text(encoding="utf-8")
+    after_addition_invocations = invocation_count()
+    assert after_addition_invocations == initial_invocations + 2
+
+    if generator_kind == "ninja":
+        subprocess.run(build_command, check=True, env=configure_environment)
+        assert invocation_count() == after_addition_invocations
+
+    high_priority_common.unlink()
+    subprocess.run(build_command, check=True, env=configure_environment)
+    assert "DERIVED {3u}" in generated_header.read_text(encoding="utf-8")
+    after_removal_invocations = invocation_count()
+    assert after_removal_invocations == after_addition_invocations + 2
+
+    if generator_kind == "ninja":
+        subprocess.run(build_command, check=True, env=configure_environment)
+        assert invocation_count() == after_removal_invocations
+
+
 def test_source_codegen_tracks_special_character_paths_incrementally(
     tmp_path: Path,
 ) -> None:
@@ -4393,6 +4651,149 @@ def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
 
     generated_header = build_dir / "generated" / "demo.protocyte.hpp"
     generated_source = build_dir / "generated" / "demo.protocyte.cpp"
+    assert "struct Demo" in generated_header.read_text(encoding="utf-8")
+    assert '"demo.protocyte.hpp"' in generated_source.read_text(encoding="utf-8")
+
+
+def test_codegen_serializes_shared_outputs_between_independent_build_trees(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    real_protoc = _find_real_protoc(repo_root)
+    if shutil.which("ninja") is None:
+        _multiconfig_locking_requirement_unavailable(
+            "Ninja is required to verify concurrent independent build trees"
+        )
+
+    source_dir = tmp_path / "project"
+    first_build_dir = tmp_path / "build-first"
+    second_build_dir = tmp_path / "build-second"
+    generated_dir = tmp_path / "generated"
+    tools_dir = source_dir / "tools"
+    state_dir = source_dir / "protoc-state"
+    source_dir.mkdir()
+    tools_dir.mkdir()
+
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    descriptor = file_set.file.add()
+    descriptor.name = "demo.proto"
+    descriptor.package = "demo"
+    descriptor.syntax = "proto3"
+    message = descriptor.message_type.add()
+    message.name = "Demo"
+    field = message.field.add()
+    field.name = "value"
+    field.number = 1
+    field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    field.type = descriptor_pb2.FieldDescriptorProto.TYPE_STRING
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    protoc = _write_overlap_detecting_protoc_wrapper(
+        tools_dir / "protoc", real_protoc, state_dir
+    )
+    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(independent_build_tree_locking LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                f'    OUT_DIR "{generated_dir.as_posix()}"',
+                "    PROTOS demo.proto",
+                "    OPTIONS format=off",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configure_environment = os.environ.copy()
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+    if os.name == "nt":
+        configure_environment["LOCALAPPDATA"] = str(cache_root)
+    else:
+        configure_environment["XDG_CACHE_HOME"] = str(cache_root)
+    for build_dir in (first_build_dir, second_build_dir):
+        subprocess.run(
+            [
+                "cmake",
+                "-G",
+                "Ninja",
+                "-S",
+                str(source_dir),
+                "-B",
+                str(build_dir),
+            ],
+            check=True,
+            env=configure_environment,
+        )
+
+    runner = _write_synchronized_build_runner(source_dir / "build_runner.py")
+    gate = source_dir / "start-builds"
+    processes: list[subprocess.Popen[str]] = []
+    ready_paths: list[Path] = []
+    for index, build_dir in enumerate((first_build_dir, second_build_dir)):
+        ready = source_dir / f"build-{index}.ready"
+        ready_paths.append(ready)
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(runner),
+                    str(ready),
+                    str(gate),
+                    "cmake",
+                    "--build",
+                    str(build_dir),
+                    "--target",
+                    "demo_codegen",
+                    "--parallel",
+                    "1",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=configure_environment,
+            )
+        )
+
+    deadline = time.monotonic() + 30.0
+    while not all(path.is_file() for path in ready_paths):
+        if any(process.poll() is not None for process in processes):
+            pytest.fail("a synchronized build runner exited before reaching the gate")
+        if time.monotonic() >= deadline:
+            pytest.fail("timed out waiting for the synchronized build runners")
+        time.sleep(0.01)
+    gate.write_text("start\n", encoding="utf-8")
+
+    build_outputs: list[str] = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=120)
+            build_outputs.append(stdout + stderr)
+            assert process.returncode == 0, stdout + stderr
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert not list(state_dir.glob("overlap-*")), "\n".join(build_outputs)
+    assert len(list(state_dir.glob("attempt-generation-*"))) == 2
+    assert len(list(state_dir.glob("complete-generation-*"))) == 2
+    assert not list(state_dir.glob("active-*"))
+    lock_directory = cache_root / "protocyte" / "output-locks-v1"
+    assert len(list(lock_directory.glob("*.lock"))) == 2
+    generated_header = generated_dir / "demo.protocyte.hpp"
+    generated_source = generated_dir / "demo.protocyte.cpp"
     assert "struct Demo" in generated_header.read_text(encoding="utf-8")
     assert '"demo.protocyte.hpp"' in generated_source.read_text(encoding="utf-8")
 
