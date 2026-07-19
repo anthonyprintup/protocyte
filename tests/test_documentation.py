@@ -141,9 +141,43 @@ def test_direct_generation_examples_create_output_directories() -> None:
         )
         assert all("mkdir -p" in block for block in posix_blocks)
         assert all(
-            "--protocyte_out=runtime=emit:" in block for block in powershell_blocks
+            "--protocyte_out=runtime=emit:" in block
+            or (
+                "--protocyte_out=out" in block
+                and "--protocyte_opt=runtime=emit:" in block
+            )
+            for block in powershell_blocks
         )
-        assert all("--protocyte_out=runtime=emit:" in block for block in posix_blocks)
+        assert all(
+            "--protocyte_out=runtime=emit:" in block
+            or (
+                "--protocyte_out=out" in block
+                and "--protocyte_opt=runtime=emit:" in block
+            )
+            for block in posix_blocks
+        )
+
+
+def test_colon_valued_plugin_options_are_separate_from_protoc_output() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    plugin_parameters = readme.split("## Plugin Parameters", maxsplit=1)[1].split(
+        "### Generator trust boundary", maxsplit=1
+    )[0]
+
+    for language in ("powershell", "bash"):
+        example = next(
+            block
+            for block in _fenced_blocks(plugin_parameters, language)
+            if "namespace_prefix=mycorp::wire" in block
+        )
+        assert "--protocyte_out=out" in example
+        assert (
+            "--protocyte_opt=runtime=emit:vendor/protocyte,"
+            "namespace_prefix=mycorp::wire,include_prefix=generated"
+        ) in example
+        assert "--protocyte_out=runtime=emit:vendor/protocyte" not in example
+
+    assert "treats the first `:`" in plugin_parameters
 
 
 def test_ground_zero_python_commands_use_uv_managed_environments() -> None:
@@ -331,3 +365,15 @@ def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
             if re.search(rf"\b{re.escape(argument)}\b", helper_reference) is None
         )
         assert not missing, f"{helper} arguments missing from README: {missing}"
+
+
+def test_debugger_guide_documents_python_enabled_lldb_requirement() -> None:
+    guide = (ROOT / "docs" / "debugger.md").read_text(encoding="utf-8")
+    plain_lldb = guide.split("## Plain LLDB", maxsplit=1)[1].split(
+        "## CLion", maxsplit=1
+    )[0]
+
+    assert "require an LLDB build with\nPython scripting enabled" in plain_lldb
+    assert '(lldb) script print("LLDB Python scripting is available")' in plain_lldb
+    assert "CLion's bundled LLDB is one suitable option" in plain_lldb
+    assert "not in repository files shared with other users" in plain_lldb

@@ -922,7 +922,7 @@ in [docs/debugger.md](docs/debugger.md).
 
 ## Plugin Parameters
 
-Supported `--protocyte_out=` parameters:
+Supported Protocyte plugin parameters:
 
 - `runtime=emit`: emit `runtime.hpp` under `protocyte/runtime`.
 - `runtime=emit:<prefix>`: emit `runtime.hpp` under a custom prefix.
@@ -1006,6 +1006,13 @@ use the dedicated `EMIT_RUNTIME` and `RUNTIME_PREFIX` arguments so CMake can
 declare the emitted runtime header and runtime linkage consistently. Forwarded
 `runtime` and `runtime_prefix` parameters are rejected.
 
+Direct `protoc` callers should pass plugin parameters through
+`--protocyte_opt=...` and keep the output directory in a separate
+`--protocyte_out=<directory>` argument. `protoc` treats the first `:` in a
+combined `--protocyte_out=<parameters>:<directory>` value as the separator, so
+combining that form with values such as `runtime=emit:<prefix>` or
+`namespace_prefix=a::b` misparses the remaining text as the output directory.
+
 For example, size-sensitive builds can disable generated documentation with
 `OPTIONS "comments=off"`. Direct `.proto` generation normally receives source
 information from `protoc`; descriptor-set generation emits comments only when
@@ -1018,7 +1025,8 @@ New-Item -ItemType Directory -Force out | Out-Null
 protoc `
   --proto_path=. `
   --proto_path=src/protocyte/proto `
-  --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out `
+  --protocyte_out=out `
+  --protocyte_opt=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated `
   tests/example.proto
 ```
 
@@ -1029,7 +1037,8 @@ mkdir -p out
 protoc \
   --proto_path=. \
   --proto_path=src/protocyte/proto \
-  --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out \
+  --protocyte_out=out \
+  --protocyte_opt=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated \
   tests/example.proto
 ```
 
@@ -1763,6 +1772,42 @@ namespace std {
 Prefer the default `::protocyte::Span<const char>` API in kernel and
 freestanding builds. It avoids depending on implementation-private STL symbols
 and keeps checked string access out of the generated-code runtime surface.
+
+### String Formatting
+
+`PROTOCYTE_ENABLE_STD_FORMAT` and `PROTOCYTE_ENABLE_FMT_FORMAT` are hosted
+runtime interoperability opt-ins. Both default to `0`. They are unrelated to
+the generator's `format=...` and `clang-format` options: those options style
+generated source files, while these macros let formatting libraries consume
+`::protocyte::String<Config>` values.
+
+For a standard library with C++20 formatting support, enable:
+
+```cmake
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_STD_FORMAT=1)
+```
+
+When the standard library advertises `__cpp_lib_format >= 201907L`, the runtime
+provides `std::formatter<::protocyte::String<Config>, char>` by delegating to
+the existing `std::string_view` formatter. This supports the same string format
+specifiers, including width and alignment, and preserves embedded null bytes by
+using the string's explicit size. The smoke build probes for working
+`std::format` support before enabling this macro. If the feature-test macro is
+unavailable or too old, Protocyte does not emit the formatter specialization.
+
+For the {fmt} library, enable:
+
+```cmake
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_FMT_FORMAT=1)
+```
+
+That opt-in exposes an argument-dependent-lookup `format_as(...)` overload for
+`::protocyte::String<Config>` that returns `std::string_view`. Protocyte does
+not include, provide, or link {fmt}; the consuming target remains responsible
+for its chosen {fmt} headers and target. Define either interoperability macro
+consistently and propagate it to targets that format Protocyte strings, as in
+the `PUBLIC` examples above. Projects may enable both when they use both
+formatting libraries.
 
 ### Parse Atomicity
 
