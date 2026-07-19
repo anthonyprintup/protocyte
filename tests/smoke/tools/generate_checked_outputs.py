@@ -20,6 +20,7 @@ if str(_TRANSACTION_HELPERS) not in sys.path:
 
 from owned_transactions import (  # noqa: E402
     OwnedSibling,
+    claim_dead_owner_for_path,
     create_owned_sibling,
     locked_destination,
     recover_owned_siblings,
@@ -116,11 +117,20 @@ def _regenerate_checked_outputs(
             if error is not None:
                 return error
 
-            _swap_checked_outputs(out_dir, staged_out_dir, transaction)
+            _swap_checked_outputs(
+                out_dir,
+                staged_out_dir,
+                transaction,
+                transaction_owner,
+            )
             return None
         finally:
             _checked_output_swap_phase("before_cleanup")
-            transaction_owner.cleanup(_remove_checked_output_path)
+            rollback = _checked_output_rollback_path(out_dir)
+            if _checked_output_path_exists(rollback):
+                transaction_owner.close(remove_marker=False)
+            else:
+                transaction_owner.cleanup(_remove_checked_output_path)
             _checked_output_swap_phase("after_cleanup")
 
 
@@ -152,23 +162,50 @@ def _create_checked_output_transaction(out_dir: Path, purpose: str) -> OwnedSibl
     return create_owned_sibling(out_dir, purpose)
 
 
-def _restore_checked_output_rollback(out_dir: Path, rollback: Path) -> None:
-    recovery_owner = _create_checked_output_transaction(out_dir, "recovery")
-    recovery = recovery_owner.path
-    displaced = recovery / "interrupted-output"
+def _unowned_checked_output_rollback_error(rollback: Path) -> RuntimeError:
+    return RuntimeError(
+        "refusing to recover an unowned or replaced checked-output rollback at "
+        f"{rollback}. The live generated tree was left unchanged. Inspect both "
+        "paths, then move or remove the rollback manually before retrying."
+    )
+
+
+def _restore_checked_output_rollback(
+    out_dir: Path,
+    rollback: Path,
+    rollback_owner: OwnedSibling | None = None,
+) -> None:
+    claimed_owner = rollback_owner is None
+    if rollback_owner is None:
+        rollback_owner = claim_dead_owner_for_path(
+            out_dir,
+            ("transaction",),
+            "rollback",
+            rollback,
+        )
+    if rollback_owner is None or not rollback_owner.owns_path("rollback", rollback):
+        raise _unowned_checked_output_rollback_error(rollback)
+
     try:
-        if _checked_output_path_exists(out_dir):
-            out_dir.replace(displaced)
-        _checked_output_swap_phase("recovery_after_displace")
-        rollback.replace(out_dir)
-        _checked_output_swap_phase("recovery_after_restore")
-    finally:
-        # Recovery is already durable once rollback.replace succeeds. Cleanup
-        # must not mask the original interruption or endanger the restored tree.
+        recovery_owner = _create_checked_output_transaction(out_dir, "recovery")
+        recovery = recovery_owner.path
+        displaced = recovery / "interrupted-output"
         try:
-            recovery_owner.cleanup(_remove_checked_output_path)
-        except OSError:
-            pass
+            if _checked_output_path_exists(out_dir):
+                out_dir.replace(displaced)
+            _checked_output_swap_phase("recovery_after_displace")
+            rollback.replace(out_dir)
+            _checked_output_swap_phase("recovery_after_restore")
+        finally:
+            # Recovery is already durable once rollback.replace succeeds. Cleanup
+            # must not mask the original interruption or endanger the restored tree.
+            try:
+                recovery_owner.cleanup(_remove_checked_output_path)
+            except OSError:
+                pass
+    finally:
+        if claimed_owner:
+            rollback_owner.close(remove_marker=False)
 
 
 def _recover_interrupted_checked_output_swap(out_dir: Path) -> None:
@@ -192,6 +229,7 @@ def _swap_checked_outputs(
     out_dir: Path,
     staged_out_dir: Path,
     transaction: Path,
+    transaction_owner: OwnedSibling,
 ) -> None:
     rollback = _checked_output_rollback_path(out_dir)
     discard = transaction / "previous"
@@ -202,6 +240,11 @@ def _swap_checked_outputs(
     try:
         _checked_output_swap_phase("before_backup")
         if had_previous:
+            transaction_owner.bind_path(
+                "rollback",
+                rollback,
+                identity_source=out_dir,
+            )
             out_dir.replace(rollback)
         _checked_output_swap_phase("after_backup")
 
@@ -222,7 +265,11 @@ def _swap_checked_outputs(
             ) and _checked_output_path_exists(discard):
                 discard.replace(rollback)
             if _checked_output_path_exists(rollback):
-                _restore_checked_output_rollback(out_dir, rollback)
+                _restore_checked_output_rollback(
+                    out_dir,
+                    rollback,
+                    transaction_owner,
+                )
         elif _checked_output_path_exists(out_dir) and not _checked_output_path_exists(
             staged_out_dir
         ):

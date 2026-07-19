@@ -388,19 +388,29 @@ def test_next_regeneration_recovers_a_crash_before_commit(
     checked_out_dir = tmp_path / "generated"
     checked_out_dir.mkdir()
     (checked_out_dir / "previous.hpp").write_text("previous\n", encoding="utf-8")
-    rollback = generate_checked_outputs._checked_output_rollback_path(checked_out_dir)
-    checked_out_dir.replace(rollback)
+    rollback = _leave_owned_checked_output_rollback(checked_out_dir)
     if promoted_new_tree:
         checked_out_dir.mkdir()
         (checked_out_dir / "current.hpp").write_text("current\n", encoding="utf-8")
 
-    generate_checked_outputs._recover_interrupted_checked_output_swap(checked_out_dir)
+    generate_checked_outputs._recover_interrupted_checked_output_state(checked_out_dir)
 
     assert (checked_out_dir / "previous.hpp").read_text(encoding="utf-8") == (
         "previous\n"
     )
     assert not (checked_out_dir / "current.hpp").exists()
     assert not rollback.exists()
+
+
+def _leave_owned_checked_output_rollback(checked_out_dir: Path) -> Path:
+    owner = generate_checked_outputs._create_checked_output_transaction(
+        checked_out_dir, "transaction"
+    )
+    rollback = generate_checked_outputs._checked_output_rollback_path(checked_out_dir)
+    checked_out_dir.replace(rollback)
+    owner.bind_path("rollback", rollback)
+    owner.close(remove_marker=False)
+    return rollback
 
 
 def _crash_test_environment(
@@ -491,6 +501,7 @@ def _owned_checked_output_siblings(checked_out_dir: Path) -> set[Path]:
     ("interrupted_phase", "expected_file"),
     [
         ("before_backup", "previous.hpp"),
+        ("after_backup", "previous.hpp"),
         ("before_cleanup", "current.hpp"),
     ],
 )
@@ -534,10 +545,10 @@ def test_checked_output_recovery_survives_a_hard_exit_mid_recovery(
     environment = _crash_test_environment(monkeypatch, tmp_path / "state")
     checked_out_dir = tmp_path / "generated"
     checked_out_dir.mkdir()
+    (checked_out_dir / "previous.hpp").write_text("previous\n", encoding="utf-8")
+    rollback = _leave_owned_checked_output_rollback(checked_out_dir)
+    checked_out_dir.mkdir()
     (checked_out_dir / "current.hpp").write_text("current\n", encoding="utf-8")
-    rollback = generate_checked_outputs._checked_output_rollback_path(checked_out_dir)
-    rollback.mkdir()
-    (rollback / "previous.hpp").write_text("previous\n", encoding="utf-8")
 
     _run_generator_hard_exit(
         checked_out_dir,
@@ -557,6 +568,86 @@ def test_checked_output_recovery_survives_a_hard_exit_mid_recovery(
     assert not (checked_out_dir / "current.hpp").exists()
     assert not rollback.exists()
     assert not _owned_checked_output_siblings(checked_out_dir)
+
+
+def test_unowned_checked_output_rollback_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _crash_test_environment(monkeypatch, tmp_path / "state")
+    checked_out_dir = tmp_path / "generated"
+    checked_out_dir.mkdir()
+    (checked_out_dir / "live.hpp").write_text("live\n", encoding="utf-8")
+    rollback = generate_checked_outputs._checked_output_rollback_path(checked_out_dir)
+    rollback.mkdir()
+    (rollback / "unowned.hpp").write_text("unowned\n", encoding="utf-8")
+
+    with generate_checked_outputs.locked_destination(checked_out_dir):
+        with pytest.raises(RuntimeError, match="unowned or replaced.*left unchanged"):
+            generate_checked_outputs._recover_interrupted_checked_output_state(
+                checked_out_dir
+            )
+
+    assert (checked_out_dir / "live.hpp").read_text(encoding="utf-8") == "live\n"
+    assert (rollback / "unowned.hpp").read_text(encoding="utf-8") == "unowned\n"
+
+
+def _create_directory_lookalike(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            pytest.skip("Windows junction creation is unavailable: " + result.stderr)
+        return
+    link.symlink_to(target, target_is_directory=True)
+
+
+def test_replaced_checked_output_rollback_lookalike_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _crash_test_environment(monkeypatch, tmp_path / "state")
+    checked_out_dir = tmp_path / "generated"
+    checked_out_dir.mkdir()
+    (checked_out_dir / "previous.hpp").write_text("previous\n", encoding="utf-8")
+    rollback = _leave_owned_checked_output_rollback(checked_out_dir)
+    original_rollback = tmp_path / "owned-rollback"
+    rollback.replace(original_rollback)
+    lookalike_target = tmp_path / "lookalike-target"
+    lookalike_target.mkdir()
+    (lookalike_target / "keep.hpp").write_text("keep\n", encoding="utf-8")
+    _create_directory_lookalike(rollback, lookalike_target)
+    checked_out_dir.mkdir()
+    (checked_out_dir / "live.hpp").write_text("live\n", encoding="utf-8")
+
+    try:
+        with generate_checked_outputs.locked_destination(checked_out_dir):
+            with pytest.raises(
+                RuntimeError, match="unowned or replaced.*left unchanged"
+            ):
+                generate_checked_outputs._recover_interrupted_checked_output_state(
+                    checked_out_dir
+                )
+
+        assert (checked_out_dir / "live.hpp").read_text(encoding="utf-8") == (
+            "live\n"
+        )
+        assert (lookalike_target / "keep.hpp").read_text(encoding="utf-8") == (
+            "keep\n"
+        )
+        assert (original_rollback / "previous.hpp").read_text(
+            encoding="utf-8"
+        ) == "previous\n"
+        assert rollback.exists()
+    finally:
+        if os.name == "nt" and rollback.exists():
+            os.rmdir(rollback)
 
 
 def test_checked_output_recovery_skips_a_live_owned_transaction(

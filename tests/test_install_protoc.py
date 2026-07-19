@@ -316,17 +316,25 @@ def test_next_install_recovers_an_interrupted_swap(
     destination = tmp_path / "protoc"
     destination.mkdir()
     (destination / "known-good").write_text("preserve", encoding="utf-8")
-    rollback = install_protoc._installation_rollback_path(destination)
-    destination.replace(rollback)
+    rollback = _leave_owned_install_rollback(destination)
     if promoted_new_install:
         destination.mkdir()
         (destination / "partial").write_text("discard", encoding="utf-8")
 
-    install_protoc._recover_interrupted_install(destination)
+    install_protoc._recover_interrupted_install_state(destination)
 
     assert (destination / "known-good").read_text(encoding="utf-8") == "preserve"
     assert not (destination / "partial").exists()
     assert not rollback.exists()
+
+
+def _leave_owned_install_rollback(destination: Path) -> Path:
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    rollback = install_protoc._installation_rollback_path(destination)
+    destination.replace(rollback)
+    owner.bind_path("rollback", rollback)
+    owner.close(remove_marker=False)
+    return rollback
 
 
 def _install_crash_test_environment(
@@ -378,7 +386,7 @@ with module.locked_destination(destination):
         staging.mkdir()
         (staging / "new").write_text("new\n", encoding="utf-8")
         try:
-            module.replace_destination(staging, destination)
+            module.replace_destination(staging, destination, owner)
         finally:
             module._cleanup_install_transaction(owner)
 """
@@ -417,6 +425,7 @@ def _owned_install_siblings(destination: Path) -> set[Path]:
     ("interrupted_phase", "expected_file"),
     [
         ("before_backup", "old"),
+        ("after_backup", "old"),
         ("before_cleanup", "new"),
     ],
 )
@@ -452,10 +461,10 @@ def test_install_recovery_survives_a_hard_exit_mid_recovery(
     environment = _install_crash_test_environment(monkeypatch, tmp_path / "state")
     destination = tmp_path / "protoc"
     destination.mkdir()
+    (destination / "old").write_text("old\n", encoding="utf-8")
+    rollback = _leave_owned_install_rollback(destination)
+    destination.mkdir()
     (destination / "new").write_text("new\n", encoding="utf-8")
-    rollback = install_protoc._installation_rollback_path(destination)
-    rollback.mkdir()
-    (rollback / "old").write_text("old\n", encoding="utf-8")
 
     _run_install_hard_exit(
         destination,
@@ -471,6 +480,76 @@ def test_install_recovery_survives_a_hard_exit_mid_recovery(
     assert not (destination / "new").exists()
     assert not rollback.exists()
     assert not _owned_install_siblings(destination)
+
+
+def test_unowned_install_rollback_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_crash_test_environment(monkeypatch, tmp_path / "state")
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    (destination / "live").write_text("live\n", encoding="utf-8")
+    rollback = install_protoc._installation_rollback_path(destination)
+    rollback.mkdir()
+    (rollback / "unowned").write_text("unowned\n", encoding="utf-8")
+
+    with install_protoc.locked_destination(destination):
+        with pytest.raises(RuntimeError, match="unowned or replaced.*left unchanged"):
+            install_protoc._recover_interrupted_install_state(destination)
+
+    assert (destination / "live").read_text(encoding="utf-8") == "live\n"
+    assert (rollback / "unowned").read_text(encoding="utf-8") == "unowned\n"
+
+
+def _create_install_rollback_lookalike(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            pytest.skip("Windows junction creation is unavailable: " + result.stderr)
+        return
+    link.symlink_to(target, target_is_directory=True)
+
+
+def test_replaced_install_rollback_lookalike_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_crash_test_environment(monkeypatch, tmp_path / "state")
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    (destination / "old").write_text("old\n", encoding="utf-8")
+    rollback = _leave_owned_install_rollback(destination)
+    original_rollback = tmp_path / "owned-rollback"
+    rollback.replace(original_rollback)
+    lookalike_target = tmp_path / "lookalike-target"
+    lookalike_target.mkdir()
+    (lookalike_target / "keep").write_text("keep\n", encoding="utf-8")
+    _create_install_rollback_lookalike(rollback, lookalike_target)
+    destination.mkdir()
+    (destination / "live").write_text("live\n", encoding="utf-8")
+
+    try:
+        with install_protoc.locked_destination(destination):
+            with pytest.raises(
+                RuntimeError, match="unowned or replaced.*left unchanged"
+            ):
+                install_protoc._recover_interrupted_install_state(destination)
+
+        assert (destination / "live").read_text(encoding="utf-8") == "live\n"
+        assert (lookalike_target / "keep").read_text(encoding="utf-8") == "keep\n"
+        assert (original_rollback / "old").read_text(encoding="utf-8") == "old\n"
+        assert rollback.exists()
+    finally:
+        if os.name == "nt" and rollback.exists():
+            os.rmdir(rollback)
 
 
 def test_resolve_release_requires_digest_for_version_override() -> None:

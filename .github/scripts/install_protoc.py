@@ -24,6 +24,7 @@ if str(_SCRIPTS_DIRECTORY) not in sys.path:
 
 from owned_transactions import (  # noqa: E402
     OwnedSibling,
+    claim_dead_owner_for_path,
     create_owned_sibling,
     locked_destination,
     recover_owned_siblings,
@@ -357,25 +358,56 @@ def _create_install_transaction(destination: Path, purpose: str) -> OwnedSibling
 
 def _cleanup_install_transaction(transaction_owner: OwnedSibling) -> None:
     _install_swap_phase("before_cleanup")
-    transaction_owner.cleanup(_remove_path)
+    rollback = _installation_rollback_path(transaction_owner.destination)
+    if _path_exists(rollback):
+        transaction_owner.close(remove_marker=False)
+    else:
+        transaction_owner.cleanup(_remove_path)
     _install_swap_phase("after_cleanup")
 
 
-def _restore_installation_rollback(destination: Path, rollback: Path) -> None:
-    recovery_owner = _create_install_transaction(destination, "recovery")
-    recovery = recovery_owner.path
-    displaced = recovery / "interrupted-install"
+def _unowned_installation_rollback_error(rollback: Path) -> RuntimeError:
+    return RuntimeError(
+        "refusing to recover an unowned or replaced protoc installation rollback at "
+        f"{rollback}. The live installation was left unchanged. Inspect both paths, "
+        "then move or remove the rollback manually before retrying."
+    )
+
+
+def _restore_installation_rollback(
+    destination: Path,
+    rollback: Path,
+    rollback_owner: OwnedSibling | None = None,
+) -> None:
+    claimed_owner = rollback_owner is None
+    if rollback_owner is None:
+        rollback_owner = claim_dead_owner_for_path(
+            destination,
+            ("transaction",),
+            "rollback",
+            rollback,
+        )
+    if rollback_owner is None or not rollback_owner.owns_path("rollback", rollback):
+        raise _unowned_installation_rollback_error(rollback)
+
     try:
-        if _path_exists(destination):
-            destination.replace(displaced)
-        _install_swap_phase("recovery_after_displace")
-        rollback.replace(destination)
-        _install_swap_phase("recovery_after_restore")
-    finally:
+        recovery_owner = _create_install_transaction(destination, "recovery")
+        recovery = recovery_owner.path
+        displaced = recovery / "interrupted-install"
         try:
-            recovery_owner.cleanup(_remove_path)
-        except OSError:
-            pass
+            if _path_exists(destination):
+                destination.replace(displaced)
+            _install_swap_phase("recovery_after_displace")
+            rollback.replace(destination)
+            _install_swap_phase("recovery_after_restore")
+        finally:
+            try:
+                recovery_owner.cleanup(_remove_path)
+            except OSError:
+                pass
+    finally:
+        if claimed_owner:
+            rollback_owner.close(remove_marker=False)
 
 
 def _recover_interrupted_install(destination: Path) -> None:
@@ -395,15 +427,30 @@ def _recover_interrupted_install_state(destination: Path) -> None:
     )
 
 
-def replace_destination(staging: Path, destination: Path) -> None:
+def replace_destination(
+    staging: Path,
+    destination: Path,
+    transaction_owner: OwnedSibling | None = None,
+) -> None:
     _recover_interrupted_install(destination)
     rollback = _installation_rollback_path(destination)
     previous = staging.parent / "previous-install"
     had_previous = _path_exists(destination)
+    local_owner = False
 
     try:
         _install_swap_phase("before_backup")
         if had_previous:
+            if transaction_owner is None:
+                transaction_owner = _create_install_transaction(
+                    destination, "transaction"
+                )
+                local_owner = True
+            transaction_owner.bind_path(
+                "rollback",
+                rollback,
+                identity_source=destination,
+            )
             destination.replace(rollback)
         _install_swap_phase("after_backup")
         _install_swap_phase("before_promote")
@@ -418,13 +465,20 @@ def replace_destination(staging: Path, destination: Path) -> None:
             if not _path_exists(rollback) and _path_exists(previous):
                 previous.replace(rollback)
             if _path_exists(rollback):
-                _restore_installation_rollback(destination, rollback)
+                _restore_installation_rollback(
+                    destination,
+                    rollback,
+                    transaction_owner,
+                )
         elif _path_exists(destination) and not _path_exists(staging):
             try:
                 destination.replace(staging)
             except OSError:
                 pass
         raise
+    finally:
+        if local_owner:
+            _cleanup_install_transaction(transaction_owner)
 
     if had_previous:
         _remove_path(previous)
@@ -469,7 +523,7 @@ def main() -> int:
             (staging / VERSION_MARKER).write_text(f"{version}\n", encoding="utf-8")
             staged_protoc.chmod(staged_protoc.stat().st_mode | 0o111)
             subprocess.run([str(staged_protoc), "--version"], check=True)
-            replace_destination(staging, destination)
+            replace_destination(staging, destination, transaction_owner)
         finally:
             _cleanup_install_transaction(transaction_owner)
 
