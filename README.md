@@ -686,6 +686,15 @@ This is the lower-level primitive. It creates the custom target named by
   scope.
 - `GENERATED_TARGET_VAR` receives `TARGET` in the caller's scope.
 
+Protocyte records content fingerprints for generated outputs and removes an
+unchanged output when its code-generation owner disappears. Build trees created
+by older Protocyte versions may contain ownership records without fingerprints;
+those outputs are preserved because Protocyte cannot safely distinguish generated
+bytes from user edits. Configuration reports each affected output once. Remove
+an obsolete file manually, or restore its generation target, back up any edits,
+delete the output, and build the target once to establish a fingerprint before
+removing the target again.
+
 `RUNTIME_PREFIX` and `INCLUDE_PREFIX` are virtual include directories, not host
 filesystem paths. They must be normalized, relative, `/`-separated paths and
 must not contain `.`/`..` segments, Windows device names, or characters unsafe

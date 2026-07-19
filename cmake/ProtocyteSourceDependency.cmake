@@ -1,10 +1,23 @@
 cmake_minimum_required(VERSION 3.24)
 
-foreach(required_variable IN ITEMS SOURCE_ARGUMENT_FILE PROXY_FILE)
+foreach(required_variable IN ITEMS SOURCE_ARGUMENT_FILE PROXY_FILE LOCK_FILE)
     if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
         message(FATAL_ERROR "Protocyte source dependency check requires ${required_variable}")
     endif()
 endforeach()
+
+file(
+    LOCK "${LOCK_FILE}"
+    GUARD PROCESS
+    TIMEOUT 600
+    RESULT_VARIABLE proxy_lock_result
+)
+if(NOT "${proxy_lock_result}" STREQUAL "0")
+    message(
+        FATAL_ERROR
+        "Failed to lock Protocyte source dependency proxy '${PROXY_FILE}': ${proxy_lock_result}"
+    )
+endif()
 
 file(READ "${SOURCE_ARGUMENT_FILE}" source_file)
 if(source_file STREQUAL "")
