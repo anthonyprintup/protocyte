@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import tomllib
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +18,39 @@ from protocyte import __version__
 ROOT = Path(__file__).resolve().parents[3]
 SMOKE_PROTO_DIR = ROOT / "tests" / "smoke" / "proto"
 PROTOCYTE_PROTO_DIR = ROOT / "src" / "protocyte" / "proto"
+PROTOBUF_VERSION_MARKER = ".protocyte-protobuf-version"
+
+
+def _load_cmake_string(variable: str) -> str:
+    cmake_text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    match = re.search(
+        rf'set\(\s*{re.escape(variable)}\s*"([^"]+)"',
+        cmake_text,
+        re.MULTILINE,
+    )
+    if match is None:
+        raise RuntimeError(f"failed to read {variable} from CMakeLists.txt")
+    return match.group(1)
+
+
+def _load_exact_dev_dependency_version(package: str) -> str:
+    with (ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+    prefix = f"{package}=="
+    matches = [
+        dependency.removeprefix(prefix)
+        for dependency in pyproject["dependency-groups"]["dev"]
+        if dependency.startswith(prefix)
+    ]
+    if len(matches) != 1 or not matches[0]:
+        raise RuntimeError(
+            f"pyproject.toml must pin exactly one {package} development dependency"
+        )
+    return matches[0]
+
+
+PINNED_PROTOC_VERSION = _load_cmake_string("PROTOCYTE_PROTOBUF_VERSION")
+PINNED_CLANG_FORMAT_VERSION = _load_exact_dev_dependency_version("clang-format")
 
 
 @dataclass(frozen=True)
@@ -55,11 +90,9 @@ def _regenerate_checked_outputs(
     clang_format_config: Path,
 ) -> str | None:
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".protocyte-smoke-generated-",
-        dir=out_dir.parent,
-    ) as transaction_dir:
-        transaction = Path(transaction_dir)
+    _recover_interrupted_checked_output_swap(out_dir)
+    transaction = _create_checked_output_transaction(out_dir, "transaction")
+    try:
         staged_out_dir = transaction / "generated"
         staged_out_dir.mkdir()
         error = _write_checked_outputs(
@@ -70,17 +103,115 @@ def _regenerate_checked_outputs(
         if error is not None:
             return error
 
-        previous_out_dir = transaction / "previous"
-        had_previous = out_dir.exists()
-        if had_previous:
-            out_dir.replace(previous_out_dir)
+        _swap_checked_outputs(out_dir, staged_out_dir, transaction)
+        return None
+    finally:
+        _checked_output_swap_phase("before_cleanup")
+        _remove_checked_output_path(transaction)
+        _checked_output_swap_phase("after_cleanup")
+
+
+def _checked_output_swap_phase(_phase: str) -> None:
+    """Test seam for process interruptions between atomic filesystem operations."""
+
+
+def _checked_output_path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _remove_checked_output_path(path: Path) -> None:
+    if not _checked_output_path_exists(path):
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
+
+
+def _checked_output_rollback_path(out_dir: Path) -> Path:
+    return out_dir.with_name(f".{out_dir.name}.protocyte-rollback")
+
+
+def _create_checked_output_transaction(out_dir: Path, purpose: str) -> Path:
+    # Path.mkdir uses the parent directory's normal ACL inheritance. tempfile's
+    # Windows directories intentionally use a private DACL, which must never be
+    # moved into the checked-out tree as the live generated directory.
+    while True:
+        transaction = out_dir.with_name(
+            f".{out_dir.name}.protocyte-{purpose}-{uuid.uuid4().hex}"
+        )
         try:
-            staged_out_dir.replace(out_dir)
-        except BaseException:
-            if had_previous:
-                previous_out_dir.replace(out_dir)
-            raise
-    return None
+            transaction.mkdir()
+        except FileExistsError:
+            continue
+        return transaction
+
+
+def _restore_checked_output_rollback(out_dir: Path, rollback: Path) -> None:
+    recovery = _create_checked_output_transaction(out_dir, "recovery")
+    displaced = recovery / "interrupted-output"
+    try:
+        if _checked_output_path_exists(out_dir):
+            out_dir.replace(displaced)
+        rollback.replace(out_dir)
+    finally:
+        # Recovery is already durable once rollback.replace succeeds. Cleanup
+        # must not mask the original interruption or endanger the restored tree.
+        try:
+            _remove_checked_output_path(recovery)
+        except OSError:
+            pass
+
+
+def _recover_interrupted_checked_output_swap(out_dir: Path) -> None:
+    rollback = _checked_output_rollback_path(out_dir)
+    if _checked_output_path_exists(rollback):
+        _restore_checked_output_rollback(out_dir, rollback)
+
+
+def _swap_checked_outputs(
+    out_dir: Path,
+    staged_out_dir: Path,
+    transaction: Path,
+) -> None:
+    rollback = _checked_output_rollback_path(out_dir)
+    discard = transaction / "previous"
+    had_previous = _checked_output_path_exists(out_dir)
+    if _checked_output_path_exists(rollback):
+        raise RuntimeError(f"unrecovered checked-output rollback exists: {rollback}")
+
+    try:
+        _checked_output_swap_phase("before_backup")
+        if had_previous:
+            out_dir.replace(rollback)
+        _checked_output_swap_phase("after_backup")
+
+        _checked_output_swap_phase("before_promote")
+        staged_out_dir.replace(out_dir)
+        _checked_output_swap_phase("after_promote")
+
+        _checked_output_swap_phase("before_commit")
+        if had_previous:
+            # This atomic rename is the commit point. Once rollback disappears,
+            # cleanup may be interrupted without making the live tree ambiguous.
+            rollback.replace(discard)
+        _checked_output_swap_phase("after_commit")
+    except BaseException:
+        if had_previous:
+            if not _checked_output_path_exists(rollback) and _checked_output_path_exists(
+                discard
+            ):
+                discard.replace(rollback)
+            if _checked_output_path_exists(rollback):
+                _restore_checked_output_rollback(out_dir, rollback)
+        elif _checked_output_path_exists(out_dir) and not _checked_output_path_exists(
+            staged_out_dir
+        ):
+            try:
+                out_dir.replace(staged_out_dir)
+            except OSError:
+                pass
+        raise
 
 
 def _write_checked_outputs(
@@ -94,7 +225,7 @@ def _write_checked_outputs(
         protobuf_import_dir = _resolve_protobuf_import_dir(protoc)
     except FileNotFoundError as exc:
         return str(exc)
-    tool_error = _verify_smoke_tools(protoc, plugin)
+    tool_error = _verify_smoke_tools(protoc, plugin, Path(clang_format))
     if tool_error is not None:
         return tool_error
 
@@ -192,12 +323,21 @@ def _run_protoc(
     )
 
 
-def _verify_smoke_tools(protoc: Path, plugin: Path) -> str | None:
+def _verify_smoke_tools(
+    protoc: Path,
+    plugin: Path,
+    clang_format: Path,
+) -> str | None:
     commands = (
-        (protoc, "libprotoc "),
-        (plugin, __version__),
+        (protoc, f"libprotoc {PINNED_PROTOC_VERSION}", True),
+        (plugin, __version__, False),
+        (
+            clang_format,
+            f"clang-format version {PINNED_CLANG_FORMAT_VERSION}",
+            True,
+        ),
     )
-    for executable, expected in commands:
+    for executable, expected, allow_suffix in commands:
         try:
             result = subprocess.run(
                 [str(executable), "--version"],
@@ -210,10 +350,8 @@ def _verify_smoke_tools(protoc: Path, plugin: Path) -> str | None:
         except OSError as exc:
             return f"failed to execute smoke generation tool {executable}: {exc}"
         reported = result.stdout.strip()
-        matches = (
-            reported.startswith(expected)
-            if expected.endswith(" ")
-            else reported == expected
+        matches = reported == expected or (
+            allow_suffix and reported.startswith(f"{expected} ")
         )
         if result.returncode != 0 or not matches:
             return (
@@ -260,30 +398,47 @@ def _resolve_smoke_plugin() -> Path:
 
 
 def _resolve_protobuf_import_dir(protoc: Path) -> Path:
+    install_root = protoc.parent.parent.resolve()
+    paired_import_dir = (install_root / "include").resolve()
     configured = os.environ.get("PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR")
-    candidates = [Path(configured)] if configured else []
-    candidates.extend(
-        [
-            protoc.parent.parent / "include",
-            Path("/opt/homebrew/include"),
-            Path("/usr/local/include"),
-            Path("/usr/include"),
-        ]
-    )
-    for candidate in candidates:
-        descriptor = candidate / "google" / "protobuf" / "descriptor.proto"
-        if descriptor.is_file():
-            return candidate.resolve()
-    raise FileNotFoundError(
-        "google/protobuf/descriptor.proto was not found for the selected protoc. "
-        "Set PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR to its import root."
-    )
+    if configured and Path(configured).resolve() != paired_import_dir:
+        raise FileNotFoundError(
+            "canonical smoke generation requires the protobuf import tree shipped "
+            f"with the selected protoc: expected {paired_import_dir}, got "
+            f"{Path(configured).resolve()}"
+        )
+
+    marker = install_root / PROTOBUF_VERSION_MARKER
+    if not marker.is_file():
+        raise FileNotFoundError(
+            f"selected protoc is missing the repository installer marker: {marker}. "
+            "Provision it with .github/scripts/install_protoc.py."
+        )
+    installed_version = marker.read_text(encoding="utf-8").strip()
+    if installed_version != PINNED_PROTOC_VERSION:
+        raise FileNotFoundError(
+            "selected protoc/import installation does not match the repository pin: "
+            f"expected {PINNED_PROTOC_VERSION}, marker reports {installed_version!r}"
+        )
+
+    descriptor = paired_import_dir / "google" / "protobuf" / "descriptor.proto"
+    if not descriptor.is_file():
+        raise FileNotFoundError(
+            "the import tree paired with the selected protoc does not contain "
+            f"google/protobuf/descriptor.proto: {paired_import_dir}"
+        )
+    return paired_import_dir
 
 
 def _resolve_smoke_clang_format() -> str:
     override = os.environ.get("PROTOCYTE_SMOKE_CLANG_FORMAT")
     if override:
-        return override
+        executable = Path(override).resolve()
+        if executable.is_file():
+            return executable.as_posix()
+        raise FileNotFoundError(
+            f"configured canonical clang-format does not exist: {executable}"
+        )
 
     for command in ("clang-format", "clang-format.exe"):
         resolved = shutil.which(command)

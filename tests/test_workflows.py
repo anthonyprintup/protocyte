@@ -63,10 +63,12 @@ def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
     )[0]
 
     assert "PROTOCYTE_SMOKE_PROTOC:" in smoke_job
+    assert "PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR:" in smoke_job
     assert "PROTOCYTE_SMOKE_PLUGIN:" in smoke_job
+    assert "PROTOCYTE_SMOKE_CLANG_FORMAT:" in smoke_job
     assert "git diff --exit-code -- tests/smoke/generated" in smoke_job
-    assert "git ls-files --others --exclude-standard" in smoke_job
-    assert "Canonical regeneration produced untracked smoke outputs" in smoke_job
+    assert ".github/scripts/verify_tracked_tree.py tests/smoke/generated" in smoke_job
+    assert "--exclude-standard" not in smoke_job
 
 
 def test_ci_requires_real_visual_studio_incremental_codegen() -> None:

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import uuid
 from pathlib import Path
 from typing import Never
 
@@ -58,6 +59,18 @@ def _visual_studio_requirement_unavailable(message: str) -> Never:
     if os.environ.get(_CI_REQUIRE_VISUAL_STUDIO_TEST_ENV) == "1":
         pytest.fail(message)
     pytest.skip(message)
+
+
+def _create_visual_studio_test_directory(parent: Path) -> Path:
+    parent = parent.resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        test_directory = parent / f"protocyte-vs-incremental-{uuid.uuid4().hex}"
+        try:
+            test_directory.mkdir()
+        except FileExistsError:
+            continue
+        return test_directory
 
 
 def _find_real_protoc(repo_root: Path) -> Path:
@@ -3934,9 +3947,17 @@ def test_source_codegen_regenerates_when_transitive_import_changes(
     assert "no work to do" in no_change.stdout.lower()
 
 
+def test_visual_studio_test_directory_is_unique_between_runs(tmp_path: Path) -> None:
+    first = _create_visual_studio_test_directory(tmp_path)
+    second = _create_visual_studio_test_directory(tmp_path)
+
+    assert first != second
+    assert first.parent == tmp_path.resolve()
+    assert second.parent == tmp_path.resolve()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Visual Studio generator regression")
 def test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import(
-    tmp_path: Path,
 ) -> None:
     configured_protoc = os.environ.get(_CI_PROTOC_ENV)
     if not configured_protoc:
@@ -3961,7 +3982,7 @@ def test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import(
         _visual_studio_requirement_unavailable(
             "PROTOCYTE_CI_VISUAL_STUDIO_TEST_ROOT is not configured outside the Windows temporary directory"
         )
-    test_root = Path(configured_test_root).resolve() / tmp_path.name
+    test_root = _create_visual_studio_test_directory(Path(configured_test_root))
     real_protoc = _find_real_protoc(repo_root)
     protobuf_import_dir = _find_protobuf_import_dir(repo_root, real_protoc)
     source_dir = test_root / "project"

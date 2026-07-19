@@ -572,15 +572,20 @@ Regenerate the checked-in smoke fixtures:
 
 ```powershell
 uv sync --locked --group dev
-$env:PROTOCYTE_SMOKE_PROTOC = (Get-Command protoc).Source
+python .github/scripts/install_protoc.py --dest build/canonical-protoc
+$env:PROTOCYTE_SMOKE_PROTOC = (Resolve-Path build/canonical-protoc/bin/protoc.exe)
+$env:PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR = (Resolve-Path build/canonical-protoc/include)
+$env:PROTOCYTE_SMOKE_PLUGIN = (Resolve-Path .venv/Scripts/protoc-gen-protocyte.exe)
+$env:PROTOCYTE_SMOKE_CLANG_FORMAT = (Resolve-Path .venv/Scripts/clang-format.exe)
 uv run python tests/smoke/tools/generate_checked_outputs.py
 ```
 
 The generator compiles the real files under `tests/smoke/proto/` with official
 `protoc`, invokes the installed Protocyte plugin with the smoke options, and
-replaces the complete checked tree only after every output succeeds. Set
-`PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR` as well when the selected `protoc` is not
-installed beside its `include/google/protobuf/descriptor.proto` tree.
+replaces the complete checked tree only after every output succeeds. The
+repository installer verifies the pinned protobuf archive and pairs `protoc`
+with its matching import tree. The locked development environment supplies the
+pinned `clang-format`; regeneration rejects any mismatched tool version.
 
 Build the optional WDK driver smoke target:
 

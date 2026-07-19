@@ -171,23 +171,16 @@ jobs:
       - name: Verify checked smoke outputs
         env:
           PROTOCYTE_SMOKE_PROTOC: ${{ steps.windows-protoc.outputs.protoc }}
+          PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR: ${{ steps.windows-protoc.outputs.include }}
           PROTOCYTE_SMOKE_PLUGIN: ${{ github.workspace }}/.venv/Scripts/protoc-gen-protocyte.exe
+          PROTOCYTE_SMOKE_CLANG_FORMAT: ${{ github.workspace }}/.venv/Scripts/clang-format.exe
         run: |
           uv run python tests/smoke/tools/generate_checked_outputs.py
           git diff --exit-code -- tests/smoke/generated
           if ($LASTEXITCODE -ne 0) {
               throw "Tracked smoke outputs differ from canonical regeneration"
           }
-          $untracked = @(
-              git ls-files --others --exclude-standard -- tests/smoke/generated
-          )
-          if ($LASTEXITCODE -ne 0) {
-              throw "git ls-files failed while checking generated smoke outputs"
-          }
-          if ($untracked.Count -ne 0) {
-              $untracked | Write-Error
-              throw "Canonical regeneration produced untracked smoke outputs"
-          }
+          uv run python .github/scripts/verify_tracked_tree.py tests/smoke/generated
 
       - name: Set up MSVC developer command prompt
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
