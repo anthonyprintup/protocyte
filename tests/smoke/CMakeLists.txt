@@ -162,7 +162,7 @@ endif()
 FetchContent_Declare(
     Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.7.1
+    GIT_TAG fa43b77429ba76c462b1898d6cd2f2d7a9416b14
 )
 FetchContent_MakeAvailable(Catch2)
 FetchContent_GetProperties(Catch2 SOURCE_DIR protocyte_smoke_catch2_source_dir)
@@ -183,7 +183,7 @@ if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     FetchContent_Declare(
         benchmark
         GIT_REPOSITORY https://github.com/google/benchmark.git
-        GIT_TAG v1.9.5
+        GIT_TAG 192ef10025eb2c4cdd392bc502f0c852196baa48
     )
     FetchContent_MakeAvailable(benchmark)
 

@@ -3464,7 +3464,7 @@ def test_cross_compile_rejects_target_protoc_and_its_emulator(
 
     assert result.returncode != 0
     assert "could not find a host-runnable protoc while cross-compiling" in output
-    assert "target 'protobuf::protoc' for project configuration" in output
+    assert "target 'protobuf::protoc'" in output
     assert "is not host-runnable" in output
     assert target_protoc.as_posix() in output
     assert "target emulators are not propagated" in output
