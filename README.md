@@ -647,11 +647,14 @@ This is the lower-level primitive. It creates the custom target named by
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.
 - `DESCRIPTOR_SET` selects descriptor-set mode and is mutually exclusive with
-  `PROTO_ROOT`. Relative paths are resolved from `CMAKE_CURRENT_SOURCE_DIR`. The
-  file must exist during configuration when using `DISCOVER`. With explicit
-  `PROTOS`, it may instead be a build-generated file when `DEPENDS` names the
-  file or target that produces it. In this mode, `PROTOS` entries are relative
-  virtual descriptor names inside the set rather than filesystem paths.
+  `PROTO_ROOT`. It must be a concrete, configuration-independent path; generator
+  expressions are rejected because one code-generation declaration owns the
+  same outputs in every configuration. Relative paths are resolved from
+  `CMAKE_CURRENT_SOURCE_DIR`. The file must exist during configuration when
+  using `DISCOVER`. With explicit `PROTOS`, it may instead be a build-generated
+  file when `DEPENDS` names the file or target that produces it. In this mode,
+  `PROTOS` entries are relative virtual descriptor names inside the set rather
+  than filesystem paths.
 - `DISCOVER` is mutually exclusive with `PROTOS`. In source mode it recursively
   discovers `*.proto` beneath `PROTO_ROOT` and reconfigures when that set changes.
   In descriptor-set mode it asks the Protocyte plugin to select every supported
@@ -667,7 +670,8 @@ This is the lower-level primitive. It creates the custom target named by
   or CMake targets. Use it for project-specific prerequisite files or targets
   that Protocyte does not otherwise track. This is also how explicit descriptor
   names can consume a descriptor set produced during the build; its custom
-  command should declare the descriptor-set file as an output or byproduct.
+  command should declare the concrete, configuration-independent descriptor-set
+  file as an output or byproduct.
 - `OPTIONS` forwards non-runtime [plugin parameters](#plugin-parameters).
   Each entry must use `key=value`; bare entries are rejected during
   configuration.
@@ -847,7 +851,8 @@ library, runtime, `DEPENDS`, `OPTIONS`, prefix, and output-variable behavior as
 of `PROTOS`: each entry is a relative virtual descriptor name inside the set.
 Choose exactly one of `DISCOVER` or `FILES`. `DISCOVER` requires the descriptor
 set during configuration; `FILES` can consume a build-generated descriptor set
-when its producer is listed in `DEPENDS`. `PROTO_ROOT` and `IMPORT_DIRS` do not
+when its producer is listed in `DEPENDS`, but the descriptor-set path must remain
+concrete and configuration-independent. `PROTO_ROOT` and `IMPORT_DIRS` do not
 apply because the descriptor set already carries its dependency descriptors.
 
 All public helpers reject unknown arguments during configuration.

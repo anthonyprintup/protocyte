@@ -541,8 +541,10 @@ The high-level helper in section 6 teaches the build graph what generation owns:
 
 Use the helper's `DEPENDS` argument only for project-specific prerequisites that
 Protocyte cannot infer, such as another target that creates a descriptor set
-consumed through explicit `FILES`/`PROTOS`. Descriptor-set `DISCOVER` needs the
-set to exist during configuration because it must inspect the file immediately.
+consumed through explicit `FILES`/`PROTOS`. Use a concrete,
+configuration-independent descriptor-set output; generator-expression paths are
+rejected. Descriptor-set `DISCOVER` needs the set to exist during configuration
+because it must inspect the file immediately.
 The lower-level `protocyte_generate(...)` API is available when a project needs
 to own the C++ target itself, but it should not be the first integration copied
 by a new user.

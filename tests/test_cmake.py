@@ -2068,6 +2068,79 @@ def test_descriptor_discover_requires_a_configure_time_descriptor_set(
     assert "use explicit PROTOS/FILES with DEPENDS" in output
 
 
+@pytest.mark.parametrize(
+    "generator",
+    [
+        pytest.param(None, id="visual-studio-default"),
+        pytest.param("Ninja", id="ninja"),
+        pytest.param("Ninja Multi-Config", id="ninja-multi-config"),
+    ],
+)
+def test_descriptor_set_rejects_generator_expression_path(
+    tmp_path: Path,
+    generator: str | None,
+) -> None:
+    if generator is None and os.name != "nt":
+        pytest.skip("the default Visual Studio generator is only available on Windows")
+    if generator is not None and shutil.which("ninja") is None:
+        pytest.skip(f"{generator} requires Ninja")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_generator_expression LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "add_custom_target(descriptor_producer)",
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                '    DESCRIPTOR_SET "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/descriptor-set.pb"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    PROTOS api/demo.proto",
+                "    DEPENDS descriptor_producer",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configure_command = [
+        "cmake",
+        "-S",
+        str(source_dir),
+        "-B",
+        str(build_dir),
+    ]
+    environment = os.environ.copy()
+    if generator is None:
+        environment.pop("CMAKE_GENERATOR", None)
+    else:
+        configure_command[1:1] = ["-G", generator]
+
+    result = subprocess.run(
+        configure_command,
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+
+    output = " ".join((result.stdout + result.stderr).split())
+    assert result.returncode != 0
+    if generator is None:
+        assert "Building for: Visual Studio" in output
+    assert "DESCRIPTOR_SET must be a configure-time path" in output
+    assert "not a generator expression" in output
+    assert "concrete, config-independent descriptor-set output" in output
+    assert "explicit PROTOS/FILES" in output
+    assert "DEPENDS" in output
+
+
 def test_cmake_install_tree_contains_installable_python_project() -> None:
     cmake = (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(
         encoding="utf-8"
@@ -2683,6 +2756,14 @@ def test_resolve_protobuf_import_dir_from_protoc_layout(tmp_path: Path) -> None:
         (
             {"protobuf/README.txt": "not a protobuf import tree\n"},
             "does not contain google/protobuf/descriptor.proto",
+        ),
+        (
+            {
+                "protobuf/google/protobuf/descriptor.proto/marker.txt": (
+                    "descriptor.proto is a directory\n"
+                )
+            },
+            "google/protobuf/descriptor.proto' is a directory; an existing file is required",
         ),
     ],
 )
@@ -5903,15 +5984,43 @@ def test_descriptor_set_library_accepts_build_generated_input_with_files(
     descriptor_set = build_dir / "generated" / "descriptor_set.pb"
     assert not descriptor_set.exists()
 
-    subprocess.run(
-        ["cmake", "--build", str(build_dir), "--target", "generated_proto"],
-        check=True,
-    )
+    build_command = [
+        "cmake",
+        "--build",
+        str(build_dir),
+        "--target",
+        "generated_proto",
+    ]
+    subprocess.run(build_command, check=True)
 
     assert descriptor_set.is_file()
-    assert (build_dir / "generated/cpp/common.protocyte.hpp").is_file()
+    common_header = build_dir / "generated/cpp/common.protocyte.hpp"
+    assert common_header.is_file()
     assert (build_dir / "generated/cpp/api/demo.protocyte.hpp").is_file()
     assert (build_dir / "generated/cpp/api/demo.protocyte.cpp").is_file()
+    initial_descriptor_mtime_ns = descriptor_set.stat().st_mtime_ns
+    initial_header_mtime_ns = common_header.stat().st_mtime_ns
+    initial_header = common_header.read_text(encoding="utf-8")
+
+    no_change = subprocess.run(
+        build_command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "no work to do" in no_change.stdout.lower()
+
+    common_proto.write_text(
+        'syntax = "proto3"; package generated_input; message Common { uint32 version = 1; }\n',
+        encoding="utf-8",
+    )
+    _touch_newer_than(common_proto, descriptor_set)
+    _touch_newer_than(common_proto, common_header)
+    subprocess.run(build_command, check=True)
+
+    assert descriptor_set.stat().st_mtime_ns > initial_descriptor_mtime_ns
+    assert common_header.stat().st_mtime_ns > initial_header_mtime_ns
+    assert common_header.read_text(encoding="utf-8") != initial_header
 
 
 def test_descriptor_set_library_wrapper_configures_alias_target(tmp_path: Path) -> None:
