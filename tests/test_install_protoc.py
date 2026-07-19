@@ -183,6 +183,95 @@ def test_transaction_state_directory_rejects_insecure_permissions(
         owned_transactions._state_directory()
 
 
+def _transaction_state_entries(state_directory: Path) -> set[str]:
+    return {
+        path.relative_to(state_directory).as_posix()
+        for path in state_directory.rglob("*")
+    }
+
+
+def test_destination_lock_state_is_bounded_across_distinct_destinations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+
+    for index in range(64):
+        with install_protoc.locked_destination(tmp_path / f"destination-{index}"):
+            pass
+
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
+def test_nested_transaction_state_is_isolated_from_unreleased_flat_v2_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(owned_transactions._STATE_DIRECTORY_ENV, raising=False)
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+    destination = tmp_path / "protoc"
+    key = owned_transactions._destination_key(destination)
+    token = "a" * 32
+    v2_state = tmp_path / (
+        "protocyte-owned-transactions-v2-" + owned_transactions._user_namespace()
+    )
+    v2_state.mkdir(mode=0o700)
+    v2_state.chmod(0o700)
+    legacy_lock = v2_state / f"{key}.destination.lock"
+    legacy_marker = v2_state / f"{key}.transaction.{token}.owner"
+    legacy_sibling = tmp_path / f".protoc.protocyte-transaction-{token}"
+    legacy_lock.write_bytes(b"\0")
+    legacy_marker.write_text("unreleased-v2-state\n", encoding="utf-8")
+    legacy_sibling.mkdir()
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    v3_state = owned_transactions._state_directory()
+    assert v3_state != v2_state
+    assert _transaction_state_entries(v3_state) == {"registry.lock"}
+    assert legacy_lock.read_bytes() == b"\0"
+    assert legacy_marker.read_text(encoding="utf-8") == "unreleased-v2-state\n"
+    assert legacy_sibling.is_dir()
+
+
+def test_destination_lock_pruning_preserves_a_live_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "live").write_text("live\n", encoding="utf-8")
+
+    try:
+        with install_protoc.locked_destination(destination):
+            pass
+
+        assert owner.marker_path.is_file()
+        assert (owner.path / "live").read_text(encoding="utf-8") == "live\n"
+    finally:
+        owner.cleanup(install_protoc._remove_path)
+
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
 def _write_archive(path: Path, members: list[str]) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         for member in members:
@@ -502,6 +591,150 @@ def _install_crash_test_environment(
         python_path.append(existing)
     environment["PYTHONPATH"] = os.pathsep.join(python_path)
     return environment
+
+
+def test_destination_lock_recovers_state_left_by_a_hard_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    environment = _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    script_path = Path(install_protoc.__file__).resolve()
+    script = r"""
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("lock_crash_install_protoc", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+with module.locked_destination(destination):
+    os._exit(86)
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(script_path), str(destination)],
+        cwd=script_path.parents[2],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 86, result.stdout + result.stderr
+    assert any(path.is_dir() for path in state_directory.iterdir())
+
+    with install_protoc.locked_destination(destination):
+        pass
+
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
+def test_destination_lock_prune_and_reopen_never_split_the_lock_inode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    environment = _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    start = tmp_path / "start"
+    violation = tmp_path / "mutual-exclusion-violation"
+    script_path = Path(install_protoc.__file__).resolve()
+    script = r"""
+import importlib.util
+import sys
+import time
+from pathlib import Path
+
+script_path, destination, start, violation = map(Path, sys.argv[1:])
+spec = importlib.util.spec_from_file_location("lock_race_install_protoc", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+critical = destination.with_name(".protocyte-lock-critical")
+while not start.exists():
+    time.sleep(0.005)
+for _ in range(12):
+    with module.locked_destination(destination):
+        try:
+            critical.mkdir()
+        except FileExistsError:
+            violation.touch()
+            raise
+        try:
+            time.sleep(0.003)
+        finally:
+            critical.rmdir()
+"""
+    processes = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                script,
+                str(script_path),
+                str(destination),
+                str(start),
+                str(violation),
+            ],
+            cwd=script_path.parents[2],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        for _ in range(4)
+    ]
+    outputs: list[tuple[str, str]] = []
+    try:
+        start.touch()
+        outputs = [process.communicate(timeout=20.0) for process in processes]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    for process, (stdout, stderr) in zip(processes, outputs, strict=True):
+        assert process.returncode == 0, stdout + stderr
+    assert not violation.exists()
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
+def test_owned_recovery_does_not_scan_the_global_state_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "dead").write_text("dead\n", encoding="utf-8")
+    owner.close(remove_marker=False)
+    original_iterdir = Path.iterdir
+
+    def reject_global_scan(path: Path):
+        if path == state_directory:
+            raise AssertionError("recovery scanned the global transaction state")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", reject_global_scan)
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not owner.path.exists()
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
 
 
 def _run_install_hard_exit(

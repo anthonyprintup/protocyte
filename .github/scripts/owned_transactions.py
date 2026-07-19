@@ -17,7 +17,10 @@ from typing import BinaryIO, Callable, Iterator
 
 _MARKER_SCHEMA = 3
 _STATE_DIRECTORY_ENV = "PROTOCYTE_TRANSACTION_STATE_DIR"
-_STATE_DIRECTORY_NAME = "protocyte-owned-transactions-v2"
+_STATE_DIRECTORY_NAME = "protocyte-owned-transactions-v3"
+_REGISTRY_LOCK_NAME = "registry.lock"
+_DESTINATION_STATE_SUFFIX = ".destination"
+_DESTINATION_LOCK_NAME = "destination.lock"
 
 
 class _KernelFileLock:
@@ -72,6 +75,24 @@ class _KernelFileLock:
         self._file.write(content)
         self._file.flush()
         os.fsync(self._file.fileno())
+
+    def matches_path(self, path: Path) -> bool:
+        try:
+            file_stat = os.fstat(self._file.fileno())
+            path_stat = path.lstat()
+        except OSError:
+            return False
+        return (
+            int(file_stat.st_dev),
+            int(file_stat.st_ino),
+            int(stat.S_IFMT(file_stat.st_mode)),
+            int(getattr(file_stat, "st_reparse_tag", 0)),
+        ) == (
+            int(path_stat.st_dev),
+            int(path_stat.st_ino),
+            int(stat.S_IFMT(path_stat.st_mode)),
+            int(getattr(path_stat, "st_reparse_tag", 0)),
+        )
 
 
 def _effective_user_id() -> int | None:
@@ -191,17 +212,152 @@ def _ensure_lock_byte(file: BinaryIO) -> None:
         os.fsync(file.fileno())
 
 
+def _destination_state_directory(
+    destination: Path,
+    state_directory: Path | None = None,
+) -> Path:
+    state = state_directory or _state_directory()
+    return state / f"{_destination_key(destination)}{_DESTINATION_STATE_SUFFIX}"
+
+
+def _ensure_destination_state_directory(
+    destination: Path,
+    state_directory: Path,
+) -> Path:
+    destination_state = _destination_state_directory(destination, state_directory)
+    try:
+        destination_state.mkdir(mode=0o700, exist_ok=False)
+    except FileExistsError:
+        pass
+    _validate_state_directory(destination_state)
+    return destination_state
+
+
+def _existing_destination_state_directory(
+    destination: Path,
+    state_directory: Path,
+) -> Path | None:
+    destination_state = _destination_state_directory(destination, state_directory)
+    try:
+        destination_state.lstat()
+    except FileNotFoundError:
+        return None
+    _validate_state_directory(destination_state)
+    return destination_state
+
+
 @contextmanager
-def locked_destination(destination: Path) -> Iterator[None]:
-    lock_path = _state_directory() / f"{_destination_key(destination)}.destination.lock"
-    file = _open_state_file(lock_path, os.O_RDWR | os.O_CREAT)
+def _locked_registry() -> Iterator[Path]:
+    state_directory = _state_directory()
+    registry_path = state_directory / _REGISTRY_LOCK_NAME
+    file = _open_state_file(registry_path, os.O_RDWR | os.O_CREAT)
     lock = _KernelFileLock(file)
     try:
         _ensure_lock_byte(file)
         lock.acquire(blocking=True)
-        yield
+        yield state_directory
     finally:
         lock.close()
+
+
+def _try_destination_lock(
+    destination: Path,
+    state_directory: Path,
+) -> _KernelFileLock | None:
+    destination_state = _ensure_destination_state_directory(
+        destination,
+        state_directory,
+    )
+    lock_path = destination_state / _DESTINATION_LOCK_NAME
+    file = _open_state_file(lock_path, os.O_RDWR | os.O_CREAT)
+    lock = _KernelFileLock(file)
+    try:
+        _ensure_lock_byte(file)
+        if not lock.acquire(blocking=False):
+            lock.close()
+            return None
+        return lock
+    except BaseException:
+        lock.close()
+        raise
+
+
+def _prune_destination_state(
+    destination: Path,
+    state_directory: Path,
+    held_lock: _KernelFileLock | None = None,
+) -> None:
+    destination_state = _existing_destination_state_directory(
+        destination,
+        state_directory,
+    )
+    if destination_state is None:
+        if held_lock is not None:
+            held_lock.close()
+        return
+
+    lock_path = destination_state / _DESTINATION_LOCK_NAME
+    entries = tuple(destination_state.iterdir())
+    if any(entry != lock_path for entry in entries):
+        if held_lock is not None:
+            held_lock.close()
+        return
+
+    lock = held_lock
+    if lock is None and lock_path in entries:
+        try:
+            file = _open_state_file(lock_path, os.O_RDWR)
+        except FileNotFoundError:
+            return
+        lock = _KernelFileLock(file)
+        try:
+            _ensure_lock_byte(file)
+            if not lock.acquire(blocking=False):
+                lock.close()
+                return
+        except BaseException:
+            lock.close()
+            raise
+
+    if lock is not None:
+        if lock_path in entries and not lock.matches_path(lock_path):
+            lock.close()
+            return
+        lock.close()
+
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    try:
+        destination_state.rmdir()
+    except FileNotFoundError:
+        pass
+
+
+def _release_destination_lock(
+    destination: Path,
+    lock: _KernelFileLock,
+) -> None:
+    try:
+        with _locked_registry() as state_directory:
+            _prune_destination_state(destination, state_directory, lock)
+    finally:
+        lock.close()
+
+
+@contextmanager
+def locked_destination(destination: Path) -> Iterator[None]:
+    lock: _KernelFileLock | None = None
+    while lock is None:
+        with _locked_registry() as state_directory:
+            lock = _try_destination_lock(destination, state_directory)
+        if lock is None:
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        _release_destination_lock(destination, lock)
 
 
 def _validate_kind(kind: str) -> None:
@@ -209,9 +365,14 @@ def _validate_kind(kind: str) -> None:
         raise ValueError(f"invalid owned transaction kind: {kind!r}")
 
 
-def _marker_path(destination: Path, kind: str, token: str) -> Path:
-    return _state_directory() / (
-        f"{_destination_key(destination)}.{kind}.{token}.owner"
+def _marker_path(
+    destination: Path,
+    kind: str,
+    token: str,
+    state_directory: Path | None = None,
+) -> Path:
+    return _destination_state_directory(destination, state_directory) / (
+        f"{kind}.{token}.owner"
     )
 
 
@@ -335,13 +496,22 @@ class OwnedSibling:
             return False
 
     def close(self, *, remove_marker: bool) -> None:
-        self._lease.close()
         if not remove_marker:
+            self._lease.close()
             return
         try:
-            self.marker_path.unlink()
-        except FileNotFoundError:
-            pass
+            with _locked_registry() as state_directory:
+                # Windows cannot unlink the marker while its lease is open.
+                # The registry prevents a recovery claimant from opening the
+                # marker in the close-to-unlink window.
+                self._lease.close()
+                try:
+                    self.marker_path.unlink()
+                except FileNotFoundError:
+                    pass
+                _prune_destination_state(self.destination, state_directory)
+        finally:
+            self._lease.close()
 
     def cleanup(self, remove_path: Callable[[Path], None]) -> None:
         try:
@@ -354,48 +524,71 @@ class OwnedSibling:
 
 def create_owned_sibling(destination: Path, kind: str) -> OwnedSibling:
     _validate_kind(kind)
-    while True:
-        token = uuid.uuid4().hex
-        marker_path = _marker_path(destination, kind, token)
-        try:
-            marker_file = _open_state_file(
-                marker_path,
-                os.O_RDWR | os.O_CREAT | os.O_EXCL,
+    with _locked_registry() as state_directory:
+        _ensure_destination_state_directory(destination, state_directory)
+        while True:
+            token = uuid.uuid4().hex
+            marker_path = _marker_path(
+                destination,
+                kind,
+                token,
+                state_directory,
             )
-        except FileExistsError:
-            continue
-        except BaseException:
             try:
-                marker_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise
+                marker_file = _open_state_file(
+                    marker_path,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                )
+            except FileExistsError:
+                continue
+            except BaseException:
+                try:
+                    marker_path.unlink()
+                except FileNotFoundError:
+                    pass
+                raise
+            break
 
         lease = _KernelFileLock(marker_file)
-        path = destination.with_name(f".{destination.name}.protocyte-{kind}-{token}")
         owned_paths: dict[str, dict[str, object]] = {}
         try:
             marker_file.write(_encode_marker(destination, kind, token, owned_paths))
             marker_file.flush()
             os.fsync(marker_file.fileno())
             lease.acquire(blocking=True)
-            path.mkdir()
         except BaseException:
             lease.close()
             try:
                 marker_path.unlink()
             except FileNotFoundError:
                 pass
+            _prune_destination_state(destination, state_directory)
             raise
-        return OwnedSibling(
-            destination,
-            kind,
-            token,
-            path,
-            marker_path,
-            lease,
-            owned_paths,
-        )
+
+    path = destination.with_name(f".{destination.name}.protocyte-{kind}-{token}")
+    try:
+        path.mkdir()
+    except BaseException:
+        try:
+            with _locked_registry() as state_directory:
+                lease.close()
+                try:
+                    marker_path.unlink()
+                except FileNotFoundError:
+                    pass
+                _prune_destination_state(destination, state_directory)
+        finally:
+            lease.close()
+        raise
+    return OwnedSibling(
+        destination,
+        kind,
+        token,
+        path,
+        marker_path,
+        lease,
+        owned_paths,
+    )
 
 
 def _claim_dead_owner(
@@ -403,50 +596,64 @@ def _claim_dead_owner(
     kind: str,
     token: str,
 ) -> OwnedSibling | None:
-    marker_path = _marker_path(destination, kind, token)
-    try:
-        marker_file = _open_state_file(marker_path, os.O_RDWR)
-    except FileNotFoundError:
-        return None
-    lease = _KernelFileLock(marker_file)
-    try:
-        if not lease.acquire(blocking=False):
-            lease.close()
+    with _locked_registry() as state_directory:
+        if _existing_destination_state_directory(destination, state_directory) is None:
             return None
-        marker_file.seek(0)
-        owned_paths = _read_owned_paths(marker_file.read(), destination, kind, token)
-        if owned_paths is None:
-            lease.close()
+        marker_path = _marker_path(destination, kind, token, state_directory)
+        try:
+            marker_file = _open_state_file(marker_path, os.O_RDWR)
+        except FileNotFoundError:
             return None
-        path = destination.with_name(f".{destination.name}.protocyte-{kind}-{token}")
-        return OwnedSibling(
-            destination,
-            kind,
-            token,
-            path,
-            marker_path,
-            lease,
-            owned_paths,
-        )
-    except BaseException:
-        lease.close()
-        raise
+        lease = _KernelFileLock(marker_file)
+        try:
+            if not lease.acquire(blocking=False):
+                lease.close()
+                return None
+            marker_file.seek(0)
+            owned_paths = _read_owned_paths(
+                marker_file.read(), destination, kind, token
+            )
+            if owned_paths is None:
+                lease.close()
+                return None
+        except BaseException:
+            lease.close()
+            raise
 
-
-def _owned_sibling_identity(
-    destination: Path,
-    path: Path,
-    kinds: tuple[str, ...],
-) -> tuple[str, str] | None:
-    kind_pattern = "|".join(re.escape(kind) for kind in kinds)
-    match = re.fullmatch(
-        rf"\.{re.escape(destination.name)}\.protocyte-({kind_pattern})-([0-9a-f]{{32}})",
-        path.name,
-        flags=re.IGNORECASE if os.name == "nt" else 0,
+    path = destination.with_name(f".{destination.name}.protocyte-{kind}-{token}")
+    return OwnedSibling(
+        destination,
+        kind,
+        token,
+        path,
+        marker_path,
+        lease,
+        owned_paths,
     )
-    if match is None:
-        return None
-    return match.group(1), match.group(2)
+
+
+def _owned_marker_identities(
+    destination: Path,
+    kinds: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    for kind in kinds:
+        _validate_kind(kind)
+    marker_pattern = re.compile(
+        rf"({'|'.join(re.escape(kind) for kind in kinds)})\.([0-9a-f]{{32}})\.owner"
+    )
+    with _locked_registry() as state_directory:
+        destination_state = _existing_destination_state_directory(
+            destination,
+            state_directory,
+        )
+        if destination_state is None:
+            return ()
+        identities: list[tuple[str, str]] = []
+        for marker_path in tuple(destination_state.iterdir()):
+            match = marker_pattern.fullmatch(marker_path.name)
+            if match is not None:
+                identities.append((match.group(1), match.group(2)))
+        return tuple(identities)
 
 
 def recover_owned_siblings(
@@ -454,45 +661,17 @@ def recover_owned_siblings(
     kinds: tuple[str, ...],
     remove_path: Callable[[Path], None],
 ) -> None:
-    for kind in kinds:
-        _validate_kind(kind)
-
-    observed_markers: set[Path] = set()
-    for candidate in tuple(destination.parent.iterdir()):
-        identity = _owned_sibling_identity(destination, candidate, kinds)
-        if identity is None:
-            continue
-        kind, token = identity
+    for kind, token in _owned_marker_identities(destination, kinds):
         claimed = _claim_dead_owner(destination, kind, token)
         if claimed is None:
             continue
-        observed_markers.add(claimed.marker_path)
-        try:
-            remove_path(candidate)
-        except BaseException:
-            claimed.close(remove_marker=False)
-            raise
-        claimed.close(remove_marker=True)
-
-    key = _destination_key(destination)
-    marker_pattern = re.compile(
-        rf"{key}\.({'|'.join(re.escape(kind) for kind in kinds)})\.([0-9a-f]{{32}})\.owner"
-    )
-    for marker_path in tuple(_state_directory().iterdir()):
-        if marker_path in observed_markers:
-            continue
-        match = marker_pattern.fullmatch(marker_path.name)
-        if match is None:
-            continue
-        kind, token = match.groups()
-        candidate = destination.with_name(
-            f".{destination.name}.protocyte-{kind}-{token}"
-        )
+        candidate = claimed.path
         if candidate.exists() or candidate.is_symlink():
-            continue
-        claimed = _claim_dead_owner(destination, kind, token)
-        if claimed is None:
-            continue
+            try:
+                remove_path(candidate)
+            except BaseException:
+                claimed.close(remove_marker=False)
+                raise
         claimed.close(remove_marker=True)
 
 
@@ -503,11 +682,7 @@ def claim_dead_owner_for_path(
     owned_path: Path,
 ) -> OwnedSibling | None:
     match: OwnedSibling | None = None
-    for candidate in tuple(destination.parent.iterdir()):
-        identity = _owned_sibling_identity(destination, candidate, kinds)
-        if identity is None:
-            continue
-        kind, token = identity
+    for kind, token in _owned_marker_identities(destination, kinds):
         claimed = _claim_dead_owner(destination, kind, token)
         if claimed is None:
             continue
