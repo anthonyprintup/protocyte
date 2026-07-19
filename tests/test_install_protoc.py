@@ -305,6 +305,27 @@ def test_replace_destination_restores_previous_if_staging_rename_fails(
     assert marker.read_text(encoding="utf-8") == "preserve"
 
 
+@pytest.mark.parametrize("promoted_new_install", [False, True])
+def test_next_install_recovers_an_interrupted_swap(
+    tmp_path: Path,
+    promoted_new_install: bool,
+) -> None:
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    (destination / "known-good").write_text("preserve", encoding="utf-8")
+    rollback = install_protoc._installation_rollback_path(destination)
+    destination.replace(rollback)
+    if promoted_new_install:
+        destination.mkdir()
+        (destination / "partial").write_text("discard", encoding="utf-8")
+
+    install_protoc._recover_interrupted_install(destination)
+
+    assert (destination / "known-good").read_text(encoding="utf-8") == "preserve"
+    assert not (destination / "partial").exists()
+    assert not rollback.exists()
+
+
 def test_resolve_release_requires_digest_for_version_override() -> None:
     asset = install_protoc.resolve_platform_asset("Linux", "x86_64")
     with pytest.raises(RuntimeError, match="--sha256 is required"):
@@ -453,10 +474,14 @@ def test_main_installs_selected_platform_asset(
     assert (
         destination / "include" / "google" / "protobuf" / "descriptor.proto"
     ).is_file()
+    assert (destination / install_protoc.VERSION_MARKER).read_text(
+        encoding="utf-8"
+    ) == "34.1\n"
     outputs = github_output.read_text(encoding="utf-8").splitlines()
     assert "version=34.1" in outputs
     assert f"root={destination.as_posix()}" in outputs
     assert f"protoc={(destination / 'bin' / asset.executable_name).as_posix()}" in outputs
+    assert f"include={(destination / 'include').as_posix()}" in outputs
 
 
 @pytest.mark.parametrize(

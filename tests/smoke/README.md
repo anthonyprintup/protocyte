@@ -571,11 +571,21 @@ Pop-Location
 Regenerate the checked-in smoke fixtures:
 
 ```powershell
-Push-Location tests/smoke
-cmake --preset windows-clangcl-ninja -DPROTOCYTE_SMOKE_REGENERATE=ON
-cmake --build build/clangcl --target protocyte_smoke_regenerate
-Pop-Location
+uv sync --locked --group dev
+python .github/scripts/install_protoc.py --dest build/canonical-protoc
+$env:PROTOCYTE_SMOKE_PROTOC = (Resolve-Path build/canonical-protoc/bin/protoc.exe)
+$env:PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR = (Resolve-Path build/canonical-protoc/include)
+$env:PROTOCYTE_SMOKE_PLUGIN = (Resolve-Path .venv/Scripts/protoc-gen-protocyte.exe)
+$env:PROTOCYTE_SMOKE_CLANG_FORMAT = (Resolve-Path .venv/Scripts/clang-format.exe)
+uv run python tests/smoke/tools/generate_checked_outputs.py
 ```
+
+The generator compiles the real files under `tests/smoke/proto/` with official
+`protoc`, invokes the installed Protocyte plugin with the smoke options, and
+replaces the complete checked tree only after every output succeeds. The
+repository installer verifies the pinned protobuf archive and pairs `protoc`
+with its matching import tree. The locked development environment supplies the
+pinned `clang-format`; regeneration rejects any mismatched tool version.
 
 Build the optional WDK driver smoke target:
 

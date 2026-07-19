@@ -2064,7 +2064,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         static ::protocyte::Result<Config> parse(Context &ctx,
                                                  ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -2323,7 +2327,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         static ::protocyte::Result<Reader> parse(Context &ctx,
                                                  ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -2535,7 +2543,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         static ::protocyte::Result<LegacyPayload> parse(Context &ctx,
                                                         ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 
@@ -2808,7 +2820,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         static ::protocyte::Result<DeprecationCarrier> parse(Context &ctx,
                                                              ::protocyte::Span<const ::protocyte::u8> input) noexcept {
-            ::protocyte::SliceReader reader {input.data(), input.size()};
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
             return parse(ctx, reader);
         }
 

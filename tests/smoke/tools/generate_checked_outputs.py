@@ -1,21 +1,71 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
-import tempfile
+import tomllib
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
-from google.protobuf.compiler import plugin_pb2
+from google.protobuf.message import DecodeError
+from protocyte import __version__
+
 
 ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT / "src"))
+SMOKE_PROTO_DIR = ROOT / "tests" / "smoke" / "proto"
+PROTOCYTE_PROTO_DIR = ROOT / "src" / "protocyte" / "proto"
+PROTOBUF_VERSION_MARKER = ".protocyte-protobuf-version"
 
-from protocyte.plugin import generate_response  # noqa: E402
 
-F = descriptor_pb2.FieldDescriptorProto
+def _load_cmake_string(variable: str) -> str:
+    cmake_text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    match = re.search(
+        rf'set\(\s*{re.escape(variable)}\s*"([^"]+)"',
+        cmake_text,
+        re.MULTILINE,
+    )
+    if match is None:
+        raise RuntimeError(f"failed to read {variable} from CMakeLists.txt")
+    return match.group(1)
+
+
+def _load_exact_dev_dependency_version(package: str) -> str:
+    with (ROOT / "pyproject.toml").open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+    prefix = f"{package}=="
+    matches = [
+        dependency.removeprefix(prefix)
+        for dependency in pyproject["dependency-groups"]["dev"]
+        if dependency.startswith(prefix)
+    ]
+    if len(matches) != 1 or not matches[0]:
+        raise RuntimeError(
+            f"pyproject.toml must pin exactly one {package} development dependency"
+        )
+    return matches[0]
+
+
+PINNED_PROTOC_VERSION = _load_cmake_string("PROTOCYTE_PROTOBUF_VERSION")
+PINNED_CLANG_FORMAT_VERSION = _load_exact_dev_dependency_version("clang-format")
+
+
+@dataclass(frozen=True)
+class GenerationSpec:
+    source: str
+    options: tuple[str, ...] = ()
+
+
+GENERATION_SPECS = (
+    GenerationSpec("example.proto", ("runtime=emit",)),
+    GenerationSpec("compat.proto", ("namespace_prefix=protocyte_smoke",)),
+    GenerationSpec("cross_package.proto"),
+    GenerationSpec("proto2_required.proto"),
+    GenerationSpec("reserved_identifiers.proto"),
+)
 
 
 def main() -> int:
@@ -40,11 +90,9 @@ def _regenerate_checked_outputs(
     clang_format_config: Path,
 ) -> str | None:
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".protocyte-smoke-generated-",
-        dir=out_dir.parent,
-    ) as transaction_dir:
-        transaction = Path(transaction_dir)
+    _recover_interrupted_checked_output_swap(out_dir)
+    transaction = _create_checked_output_transaction(out_dir, "transaction")
+    try:
         staged_out_dir = transaction / "generated"
         staged_out_dir.mkdir()
         error = _write_checked_outputs(
@@ -55,17 +103,115 @@ def _regenerate_checked_outputs(
         if error is not None:
             return error
 
-        previous_out_dir = transaction / "previous"
-        had_previous = out_dir.exists()
-        if had_previous:
-            out_dir.replace(previous_out_dir)
+        _swap_checked_outputs(out_dir, staged_out_dir, transaction)
+        return None
+    finally:
+        _checked_output_swap_phase("before_cleanup")
+        _remove_checked_output_path(transaction)
+        _checked_output_swap_phase("after_cleanup")
+
+
+def _checked_output_swap_phase(_phase: str) -> None:
+    """Test seam for process interruptions between atomic filesystem operations."""
+
+
+def _checked_output_path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _remove_checked_output_path(path: Path) -> None:
+    if not _checked_output_path_exists(path):
+        return
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
+
+
+def _checked_output_rollback_path(out_dir: Path) -> Path:
+    return out_dir.with_name(f".{out_dir.name}.protocyte-rollback")
+
+
+def _create_checked_output_transaction(out_dir: Path, purpose: str) -> Path:
+    # Path.mkdir uses the parent directory's normal ACL inheritance. tempfile's
+    # Windows directories intentionally use a private DACL, which must never be
+    # moved into the checked-out tree as the live generated directory.
+    while True:
+        transaction = out_dir.with_name(
+            f".{out_dir.name}.protocyte-{purpose}-{uuid.uuid4().hex}"
+        )
         try:
-            staged_out_dir.replace(out_dir)
-        except BaseException:
-            if had_previous:
-                previous_out_dir.replace(out_dir)
-            raise
-    return None
+            transaction.mkdir()
+        except FileExistsError:
+            continue
+        return transaction
+
+
+def _restore_checked_output_rollback(out_dir: Path, rollback: Path) -> None:
+    recovery = _create_checked_output_transaction(out_dir, "recovery")
+    displaced = recovery / "interrupted-output"
+    try:
+        if _checked_output_path_exists(out_dir):
+            out_dir.replace(displaced)
+        rollback.replace(out_dir)
+    finally:
+        # Recovery is already durable once rollback.replace succeeds. Cleanup
+        # must not mask the original interruption or endanger the restored tree.
+        try:
+            _remove_checked_output_path(recovery)
+        except OSError:
+            pass
+
+
+def _recover_interrupted_checked_output_swap(out_dir: Path) -> None:
+    rollback = _checked_output_rollback_path(out_dir)
+    if _checked_output_path_exists(rollback):
+        _restore_checked_output_rollback(out_dir, rollback)
+
+
+def _swap_checked_outputs(
+    out_dir: Path,
+    staged_out_dir: Path,
+    transaction: Path,
+) -> None:
+    rollback = _checked_output_rollback_path(out_dir)
+    discard = transaction / "previous"
+    had_previous = _checked_output_path_exists(out_dir)
+    if _checked_output_path_exists(rollback):
+        raise RuntimeError(f"unrecovered checked-output rollback exists: {rollback}")
+
+    try:
+        _checked_output_swap_phase("before_backup")
+        if had_previous:
+            out_dir.replace(rollback)
+        _checked_output_swap_phase("after_backup")
+
+        _checked_output_swap_phase("before_promote")
+        staged_out_dir.replace(out_dir)
+        _checked_output_swap_phase("after_promote")
+
+        _checked_output_swap_phase("before_commit")
+        if had_previous:
+            # This atomic rename is the commit point. Once rollback disappears,
+            # cleanup may be interrupted without making the live tree ambiguous.
+            rollback.replace(discard)
+        _checked_output_swap_phase("after_commit")
+    except BaseException:
+        if had_previous:
+            if not _checked_output_path_exists(rollback) and _checked_output_path_exists(
+                discard
+            ):
+                discard.replace(rollback)
+            if _checked_output_path_exists(rollback):
+                _restore_checked_output_rollback(out_dir, rollback)
+        elif _checked_output_path_exists(out_dir) and not _checked_output_path_exists(
+            staged_out_dir
+        ):
+            try:
+                out_dir.replace(staged_out_dir)
+            except OSError:
+                pass
+        raise
 
 
 def _write_checked_outputs(
@@ -73,68 +219,226 @@ def _write_checked_outputs(
     clang_format: str,
     clang_format_config: Path,
 ) -> str | None:
-    requests: list[plugin_pb2.CodeGeneratorRequest] = []
-    smoke_format_options = (
-        f"clang_format={clang_format}",
+    try:
+        protoc = _resolve_smoke_protoc()
+        plugin = _resolve_smoke_plugin()
+        protobuf_import_dir = _resolve_protobuf_import_dir(protoc)
+    except FileNotFoundError as exc:
+        return str(exc)
+    tool_error = _verify_smoke_tools(protoc, plugin, Path(clang_format))
+    if tool_error is not None:
+        return tool_error
+
+    format_options = (
+        f"clang_format={Path(clang_format).as_posix()}",
         f"clang_format_config={clang_format_config.as_posix()}",
     )
-
-    example_request = plugin_pb2.CodeGeneratorRequest()
-    example_request.file_to_generate.append("example.proto")
-    example_request.parameter = _generator_parameter("runtime=emit", *smoke_format_options)
-    example_request.proto_file.extend([options_file(), example_file()])
-    requests.append(example_request)
-
-    compat_request = plugin_pb2.CodeGeneratorRequest()
-    compat_request.file_to_generate.append("compat.proto")
-    compat_request.parameter = _generator_parameter("namespace_prefix=protocyte_smoke", *smoke_format_options)
-    compat_request.proto_file.append(compat_file())
-    requests.append(compat_request)
-
-    cross_package_request = plugin_pb2.CodeGeneratorRequest()
-    cross_package_request.file_to_generate.append("cross_package.proto")
-    cross_package_request.parameter = _generator_parameter(*smoke_format_options)
-    cross_package_request.proto_file.extend([options_file(), example_file(), cross_package_file()])
-    requests.append(cross_package_request)
-
-    proto2_required_request = plugin_pb2.CodeGeneratorRequest()
-    proto2_required_request.file_to_generate.append("proto2_required.proto")
-    proto2_required_request.parameter = _generator_parameter(*smoke_format_options)
-    proto2_required_request.proto_file.extend([options_file(), proto2_required_file()])
-    requests.append(proto2_required_request)
-
-    reserved_identifiers_request = plugin_pb2.CodeGeneratorRequest()
-    reserved_identifiers_request.file_to_generate.append("reserved_identifiers.proto")
-    reserved_identifiers_request.parameter = _generator_parameter(*smoke_format_options)
-    reserved_identifiers_request.proto_file.extend(
-        [options_file(), reserved_identifiers_file()]
+    common_arguments = (
+        f"--proto_path={SMOKE_PROTO_DIR.as_posix()}",
+        f"--proto_path={PROTOCYTE_PROTO_DIR.as_posix()}",
+        f"--proto_path={protobuf_import_dir.as_posix()}",
     )
-    requests.append(reserved_identifiers_request)
 
-    for request in requests:
-        response = generate_response(request)
-        if response.error:
-            return response.error
+    for spec in GENERATION_SPECS:
+        parameter = ",".join((*spec.options, *format_options))
+        encoded_parameter = parameter.encode("utf-8").hex()
+        arguments = (
+            *common_arguments,
+            f"--plugin=protoc-gen-protocyte={plugin.as_posix()}",
+            f"--protocyte_out=_protocyte_options_hex={encoded_parameter}:{out_dir.as_posix()}",
+            spec.source,
+        )
+        error = _run_protoc(
+            protoc,
+            arguments,
+            response_file=out_dir.parent / f"generate-{spec.source}.rsp",
+        )
+        if error is not None:
+            return error
 
-        for item in response.file:
-            path = out_dir / item.name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(item.content, encoding="utf-8", newline="\n")
+    descriptor_set_path = out_dir.parent / "compat-descriptor-set.pb"
+    error = _run_protoc(
+        protoc,
+        (
+            *common_arguments,
+            "--include_source_info",
+            f"--descriptor_set_out={descriptor_set_path.as_posix()}",
+            "compat.proto",
+        ),
+        response_file=out_dir.parent / "describe-compat.rsp",
+    )
+    if error is not None:
+        return error
+
+    try:
+        descriptor_set = descriptor_pb2.FileDescriptorSet.FromString(
+            descriptor_set_path.read_bytes()
+        )
+    except (OSError, DecodeError) as exc:
+        return f"failed to read the canonical compat descriptor set: {exc}"
+    compat_descriptor = next(
+        (file for file in descriptor_set.file if file.name == "compat.proto"),
+        None,
+    )
+    if compat_descriptor is None:
+        return "canonical compat descriptor set does not contain compat.proto"
 
     compat_cases_path = out_dir / "compat_cases.hpp"
-    compat_cases_path.write_text(compat_cases_header(), encoding="utf-8", newline="\n")
+    compat_cases_path.write_text(
+        compat_cases_header(compat_descriptor),
+        encoding="utf-8",
+        newline="\n",
+    )
     _clang_format_file(compat_cases_path, clang_format, clang_format_config)
     return None
 
 
-def _generator_parameter(*parts: str) -> str:
-    return ",".join(part for part in parts if part)
+def _run_protoc(
+    protoc: Path,
+    arguments: tuple[str, ...],
+    *,
+    response_file: Path,
+) -> str | None:
+    response_file.write_text("\n".join((*arguments, "")), encoding="utf-8", newline="\n")
+    result = subprocess.run(
+        [str(protoc), f"@{response_file}"],
+        cwd=SMOKE_PROTO_DIR,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode == 0:
+        return None
+
+    stdout = result.stdout.strip() or "<no standard output>"
+    stderr = result.stderr.strip() or "<no standard error>"
+    return (
+        f"official protoc failed while processing {response_file.name}\n"
+        f"protoc: {protoc}\n"
+        f"exit code: {result.returncode}\n\n"
+        f"standard output:\n{stdout}\n\n"
+        f"standard error:\n{stderr}"
+    )
+
+
+def _verify_smoke_tools(
+    protoc: Path,
+    plugin: Path,
+    clang_format: Path,
+) -> str | None:
+    commands = (
+        (protoc, f"libprotoc {PINNED_PROTOC_VERSION}", True),
+        (plugin, __version__, False),
+        (
+            clang_format,
+            f"clang-format version {PINNED_CLANG_FORMAT_VERSION}",
+            True,
+        ),
+    )
+    for executable, expected, allow_suffix in commands:
+        try:
+            result = subprocess.run(
+                [str(executable), "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as exc:
+            return f"failed to execute smoke generation tool {executable}: {exc}"
+        reported = result.stdout.strip()
+        matches = reported == expected or (
+            allow_suffix and reported.startswith(f"{expected} ")
+        )
+        if result.returncode != 0 or not matches:
+            return (
+                f"smoke generation tool is incompatible: {executable}\n"
+                f"expected version output: {expected!r}\n"
+                f"reported version output: {reported!r}\n"
+                f"exit code: {result.returncode}"
+            )
+    return None
+
+
+def _resolve_smoke_protoc() -> Path:
+    configured = os.environ.get("PROTOCYTE_SMOKE_PROTOC") or os.environ.get(
+        "PROTOCYTE_CI_PROTOC_EXECUTABLE"
+    )
+    if configured:
+        protoc = Path(configured).resolve()
+        if protoc.is_file():
+            return protoc
+        raise FileNotFoundError(f"configured protoc does not exist: {protoc}")
+
+    executable = shutil.which("protoc")
+    if executable:
+        return Path(executable).resolve()
+    raise FileNotFoundError(
+        "official protoc was not found. Set PROTOCYTE_SMOKE_PROTOC or install protoc."
+    )
+
+
+def _resolve_smoke_plugin() -> Path:
+    configured = os.environ.get("PROTOCYTE_SMOKE_PLUGIN")
+    if configured:
+        plugin = Path(configured).resolve()
+        if plugin.is_file():
+            return plugin
+        raise FileNotFoundError(f"configured Protocyte plugin does not exist: {plugin}")
+
+    executable = shutil.which("protoc-gen-protocyte")
+    if executable:
+        return Path(executable).resolve()
+    raise FileNotFoundError(
+        "protoc-gen-protocyte was not found. Set PROTOCYTE_SMOKE_PLUGIN or run the generator with 'uv run'."
+    )
+
+
+def _resolve_protobuf_import_dir(protoc: Path) -> Path:
+    install_root = protoc.parent.parent.resolve()
+    paired_import_dir = (install_root / "include").resolve()
+    configured = os.environ.get("PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR")
+    if configured and Path(configured).resolve() != paired_import_dir:
+        raise FileNotFoundError(
+            "canonical smoke generation requires the protobuf import tree shipped "
+            f"with the selected protoc: expected {paired_import_dir}, got "
+            f"{Path(configured).resolve()}"
+        )
+
+    marker = install_root / PROTOBUF_VERSION_MARKER
+    if not marker.is_file():
+        raise FileNotFoundError(
+            f"selected protoc is missing the repository installer marker: {marker}. "
+            "Provision it with .github/scripts/install_protoc.py."
+        )
+    installed_version = marker.read_text(encoding="utf-8").strip()
+    if installed_version != PINNED_PROTOC_VERSION:
+        raise FileNotFoundError(
+            "selected protoc/import installation does not match the repository pin: "
+            f"expected {PINNED_PROTOC_VERSION}, marker reports {installed_version!r}"
+        )
+
+    descriptor = paired_import_dir / "google" / "protobuf" / "descriptor.proto"
+    if not descriptor.is_file():
+        raise FileNotFoundError(
+            "the import tree paired with the selected protoc does not contain "
+            f"google/protobuf/descriptor.proto: {paired_import_dir}"
+        )
+    return paired_import_dir
 
 
 def _resolve_smoke_clang_format() -> str:
     override = os.environ.get("PROTOCYTE_SMOKE_CLANG_FORMAT")
     if override:
-        return override
+        executable = Path(override).resolve()
+        if executable.is_file():
+            return executable.as_posix()
+        raise FileNotFoundError(
+            f"configured canonical clang-format does not exist: {executable}"
+        )
 
     for command in ("clang-format", "clang-format.exe"):
         resolved = shutil.which(command)
@@ -186,858 +490,7 @@ def _clang_format_file(path: Path, clang_format: str, clang_format_config: Path)
     )
 
 
-def add_field(
-    message: descriptor_pb2.DescriptorProto,
-    name: str,
-    number: int,
-    kind: int,
-    *,
-    label: int = F.LABEL_OPTIONAL,
-    type_name: str = "",
-    packed: bool | None = None,
-    oneof_index: int | None = None,
-    proto3_optional: bool = False,
-) -> descriptor_pb2.FieldDescriptorProto:
-    field = message.field.add()
-    field.name = name
-    field.number = number
-    field.label = label
-    field.type = kind
-    if type_name:
-        field.type_name = type_name
-    if packed is not None:
-        field.options.packed = packed
-    if oneof_index is not None:
-        field.oneof_index = oneof_index
-    if proto3_optional:
-        field.proto3_optional = True
-    return field
-
-
-def add_source_documentation(
-    file: descriptor_pb2.FileDescriptorProto,
-    path: list[int],
-    text: str,
-) -> None:
-    location = file.source_code_info.location.add()
-    location.path.extend(path)
-    location.leading_comments = text
-
-
-def add_map_entry(
-    parent: descriptor_pb2.DescriptorProto,
-    name: str,
-    key_type: int,
-    value_type: int,
-    *,
-    value_type_name: str = "",
-    parent_type_name: str = ".test.ultimate.UltimateComplexMessage",
-) -> str:
-    entry = parent.nested_type.add()
-    entry.name = name
-    entry.options.map_entry = True
-    add_field(entry, "key", 1, key_type)
-    add_field(entry, "value", 2, value_type, type_name=value_type_name)
-    return f"{parent_type_name}.{name}"
-
-
-def example_file() -> descriptor_pb2.FileDescriptorProto:
-    file = descriptor_pb2.FileDescriptorProto()
-    file.name = "example.proto"
-    file.package = "test.ultimate"
-    file.syntax = "proto3"
-    file.options.optimize_for = descriptor_pb2.FileOptions.SPEED
-    file.dependency.append("protocyte/options.proto")
-    file.options.ParseFromString(
-        package_constant_options_bytes(
-            [
-                ("BASE_COUNT", "i32", 5),
-                ("PREFIX", "str_expr", 'substr("protocyte", 0, 5)'),
-                ("BYTE_ARRAY_CAP", "u32_expr", "len(PREFIX) - 1"),
-                ("BITWISE_BASE", "u32_expr", "(true << 3) | 2"),
-                ("MATH_BASE", "u32_expr", "max(2, sqrt(9))"),
-            ]
-        )
-    )
-
-    msg = file.message_type.add()
-    msg.name = "UltimateComplexMessage"
-    msg.options.ParseFromString(
-        constant_options_bytes(
-            [
-                ("SHIFTED_COUNT", "i64_expr", "i64(BASE_COUNT) * 1000000000"),
-                ("MASK_BITS", "u64", 1234567890123456789),
-                ("FLOAT_SCALE", "f32", 1.25),
-                ("DOUBLE_SCALE", "f64_expr", "FLOAT_SCALE + 2.5"),
-                ("FLAG_LITERAL", "boolean", True),
-                ("HEX_LITERAL", "u32", 0x20),
-                ("HEX_SUM", "u32_expr", "0x10 + 0x8"),
-                ("HEX_E_DIGITS", "u32_expr", "0xDEADBEEF & 0xFFFF"),
-                ("INTEGER_ARRAY_CAP", "u32_expr", "(BASE_COUNT * 2) - 2"),
-                ("LABEL", "str_expr", 'PREFIX + "-demo"'),
-                ("UNICODE_LABEL", "str", chr(0x0100) + chr(0x00E9)),
-                ("FIXED_INTEGER_ARRAY_CAP", "u32_expr", "BASE_COUNT - 2"),
-                ("FLOATISH_BOUND", "u32_expr", "4 / 2.0"),
-                ("GT_CHECK", "boolean_expr", "BASE_COUNT > 4"),
-                ("LE_CHECK", "boolean_expr", "BYTE_ARRAY_CAP <= INTEGER_ARRAY_CAP"),
-                ("EQ_CHECK", "boolean_expr", 'PREFIX == "proto"'),
-                ("NE_CHECK", "boolean_expr", 'LABEL != "proto"'),
-                ("HAS_PREFIX", "boolean_expr", 'starts_with(LABEL, PREFIX) && !starts_with(LABEL, "zzz")'),
-                ("MOD_CHECK", "i32_expr", "BASE_COUNT % 2"),
-                ("OR_CHECK", "boolean_expr", "HAS_PREFIX || false"),
-                ("I32_BITWISE", "i32_expr", "~0"),
-                ("U32_BITWISE", "u32_expr", "~u32(0)"),
-                ("I64_BITWISE", "i64_expr", "i64(1) << 40"),
-                ("U64_BITWISE", "u64_expr", "(~u64(0)) ^ 0xf"),
-                ("F32_BITWISE", "f32_expr", "(1 << 3) | 1"),
-                ("F64_BITWISE", "f64_expr", "true << 4"),
-                ("BOOL_BITWISE", "boolean_expr", "BITWISE_BASE & 0x8"),
-                (
-                    "BOOL_BITWISE_LOGIC",
-                    "boolean_expr",
-                    "(BITWISE_BASE & 0x8) && FLAG_LITERAL",
-                ),
-                ("BOOL_INTEGER", "boolean_expr", "1 + 1"),
-                ("BOOL_ARITHMETIC", "i32_expr", "true + true"),
-                ("FLOAT_LOGIC", "boolean_expr", "0.5 && !0.0"),
-                (
-                    "SHORT_CIRCUIT_AND",
-                    "boolean_expr",
-                    "false && (1 / 0)",
-                ),
-                (
-                    "SHORT_CIRCUIT_OR",
-                    "boolean_expr",
-                    "true || (1 / 0)",
-                ),
-                (
-                    "MIXED_UNSIGNED",
-                    "u32_expr",
-                    "BASE_COUNT - BITWISE_BASE",
-                ),
-                ("MIXED_COMPARE", "boolean_expr", "(-1) < BITWISE_BASE"),
-                (
-                    "MIXED_EQUAL",
-                    "boolean_expr",
-                    "I32_BITWISE == U32_BITWISE",
-                ),
-                ("F32_EQUAL_SOURCE", "f32", 16777216.0),
-                (
-                    "MIXED_F32_EQUAL",
-                    "boolean_expr",
-                    "F32_EQUAL_SOURCE == 16777217",
-                ),
-                (
-                    "BITWISE_SOURCE_NORMALIZED",
-                    "i64_expr",
-                    "(-u32(1)) & i64(4294967296)",
-                ),
-                (
-                    "SHIFT_COUNT_NORMALIZED",
-                    "i32_expr",
-                    "1 << -U32_BITWISE",
-                ),
-                ("CAST_U32", "u32_expr", "u32(-1)"),
-                ("CAST_I32", "i32_expr", "i32(CAST_U32)"),
-                ("CAST_I64", "i64_expr", "i64(CAST_I32)"),
-                ("CAST_U64", "u64_expr", "u64(CAST_I32)"),
-                ("CAST_F32", "f32_expr", "f32(16777217)"),
-                ("CAST_F64", "f64_expr", "f64(CAST_F32) + 0.5"),
-                ("CAST_BOOL", "boolean_expr", "bool(0.5)"),
-                ("CAST_STR", "str_expr", "str(CAST_I32)"),
-                (
-                    "STR_BITWISE",
-                    "str_expr",
-                    'substr("abcd", 1 << 0, 1 | 0)',
-                ),
-                ("MATH_POW", "i32_expr", "pow(2, 5)"),
-                ("MATH_U64_POW", "u64_expr", "pow(2, 63)"),
-                ("MATH_ABS", "i64_expr", "abs(-9)"),
-                ("MATH_MIN", "u32_expr", "min(MATH_BASE, 5, 4)"),
-                ("MATH_F32", "f32_expr", "pow(FLOAT_SCALE, 2)"),
-                ("MATH_EXP", "f64_expr", "exp(0)"),
-                ("MATH_LOG", "f64_expr", "log(exp(2.0))"),
-                ("MATH_LOG2", "f64_expr", "log2(16)"),
-                ("MATH_LOG10", "f64_expr", "log10(1000)"),
-                ("MATH_CEIL", "f64_expr", "ceil(-2.1)"),
-                ("MATH_FLOOR", "f64_expr", "floor(-2.1)"),
-                ("MATH_TRUNC", "f64_expr", "trunc(-2.9)"),
-                ("MATH_ROUND", "f64_expr", "round(-2.5)"),
-                (
-                    "MATH_ROUND_BELOW",
-                    "f64_expr",
-                    "round(0.49999999999999994)",
-                ),
-                (
-                    "MATH_NEGATIVE_POW",
-                    "u32_expr",
-                    "pow(2, -3) * 8",
-                ),
-                ("MATH_INTEGRAL_NEGATIVE_POW", "f64_expr", "pow(2, -3)"),
-                (
-                    "MATH_ACCURATE_NEGATIVE_POW",
-                    "f64_expr",
-                    "pow(10, f64(-23))",
-                ),
-                ("MATH_TRUNC_INT", "i32_expr", "-2.9"),
-                ("MATH_BOOL", "boolean_expr", "max(false, true)"),
-                (
-                    "MATH_STR",
-                    "str_expr",
-                    'substr("abcd", floor(1.9), max(1, 1))',
-                ),
-            ]
-        )
-    )
-    msg.reserved_range.add(start=3, end=4)
-    msg.reserved_range.add(start=5, end=8)
-    msg.reserved_range.add(start=20, end=21)
-    msg.reserved_name.extend(["old_name", "legacy_field"])
-
-    add_field(msg, "f_double", 1, F.TYPE_DOUBLE)
-    add_field(msg, "f_float", 2, F.TYPE_FLOAT)
-    add_field(msg, "f_int32", 4, F.TYPE_INT32)
-    add_field(msg, "f_int64", 8, F.TYPE_INT64)
-    add_field(msg, "f_uint32", 9, F.TYPE_UINT32)
-    add_field(msg, "f_uint64", 10, F.TYPE_UINT64)
-    add_field(msg, "f_sint32", 11, F.TYPE_SINT32)
-    add_field(msg, "f_sint64", 12, F.TYPE_SINT64)
-    add_field(msg, "f_fixed32", 13, F.TYPE_FIXED32)
-    add_field(msg, "f_fixed64", 14, F.TYPE_FIXED64)
-    add_field(msg, "f_sfixed32", 15, F.TYPE_SFIXED32)
-    add_field(msg, "f_sfixed64", 16, F.TYPE_SFIXED64)
-    add_field(msg, "f_bool", 17, F.TYPE_BOOL)
-    add_field(msg, "f_string", 18, F.TYPE_STRING)
-    add_field(msg, "f_bytes", 19, F.TYPE_BYTES)
-    add_field(msg, "r_int32_unpacked", 21, F.TYPE_INT32, label=F.LABEL_REPEATED, packed=False)
-    add_field(msg, "r_int32_packed", 22, F.TYPE_INT32, label=F.LABEL_REPEATED, packed=True)
-    add_field(msg, "r_double", 23, F.TYPE_DOUBLE, label=F.LABEL_REPEATED, packed=True)
-
-    color = msg.enum_type.add()
-    color.name = "Color"
-    for name, number in [
-        ("COLOR_UNSPECIFIED", 0),
-        ("RED", 1),
-        ("GREEN", 2),
-        ("BLUE", 3),
-    ]:
-        value = color.value.add()
-        value.name = name
-        value.number = number
-    add_field(msg, "color", 24, F.TYPE_ENUM, type_name=".test.ultimate.UltimateComplexMessage.Color")
-
-    nested1 = msg.nested_type.add()
-    nested1.name = "NestedLevel1"
-    add_field(nested1, "name", 1, F.TYPE_STRING)
-    add_field(nested1, "id", 2, F.TYPE_INT32)
-
-    nested2 = nested1.nested_type.add()
-    nested2.name = "NestedLevel2"
-    add_field(nested2, "description", 1, F.TYPE_STRING)
-    add_field(nested2, "values", 2, F.TYPE_FLOAT, label=F.LABEL_REPEATED, packed=True)
-    inner = nested2.enum_type.add()
-    inner.name = "InnerEnum"
-    for name, number in [
-        ("INNER_UNSPECIFIED", 0),
-        ("A", 1),
-        ("B", 2),
-        ("C", 3),
-    ]:
-        value = inner.value.add()
-        value.name = name
-        value.number = number
-    add_field(
-        nested2,
-        "mode",
-        3,
-        F.TYPE_ENUM,
-        type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1.NestedLevel2.InnerEnum",
-    )
-    add_field(
-        nested1,
-        "inner",
-        3,
-        F.TYPE_MESSAGE,
-        type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1.NestedLevel2",
-    )
-    add_field(msg, "nested1", 25, F.TYPE_MESSAGE, type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1")
-
-    msg.oneof_decl.add().name = "special_oneof"
-    add_field(msg, "oneof_string", 26, F.TYPE_STRING, oneof_index=0)
-    add_field(msg, "oneof_int32", 27, F.TYPE_INT32, oneof_index=0)
-    add_field(
-        msg,
-        "oneof_msg",
-        28,
-        F.TYPE_MESSAGE,
-        type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1",
-        oneof_index=0,
-    )
-    oneof_bytes = add_field(msg, "oneof_bytes", 29, F.TYPE_BYTES, oneof_index=0)
-    oneof_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
-
-    repeated_bytes_holder = msg.nested_type.add()
-    repeated_bytes_holder.name = "RepeatedBytesHolder"
-    add_field(repeated_bytes_holder, "values", 1, F.TYPE_BYTES, label=F.LABEL_REPEATED)
-
-    bounded_repeated_bytes_holder = msg.nested_type.add()
-    bounded_repeated_bytes_holder.name = "BoundedRepeatedBytesHolder"
-    bounded_values = add_field(bounded_repeated_bytes_holder, "values", 1, F.TYPE_BYTES, label=F.LABEL_REPEATED)
-    bounded_values.options.ParseFromString(array_option_bytes(max_value=3))
-
-    fixed_repeated_bytes_holder = msg.nested_type.add()
-    fixed_repeated_bytes_holder.name = "FixedRepeatedBytesHolder"
-    fixed_values = add_field(fixed_repeated_bytes_holder, "values", 1, F.TYPE_BYTES, label=F.LABEL_REPEATED)
-    fixed_values.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
-
-    msg.oneof_decl.add().name = "crazy_bytes_oneof"
-    add_field(msg, "crazy_plain_bytes", 49, F.TYPE_BYTES, oneof_index=1)
-    crazy_bounded_bytes = add_field(msg, "crazy_bounded_bytes", 50, F.TYPE_BYTES, oneof_index=1)
-    crazy_bounded_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
-    crazy_fixed_bytes = add_field(msg, "crazy_fixed_bytes", 51, F.TYPE_BYTES, oneof_index=1)
-    crazy_fixed_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP", fixed=True))
-    add_field(
-        msg,
-        "crazy_repeated_bytes",
-        52,
-        F.TYPE_MESSAGE,
-        type_name=".test.ultimate.UltimateComplexMessage.RepeatedBytesHolder",
-        oneof_index=1,
-    )
-    add_field(
-        msg,
-        "crazy_bounded_repeated_bytes",
-        53,
-        F.TYPE_MESSAGE,
-        type_name=".test.ultimate.UltimateComplexMessage.BoundedRepeatedBytesHolder",
-        oneof_index=1,
-    )
-    add_field(
-        msg,
-        "crazy_fixed_repeated_bytes",
-        54,
-        F.TYPE_MESSAGE,
-        type_name=".test.ultimate.UltimateComplexMessage.FixedRepeatedBytesHolder",
-        oneof_index=1,
-    )
-
-    map_str_int32 = add_map_entry(msg, "MapStrInt32Entry", F.TYPE_STRING, F.TYPE_INT32)
-    map_int32_str = add_map_entry(msg, "MapInt32StrEntry", F.TYPE_INT32, F.TYPE_STRING)
-    map_bool_bytes = add_map_entry(msg, "MapBoolBytesEntry", F.TYPE_BOOL, F.TYPE_BYTES)
-    map_uint64_msg = add_map_entry(
-        msg,
-        "MapUint64MsgEntry",
-        F.TYPE_UINT64,
-        F.TYPE_MESSAGE,
-        value_type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1",
-    )
-    very_nested_map = add_map_entry(
-        msg,
-        "VeryNestedMapEntry",
-        F.TYPE_STRING,
-        F.TYPE_MESSAGE,
-        value_type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1.NestedLevel2",
-    )
-
-    add_field(msg, "map_str_int32", 30, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_str_int32)
-    add_field(msg, "map_int32_str", 31, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_int32_str)
-    add_field(msg, "map_bool_bytes", 32, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_bool_bytes)
-    add_field(msg, "map_uint64_msg", 33, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_uint64_msg)
-    add_field(msg, "very_nested_map", 34, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=very_nested_map)
-    add_field(msg, "recursive_self", 35, F.TYPE_MESSAGE, type_name=".test.ultimate.UltimateComplexMessage")
-    add_field(
-        msg,
-        "lots_of_nested",
-        36,
-        F.TYPE_MESSAGE,
-        label=F.LABEL_REPEATED,
-        type_name=".test.ultimate.UltimateComplexMessage.NestedLevel1.NestedLevel2",
-    )
-    add_field(
-        msg,
-        "colors",
-        37,
-        F.TYPE_ENUM,
-        label=F.LABEL_REPEATED,
-        type_name=".test.ultimate.UltimateComplexMessage.Color",
-        packed=True,
-    )
-
-    msg.oneof_decl.add().name = "_opt_int32"
-    opt_int32_oneof_index = len(msg.oneof_decl) - 1
-    msg.oneof_decl.add().name = "_opt_string"
-    opt_string_oneof_index = len(msg.oneof_decl) - 1
-    add_field(msg, "opt_int32", 38, F.TYPE_INT32, oneof_index=opt_int32_oneof_index,
-              proto3_optional=True)
-    add_field(msg, "opt_string", 39, F.TYPE_STRING, oneof_index=opt_string_oneof_index,
-              proto3_optional=True)
-
-    level_a = msg.nested_type.add()
-    level_a.name = "LevelA"
-    level_b = level_a.nested_type.add()
-    level_b.name = "LevelB"
-    level_c = level_b.nested_type.add()
-    level_c.name = "LevelC"
-    level_d = level_c.nested_type.add()
-    level_d.name = "LevelD"
-    level_e = level_d.nested_type.add()
-    level_e.name = "LevelE"
-    add_field(level_e, "extreme", 1, F.TYPE_STRING)
-    weird_map = add_map_entry(
-        level_e,
-        "WeirdMapEntry",
-        F.TYPE_INT32,
-        F.TYPE_STRING,
-        parent_type_name=".test.ultimate.UltimateComplexMessage.LevelA.LevelB.LevelC.LevelD.LevelE",
-    )
-    add_field(level_e, "weird_map", 2, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=weird_map)
-    level_e.oneof_decl.add().name = "deep_oneof"
-    add_field(level_e, "val", 3, F.TYPE_INT64, oneof_index=0)
-    add_field(level_e, "text", 4, F.TYPE_STRING, oneof_index=0)
-
-    add_field(
-        msg,
-        "extreme_nesting",
-        40,
-        F.TYPE_MESSAGE,
-        type_name=".test.ultimate.UltimateComplexMessage.LevelA.LevelB.LevelC.LevelD.LevelE",
-    )
-    sha256 = add_field(msg, "sha256", 41, F.TYPE_BYTES)
-    sha256.options.ParseFromString(array_option_bytes(expr="INTEGER_ARRAY_CAP * 4", fixed=True))
-    integer_array = add_field(msg, "integer_array", 42, F.TYPE_INT32, label=F.LABEL_REPEATED)
-    integer_array.options.ParseFromString(array_option_bytes(expr="INTEGER_ARRAY_CAP"))
-    byte_array = add_field(msg, "byte_array", 43, F.TYPE_BYTES)
-    byte_array.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP"))
-    fixed_integer_array = add_field(msg, "fixed_integer_array", 44, F.TYPE_UINT32, label=F.LABEL_REPEATED)
-    fixed_integer_array.options.ParseFromString(array_option_bytes(expr="(BITWISE_BASE >> 1) - 2", fixed=True))
-    float_expr_array = add_field(msg, "float_expr_array", 45, F.TYPE_BYTES)
-    float_expr_array.options.ParseFromString(array_option_bytes(expr="pow(2, f64(-1)) * 4"))
-    add_field(msg, "repeated_byte_array", 46, F.TYPE_BYTES, label=F.LABEL_REPEATED)
-    bounded_repeated_byte_array = add_field(msg, "bounded_repeated_byte_array", 47, F.TYPE_BYTES,
-                                            label=F.LABEL_REPEATED)
-    bounded_repeated_byte_array.options.ParseFromString(array_option_bytes(max_value=3))
-    fixed_repeated_byte_array = add_field(msg, "fixed_repeated_byte_array", 48, F.TYPE_BYTES, label=F.LABEL_REPEATED)
-    fixed_repeated_byte_array.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
-
-    extra = file.message_type.add()
-    extra.name = "ExtraMessage"
-    add_field(extra, "tag", 1, F.TYPE_STRING)
-    add_field(extra, "ref", 2, F.TYPE_MESSAGE, type_name=".test.ultimate.UltimateComplexMessage")
-
-    cross = file.message_type.add()
-    cross.name = "CrossMessageConstants"
-    cross.options.ParseFromString(
-        constant_options_bytes(
-            [
-                ("ROOT_MIRROR", "u32_expr", "UltimateComplexMessage.INTEGER_ARRAY_CAP + 2"),
-                ("LABEL_COPY", "str_expr", 'PREFIX + "-cross"'),
-                ("READY", "boolean_expr", "UltimateComplexMessage.HAS_PREFIX && (ROOT_MIRROR == 10)"),
-            ]
-        )
-    )
-    external_bytes = add_field(cross, "external_bytes", 1, F.TYPE_BYTES)
-    external_bytes.options.ParseFromString(array_option_bytes(expr="BYTE_ARRAY_CAP + 2"))
-    mirrored_values = add_field(cross, "mirrored_values", 2, F.TYPE_INT32, label=F.LABEL_REPEATED)
-    mirrored_values.options.ParseFromString(array_option_bytes(expr="ROOT_MIRROR"))
-
-    nested_cross = cross.nested_type.add()
-    nested_cross.name = "Nested"
-    nested_cross.options.ParseFromString(
-        constant_options_bytes(
-            [
-                ("EXTERNAL_CAP", "u32_expr", "BASE_COUNT + 3"),
-            ]
-        )
-    )
-    nested_bytes = add_field(nested_cross, "nested_bytes", 1, F.TYPE_BYTES)
-    nested_bytes.options.ParseFromString(array_option_bytes(expr="EXTERNAL_CAP"))
-
-    add_field(cross, "nested", 3, F.TYPE_MESSAGE, type_name=".test.ultimate.CrossMessageConstants.Nested")
-
-    return file
-
-
-def compat_file() -> descriptor_pb2.FileDescriptorProto:
-    file = descriptor_pb2.FileDescriptorProto()
-    file.name = "compat.proto"
-    file.package = "test.compat"
-    file.syntax = "proto3"
-    file.options.optimize_for = descriptor_pb2.FileOptions.LITE_RUNTIME
-
-    msg = file.message_type.add()
-    msg.name = "EncodingMatrix"
-    add_source_documentation(
-        file,
-        [4, 0],
-        "Exercises protobuf wire compatibility across every supported field shape.\n",
-    )
-
-    mode = msg.enum_type.add()
-    mode.name = "Mode"
-    for name, number in [
-        ("MODE_UNSPECIFIED", 0),
-        ("FIRST", 1),
-        ("SECOND", 2),
-    ]:
-        value = mode.value.add()
-        value.name = name
-        value.number = number
-
-    inner = msg.nested_type.add()
-    inner.name = "Inner"
-    add_field(inner, "value", 1, F.TYPE_INT32)
-    add_field(inner, "label", 2, F.TYPE_STRING)
-
-    add_field(msg, "f_int32", 1, F.TYPE_INT32)
-    add_field(msg, "f_int64", 2, F.TYPE_INT64)
-    add_field(msg, "f_uint32", 3, F.TYPE_UINT32)
-    add_field(msg, "f_uint64", 4, F.TYPE_UINT64)
-    add_field(msg, "f_sint32", 5, F.TYPE_SINT32)
-    add_field(msg, "f_sint64", 6, F.TYPE_SINT64)
-    add_field(msg, "f_bool", 7, F.TYPE_BOOL)
-    add_field(msg, "mode", 8, F.TYPE_ENUM, type_name=".test.compat.EncodingMatrix.Mode")
-    add_field(msg, "f_fixed32", 9, F.TYPE_FIXED32)
-    add_field(msg, "f_fixed64", 10, F.TYPE_FIXED64)
-    add_field(msg, "f_sfixed32", 11, F.TYPE_SFIXED32)
-    add_field(msg, "f_sfixed64", 12, F.TYPE_SFIXED64)
-    add_field(msg, "f_float", 13, F.TYPE_FLOAT)
-    add_field(msg, "f_double", 14, F.TYPE_DOUBLE)
-    add_field(msg, "f_string", 15, F.TYPE_STRING)
-    add_field(msg, "f_bytes", 16, F.TYPE_BYTES)
-    add_field(msg, "nested", 17, F.TYPE_MESSAGE, type_name=".test.compat.EncodingMatrix.Inner")
-    add_field(msg, "r_int32_unpacked", 18, F.TYPE_INT32, label=F.LABEL_REPEATED, packed=False)
-    add_field(msg, "r_int32_packed", 19, F.TYPE_INT32, label=F.LABEL_REPEATED, packed=True)
-    add_field(msg, "r_double", 20, F.TYPE_DOUBLE, label=F.LABEL_REPEATED, packed=True)
-
-    msg.oneof_decl.add().name = "special_oneof"
-    add_field(msg, "oneof_string", 21, F.TYPE_STRING, oneof_index=0)
-    add_field(msg, "oneof_int32", 22, F.TYPE_INT32, oneof_index=0)
-    add_field(msg, "oneof_nested", 23, F.TYPE_MESSAGE, type_name=".test.compat.EncodingMatrix.Inner", oneof_index=0)
-    add_field(msg, "oneof_bytes", 24, F.TYPE_BYTES, oneof_index=0)
-
-    msg.oneof_decl.add().name = "_opt_int32"
-    opt_int32_oneof_index = len(msg.oneof_decl) - 1
-    msg.oneof_decl.add().name = "_opt_string"
-    opt_string_oneof_index = len(msg.oneof_decl) - 1
-    add_field(msg, "opt_int32", 25, F.TYPE_INT32, oneof_index=opt_int32_oneof_index,
-              proto3_optional=True)
-    add_field(msg, "opt_string", 26, F.TYPE_STRING, oneof_index=opt_string_oneof_index,
-              proto3_optional=True)
-    map_str_int32 = add_map_entry(
-        msg,
-        "MapStrInt32Entry",
-        F.TYPE_STRING,
-        F.TYPE_INT32,
-        parent_type_name=".test.compat.EncodingMatrix",
-    )
-    map_int32_str = add_map_entry(
-        msg,
-        "MapInt32StrEntry",
-        F.TYPE_INT32,
-        F.TYPE_STRING,
-        parent_type_name=".test.compat.EncodingMatrix",
-    )
-    add_field(msg, "map_str_int32", 27, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_str_int32)
-    add_field(msg, "map_int32_str", 28, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=map_int32_str)
-    deprecated_field_index = len(msg.field)
-    deprecated_field = add_field(msg, "deprecated_unused", 29, F.TYPE_STRING)
-    deprecated_field.options.deprecated = True
-    add_source_documentation(
-        file,
-        [4, 0, 2, deprecated_field_index],
-        "Legacy field retained to verify generated deprecation diagnostics.\n",
-    )
-
-    return file
-
-
-def cross_package_file() -> descriptor_pb2.FileDescriptorProto:
-    file = descriptor_pb2.FileDescriptorProto()
-    file.name = "cross_package.proto"
-    file.package = "test.crosspkg"
-    file.syntax = "proto3"
-    file.dependency.extend(["example.proto", "protocyte/options.proto"])
-    file.options.ParseFromString(
-        package_constant_options_bytes(
-            [
-                ("FOREIGN_BASE", "u32_expr", "test.ultimate.BASE_COUNT + 2"),
-                ("FOREIGN_LABEL", "str_expr", 'test.ultimate.PREFIX + "-xpkg"'),
-            ]
-        )
-    )
-
-    msg = file.message_type.add()
-    msg.name = "CrossPackageConstants"
-    msg.options.ParseFromString(
-        constant_options_bytes(
-            [
-                ("REMOTE_COUNT", "u32_expr", "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP * 2"),
-                ("REMOTE_LABEL", "str_expr", 'test.ultimate.UltimateComplexMessage.LABEL + "-external"'),
-                (
-                    "REMOTE_READY",
-                    "boolean_expr",
-                    "test.ultimate.CrossMessageConstants.READY && test.ultimate.UltimateComplexMessage.HAS_PREFIX",
-                ),
-                ("NESTED_COUNT", "u32_expr", "test.ultimate.CrossMessageConstants.Nested.EXTERNAL_CAP + 1"),
-            ]
-        )
-    )
-
-    remote_bytes = add_field(msg, "remote_bytes", 1, F.TYPE_BYTES)
-    remote_bytes.options.ParseFromString(
-        array_option_bytes(expr="test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + 1")
-    )
-    remote_values = add_field(msg, "remote_values", 2, F.TYPE_INT32, label=F.LABEL_REPEATED)
-    remote_values.options.ParseFromString(array_option_bytes(expr="NESTED_COUNT"))
-
-    nested = msg.nested_type.add()
-    nested.name = "Nested"
-    nested.options.ParseFromString(
-        constant_options_bytes(
-            [
-                ("MIRRORED_COUNT", "u32_expr", "test.ultimate.UltimateComplexMessage.INTEGER_ARRAY_CAP + FOREIGN_BASE"),
-            ]
-        )
-    )
-    nested_bytes = add_field(
-        nested,
-        "nested_bytes",
-        1,
-        F.TYPE_BYTES,
-    )
-    nested_bytes.options.ParseFromString(array_option_bytes(expr="MIRRORED_COUNT"))
-
-    add_field(msg, "nested", 3, F.TYPE_MESSAGE, type_name=".test.crosspkg.CrossPackageConstants.Nested")
-    return file
-
-
-def proto2_required_file() -> descriptor_pb2.FileDescriptorProto:
-    file = descriptor_pb2.FileDescriptorProto()
-    file.name = "proto2_required.proto"
-    file.package = "test.required"
-    file.syntax = "proto2"
-    file.dependency.append("protocyte/options.proto")
-
-    child = file.message_type.add()
-    child.name = "RequiredChild"
-    add_field(child, "id", 1, F.TYPE_INT32, label=F.LABEL_REQUIRED)
-    add_field(child, "note", 2, F.TYPE_STRING)
-
-    parent = file.message_type.add()
-    parent.name = "RequiredParent"
-    add_field(parent, "child", 1, F.TYPE_MESSAGE, type_name=".test.required.RequiredChild")
-    add_field(parent, "children", 2, F.TYPE_MESSAGE, label=F.LABEL_REPEATED, type_name=".test.required.RequiredChild")
-
-    array_defaults = file.message_type.add()
-    array_defaults.name = "Proto2ArrayDefaults"
-    bounded = add_field(array_defaults, "bounded_bytes", 1, F.TYPE_BYTES)
-    bounded.default_value = "abc"
-    bounded.options.ParseFromString(array_option_bytes(max_value=8))
-    fixed = add_field(array_defaults, "fixed_bytes", 2, F.TYPE_BYTES)
-    fixed.default_value = "xyz"
-    fixed.options.ParseFromString(array_option_bytes(max_value=3, fixed=True))
-
-    mode = file.enum_type.add()
-    mode.name = "Proto2DefaultMode"
-    value = mode.value.add()
-    value.name = "PROTO2_DEFAULT_MODE_UNKNOWN"
-    value.number = 5
-    value = mode.value.add()
-    value.name = "PROTO2_DEFAULT_MODE_READY"
-    value.number = 9
-
-    map_mode = file.enum_type.add()
-    map_mode.name = "Proto2MapMode"
-    value = map_mode.value.add()
-    value.name = "PROTO2_MAP_MODE_UNKNOWN"
-    value.number = 0
-    value = map_mode.value.add()
-    value.name = "PROTO2_MAP_MODE_READY"
-    value.number = 9
-
-    defaults = file.message_type.add()
-    defaults.name = "Proto2DefaultValues"
-    field = add_field(defaults, "double_value", 1, F.TYPE_DOUBLE)
-    field.default_value = "1.5"
-    field = add_field(defaults, "float_value", 2, F.TYPE_FLOAT)
-    field.default_value = "-2.25"
-    field = add_field(defaults, "int64_value", 3, F.TYPE_INT64)
-    field.default_value = "-1234567890123"
-    field = add_field(defaults, "uint64_value", 4, F.TYPE_UINT64)
-    field.default_value = "1234567890123"
-    field = add_field(defaults, "int32_value", 5, F.TYPE_INT32)
-    field.default_value = "-12345"
-    field = add_field(defaults, "fixed64_value", 6, F.TYPE_FIXED64)
-    field.default_value = "12345678901234"
-    field = add_field(defaults, "fixed32_value", 7, F.TYPE_FIXED32)
-    field.default_value = "123456789"
-    field = add_field(defaults, "bool_value", 8, F.TYPE_BOOL)
-    field.default_value = "true"
-    field = add_field(defaults, "string_value", 9, F.TYPE_STRING)
-    field.default_value = "default-text"
-    field = add_field(defaults, "bytes_value", 10, F.TYPE_BYTES)
-    field.default_value = "default-bytes"
-    field = add_field(defaults, "uint32_value", 11, F.TYPE_UINT32)
-    field.default_value = "456789"
-    field = add_field(defaults, "enum_value", 12, F.TYPE_ENUM, type_name=".test.required.Proto2DefaultMode")
-    field.default_value = "PROTO2_DEFAULT_MODE_READY"
-    field = add_field(defaults, "sfixed32_value", 13, F.TYPE_SFIXED32)
-    field.default_value = "-54321"
-    field = add_field(defaults, "sfixed64_value", 14, F.TYPE_SFIXED64)
-    field.default_value = "-9876543210"
-    field = add_field(defaults, "sint32_value", 15, F.TYPE_SINT32)
-    field.default_value = "-23456"
-    field = add_field(defaults, "sint64_value", 16, F.TYPE_SINT64)
-    field.default_value = "-123456789012"
-    add_field(defaults, "implicit_enum_value", 17, F.TYPE_ENUM, type_name=".test.required.Proto2DefaultMode")
-    add_field(
-        defaults,
-        "enum_values",
-        18,
-        F.TYPE_ENUM,
-        label=F.LABEL_REPEATED,
-        type_name=".test.required.Proto2DefaultMode",
-        packed=True,
-    )
-    enum_by_name = add_map_entry(
-        defaults,
-        "EnumByNameEntry",
-        F.TYPE_STRING,
-        F.TYPE_ENUM,
-        value_type_name=".test.required.Proto2MapMode",
-        parent_type_name=".test.required.Proto2DefaultValues",
-    )
-    add_field(
-        defaults,
-        "enum_by_name",
-        19,
-        F.TYPE_MESSAGE,
-        label=F.LABEL_REPEATED,
-        type_name=enum_by_name,
-    )
-
-    shadowing = file.message_type.add()
-    shadowing.name = "OneofShadowingValue"
-    shadowing.oneof_decl.add().name = "value"
-    add_field(shadowing, "bool_value", 1, F.TYPE_BOOL, oneof_index=0)
-
-    return file
-
-
-def reserved_identifiers_file() -> descriptor_pb2.FileDescriptorProto:
-    file = descriptor_pb2.FileDescriptorProto()
-    file.name = "reserved_identifiers.proto"
-    file.package = "_Package.__LINE__"
-    file.syntax = "proto3"
-    file.dependency.append("protocyte/options.proto")
-    file.options.ParseFromString(
-        package_constant_options_bytes(
-            [("__DATE__", "i32", 7), ("class", "i32", 8)]
-        )
-    )
-
-    top_level_enum = file.enum_type.add()
-    top_level_enum.name = "__FILE__"
-    for name, number in (("_Upper", 0), ("value__gap", 1)):
-        value = top_level_enum.value.add()
-        value.name = name
-        value.number = number
-
-    message = file.message_type.add()
-    message.name = "__LINE__"
-    message.options.ParseFromString(
-        constant_options_bytes([("__TIME__", "i32", 9)])
-    )
-
-    nested_enum = message.enum_type.add()
-    nested_enum.name = "_NestedEnum"
-    for name, number in (("__STDC__", 0), ("enum_trailing_", 1)):
-        value = nested_enum.value.add()
-        value.name = name
-        value.number = number
-
-    nested_message = message.nested_type.add()
-    nested_message.name = "Nested__Message"
-    add_field(nested_message, "_Inner", 1, F.TYPE_INT32)
-
-    message.oneof_decl.add().name = "_Choice"
-    add_field(message, "__FILE__", 1, F.TYPE_STRING, oneof_index=0)
-    add_field(message, "value__gap", 2, F.TYPE_INT32, oneof_index=0)
-    add_field(message, "_Upper", 3, F.TYPE_INT32)
-    add_field(message, "trailing_", 4, F.TYPE_INT32)
-    add_field(
-        message,
-        "enum__value",
-        5,
-        F.TYPE_ENUM,
-        type_name="._Package.__LINE__.__FILE__",
-    )
-    add_field(
-        message,
-        "class",
-        6,
-        F.TYPE_MESSAGE,
-        type_name="._Package.__LINE__.__LINE__.Nested__Message",
-    )
-    add_field(message, "_", 7, F.TYPE_INT32)
-
-    keyword_message = file.message_type.add()
-    keyword_message.name = "class"
-    keyword_enum = keyword_message.enum_type.add()
-    keyword_enum.name = "KeywordValues"
-    keyword_value = keyword_enum.value.add()
-    keyword_value.name = "class"
-    keyword_value.number = 0
-    nested_keyword_message = keyword_message.nested_type.add()
-    nested_keyword_message.name = "struct"
-    add_field(nested_keyword_message, "value", 1, F.TYPE_INT32)
-    keyword_message.oneof_decl.add().name = "and"
-    add_field(keyword_message, "value", 1, F.TYPE_INT32, oneof_index=0)
-    add_field(
-        keyword_message,
-        "nested",
-        2,
-        F.TYPE_MESSAGE,
-        type_name="._Package.__LINE__.class.struct",
-    )
-
-    config_message = file.message_type.add()
-    config_message.name = "Config"
-    add_field(config_message, "text", 1, F.TYPE_STRING)
-
-    file.message_type.add().name = "Reader"
-
-    legacy_mode = file.enum_type.add()
-    legacy_mode.name = "LegacyMode"
-    legacy_mode.options.deprecated = True
-    legacy_value = legacy_mode.value.add()
-    legacy_value.name = "LEGACY_MODE_UNSPECIFIED"
-    legacy_value.number = 0
-
-    legacy_payload = file.message_type.add()
-    legacy_payload.name = "LegacyPayload"
-    legacy_payload.options.deprecated = True
-
-    deprecation_carrier = file.message_type.add()
-    deprecation_carrier.name = "DeprecationCarrier"
-    add_field(
-        deprecation_carrier,
-        "legacy_mode",
-        1,
-        F.TYPE_ENUM,
-        type_name="._Package.__LINE__.LegacyMode",
-    )
-    add_field(
-        deprecation_carrier,
-        "legacy_payload",
-        2,
-        F.TYPE_MESSAGE,
-        type_name="._Package.__LINE__.LegacyPayload",
-    )
-    return file
-
-
-def compat_cases_header() -> str:
+def compat_cases_header(file: descriptor_pb2.FileDescriptorProto) -> str:
     def encode_varint(value: int) -> bytes:
         out = bytearray()
         while value > 0x7F:
@@ -1059,9 +512,15 @@ def compat_cases_header() -> str:
         return length_delimited_field(field_number, value.encode("utf-8"))
 
     def map_str_int32_entry(key_value: str, value: int, *, extra: bytes = b"") -> bytes:
-        return length_delimited_field(27, string_field(1, key_value) + extra + int32_field(2, value))
+        return length_delimited_field(
+            27,
+            string_field(1, key_value) + extra + int32_field(2, value),
+        )
 
-    def map_int32_str_entry(key_value: int | None = None, value: str | None = None) -> bytes:
+    def map_int32_str_entry(
+        key_value: int | None = None,
+        value: str | None = None,
+    ) -> bytes:
         payload = b""
         if key_value is not None:
             payload += int32_field(1, key_value)
@@ -1069,14 +528,12 @@ def compat_cases_header() -> str:
             payload += string_field(2, value)
         return length_delimited_field(28, payload)
 
-    file = compat_file()
     pool = descriptor_pool.DescriptorPool()
     pool.Add(file)
     message_desc = pool.FindMessageTypeByName("test.compat.EncodingMatrix")
     message_cls = message_factory.GetMessageClass(message_desc)
 
     cases: list[tuple[str, bytes]] = []
-
     cases.append(("empty", message_cls().SerializeToString()))
 
     message = message_cls()
@@ -1139,21 +596,33 @@ def compat_cases_header() -> str:
     message.map_int32_str[302] = "map-val"
     cases.append(("map_runtime", message.SerializeToString()))
 
-    cases.append(("map_duplicate_key", map_str_int32_entry("dup", 1) + map_str_int32_entry("dup", 2)))
+    cases.append(
+        ("map_duplicate_key", map_str_int32_entry("dup", 1) + map_str_int32_entry("dup", 2))
+    )
     cases.append(("map_default_entries", map_int32_str_entry() + map_int32_str_entry(7)))
-    cases.append(("map_unknown_entry_field", map_str_int32_entry("mystery", 33, extra=int32_field(9, 123))))
+    cases.append(
+        (
+            "map_unknown_entry_field",
+            map_str_int32_entry("mystery", 33, extra=int32_field(9, 123)),
+        )
+    )
     cases.append(
         (
             "mixed_repeated_numeric",
-            int32_field(18, 1) + length_delimited_field(18, encode_varint(2) + encode_varint(3)) +
-            length_delimited_field(19, encode_varint(4)) + int32_field(19, 5),
+            int32_field(18, 1)
+            + length_delimited_field(18, encode_varint(2) + encode_varint(3))
+            + length_delimited_field(19, encode_varint(4))
+            + int32_field(19, 5),
         )
     )
     cases.append(
         (
             "unknown_fields",
-            int32_field(99, 123) + length_delimited_field(100, b"skip-me") + key(101, 5) +
-            bytes([0x44, 0x33, 0x22, 0x11]) + int32_field(1, 321),
+            int32_field(99, 123)
+            + length_delimited_field(100, b"skip-me")
+            + key(101, 5)
+            + bytes([0x44, 0x33, 0x22, 0x11])
+            + int32_field(1, 321),
         )
     )
 
@@ -1167,7 +636,9 @@ def compat_cases_header() -> str:
         "",
     ]
     for name, payload in cases:
-        lines.append(f"inline constexpr ::std::array<unsigned char, {len(payload)}> {name} {{")
+        lines.append(
+            f"inline constexpr ::std::array<unsigned char, {len(payload)}> {name} {{"
+        )
         if payload:
             row = ", ".join(f"0x{byte:02x}" for byte in payload)
             lines.append(f"    {row},")
@@ -1176,156 +647,6 @@ def compat_cases_header() -> str:
     lines.append("} // namespace compat_cases")
     lines.append("")
     return "\n".join(lines)
-
-
-def options_file() -> descriptor_pb2.FileDescriptorProto:
-    file = descriptor_pb2.FileDescriptorProto()
-    file.name = "protocyte/options.proto"
-    file.package = "protocyte"
-    file.syntax = "proto3"
-    file.dependency.append("google/protobuf/descriptor.proto")
-
-    constant = file.message_type.add()
-    constant.name = "Constant"
-    field = constant.field.add()
-    field.name = "name"
-    field.number = 1
-    field.label = F.LABEL_OPTIONAL
-    field.type = F.TYPE_STRING
-    for number, (field_name, field_type) in enumerate(
-        [
-            ("boolean", F.TYPE_BOOL),
-            ("boolean_expr", F.TYPE_STRING),
-            ("i32", F.TYPE_INT32),
-            ("i32_expr", F.TYPE_STRING),
-            ("u32", F.TYPE_UINT32),
-            ("u32_expr", F.TYPE_STRING),
-            ("i64", F.TYPE_INT64),
-            ("i64_expr", F.TYPE_STRING),
-            ("u64", F.TYPE_UINT64),
-            ("u64_expr", F.TYPE_STRING),
-            ("f32", F.TYPE_FLOAT),
-            ("f32_expr", F.TYPE_STRING),
-            ("f64", F.TYPE_DOUBLE),
-            ("f64_expr", F.TYPE_STRING),
-            ("str", F.TYPE_STRING),
-            ("str_expr", F.TYPE_STRING),
-        ],
-        start=2,
-    ):
-        add_oneof_field(constant, "value", field_name, number, field_type)
-
-    array_options = file.message_type.add()
-    array_options.name = "ArrayOptions"
-    add_oneof_field(array_options, "bound", "max", 1, F.TYPE_UINT32)
-    add_oneof_field(array_options, "bound", "expr", 2, F.TYPE_STRING)
-    field = array_options.field.add()
-    field.name = "fixed"
-    field.number = 3
-    field.label = F.LABEL_OPTIONAL
-    field.type = F.TYPE_BOOL
-
-    ext = file.extension.add()
-    ext.name = "constant"
-    ext.number = 50000
-    ext.label = F.LABEL_REPEATED
-    ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.Constant"
-    ext.extendee = ".google.protobuf.MessageOptions"
-
-    ext = file.extension.add()
-    ext.name = "package_constant"
-    ext.number = 50002
-    ext.label = F.LABEL_REPEATED
-    ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.Constant"
-    ext.extendee = ".google.protobuf.FileOptions"
-
-    ext = file.extension.add()
-    ext.name = "array"
-    ext.number = 50000
-    ext.label = F.LABEL_OPTIONAL
-    ext.type = F.TYPE_MESSAGE
-    ext.type_name = ".protocyte.ArrayOptions"
-    ext.extendee = ".google.protobuf.FieldOptions"
-
-    return file
-
-
-def add_oneof_field(
-    message: descriptor_pb2.DescriptorProto,
-    oneof_name: str,
-    name: str,
-    number: int,
-    field_type: int,
-) -> None:
-    oneof_index: int | None = None
-    for index, oneof in enumerate(message.oneof_decl):
-        if oneof.name == oneof_name:
-            oneof_index = index
-            break
-    if oneof_index is None:
-        oneof = message.oneof_decl.add()
-        oneof.name = oneof_name
-        oneof_index = len(message.oneof_decl) - 1
-
-    field = message.field.add()
-    field.name = name
-    field.number = number
-    field.label = F.LABEL_OPTIONAL
-    field.type = field_type
-    field.oneof_index = oneof_index
-
-
-def array_option_bytes(*, max_value: int | None = None, expr: str | None = None, fixed: bool = False) -> bytes:
-    pool = descriptor_pool.DescriptorPool()
-    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(options_file())
-    field_options_desc = pool.FindMessageTypeByName("google.protobuf.FieldOptions")
-    field_options_cls = message_factory.GetMessageClass(field_options_desc)
-    array_ext = pool.FindExtensionByName("protocyte.array")
-
-    options = field_options_cls()
-    array_options = options.Extensions[array_ext]
-    if max_value is not None:
-        array_options.max = max_value
-    if expr is not None:
-        array_options.expr = expr
-    if fixed:
-        array_options.fixed = True
-    return options.SerializeToString()
-
-
-def constant_options_bytes(constants: list[tuple[str, str, object]]) -> bytes:
-    pool = descriptor_pool.DescriptorPool()
-    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(options_file())
-    message_options_desc = pool.FindMessageTypeByName("google.protobuf.MessageOptions")
-    message_options_cls = message_factory.GetMessageClass(message_options_desc)
-    constant_ext = pool.FindExtensionByName("protocyte.constant")
-
-    options = message_options_cls()
-    for name, value_field, value in constants:
-        item = options.Extensions[constant_ext].add()
-        item.name = name
-        setattr(item, value_field, value)
-    return options.SerializeToString()
-
-
-def package_constant_options_bytes(constants: list[tuple[str, str, object]]) -> bytes:
-    pool = descriptor_pool.DescriptorPool()
-    pool.AddSerializedFile(descriptor_pb2.DESCRIPTOR.serialized_pb)
-    pool.Add(options_file())
-    file_options_desc = pool.FindMessageTypeByName("google.protobuf.FileOptions")
-    file_options_cls = message_factory.GetMessageClass(file_options_desc)
-    constant_ext = pool.FindExtensionByName("protocyte.package_constant")
-
-    options = file_options_cls()
-    for name, value_field, value in constants:
-        item = options.Extensions[constant_ext].add()
-        item.name = name
-        setattr(item, value_field, value)
-    return options.SerializeToString()
 
 
 if __name__ == "__main__":

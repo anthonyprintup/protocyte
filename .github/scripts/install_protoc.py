@@ -9,9 +9,9 @@ import queue
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
+import uuid
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import NamedTuple
@@ -26,6 +26,7 @@ MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 4_096
 MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+VERSION_MARKER = ".protocyte-protobuf-version"
 
 
 class ProtocAsset(NamedTuple):
@@ -322,23 +323,73 @@ def _path_exists(path: Path) -> bool:
 
 
 def _remove_path(path: Path) -> None:
+    if not _path_exists(path):
+        return
     if path.is_symlink() or path.is_file():
         path.unlink()
     else:
         shutil.rmtree(path)
 
 
+def _installation_rollback_path(destination: Path) -> Path:
+    return destination.with_name(f".{destination.name}.protocyte-rollback")
+
+
+def _create_install_transaction(destination: Path, purpose: str) -> Path:
+    while True:
+        transaction = destination.with_name(
+            f".{destination.name}.protocyte-{purpose}-{uuid.uuid4().hex}"
+        )
+        try:
+            transaction.mkdir()
+        except FileExistsError:
+            continue
+        return transaction
+
+
+def _restore_installation_rollback(destination: Path, rollback: Path) -> None:
+    recovery = _create_install_transaction(destination, "recovery")
+    displaced = recovery / "interrupted-install"
+    try:
+        if _path_exists(destination):
+            destination.replace(displaced)
+        rollback.replace(destination)
+    finally:
+        try:
+            _remove_path(recovery)
+        except OSError:
+            pass
+
+
+def _recover_interrupted_install(destination: Path) -> None:
+    rollback = _installation_rollback_path(destination)
+    if _path_exists(rollback):
+        _restore_installation_rollback(destination, rollback)
+
+
 def replace_destination(staging: Path, destination: Path) -> None:
+    _recover_interrupted_install(destination)
+    rollback = _installation_rollback_path(destination)
     previous = staging.parent / "previous-install"
     had_previous = _path_exists(destination)
-    if had_previous:
-        destination.replace(previous)
 
     try:
+        if had_previous:
+            destination.replace(rollback)
         staging.replace(destination)
+        if had_previous:
+            rollback.replace(previous)
     except BaseException:
         if had_previous:
-            previous.replace(destination)
+            if not _path_exists(rollback) and _path_exists(previous):
+                previous.replace(rollback)
+            if _path_exists(rollback):
+                _restore_installation_rollback(destination, rollback)
+        elif _path_exists(destination) and not _path_exists(staging):
+            try:
+                destination.replace(staging)
+            except OSError:
+                pass
         raise
 
     if had_previous:
@@ -354,12 +405,11 @@ def main() -> int:
     url = f"https://github.com/protocolbuffers/protobuf/releases/download/v{version}/{archive_name}"
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".protocyte-protoc-",
-        dir=destination.parent,
-    ) as temp_dir:
-        archive_path = Path(temp_dir) / archive_name
-        staging = Path(temp_dir) / "install"
+    _recover_interrupted_install(destination)
+    transaction = _create_install_transaction(destination, "transaction")
+    try:
+        archive_path = transaction / archive_name
+        staging = transaction / "install"
         actual_sha256 = download_archive(url, archive_path)
         verify_archive_sha256(actual_sha256, expected_sha256, archive_name)
         with zipfile.ZipFile(archive_path) as archive:
@@ -379,9 +429,12 @@ def main() -> int:
                 f"downloaded archive is missing descriptor.proto at {staged_descriptor}"
             )
 
+        (staging / VERSION_MARKER).write_text(f"{version}\n", encoding="utf-8")
         staged_protoc.chmod(staged_protoc.stat().st_mode | 0o111)
         subprocess.run([str(staged_protoc), "--version"], check=True)
         replace_destination(staging, destination)
+    finally:
+        _remove_path(transaction)
 
     protoc = destination / "bin" / asset.executable_name
 
@@ -392,6 +445,7 @@ def main() -> int:
             output.write(f"version={version}\n")
             output.write(f"root={destination.as_posix()}\n")
             output.write(f"protoc={protoc.as_posix()}\n")
+            output.write(f"include={(destination / 'include').as_posix()}\n")
 
     print(f"Installed protoc {version} to {destination}")
     return 0
