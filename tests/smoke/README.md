@@ -46,10 +46,10 @@ If you prefer, you can also install protobuf through your normal system package
 manager instead of downloading a release archive manually. The important part
 is that `protoc` is on `PATH` before you try to run code generation yourself.
 
-Direct `protoc` commands always require a host-runnable compiler supplied by the
+Direct `protoc` commands always require a host-runnable `protoc` supplied by the
 user. CMake source consumers using `FetchContent` or `add_subdirectory` default
-`PROTOCYTE_FETCH_PROTOBUF` to `ON`, so they can fetch protobuf only when no host
-compiler or required import sources are available. Installed
+`PROTOCYTE_FETCH_PROTOBUF` to `ON`, allowing them to fetch missing protobuf
+import sources and, for native builds, a missing host `protoc`. Installed
 `find_package(protocyte CONFIG REQUIRED)` consumers default that option to
 `OFF` and must opt in explicitly. This repository's smoke regeneration and
 benchmark paths expose the same fallback through
@@ -194,10 +194,12 @@ configure time. When code generation is first requested, it creates a
 fingerprinted virtual environment under `PROTOCYTE_PYTHON_ENV_ROOT` in the build
 tree and installs protocyte plus its pinned Python dependencies there from a
 writable staged copy. The installed CMake prefix and global or user-site Python
-packages are not modified. Protobuf C++ files and `protoc` are caller-supplied
-by default. To fetch them as a fallback, set
+packages are not modified. A host-runnable `protoc` and required protobuf import
+sources are caller-supplied by default. For native builds, set
 `PROTOCYTE_FETCH_PROTOBUF=ON` before calling
-`find_package(protocyte CONFIG REQUIRED)`.
+`find_package(protocyte CONFIG REQUIRED)` to fetch either missing input as a
+fallback. Cross-compiling consumers must always supply the host-runnable
+`protoc`, but can enable the same option to fetch missing import sources.
 
 ## 3. Find `protocyte/options.proto`
 

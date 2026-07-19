@@ -255,6 +255,15 @@ def test_documented_protobuf_fallback_defaults_match_cmake_modes() -> None:
         "Installed\n`find_package(protocyte CONFIG REQUIRED)` consumers default "
         "that option to\n`OFF`"
     ) in guide
+    assert (
+        "A host-runnable `protoc` and required protobuf import\n"
+        "sources are caller-supplied by default"
+    ) in guide
+    assert "for native builds, a missing host `protoc`" in guide
+    assert "Cross-compiling consumers must always supply the host-runnable" in guide
+    assert "Protobuf C++ files" not in guide
+    assert "Fetch protobuf tools or import sources" in source_option
+    assert "Fetch protobuf tools or import sources" in installed_default
 
 
 def test_readme_documents_descriptor_name_portability_rejections() -> None:
