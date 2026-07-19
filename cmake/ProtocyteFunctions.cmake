@@ -97,6 +97,116 @@ function(
     set(${out_absolute_path} "${manifest_path}" PARENT_SCOPE)
 endfunction()
 
+function(
+    _protocyte_get_source_dependency_proxy
+    out_proxy_path
+    out_check_target
+    source_path
+)
+    cmake_path(NORMAL_PATH source_path OUTPUT_VARIABLE normalized_source_path)
+    cmake_path(
+        NORMAL_PATH CMAKE_BINARY_DIR
+        OUTPUT_VARIABLE normalized_binary_directory
+    )
+    set(proxy_identity "${normalized_binary_directory}|${normalized_source_path}")
+    if(CMAKE_HOST_WIN32)
+        string(TOLOWER "${proxy_identity}" proxy_identity)
+    endif()
+    string(SHA256 proxy_key "${proxy_identity}")
+
+    set(
+        proxy_root
+        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-source-dependencies"
+    )
+    set(proxy_path "${proxy_root}/${proxy_key}.proto")
+    set(source_argument_file "${proxy_root}/${proxy_key}.path")
+    set(proxy_lock_file "${proxy_root}/${proxy_key}.lock")
+    set(check_target "protocyte_source_check_${proxy_key}")
+
+    get_property(
+        proxy_is_registered
+        GLOBAL PROPERTY "PROTOCYTE_INTERNAL_SOURCE_PROXY_${proxy_key}"
+        SET
+    )
+    if(proxy_is_registered)
+        get_property(
+            registered_source
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_SOURCE_PROXY_SOURCE_${proxy_key}"
+        )
+        get_property(
+            registered_proxy
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_SOURCE_PROXY_PATH_${proxy_key}"
+        )
+        set(registered_source_identity "${registered_source}")
+        set(normalized_source_identity "${normalized_source_path}")
+        if(CMAKE_HOST_WIN32)
+            string(TOLOWER "${registered_source_identity}" registered_source_identity)
+            string(TOLOWER "${normalized_source_identity}" normalized_source_identity)
+        endif()
+        if(
+            NOT "${registered_source_identity}" STREQUAL "${normalized_source_identity}"
+            OR NOT "${registered_proxy}" STREQUAL "${proxy_path}"
+            OR NOT TARGET "${check_target}"
+        )
+            message(FATAL_ERROR "Protocyte source dependency proxy identity collision")
+        endif()
+    else()
+        file(MAKE_DIRECTORY "${proxy_root}")
+        file(
+            LOCK "${proxy_lock_file}"
+            GUARD FUNCTION
+            TIMEOUT 600
+            RESULT_VARIABLE proxy_lock_result
+        )
+        if(NOT "${proxy_lock_result}" STREQUAL "0")
+            message(
+                FATAL_ERROR
+                "Failed to lock Protocyte source dependency proxy '${proxy_path}': ${proxy_lock_result}"
+            )
+        endif()
+        file(COPY_FILE "${normalized_source_path}" "${proxy_path}" ONLY_IF_DIFFERENT)
+        set(write_source_argument TRUE)
+        if(EXISTS "${source_argument_file}")
+            file(READ "${source_argument_file}" existing_source_argument)
+            if(existing_source_argument STREQUAL normalized_source_path)
+                set(write_source_argument FALSE)
+            endif()
+        endif()
+        if(write_source_argument)
+            file(WRITE "${source_argument_file}" "${normalized_source_path}")
+        endif()
+        add_custom_target(
+            "${check_target}"
+            COMMAND
+                "${CMAKE_COMMAND}"
+                "-DSOURCE_ARGUMENT_FILE=${source_argument_file}"
+                "-DPROXY_FILE=${proxy_path}"
+                "-DLOCK_FILE=${proxy_lock_file}"
+                -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteSourceDependency.cmake"
+            BYPRODUCTS "${proxy_path}"
+            VERBATIM
+        )
+        set_property(
+            GLOBAL PROPERTY
+            "PROTOCYTE_INTERNAL_SOURCE_PROXY_${proxy_key}"
+            TRUE
+        )
+        set_property(
+            GLOBAL PROPERTY
+            "PROTOCYTE_INTERNAL_SOURCE_PROXY_SOURCE_${proxy_key}"
+            "${normalized_source_path}"
+        )
+        set_property(
+            GLOBAL PROPERTY
+            "PROTOCYTE_INTERNAL_SOURCE_PROXY_PATH_${proxy_key}"
+            "${proxy_path}"
+        )
+    endif()
+
+    set(${out_proxy_path} "${proxy_path}" PARENT_SCOPE)
+    set(${out_check_target} "${check_target}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_descriptor_name_is_unsafe out_var name)
     if("${name}" MATCHES "^/" OR "${name}" MATCHES "^[A-Za-z]:/" OR "${name}" MATCHES "\\\\")
         set(${out_var} TRUE PARENT_SCOPE)
@@ -586,28 +696,195 @@ function(_protocyte_generated_output_path_is_safe out_var output_path output_roo
     set(${out_var} "${is_safe}" PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_finalize_owned_outputs)
-    get_property(target_keys GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_TARGET_KEYS)
-    foreach(target_key IN LISTS target_keys)
-        get_property(
-            manifest_dir
-            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_DIR_${target_key}"
-        )
-        get_property(
-            current_output_root
-            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_ROOT_${target_key}"
-        )
-        get_property(
-            current_output_keys
-            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${target_key}"
-        )
+function(_protocyte_schedule_owned_output_cleanup)
+    if(DEFINED CMAKE_SCRIPT_MODE_FILE)
+        return()
+    endif()
+    get_property(
+        cleanup_scheduled
+        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
+        SET
+    )
+    if(cleanup_scheduled)
+        return()
+    endif()
 
+    set(
+        manifest_root
+        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-owned-outputs"
+    )
+    set_property(
+        GLOBAL PROPERTY
+        PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_ROOT
+        "${manifest_root}"
+    )
+    set_property(
+        GLOBAL PROPERTY
+        PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
+        TRUE
+    )
+    cmake_language(
+        DEFER
+        DIRECTORY "${CMAKE_SOURCE_DIR}"
+        CALL _protocyte_finalize_owned_outputs
+    )
+endfunction()
+
+function(_protocyte_owned_output_manifest_target_key out_var manifest_dir)
+    set(manifest_target_key "")
+    if(IS_DIRECTORY "${manifest_dir}")
+        cmake_path(GET manifest_dir FILENAME candidate_target_key)
+        string(LENGTH "${candidate_target_key}" candidate_target_key_length)
+        if(
+            candidate_target_key_length EQUAL 64
+            AND candidate_target_key MATCHES "^[0-9a-f]+$"
+        )
+            set(manifest_target_key "${candidate_target_key}")
+        endif()
+    endif()
+    set(${out_var} "${manifest_target_key}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_legacy_owned_output_manifest_is_valid out_var manifest_dir)
+    set(${out_var} FALSE PARENT_SCOPE)
+    if(IS_SYMLINK "${manifest_dir}")
+        return()
+    endif()
+    _protocyte_owned_output_manifest_target_key(manifest_target_key "${manifest_dir}")
+    if(manifest_target_key STREQUAL "")
+        return()
+    endif()
+
+    cmake_path(GET manifest_dir PARENT_PATH candidate_manifest_root)
+    cmake_path(GET candidate_manifest_root FILENAME candidate_manifest_root_name)
+    cmake_path(GET candidate_manifest_root PARENT_PATH candidate_cmakefiles_dir)
+    cmake_path(GET candidate_cmakefiles_dir FILENAME candidate_cmakefiles_name)
+    cmake_path(GET candidate_cmakefiles_dir PARENT_PATH candidate_binary_directory)
+    set(build_tree_root "${CMAKE_BINARY_DIR}")
+    cmake_path(
+        IS_PREFIX build_tree_root
+        "${candidate_binary_directory}"
+        NORMALIZE
+        candidate_is_in_build_tree
+    )
+    if(
+        NOT candidate_manifest_root_name STREQUAL "protocyte-owned-outputs"
+        OR NOT candidate_cmakefiles_name STREQUAL "CMakeFiles"
+        OR NOT candidate_is_in_build_tree
+        OR "${candidate_binary_directory}" STREQUAL "${CMAKE_BINARY_DIR}"
+    )
+        return()
+    endif()
+
+    set(output_root_file "${manifest_dir}/output-root.path")
+    if(
+        NOT EXISTS "${output_root_file}"
+        OR IS_DIRECTORY "${output_root_file}"
+        OR IS_SYMLINK "${output_root_file}"
+    )
+        return()
+    endif()
+    file(READ "${output_root_file}" output_root)
+    file(GLOB manifest_files LIST_DIRECTORIES TRUE "${manifest_dir}/*")
+    set(saw_output_marker FALSE)
+    foreach(manifest_file IN LISTS manifest_files)
+        if(manifest_file STREQUAL output_root_file)
+            continue()
+        endif()
+        if(IS_DIRECTORY "${manifest_file}" OR IS_SYMLINK "${manifest_file}")
+            return()
+        endif()
+        cmake_path(GET manifest_file EXTENSION manifest_file_extension)
+        cmake_path(GET manifest_file STEM output_key)
+        string(LENGTH "${output_key}" output_key_length)
+        if(
+            NOT manifest_file_extension STREQUAL ".path"
+            OR NOT output_key_length EQUAL 64
+            OR NOT output_key MATCHES "^[0-9a-f]+$"
+        )
+            return()
+        endif()
+        file(READ "${manifest_file}" output_path)
+        _protocyte_owned_output_key(recorded_output_key "${output_path}")
+        _protocyte_generated_output_path_is_safe(
+            output_path_is_safe
+            "${output_path}"
+            "${output_root}"
+        )
+        if(
+            NOT recorded_output_key STREQUAL output_key
+            OR NOT output_path_is_safe
+        )
+            return()
+        endif()
+        set(saw_output_marker TRUE)
+    endforeach()
+    if(saw_output_marker)
+        set(${out_var} TRUE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(_protocyte_collect_owned_output_manifests out_var manifest_root)
+    file(GLOB manifest_entries LIST_DIRECTORIES TRUE "${manifest_root}/*")
+    file(
+        GLOB_RECURSE legacy_output_root_files
+        LIST_DIRECTORIES FALSE
+        "${CMAKE_BINARY_DIR}/output-root.path"
+    )
+    foreach(legacy_output_root_file IN LISTS legacy_output_root_files)
+        cmake_path(GET legacy_output_root_file PARENT_PATH candidate_manifest_dir)
+        cmake_path(GET candidate_manifest_dir PARENT_PATH candidate_manifest_root)
+        if(candidate_manifest_root STREQUAL manifest_root)
+            continue()
+        endif()
+        _protocyte_legacy_owned_output_manifest_is_valid(
+            candidate_manifest_is_valid
+            "${candidate_manifest_dir}"
+        )
+        if(candidate_manifest_is_valid)
+            list(APPEND manifest_entries "${candidate_manifest_dir}")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES manifest_entries)
+    set(${out_var} "${manifest_entries}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_read_owned_output_hash out_var hash_file)
+    set(output_hash "")
+    if(EXISTS "${hash_file}")
+        file(READ "${hash_file}" candidate_hash)
+        string(LENGTH "${candidate_hash}" candidate_hash_length)
+        if(candidate_hash_length EQUAL 64 AND candidate_hash MATCHES "^[0-9a-f]+$")
+            set(output_hash "${candidate_hash}")
+        endif()
+    endif()
+    set(${out_var} "${output_hash}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_finalize_owned_outputs)
+    get_property(
+        manifest_root
+        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_ROOT
+    )
+    get_property(target_keys GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_TARGET_KEYS)
+    list(REMOVE_DUPLICATES target_keys)
+    _protocyte_collect_owned_output_manifests(manifest_entries "${manifest_root}")
+    set(manifest_target_keys)
+
+    # Capture prior fingerprints before retiring any manifest. This lets an
+    # output keep its fingerprint when ownership moves to a renamed target.
+    foreach(manifest_dir IN LISTS manifest_entries)
+        _protocyte_owned_output_manifest_target_key(manifest_target_key "${manifest_dir}")
+        if(manifest_target_key STREQUAL "")
+            continue()
+        endif()
+        list(APPEND manifest_target_keys "${manifest_target_key}")
+        list(APPEND protocyte_manifest_dirs_${manifest_target_key} "${manifest_dir}")
         set(previous_output_root_file "${manifest_dir}/output-root.path")
         set(previous_output_root "")
         if(EXISTS "${previous_output_root_file}")
             file(READ "${previous_output_root_file}" previous_output_root)
         endif()
-
         file(GLOB previous_markers LIST_DIRECTORIES FALSE "${manifest_dir}/*.path")
         list(REMOVE_ITEM previous_markers "${previous_output_root_file}")
         foreach(previous_marker IN LISTS previous_markers)
@@ -619,29 +896,221 @@ function(_protocyte_finalize_owned_outputs)
                 "${previous_output}"
                 "${previous_output_root}"
             )
-            get_property(
-                output_is_still_owned
-                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_CURRENT_${previous_output_key}"
-                SET
-            )
+            set(previous_hash_file "${manifest_dir}/${previous_output_key}.sha256")
             if(
                 previous_output_is_safe
                 AND recorded_output_key STREQUAL previous_output_key
-                AND NOT output_is_still_owned
             )
-                file(REMOVE "${previous_output}")
+                _protocyte_read_owned_output_hash(
+                    previous_output_hash
+                    "${previous_hash_file}"
+                )
+                if(NOT previous_output_hash STREQUAL "")
+                    set(hash_variable "protocyte_owned_output_hash_${previous_output_key}")
+                    set(ambiguous_variable "${hash_variable}_ambiguous")
+                    if(
+                        DEFINED ${hash_variable}
+                        AND NOT "${${hash_variable}}" STREQUAL "${previous_output_hash}"
+                    )
+                        set(${ambiguous_variable} TRUE)
+                    else()
+                        set(${hash_variable} "${previous_output_hash}")
+                    endif()
+                endif()
             endif()
-            file(REMOVE "${previous_marker}")
+        endforeach()
+    endforeach()
+    list(REMOVE_DUPLICATES manifest_target_keys)
+
+    foreach(manifest_target_key IN LISTS manifest_target_keys)
+        set(manifest_dirs_variable "protocyte_manifest_dirs_${manifest_target_key}")
+        list(REMOVE_DUPLICATES ${manifest_dirs_variable})
+        list(FIND target_keys "${manifest_target_key}" current_target_index)
+        if(current_target_index EQUAL -1)
+            set(target_is_current FALSE)
+        else()
+            set(target_is_current TRUE)
+        endif()
+
+        set(pending_output_keys)
+        set(unnotified_pending_outputs)
+        foreach(manifest_dir IN LISTS ${manifest_dirs_variable})
+            set(previous_output_root_file "${manifest_dir}/output-root.path")
+            set(previous_output_root "")
+            if(EXISTS "${previous_output_root_file}")
+                file(READ "${previous_output_root_file}" previous_output_root)
+            endif()
+            file(GLOB previous_markers LIST_DIRECTORIES FALSE "${manifest_dir}/*.path")
+            list(REMOVE_ITEM previous_markers "${previous_output_root_file}")
+            foreach(previous_marker IN LISTS previous_markers)
+                cmake_path(GET previous_marker STEM previous_output_key)
+                file(READ "${previous_marker}" previous_output)
+                _protocyte_owned_output_key(recorded_output_key "${previous_output}")
+                _protocyte_generated_output_path_is_safe(
+                    previous_output_is_safe
+                    "${previous_output}"
+                    "${previous_output_root}"
+                )
+                get_property(
+                    output_is_still_owned
+                    GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_CURRENT_${previous_output_key}"
+                    SET
+                )
+                set(previous_hash_file "${manifest_dir}/${previous_output_key}.sha256")
+                _protocyte_read_owned_output_hash(
+                    previous_output_hash
+                    "${previous_hash_file}"
+                )
+                if(
+                    previous_output_is_safe
+                    AND recorded_output_key STREQUAL previous_output_key
+                    AND NOT output_is_still_owned
+                    AND EXISTS "${previous_output}"
+                )
+                    set(output_has_trusted_result FALSE)
+                    if(
+                        NOT IS_DIRECTORY "${previous_output}"
+                        AND NOT previous_output_hash STREQUAL ""
+                    )
+                        file(SHA256 "${previous_output}" current_output_hash)
+                        if(current_output_hash STREQUAL previous_output_hash)
+                            file(REMOVE "${previous_output}")
+                        endif()
+                        set(output_has_trusted_result TRUE)
+                    endif()
+                    if(NOT output_has_trusted_result)
+                        list(APPEND pending_output_keys "${previous_output_key}")
+                        set(
+                            protocyte_pending_output_${previous_output_key}
+                            "${previous_output}"
+                        )
+                        set(
+                            protocyte_pending_output_root_${previous_output_key}
+                            "${previous_output_root}"
+                        )
+                        if(
+                            NOT EXISTS
+                                "${manifest_dir}/${previous_output_key}.pending-notified"
+                        )
+                            list(APPEND unnotified_pending_outputs "${previous_output}")
+                        endif()
+                    endif()
+                endif()
+            endforeach()
+        endforeach()
+        list(REMOVE_DUPLICATES pending_output_keys)
+        list(REMOVE_DUPLICATES unnotified_pending_outputs)
+
+        foreach(manifest_dir IN LISTS ${manifest_dirs_variable})
+            file(REMOVE_RECURSE "${manifest_dir}")
         endforeach()
 
+        set(manifest_dir "${manifest_root}/${manifest_target_key}")
+        if(target_is_current)
+            get_property(
+                current_output_root
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_ROOT_${manifest_target_key}"
+            )
+            get_property(
+                current_output_keys
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${manifest_target_key}"
+            )
+
+            file(MAKE_DIRECTORY "${manifest_dir}")
+            file(WRITE "${manifest_dir}/output-root.path" "${current_output_root}")
+            foreach(current_output_key IN LISTS current_output_keys)
+                get_property(
+                    current_output
+                    GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PATH_${current_output_key}"
+                )
+                file(WRITE "${manifest_dir}/${current_output_key}.path" "${current_output}")
+                set(hash_variable "protocyte_owned_output_hash_${current_output_key}")
+                set(ambiguous_variable "${hash_variable}_ambiguous")
+                if(DEFINED ${hash_variable} AND NOT DEFINED ${ambiguous_variable})
+                    file(
+                        WRITE
+                        "${manifest_dir}/${current_output_key}.sha256"
+                        "${${hash_variable}}"
+                    )
+                endif()
+            endforeach()
+        endif()
+
+        foreach(pending_output_key IN LISTS pending_output_keys)
+            set(pending_output "${protocyte_pending_output_${pending_output_key}}")
+            set(
+                pending_output_root
+                "${protocyte_pending_output_root_${pending_output_key}}"
+            )
+            string(
+                SHA256
+                pending_manifest_target_key
+                "protocyte-pending-owned-output|${pending_output_key}"
+            )
+            set(pending_manifest_dir "${manifest_root}/${pending_manifest_target_key}")
+            file(REMOVE_RECURSE "${pending_manifest_dir}")
+            file(MAKE_DIRECTORY "${pending_manifest_dir}")
+            file(WRITE "${pending_manifest_dir}/output-root.path" "${pending_output_root}")
+            file(
+                WRITE
+                "${pending_manifest_dir}/${pending_output_key}.path"
+                "${pending_output}"
+            )
+            file(
+                WRITE
+                "${pending_manifest_dir}/${pending_output_key}.pending"
+                "unverified legacy output\n"
+            )
+            file(
+                WRITE
+                "${pending_manifest_dir}/${pending_output_key}.pending-notified"
+                "notified\n"
+            )
+        endforeach()
+        if(unnotified_pending_outputs)
+            list(JOIN unnotified_pending_outputs "\n  " pending_output_text)
+            message(
+                WARNING
+                "Protocyte preserved generated output(s) from a legacy ownership manifest because this "
+                "build tree predates content fingerprints:\n  ${pending_output_text}\n"
+                "Remove obsolete files manually. To restore automatic cleanup, temporarily restore a "
+                "code-generation target that declares these outputs, back up any edits, delete the outputs, "
+                "and build that target once before removing them again."
+            )
+        endif()
+    endforeach()
+
+    # Newly registered targets have no prior manifest entry to recreate above.
+    foreach(target_key IN LISTS target_keys)
+        set(manifest_dir "${manifest_root}/${target_key}")
+        if(IS_DIRECTORY "${manifest_dir}")
+            continue()
+        endif()
+        get_property(
+            current_output_root
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_ROOT_${target_key}"
+        )
+        get_property(
+            current_output_keys
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${target_key}"
+        )
         file(MAKE_DIRECTORY "${manifest_dir}")
-        file(WRITE "${previous_output_root_file}" "${current_output_root}")
+        file(WRITE "${manifest_dir}/output-root.path" "${current_output_root}")
         foreach(current_output_key IN LISTS current_output_keys)
             get_property(
                 current_output
                 GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PATH_${current_output_key}"
             )
             file(WRITE "${manifest_dir}/${current_output_key}.path" "${current_output}")
+            set(hash_variable "protocyte_owned_output_hash_${current_output_key}")
+            set(ambiguous_variable "${hash_variable}_ambiguous")
+            if(DEFINED ${hash_variable} AND NOT DEFINED ${ambiguous_variable})
+                file(
+                    WRITE
+                    "${manifest_dir}/${current_output_key}.sha256"
+                    "${${hash_variable}}"
+                )
+            endif()
         endforeach()
     endforeach()
 endfunction()
@@ -653,10 +1122,12 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         target_key
         "${CMAKE_CURRENT_BINARY_DIR}|${target_name}"
     )
-    set(
-        manifest_dir
-        "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-owned-outputs/${target_key}"
+    _protocyte_schedule_owned_output_cleanup()
+    get_property(
+        manifest_root
+        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_ROOT
     )
+    set(manifest_dir "${manifest_root}/${target_key}")
     set(current_output_keys)
     foreach(output_path IN LISTS ${outputs_var})
         cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
@@ -695,24 +1166,14 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         "${current_output_keys}"
     )
 
-    get_property(
-        cleanup_scheduled
-        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
-        SET
+    set(
+        PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR
+        "${manifest_dir}"
+        PARENT_SCOPE
     )
-    if(NOT cleanup_scheduled)
-        set_property(
-            GLOBAL PROPERTY
-            PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
-            TRUE
-        )
-        cmake_language(
-            DEFER
-            DIRECTORY "${CMAKE_SOURCE_DIR}"
-            CALL _protocyte_finalize_owned_outputs
-        )
-    endif()
 endfunction()
+
+_protocyte_schedule_owned_output_cleanup()
 
 function(_protocyte_parse_discovered_descriptor_names out_var discovered_json)
     string(JSON discovered_count ERROR_VARIABLE json_error LENGTH "${discovered_json}")
@@ -1978,10 +2439,6 @@ function(protocyte_generate)
         # sort key and a digest-backed scalar mapping until sorting and exact
         # duplicate removal are complete, then rebuild the escaped path list.
         set(normalized_proto_file_entries)
-        set(
-            protocyte_source_dependency_dir
-            "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-source-dependencies"
-        )
         foreach(proto_file IN LISTS protocyte_proto_files)
             if(IS_ABSOLUTE "${proto_file}")
                 cmake_path(NORMAL_PATH proto_file OUTPUT_VARIABLE proto_abs)
@@ -2012,37 +2469,14 @@ function(protocyte_generate)
                 CMAKE_GENERATOR MATCHES "^(Visual Studio|Ninja)"
                 AND "${proto_abs}" MATCHES ";"
             )
-                file(MAKE_DIRECTORY "${protocyte_source_dependency_dir}")
-                set(
+                _protocyte_get_source_dependency_proxy(
                     protocyte_source_dependency
-                    "${protocyte_source_dependency_dir}/${proto_abs_key}.proto"
-                )
-                # Visual Studio and Ninja cannot reliably represent a literal
-                # semicolon throughout their dependency metadata. An always-run
-                # checker updates this safe proxy only when the real source changes.
-                file(COPY_FILE "${proto_abs}" "${protocyte_source_dependency}" ONLY_IF_DIFFERENT)
-                _protocyte_write_protoc_response_file(
-                    protocyte_source_argument_file
-                    protocyte_source_argument_file_relative
-                    "source-dependency|${proto_abs_key}"
+                    protocyte_source_check_target
                     "${proto_abs}"
                 )
-                set(
-                    protocyte_source_check_target
-                    "${PROTOCYTE_TARGET}__protocyte_source_check_${proto_abs_key}"
-                )
-                if(NOT TARGET "${protocyte_source_check_target}")
-                    add_custom_target(
-                        "${protocyte_source_check_target}"
-                        COMMAND
-                            "${CMAKE_COMMAND}"
-                            "-DSOURCE_ARGUMENT_FILE=${protocyte_source_argument_file}"
-                            "-DPROXY_FILE=${protocyte_source_dependency}"
-                            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteSourceDependency.cmake"
-                        BYPRODUCTS "${protocyte_source_dependency}"
-                        VERBATIM
-                    )
-                endif()
+                # Visual Studio and Ninja cannot reliably represent a literal
+                # semicolon throughout their dependency metadata. One build-tree
+                # checker owns the safe proxy and is shared by every caller.
                 list(
                     APPEND
                     protocyte_source_check_targets
@@ -2392,6 +2826,7 @@ function(protocyte_generate)
             "-DGENERATION_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
             "-DLOCK_DIRECTORY=${protocyte_lock_dir}"
             "-DLOCK_MANIFEST=${protocyte_generation_lock_manifest}"
+            "-DOWNERSHIP_MANIFEST_DIR=${PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR}"
             "-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"
             -P "${protocyte_generation_script}"
         DEPENDS
