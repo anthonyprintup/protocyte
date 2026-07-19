@@ -745,52 +745,105 @@ function(_protocyte_owned_output_manifest_target_key out_var manifest_dir)
     set(${out_var} "${manifest_target_key}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_legacy_owned_output_manifest_is_valid out_var manifest_dir)
+    set(${out_var} FALSE PARENT_SCOPE)
+    if(IS_SYMLINK "${manifest_dir}")
+        return()
+    endif()
+    _protocyte_owned_output_manifest_target_key(manifest_target_key "${manifest_dir}")
+    if(manifest_target_key STREQUAL "")
+        return()
+    endif()
+
+    cmake_path(GET manifest_dir PARENT_PATH candidate_manifest_root)
+    cmake_path(GET candidate_manifest_root FILENAME candidate_manifest_root_name)
+    cmake_path(GET candidate_manifest_root PARENT_PATH candidate_cmakefiles_dir)
+    cmake_path(GET candidate_cmakefiles_dir FILENAME candidate_cmakefiles_name)
+    cmake_path(GET candidate_cmakefiles_dir PARENT_PATH candidate_binary_directory)
+    set(build_tree_root "${CMAKE_BINARY_DIR}")
+    cmake_path(
+        IS_PREFIX build_tree_root
+        "${candidate_binary_directory}"
+        NORMALIZE
+        candidate_is_in_build_tree
+    )
+    if(
+        NOT candidate_manifest_root_name STREQUAL "protocyte-owned-outputs"
+        OR NOT candidate_cmakefiles_name STREQUAL "CMakeFiles"
+        OR NOT candidate_is_in_build_tree
+        OR "${candidate_binary_directory}" STREQUAL "${CMAKE_BINARY_DIR}"
+    )
+        return()
+    endif()
+
+    set(output_root_file "${manifest_dir}/output-root.path")
+    if(
+        NOT EXISTS "${output_root_file}"
+        OR IS_DIRECTORY "${output_root_file}"
+        OR IS_SYMLINK "${output_root_file}"
+    )
+        return()
+    endif()
+    file(READ "${output_root_file}" output_root)
+    file(GLOB manifest_files LIST_DIRECTORIES TRUE "${manifest_dir}/*")
+    set(saw_output_marker FALSE)
+    foreach(manifest_file IN LISTS manifest_files)
+        if(manifest_file STREQUAL output_root_file)
+            continue()
+        endif()
+        if(IS_DIRECTORY "${manifest_file}" OR IS_SYMLINK "${manifest_file}")
+            return()
+        endif()
+        cmake_path(GET manifest_file EXTENSION manifest_file_extension)
+        cmake_path(GET manifest_file STEM output_key)
+        string(LENGTH "${output_key}" output_key_length)
+        if(
+            NOT manifest_file_extension STREQUAL ".path"
+            OR NOT output_key_length EQUAL 64
+            OR NOT output_key MATCHES "^[0-9a-f]+$"
+        )
+            return()
+        endif()
+        file(READ "${manifest_file}" output_path)
+        _protocyte_owned_output_key(recorded_output_key "${output_path}")
+        _protocyte_generated_output_path_is_safe(
+            output_path_is_safe
+            "${output_path}"
+            "${output_root}"
+        )
+        if(
+            NOT recorded_output_key STREQUAL output_key
+            OR NOT output_path_is_safe
+        )
+            return()
+        endif()
+        set(saw_output_marker TRUE)
+    endforeach()
+    if(saw_output_marker)
+        set(${out_var} TRUE PARENT_SCOPE)
+    endif()
+endfunction()
+
 function(_protocyte_collect_owned_output_manifests out_var manifest_root)
     file(GLOB manifest_entries LIST_DIRECTORIES TRUE "${manifest_root}/*")
-    set(pending_source_directories "${CMAKE_SOURCE_DIR}")
-    set(configured_binary_directories)
-    while(pending_source_directories)
-        list(POP_FRONT pending_source_directories source_directory)
-        get_property(
-            binary_directory
-            DIRECTORY "${source_directory}"
-            PROPERTY BINARY_DIR
-        )
-        list(APPEND configured_binary_directories "${binary_directory}")
-        get_property(
-            child_source_directories
-            DIRECTORY "${source_directory}"
-            PROPERTY SUBDIRECTORIES
-        )
-        list(APPEND pending_source_directories ${child_source_directories})
-    endwhile()
-    list(REMOVE_DUPLICATES configured_binary_directories)
-
-    foreach(binary_directory IN LISTS configured_binary_directories)
-        set(
-            candidate_manifest_root
-            "${binary_directory}/CMakeFiles/protocyte-owned-outputs"
-        )
+    file(
+        GLOB_RECURSE legacy_output_root_files
+        LIST_DIRECTORIES FALSE
+        "${CMAKE_BINARY_DIR}/output-root.path"
+    )
+    foreach(legacy_output_root_file IN LISTS legacy_output_root_files)
+        cmake_path(GET legacy_output_root_file PARENT_PATH candidate_manifest_dir)
+        cmake_path(GET candidate_manifest_dir PARENT_PATH candidate_manifest_root)
         if(candidate_manifest_root STREQUAL manifest_root)
             continue()
         endif()
-        file(
-            GLOB candidate_manifest_dirs
-            LIST_DIRECTORIES TRUE
-            "${candidate_manifest_root}/*"
+        _protocyte_legacy_owned_output_manifest_is_valid(
+            candidate_manifest_is_valid
+            "${candidate_manifest_dir}"
         )
-        foreach(candidate_manifest_dir IN LISTS candidate_manifest_dirs)
-            # Only the pre-fingerprint layout is eligible for migration from a
-            # configured subdirectory into the build-tree registry.
-            file(
-                GLOB candidate_hash_files
-                LIST_DIRECTORIES FALSE
-                "${candidate_manifest_dir}/*.sha256"
-            )
-            if(IS_DIRECTORY "${candidate_manifest_dir}" AND NOT candidate_hash_files)
-                list(APPEND manifest_entries "${candidate_manifest_dir}")
-            endif()
-        endforeach()
+        if(candidate_manifest_is_valid)
+            list(APPEND manifest_entries "${candidate_manifest_dir}")
+        endif()
     endforeach()
     list(REMOVE_DUPLICATES manifest_entries)
     set(${out_var} "${manifest_entries}" PARENT_SCOPE)
@@ -879,7 +932,6 @@ function(_protocyte_finalize_owned_outputs)
             set(target_is_current TRUE)
         endif()
 
-        set(pending_output_root "")
         set(pending_output_keys)
         set(unnotified_pending_outputs)
         foreach(manifest_dir IN LISTS ${manifest_dirs_variable})
@@ -927,22 +979,20 @@ function(_protocyte_finalize_owned_outputs)
                         set(output_has_trusted_result TRUE)
                     endif()
                     if(NOT output_has_trusted_result)
-                        if(
-                            pending_output_root STREQUAL ""
-                            OR pending_output_root STREQUAL previous_output_root
+                        list(APPEND pending_output_keys "${previous_output_key}")
+                        set(
+                            protocyte_pending_output_${previous_output_key}
+                            "${previous_output}"
                         )
-                            set(pending_output_root "${previous_output_root}")
-                            list(APPEND pending_output_keys "${previous_output_key}")
-                            set(
-                                protocyte_pending_output_${previous_output_key}
-                                "${previous_output}"
-                            )
-                            if(
-                                NOT EXISTS
-                                    "${manifest_dir}/${previous_output_key}.pending-notified"
-                            )
-                                list(APPEND unnotified_pending_outputs "${previous_output}")
-                            endif()
+                        set(
+                            protocyte_pending_output_root_${previous_output_key}
+                            "${previous_output_root}"
+                        )
+                        if(
+                            NOT EXISTS
+                                "${manifest_dir}/${previous_output_key}.pending-notified"
+                        )
+                            list(APPEND unnotified_pending_outputs "${previous_output}")
                         endif()
                     endif()
                 endif()
@@ -984,34 +1034,49 @@ function(_protocyte_finalize_owned_outputs)
                     )
                 endif()
             endforeach()
-        elseif(pending_output_keys)
-            file(MAKE_DIRECTORY "${manifest_dir}")
-            file(WRITE "${manifest_dir}/output-root.path" "${pending_output_root}")
-            foreach(pending_output_key IN LISTS pending_output_keys)
-                set(pending_output "${protocyte_pending_output_${pending_output_key}}")
-                file(WRITE "${manifest_dir}/${pending_output_key}.path" "${pending_output}")
-                file(
-                    WRITE
-                    "${manifest_dir}/${pending_output_key}.pending"
-                    "unverified legacy output\n"
-                )
-                file(
-                    WRITE
-                    "${manifest_dir}/${pending_output_key}.pending-notified"
-                    "notified\n"
-                )
-            endforeach()
-            if(unnotified_pending_outputs)
-                list(JOIN unnotified_pending_outputs "\n  " pending_output_text)
-                message(
-                    WARNING
-                    "Protocyte preserved generated output(s) from a legacy ownership manifest because this "
-                    "build tree predates content fingerprints:\n  ${pending_output_text}\n"
-                    "Remove obsolete files manually. To restore automatic cleanup, restore the code-generation "
-                    "target, back up any edits, delete these outputs, and build the target once before removing "
-                    "it again."
-                )
-            endif()
+        endif()
+
+        foreach(pending_output_key IN LISTS pending_output_keys)
+            set(pending_output "${protocyte_pending_output_${pending_output_key}}")
+            set(
+                pending_output_root
+                "${protocyte_pending_output_root_${pending_output_key}}"
+            )
+            string(
+                SHA256
+                pending_manifest_target_key
+                "protocyte-pending-owned-output|${pending_output_key}"
+            )
+            set(pending_manifest_dir "${manifest_root}/${pending_manifest_target_key}")
+            file(REMOVE_RECURSE "${pending_manifest_dir}")
+            file(MAKE_DIRECTORY "${pending_manifest_dir}")
+            file(WRITE "${pending_manifest_dir}/output-root.path" "${pending_output_root}")
+            file(
+                WRITE
+                "${pending_manifest_dir}/${pending_output_key}.path"
+                "${pending_output}"
+            )
+            file(
+                WRITE
+                "${pending_manifest_dir}/${pending_output_key}.pending"
+                "unverified legacy output\n"
+            )
+            file(
+                WRITE
+                "${pending_manifest_dir}/${pending_output_key}.pending-notified"
+                "notified\n"
+            )
+        endforeach()
+        if(unnotified_pending_outputs)
+            list(JOIN unnotified_pending_outputs "\n  " pending_output_text)
+            message(
+                WARNING
+                "Protocyte preserved generated output(s) from a legacy ownership manifest because this "
+                "build tree predates content fingerprints:\n  ${pending_output_text}\n"
+                "Remove obsolete files manually. To restore automatic cleanup, temporarily restore a "
+                "code-generation target that declares these outputs, back up any edits, delete the outputs, "
+                "and build that target once before removing them again."
+            )
         endif()
     endforeach()
 
