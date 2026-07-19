@@ -81,6 +81,22 @@ def test_no_argument_non_interactive_invocation_preserves_plugin_protocol(
     assert capsys.readouterr().err == ""
 
 
+def test_help_generation_example_uses_an_existing_output_and_explains_protocol(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert plugin_main(["--help"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "--protocyte_out=runtime=emit:." in captured.out
+    assert "--protocyte_out=generated" not in captured.out
+    assert (
+        "protoc writes a binary CodeGeneratorRequest to the plugin's standard input"
+        in captured.out
+    )
+    assert "it writes a binary CodeGeneratorRequest" not in captured.out
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [

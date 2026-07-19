@@ -333,7 +333,10 @@ def test_plugin_entrypoint_reports_help(
     captured = capsys.readouterr()
     assert "usage: protoc-gen-protocyte" in captured.out
     assert "Most users generate code by running protoc" in captured.out
-    assert "protoc --proto_path=. --protocyte_out=generated schema.proto" in captured.out
+    assert (
+        "protoc --proto_path=. --protocyte_out=runtime=emit:. schema.proto"
+        in captured.out
+    )
     assert "descriptor-set" in captured.out
     assert "--version" in captured.out
     assert captured.err == ""
