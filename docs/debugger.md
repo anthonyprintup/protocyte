@@ -11,6 +11,18 @@ This document describes LLDB visualizers for the generated Protocyte runtime:
 
 ## Plain LLDB
 
+Protocyte's formatters are Python scripts, so they require an LLDB build with
+Python scripting enabled. Check your LLDB before importing the formatter:
+
+```text
+(lldb) script print("LLDB Python scripting is available")
+```
+
+If LLDB reports that Python scripting is unavailable, use a Python-enabled LLDB
+build. On Windows, CLion's bundled LLDB is one suitable option. Keep debugger
+executable and formatter paths in your user-level LLDB or IDE configuration,
+not in repository files shared with other users.
+
 ### Installed package
 
 When Protocyte is installed in a Python environment, locate the packaged
