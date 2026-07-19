@@ -9,13 +9,26 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
-import uuid
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import NamedTuple
 from urllib.request import urlopen
+
+
+_SCRIPTS_DIRECTORY = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIRECTORY))
+
+from owned_transactions import (  # noqa: E402
+    OwnedSibling,
+    claim_dead_owner_for_path,
+    create_owned_sibling,
+    locked_destination,
+    recover_owned_siblings,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -335,30 +348,66 @@ def _installation_rollback_path(destination: Path) -> Path:
     return destination.with_name(f".{destination.name}.protocyte-rollback")
 
 
-def _create_install_transaction(destination: Path, purpose: str) -> Path:
-    while True:
-        transaction = destination.with_name(
-            f".{destination.name}.protocyte-{purpose}-{uuid.uuid4().hex}"
+def _install_swap_phase(_phase: str) -> None:
+    """Test seam for process interruptions between atomic filesystem operations."""
+
+
+def _create_install_transaction(destination: Path, purpose: str) -> OwnedSibling:
+    return create_owned_sibling(destination, purpose)
+
+
+def _cleanup_install_transaction(transaction_owner: OwnedSibling) -> None:
+    _install_swap_phase("before_cleanup")
+    rollback = _installation_rollback_path(transaction_owner.destination)
+    if _path_exists(rollback):
+        transaction_owner.close(remove_marker=False)
+    else:
+        transaction_owner.cleanup(_remove_path)
+    _install_swap_phase("after_cleanup")
+
+
+def _unowned_installation_rollback_error(rollback: Path) -> RuntimeError:
+    return RuntimeError(
+        "refusing to recover an unowned or replaced protoc installation rollback at "
+        f"{rollback}. The live installation was left unchanged. Inspect both paths, "
+        "then move or remove the rollback manually before retrying."
+    )
+
+
+def _restore_installation_rollback(
+    destination: Path,
+    rollback: Path,
+    rollback_owner: OwnedSibling | None = None,
+) -> None:
+    claimed_owner = rollback_owner is None
+    if rollback_owner is None:
+        rollback_owner = claim_dead_owner_for_path(
+            destination,
+            ("transaction",),
+            "rollback",
+            rollback,
         )
-        try:
-            transaction.mkdir()
-        except FileExistsError:
-            continue
-        return transaction
+    if rollback_owner is None or not rollback_owner.owns_path("rollback", rollback):
+        raise _unowned_installation_rollback_error(rollback)
 
-
-def _restore_installation_rollback(destination: Path, rollback: Path) -> None:
-    recovery = _create_install_transaction(destination, "recovery")
-    displaced = recovery / "interrupted-install"
     try:
-        if _path_exists(destination):
-            destination.replace(displaced)
-        rollback.replace(destination)
-    finally:
+        recovery_owner = _create_install_transaction(destination, "recovery")
+        recovery = recovery_owner.path
+        displaced = recovery / "interrupted-install"
         try:
-            _remove_path(recovery)
-        except OSError:
-            pass
+            if _path_exists(destination):
+                destination.replace(displaced)
+            _install_swap_phase("recovery_after_displace")
+            rollback.replace(destination)
+            _install_swap_phase("recovery_after_restore")
+        finally:
+            try:
+                recovery_owner.cleanup(_remove_path)
+            except OSError:
+                pass
+    finally:
+        if claimed_owner:
+            rollback_owner.close(remove_marker=False)
 
 
 def _recover_interrupted_install(destination: Path) -> None:
@@ -367,30 +416,69 @@ def _recover_interrupted_install(destination: Path) -> None:
         _restore_installation_rollback(destination, rollback)
 
 
-def replace_destination(staging: Path, destination: Path) -> None:
+def _recover_interrupted_install_state(destination: Path) -> None:
+    # Restore the authoritative fixed rollback before discarding dead UUID
+    # transaction and recovery directories left by terminated processes.
+    _recover_interrupted_install(destination)
+    recover_owned_siblings(
+        destination,
+        ("transaction", "recovery"),
+        _remove_path,
+    )
+
+
+def replace_destination(
+    staging: Path,
+    destination: Path,
+    transaction_owner: OwnedSibling | None = None,
+) -> None:
     _recover_interrupted_install(destination)
     rollback = _installation_rollback_path(destination)
     previous = staging.parent / "previous-install"
     had_previous = _path_exists(destination)
+    local_owner = False
 
     try:
+        _install_swap_phase("before_backup")
         if had_previous:
+            if transaction_owner is None:
+                transaction_owner = _create_install_transaction(
+                    destination, "transaction"
+                )
+                local_owner = True
+            transaction_owner.bind_path(
+                "rollback",
+                rollback,
+                identity_source=destination,
+            )
             destination.replace(rollback)
+        _install_swap_phase("after_backup")
+        _install_swap_phase("before_promote")
         staging.replace(destination)
+        _install_swap_phase("after_promote")
+        _install_swap_phase("before_commit")
         if had_previous:
             rollback.replace(previous)
+        _install_swap_phase("after_commit")
     except BaseException:
         if had_previous:
             if not _path_exists(rollback) and _path_exists(previous):
                 previous.replace(rollback)
             if _path_exists(rollback):
-                _restore_installation_rollback(destination, rollback)
+                _restore_installation_rollback(
+                    destination,
+                    rollback,
+                    transaction_owner,
+                )
         elif _path_exists(destination) and not _path_exists(staging):
             try:
                 destination.replace(staging)
             except OSError:
                 pass
         raise
+    finally:
+        if local_owner:
+            _cleanup_install_transaction(transaction_owner)
 
     if had_previous:
         _remove_path(previous)
@@ -405,36 +493,39 @@ def main() -> int:
     url = f"https://github.com/protocolbuffers/protobuf/releases/download/v{version}/{archive_name}"
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    _recover_interrupted_install(destination)
-    transaction = _create_install_transaction(destination, "transaction")
-    try:
-        archive_path = transaction / archive_name
-        staging = transaction / "install"
-        actual_sha256 = download_archive(url, archive_path)
-        verify_archive_sha256(actual_sha256, expected_sha256, archive_name)
-        with zipfile.ZipFile(archive_path) as archive:
-            extract_archive_safely(archive, staging)
+    with locked_destination(destination):
+        _recover_interrupted_install_state(destination)
+        transaction_owner = _create_install_transaction(destination, "transaction")
+        transaction = transaction_owner.path
+        try:
+            archive_path = transaction / archive_name
+            staging = transaction / "install"
+            actual_sha256 = download_archive(url, archive_path)
+            verify_archive_sha256(actual_sha256, expected_sha256, archive_name)
+            with zipfile.ZipFile(archive_path) as archive:
+                extract_archive_safely(archive, staging)
 
-        staged_protoc = staging / "bin" / asset.executable_name
-        staged_descriptor = (
-            staging / "include" / "google" / "protobuf" / "descriptor.proto"
-        )
-
-        if not staged_protoc.is_file():
-            raise RuntimeError(
-                f"downloaded archive is missing protoc at {staged_protoc}"
-            )
-        if not staged_descriptor.is_file():
-            raise RuntimeError(
-                f"downloaded archive is missing descriptor.proto at {staged_descriptor}"
+            staged_protoc = staging / "bin" / asset.executable_name
+            staged_descriptor = (
+                staging / "include" / "google" / "protobuf" / "descriptor.proto"
             )
 
-        (staging / VERSION_MARKER).write_text(f"{version}\n", encoding="utf-8")
-        staged_protoc.chmod(staged_protoc.stat().st_mode | 0o111)
-        subprocess.run([str(staged_protoc), "--version"], check=True)
-        replace_destination(staging, destination)
-    finally:
-        _remove_path(transaction)
+            if not staged_protoc.is_file():
+                raise RuntimeError(
+                    f"downloaded archive is missing protoc at {staged_protoc}"
+                )
+            if not staged_descriptor.is_file():
+                raise RuntimeError(
+                    "downloaded archive is missing descriptor.proto at "
+                    f"{staged_descriptor}"
+                )
+
+            (staging / VERSION_MARKER).write_text(f"{version}\n", encoding="utf-8")
+            staged_protoc.chmod(staged_protoc.stat().st_mode | 0o111)
+            subprocess.run([str(staged_protoc), "--version"], check=True)
+            replace_destination(staging, destination, transaction_owner)
+        finally:
+            _cleanup_install_transaction(transaction_owner)
 
     protoc = destination / "bin" / asset.executable_name
 
