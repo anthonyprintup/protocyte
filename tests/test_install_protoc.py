@@ -961,9 +961,30 @@ def test_resolve_release_requires_digest_for_version_override() -> None:
             "PROTOCYTE_PROTOBUF_WINDOWS_X86_64_SHA256",
             "protoc.exe",
         ),
+        (
+            "Darwin",
+            "x86_64",
+            "osx-universal_binary",
+            "PROTOCYTE_PROTOBUF_MACOS_UNIVERSAL_SHA256",
+            "protoc",
+        ),
+        (
+            "Darwin",
+            "arm64",
+            "osx-universal_binary",
+            "PROTOCYTE_PROTOBUF_MACOS_UNIVERSAL_SHA256",
+            "protoc",
+        ),
+        (
+            "Darwin",
+            "aarch64",
+            "osx-universal_binary",
+            "PROTOCYTE_PROTOBUF_MACOS_UNIVERSAL_SHA256",
+            "protoc",
+        ),
     ],
 )
-def test_resolve_platform_asset_selects_supported_x86_64_archive(
+def test_resolve_platform_asset_selects_supported_archive(
     system: str,
     machine: str,
     archive_suffix: str,
@@ -982,7 +1003,7 @@ def test_resolve_platform_asset_selects_supported_x86_64_archive(
 @pytest.mark.parametrize(
     ("system", "machine"),
     [
-        ("Darwin", "arm64"),
+        ("Darwin", "i386"),
         ("Linux", "aarch64"),
         ("Windows", "x86"),
     ],
@@ -1008,6 +1029,16 @@ def test_resolve_platform_asset_rejects_unsupported_host(
             "AMD64",
             "6d7ebdc75e9c1f0026d4fb28f17ef1d0aae77d36744d83a9e052d79ba493724f",
         ),
+        (
+            "Darwin",
+            "x86_64",
+            "5c6057638aa382542e75f1c5a0802893e2311ad0c8b689e635dd4ac3c9eb8169",
+        ),
+        (
+            "Darwin",
+            "arm64",
+            "5c6057638aa382542e75f1c5a0802893e2311ad0c8b689e635dd4ac3c9eb8169",
+        ),
     ],
 )
 def test_configured_release_digests_match_upstream_assets(
@@ -1027,6 +1058,7 @@ def test_configured_release_digests_match_upstream_assets(
     [
         ("Linux", "x86_64"),
         ("Windows", "AMD64"),
+        ("Darwin", "arm64"),
     ],
 )
 def test_main_installs_selected_platform_asset(

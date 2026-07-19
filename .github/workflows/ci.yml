@@ -154,6 +154,109 @@ jobs:
           tests/test_cmake.py::test_multiconfig_codegen_serializes_shared_outputs_between_build_processes
           tests/test_cmake.py::test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix
 
+  quickstart-windows:
+    name: Quick Start Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Build plugin wheel
+        run: uv build --wheel
+
+      - name: Install plugin wheel in an isolated environment
+        run: |
+          uv venv build/quickstart-venv --python 3.12
+          $wheel = (Get-ChildItem dist/protocyte-*.whl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+          uv pip install --python build/quickstart-venv/Scripts/python.exe $wheel
+
+      - name: Verify installed CLI entry points
+        run: |
+          & build/quickstart-venv/Scripts/protoc-gen-protocyte.exe --help
+          & build/quickstart-venv/Scripts/protoc-gen-protocyte.exe --version
+          & build/quickstart-venv/Scripts/python.exe -m protocyte --help
+          & build/quickstart-venv/Scripts/python.exe -m protocyte --version
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Configure quick-start example
+        run: >
+          cmake -S examples/quickstart -B build/quickstart
+          "-DPROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/Scripts/protoc-gen-protocyte.exe"
+
+      - name: Generate and build quick-start example
+        run: cmake --build build/quickstart --config Release
+
+      - name: Run quick-start round trip
+        run: ctest --test-dir build/quickstart -C Release --output-on-failure
+
+  quickstart-macos:
+    name: Quick Start macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Install prebuilt protoc
+        id: protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Build plugin wheel
+        run: uv build --wheel
+
+      - name: Install plugin wheel in an isolated environment
+        run: |
+          uv venv build/quickstart-venv --python 3.12
+          uv pip install --python build/quickstart-venv/bin/python dist/*.whl
+
+      - name: Verify installed CLI entry points
+        run: |
+          build/quickstart-venv/bin/protoc-gen-protocyte --help
+          build/quickstart-venv/bin/protoc-gen-protocyte --version
+          build/quickstart-venv/bin/python -m protocyte --help
+          build/quickstart-venv/bin/python -m protocyte --version
+
+      - name: Configure quick-start example
+        run: >
+          cmake -S examples/quickstart -B build/quickstart
+          -DCMAKE_BUILD_TYPE=Release
+          "-DPROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/bin/protoc-gen-protocyte"
+
+      - name: Generate and build quick-start example
+        run: cmake --build build/quickstart
+
+      - name: Run quick-start round trip
+        run: ctest --test-dir build/quickstart --output-on-failure
+
   smoke-host:
     name: Smoke Host (clang-cl)
     runs-on: windows-latest

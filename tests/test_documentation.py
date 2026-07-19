@@ -68,6 +68,17 @@ def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
         assert fragment in linux_ci
 
 
+def test_smoke_regeneration_uses_managed_python_and_documents_portability_ci() -> None:
+    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+
+    assert (
+        "uv run python .github/scripts/install_protoc.py "
+        "--dest build/canonical-protoc"
+    ) in guide
+    assert "\npython .github/scripts/install_protoc.py" not in guide
+    assert "complete wheel\nand quick-start path on Linux, Windows, and macOS" in guide
+
+
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is not available")
 def test_documented_posix_blocks_parse_as_bash() -> None:
     for relative_path in ("README.md", "tests/smoke/README.md"):

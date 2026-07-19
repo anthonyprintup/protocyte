@@ -589,7 +589,8 @@ by a new user.
 The repository's full smoke presets are Windows-specific and live in
 `tests/smoke/CMakePresets.json`. Run the preset-based configure, build, and test
 commands from the `tests/smoke/` directory. Linux and macOS users can run the
-portable quick-start commands in the root README; CI runs that path on Linux.
+portable quick-start commands in the root README. CI runs the complete wheel
+and quick-start path on Linux, Windows, and macOS.
 
 On Windows, open a Visual Studio Developer PowerShell or otherwise initialize
 the MSVC developer environment first. The presets use the standard
@@ -611,7 +612,7 @@ Regenerate the checked-in smoke fixtures:
 
 ```powershell
 uv sync --locked --group dev
-python .github/scripts/install_protoc.py --dest build/canonical-protoc
+uv run python .github/scripts/install_protoc.py --dest build/canonical-protoc
 $env:PROTOCYTE_SMOKE_PROTOC = (Resolve-Path build/canonical-protoc/bin/protoc.exe)
 $env:PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR = (Resolve-Path build/canonical-protoc/include)
 $env:PROTOCYTE_SMOKE_PLUGIN = (Resolve-Path .venv/Scripts/protoc-gen-protocyte.exe)

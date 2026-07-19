@@ -48,6 +48,13 @@ class ProtocAsset(NamedTuple):
     executable_name: str
 
 
+_MACOS_UNIVERSAL_ASSET = ProtocAsset(
+    archive_suffix="osx-universal_binary",
+    checksum_variable="PROTOCYTE_PROTOBUF_MACOS_UNIVERSAL_SHA256",
+    executable_name="protoc",
+)
+
+
 _SUPPORTED_ASSETS = {
     ("linux", "x86_64"): ProtocAsset(
         archive_suffix="linux-x86_64",
@@ -59,6 +66,8 @@ _SUPPORTED_ASSETS = {
         checksum_variable="PROTOCYTE_PROTOBUF_WINDOWS_X86_64_SHA256",
         executable_name="protoc.exe",
     ),
+    ("darwin", "x86_64"): _MACOS_UNIVERSAL_ASSET,
+    ("darwin", "arm64"): _MACOS_UNIVERSAL_ASSET,
 }
 
 
@@ -70,6 +79,8 @@ def resolve_platform_asset(
     normalized_machine = (machine or platform.machine()).casefold()
     if normalized_machine in {"amd64", "x86_64"}:
         normalized_machine = "x86_64"
+    elif normalized_machine in {"aarch64", "arm64"}:
+        normalized_machine = "arm64"
 
     try:
         return _SUPPORTED_ASSETS[(normalized_system, normalized_machine)]
@@ -77,7 +88,8 @@ def resolve_platform_asset(
         raise RuntimeError(
             "unsupported protoc prebuilt platform: "
             f"{system or platform.system()} {machine or platform.machine()}; "
-            "supported platforms are Linux x86-64 and Windows x86-64"
+            "supported platforms are Linux x86-64, Windows x86-64, and "
+            "macOS x86-64 or arm64"
         ) from error
 
 
