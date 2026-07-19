@@ -3166,6 +3166,7 @@ function(protocyte_generate)
 
     set(normalized_proto_files)
     set(normalized_proto_names)
+    set(protocyte_source_check_targets "")
     if(protocyte_has_DESCRIPTOR_SET)
         foreach(proto_file IN LISTS protocyte_proto_files)
             _protocyte_validate_descriptor_name("${proto_file}")
@@ -3710,25 +3711,10 @@ function(protocyte_add_proto_library)
                 "protocyte_add_proto_library INSTALL_INCLUDE_DIR must be a configure-time relative path, not a generator expression"
             )
         endif()
-        if(
-            IS_ABSOLUTE "${PROTOCYTE_INSTALL_INCLUDE_DIR}"
-            OR "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "^[A-Za-z]:"
-            OR "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "\\\\"
+        _protocyte_validate_virtual_directory_prefix(
+            "protocyte_add_proto_library INSTALL_INCLUDE_DIR"
+            "${PROTOCYTE_INSTALL_INCLUDE_DIR}"
         )
-            message(
-                FATAL_ERROR
-                "protocyte_add_proto_library INSTALL_INCLUDE_DIR must be a relative install path using '/': ${PROTOCYTE_INSTALL_INCLUDE_DIR}"
-            )
-        endif()
-        if(
-            "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "(^|/)(\\.|\\.\\.)(/|$)"
-            OR "${PROTOCYTE_INSTALL_INCLUDE_DIR}" MATCHES "(^/|//|/$)"
-        )
-            message(
-                FATAL_ERROR
-                "protocyte_add_proto_library INSTALL_INCLUDE_DIR contains an unsafe or non-normalized path segment: ${PROTOCYTE_INSTALL_INCLUDE_DIR}"
-            )
-        endif()
     endif()
 
     if(NOT protocyte_has_TYPE)

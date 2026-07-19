@@ -1293,11 +1293,11 @@ def test_generate_rejects_generator_expression_out_dir(tmp_path: Path) -> None:
         ),
         (
             '"/absolute/include"',
-            "INSTALL_INCLUDE_DIR must be a relative install path using '/'",
+            "INSTALL_INCLUDE_DIR must be a relative virtual directory using '/'",
         ),
         (
             '"C:/absolute/include"',
-            "INSTALL_INCLUDE_DIR must be a relative install path using '/'",
+            "INSTALL_INCLUDE_DIR must be a relative virtual directory using '/'",
         ),
         (
             '"include/../escape"',
@@ -1306,6 +1306,41 @@ def test_generate_rejects_generator_expression_out_dir(tmp_path: Path) -> None:
         (
             '"include//nested"',
             "INSTALL_INCLUDE_DIR contains an unsafe or non-normalized path segment",
+        ),
+        pytest.param(
+            '"include;private"',
+            "INSTALL_INCLUDE_DIR contains characters that are unsafe in generated includes",
+            id="semicolon",
+        ),
+        pytest.param(
+            '"include\x1fprivate"',
+            "INSTALL_INCLUDE_DIR must not contain control characters",
+            id="control-character",
+        ),
+        pytest.param(
+            '" include/private"',
+            "INSTALL_INCLUDE_DIR must not have leading or trailing segment whitespace",
+            id="leading-whitespace",
+        ),
+        pytest.param(
+            '"include/private "',
+            "INSTALL_INCLUDE_DIR must not have leading or trailing segment whitespace",
+            id="trailing-whitespace",
+        ),
+        pytest.param(
+            '"include/private."',
+            "INSTALL_INCLUDE_DIR contains a path segment ending in '.'",
+            id="trailing-dot",
+        ),
+        pytest.param(
+            '"include/CON"',
+            "INSTALL_INCLUDE_DIR contains a Windows-reserved device name",
+            id="reserved-device-name",
+        ),
+        pytest.param(
+            '"include:private"',
+            "INSTALL_INCLUDE_DIR must be a relative virtual directory using '/'",
+            id="colon",
         ),
     ],
 )
@@ -1473,6 +1508,51 @@ def test_generate_preserves_false_like_scalar_and_list_arguments(
     assert "/build/NO/OFF/runtime.hpp" in normalized_outputs
     assert "/build/NO/0.protocyte.cpp" in normalized_outputs
     assert "target=OFF" in normalized_outputs
+
+
+@pytest.mark.parametrize(
+    "injected_assignment",
+    [
+        pytest.param(
+            "set(protocyte_source_check_targets caller_scope_injected_dependency)",
+            id="normal-variable",
+        ),
+        pytest.param(
+            'set(protocyte_source_check_targets cache_injected_dependency CACHE STRING "" FORCE)',
+            id="cache-variable",
+        ),
+    ],
+)
+def test_generate_does_not_inherit_source_check_targets_from_caller_scope(
+    tmp_path: Path,
+    injected_assignment: str,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "function(_protocyte_setup_codegen_internal fetch_missing_import_sources)",
+                "endfunction()",
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_OPTIONS_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/descriptor-set.pb")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "")',
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${CMAKE_COMMAND}")',
+                'set(PROTOCYTE_PROTOC_EXECUTABLE "${CMAKE_COMMAND}")',
+                'set(PROTOCYTE_PROTOC_DEPENDENCY "${CMAKE_COMMAND}")',
+                injected_assignment,
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                "    DESCRIPTOR_SET descriptor-set.pb",
+                "    OUT_DIR generated",
+                "    PROTOS api/demo.proto",
+                "    OPTIONS format=off",
+                ")",
+            ]
+        ),
+        files={"descriptor-set.pb": "descriptor set placeholder\n"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_proto_library_forwards_false_like_scalar_and_list_arguments(
