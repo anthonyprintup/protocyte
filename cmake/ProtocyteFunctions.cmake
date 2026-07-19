@@ -2212,6 +2212,172 @@ function(_protocyte_resolve_protoc_path out_executable out_dependency candidate)
     set(${out_dependency} "${resolved_candidate}" PARENT_SCOPE)
 endfunction()
 
+function(
+    _protocyte_try_host_protoc_path
+    out_available
+    out_executable
+    out_diagnostic
+    candidate
+    source_description
+)
+    set(${out_available} FALSE PARENT_SCOPE)
+    set(${out_executable} "" PARENT_SCOPE)
+
+    if("${candidate}" MATCHES "\\$<")
+        string(
+            CONCAT candidate_diagnostic
+            "${source_description} uses a generator expression, which cannot carry a "
+            "cross-compiling emulator through Protocyte's generation scripts"
+        )
+        set(${out_diagnostic} "${candidate_diagnostic}" PARENT_SCOPE)
+        return()
+    endif()
+
+    if(IS_ABSOLUTE "${candidate}")
+        cmake_path(NORMAL_PATH candidate OUTPUT_VARIABLE resolved_candidate)
+    else()
+        cmake_path(
+            ABSOLUTE_PATH candidate
+            BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            NORMALIZE
+            OUTPUT_VARIABLE resolved_candidate
+        )
+    endif()
+    if(NOT EXISTS "${resolved_candidate}" OR IS_DIRECTORY "${resolved_candidate}")
+        set(
+            ${out_diagnostic}
+            "${source_description} resolves to '${resolved_candidate}', which does not name an existing file"
+            PARENT_SCOPE
+        )
+        return()
+    endif()
+
+    execute_process(
+        COMMAND "${resolved_candidate}" --version
+        RESULT_VARIABLE version_result
+        OUTPUT_VARIABLE version_output
+        ERROR_VARIABLE version_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 15
+    )
+    if(NOT "${version_result}" STREQUAL "0")
+        if(version_error STREQUAL "")
+            if(version_output STREQUAL "")
+                set(version_error "<no output>")
+            else()
+                set(version_error "${version_output}")
+            endif()
+        endif()
+        set(
+            ${out_diagnostic}
+            "${source_description} is not host-runnable (${version_result}): ${resolved_candidate}; ${version_error}"
+            PARENT_SCOPE
+        )
+        return()
+    endif()
+
+    set(${out_available} TRUE PARENT_SCOPE)
+    set(${out_executable} "${resolved_candidate}" PARENT_SCOPE)
+    set(${out_diagnostic} "" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_find_host_protoc_on_path out_executable)
+    set(host_path_protoc "host_path_protoc-NOTFOUND")
+    if(NOT "$ENV{PATH}" STREQUAL "")
+        cmake_path(
+            CONVERT "$ENV{PATH}"
+            TO_CMAKE_PATH_LIST host_program_directories
+            NORMALIZE
+        )
+        find_program(
+            host_path_protoc
+            NAMES protoc
+            PATHS ${host_program_directories}
+            NO_DEFAULT_PATH
+            NO_CACHE
+        )
+    endif()
+    set(${out_executable} "${host_path_protoc}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_try_imported_host_protoc_target
+    out_available
+    out_executable
+    out_diagnostic
+    target_name
+)
+    set(${out_available} FALSE PARENT_SCOPE)
+    set(${out_executable} "" PARENT_SCOPE)
+
+    get_target_property(target_is_imported "${target_name}" IMPORTED)
+    if(NOT target_is_imported)
+        set(
+            ${out_diagnostic}
+            "target '${target_name}' is built by the target toolchain and has no configure-time host executable"
+            PARENT_SCOPE
+        )
+        return()
+    endif()
+
+    # Generated outputs are shared by all project configurations, so select one
+    # concrete imported tool using the generator's default configuration.
+    set(project_configuration "")
+    if(NOT "${CMAKE_BUILD_TYPE}" STREQUAL "")
+        set(project_configuration "${CMAKE_BUILD_TYPE}")
+    elseif(NOT "${CMAKE_DEFAULT_BUILD_TYPE}" STREQUAL "")
+        set(project_configuration "${CMAKE_DEFAULT_BUILD_TYPE}")
+    elseif(CMAKE_CONFIGURATION_TYPES)
+        list(GET CMAKE_CONFIGURATION_TYPES 0 project_configuration)
+    endif()
+
+    if(project_configuration STREQUAL "")
+        set(location_property LOCATION)
+        set(location_description "target '${target_name}'")
+    else()
+        string(TOUPPER "${project_configuration}" project_configuration_upper)
+        set(location_property "LOCATION_${project_configuration_upper}")
+        set(
+            location_description
+            "target '${target_name}' for project configuration '${project_configuration}'"
+        )
+    endif()
+    get_target_property(imported_location "${target_name}" "${location_property}")
+
+    if(imported_location)
+        _protocyte_try_host_protoc_path(
+            location_is_host_runnable
+            resolved_imported_location
+            target_diagnostic
+            "${imported_location}"
+            "${location_description}"
+        )
+        if(location_is_host_runnable)
+            set(${out_available} TRUE PARENT_SCOPE)
+            set(${out_executable} "${resolved_imported_location}" PARENT_SCOPE)
+            set(${out_diagnostic} "" PARENT_SCOPE)
+            return()
+        endif()
+    else()
+        set(
+            target_diagnostic
+            "${location_description} does not expose an imported executable location"
+        )
+    endif()
+
+    get_target_property(target_emulator "${target_name}" CROSSCOMPILING_EMULATOR)
+    if(target_emulator)
+        string(
+            APPEND
+            target_diagnostic
+            "; CROSSCOMPILING_EMULATOR is set, but Protocyte cannot propagate target "
+            "emulators through its dependency-scan and generation scripts"
+        )
+    endif()
+    set(${out_diagnostic} "${target_diagnostic}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_fetch_protobuf_import_sources toolchain_identity)
     FetchContent_Declare(
         protocyte_protobuf_imports
@@ -2259,22 +2425,77 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
     set(protoc_executable "")
     set(protoc_dependency "")
     set(protocyte_path_protoc "protocyte_path_protoc-NOTFOUND")
+    set(protocyte_cross_candidate_diagnostics)
 
     if(
         DEFINED Protobuf_PROTOC_EXECUTABLE
         AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
         AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
     )
+        if(CMAKE_CROSSCOMPILING AND Protobuf_PROTOC_EXECUTABLE MATCHES "\\$<")
+            message(
+                FATAL_ERROR
+                "Cross-compiling Protocyte requires Protobuf_PROTOC_EXECUTABLE to be a concrete, "
+                "host-runnable compiler path. Target generator expressions cannot propagate "
+                "CROSSCOMPILING_EMULATOR through Protocyte's generation scripts."
+            )
+        endif()
         _protocyte_resolve_protoc_path(
             protoc_executable
             protoc_dependency
             "${Protobuf_PROTOC_EXECUTABLE}"
         )
+        if(CMAKE_CROSSCOMPILING)
+            _protocyte_try_host_protoc_path(
+                explicit_protoc_is_host_runnable
+                explicit_protoc_executable
+                explicit_protoc_diagnostic
+                "${protoc_executable}"
+                "Protobuf_PROTOC_EXECUTABLE"
+            )
+            if(NOT explicit_protoc_is_host_runnable)
+                message(
+                    FATAL_ERROR
+                    "Cross-compiling Protocyte requires Protobuf_PROTOC_EXECUTABLE to name a "
+                    "host-runnable compiler. ${explicit_protoc_diagnostic}"
+                )
+            endif()
+            set(protoc_executable "${explicit_protoc_executable}")
+            set(protoc_dependency "${explicit_protoc_executable}")
+        endif()
+    elseif(CMAKE_CROSSCOMPILING)
+        _protocyte_find_host_protoc_on_path(protocyte_path_protoc)
+        if(protocyte_path_protoc)
+            _protocyte_try_host_protoc_path(
+                path_protoc_is_host_runnable
+                path_protoc_executable
+                path_protoc_diagnostic
+                "${protocyte_path_protoc}"
+                "protoc found on the host PATH"
+            )
+            if(path_protoc_is_host_runnable)
+                set(protoc_executable "${path_protoc_executable}")
+                set(protoc_dependency "${path_protoc_executable}")
+            else()
+                list(APPEND protocyte_cross_candidate_diagnostics "${path_protoc_diagnostic}")
+            endif()
+        endif()
     elseif(TARGET protobuf::protoc)
         set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
         set(protoc_dependency protobuf::protoc)
-    else()
-        find_package(Protobuf CONFIG QUIET)
+    endif()
+
+    if(protoc_executable STREQUAL "")
+        if(
+            NOT TARGET protobuf::protoc
+            AND (
+                NOT DEFINED Protobuf_PROTOC_EXECUTABLE
+                OR Protobuf_PROTOC_EXECUTABLE STREQUAL ""
+                OR Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
+            )
+        )
+            find_package(Protobuf CONFIG QUIET)
+        endif()
         if(
             NOT TARGET protobuf::protoc
             AND NOT TARGET protobuf::libprotobuf
@@ -2287,25 +2508,74 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
             find_package(Protobuf MODULE QUIET)
         endif()
 
-        if(TARGET protobuf::protoc)
-            set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
-            set(protoc_dependency protobuf::protoc)
-        elseif(
-            DEFINED Protobuf_PROTOC_EXECUTABLE
-            AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
-            AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
-        )
-            _protocyte_resolve_protoc_path(
-                protoc_executable
-                protoc_dependency
-                "${Protobuf_PROTOC_EXECUTABLE}"
+        if(CMAKE_CROSSCOMPILING)
+            if(
+                DEFINED Protobuf_PROTOC_EXECUTABLE
+                AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
+                AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
             )
+                _protocyte_try_host_protoc_path(
+                    package_protoc_is_host_runnable
+                    package_protoc_executable
+                    package_protoc_diagnostic
+                    "${Protobuf_PROTOC_EXECUTABLE}"
+                    "Protobuf package compiler"
+                )
+                if(package_protoc_is_host_runnable)
+                    set(protoc_executable "${package_protoc_executable}")
+                    set(protoc_dependency "${package_protoc_executable}")
+                else()
+                    list(APPEND protocyte_cross_candidate_diagnostics "${package_protoc_diagnostic}")
+                endif()
+            endif()
+
+            if(protoc_executable STREQUAL "" AND TARGET protobuf::protoc)
+                _protocyte_try_imported_host_protoc_target(
+                    target_protoc_is_host_runnable
+                    target_protoc_executable
+                    target_protoc_diagnostic
+                    protobuf::protoc
+                )
+                if(target_protoc_is_host_runnable)
+                    set(protoc_executable "${target_protoc_executable}")
+                    set(protoc_dependency "${target_protoc_executable}")
+                else()
+                    list(APPEND protocyte_cross_candidate_diagnostics "${target_protoc_diagnostic}")
+                endif()
+            endif()
         else()
-            find_program(
-                protocyte_path_protoc
-                NAMES protoc
-                NO_CACHE
-                NO_CMAKE_FIND_ROOT_PATH
+            if(TARGET protobuf::protoc)
+                set(protoc_executable "$<TARGET_FILE:protobuf::protoc>")
+                set(protoc_dependency protobuf::protoc)
+            elseif(
+                DEFINED Protobuf_PROTOC_EXECUTABLE
+                AND NOT Protobuf_PROTOC_EXECUTABLE STREQUAL ""
+                AND NOT Protobuf_PROTOC_EXECUTABLE MATCHES "-NOTFOUND$"
+            )
+                _protocyte_resolve_protoc_path(
+                    protoc_executable
+                    protoc_dependency
+                    "${Protobuf_PROTOC_EXECUTABLE}"
+                )
+            else()
+                _protocyte_find_host_protoc_on_path(protocyte_path_protoc)
+            endif()
+        endif()
+
+        if(protoc_executable STREQUAL "" AND CMAKE_CROSSCOMPILING)
+            if(protocyte_cross_candidate_diagnostics)
+                list(JOIN protocyte_cross_candidate_diagnostics "\n  - " rejected_candidates)
+                set(rejected_candidates "\nRejected compiler candidate(s):\n  - ${rejected_candidates}")
+            else()
+                set(rejected_candidates "")
+            endif()
+            message(
+                FATAL_ERROR
+                "Protocyte could not find a host-runnable protoc while cross-compiling. "
+                "Set Protobuf_PROTOC_EXECUTABLE to a concrete host compiler path or add a host protoc "
+                "to PATH. Ambient protobuf::protoc targets are used only when their imported executable "
+                "can run directly on the host; target emulators are not propagated through Protocyte's "
+                "generation scripts.${rejected_candidates}"
             )
         endif()
 
@@ -2317,14 +2587,6 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
                     "${protocyte_path_protoc}"
                 )
             elseif(PROTOCYTE_FETCH_PROTOBUF)
-                if(CMAKE_CROSSCOMPILING)
-                    message(
-                        FATAL_ERROR
-                        "Protocyte could not find a host protoc executable while cross-compiling. "
-                        "Set Protobuf_PROTOC_EXECUTABLE to a host-runnable protoc or add one to PATH; "
-                        "the protobuf FetchContent fallback cannot build a host tool with the target toolchain."
-                    )
-                endif()
                 if(NOT DEFINED protobuf_BUILD_TESTS)
                     set(protobuf_BUILD_TESTS OFF)
                 endif()

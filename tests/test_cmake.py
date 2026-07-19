@@ -23,14 +23,20 @@ from protocyte.paths import (
 
 _CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
 _CI_REQUIRE_INCREMENTAL_TEST_ENV = "PROTOCYTE_CI_REQUIRE_INCREMENTAL_TEST"
+_CI_REQUIRE_INSTALL_EXPORT_TEST_ENV = "PROTOCYTE_CI_REQUIRE_INSTALL_EXPORT_TEST"
 _CI_REQUIRE_MULTICONFIG_LOCKING_TEST_ENV = (
     "PROTOCYTE_CI_REQUIRE_MULTICONFIG_LOCKING_TEST"
 )
 _CI_REQUIRE_WINDOWS_TRANSPORT_TEST_ENV = "PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST"
 
 
-def _incremental_requirement_unavailable(message: str) -> Never:
-    if os.environ.get(_CI_REQUIRE_INCREMENTAL_TEST_ENV) == "1":
+def _incremental_requirement_unavailable(
+    message: str, *, additional_required_env: str | None = None
+) -> Never:
+    if os.environ.get(_CI_REQUIRE_INCREMENTAL_TEST_ENV) == "1" or (
+        additional_required_env is not None
+        and os.environ.get(additional_required_env) == "1"
+    ):
         pytest.fail(message)
     pytest.skip(message)
 
@@ -47,7 +53,9 @@ def _windows_transport_requirement_unavailable(message: str) -> Never:
     pytest.skip(message)
 
 
-def _find_real_protoc(repo_root: Path) -> Path:
+def _find_real_protoc(
+    repo_root: Path, *, additional_required_env: str | None = None
+) -> Path:
     candidates: list[Path] = []
     if configured := os.environ.get(_CI_PROTOC_ENV):
         protoc = Path(configured)
@@ -67,7 +75,10 @@ def _find_real_protoc(repo_root: Path) -> Path:
         if candidate.is_file():
             return candidate
 
-    _incremental_requirement_unavailable("real protoc executable is not available")
+    _incremental_requirement_unavailable(
+        "real protoc executable is not available",
+        additional_required_env=additional_required_env,
+    )
 
 
 def _find_visual_studio_generator() -> str:
@@ -97,7 +108,12 @@ def _find_protobuf_import_root(repo_root: Path) -> Path:
     pytest.skip("protobuf source import tree is not available")
 
 
-def _find_protobuf_import_dir(repo_root: Path, protoc: Path) -> Path:
+def _find_protobuf_import_dir(
+    repo_root: Path,
+    protoc: Path,
+    *,
+    additional_required_env: str | None = None,
+) -> Path:
     candidates = [
         protoc.parent.parent / "include",
         protoc.parent.parent / "protobuf-src" / "src",
@@ -116,7 +132,8 @@ def _find_protobuf_import_dir(repo_root: Path, protoc: Path) -> Path:
             return candidate
 
     _incremental_requirement_unavailable(
-        "protobuf import directory is not available"
+        "protobuf import directory is not available",
+        additional_required_env=additional_required_env,
     )
 
 
@@ -515,6 +532,38 @@ def _write_protobuf_toolchain(root: Path) -> Path:
     descriptor.parent.mkdir(parents=True)
     descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
     return protoc
+
+
+def _write_runnable_host_protoc(root: Path) -> Path:
+    executable_name = "protoc.exe" if os.name == "nt" else "protoc"
+    protoc = root / "bin" / executable_name
+    protoc.parent.mkdir(parents=True)
+    cmake = shutil.which("cmake")
+    assert cmake is not None
+    shutil.copy2(cmake, protoc)
+    descriptor = root / "include" / "google" / "protobuf" / "descriptor.proto"
+    descriptor.parent.mkdir(parents=True)
+    descriptor.write_text('syntax = "proto3";\n', encoding="utf-8")
+    return protoc
+
+
+def _write_target_protobuf_package(package_dir: Path, target_protoc: Path) -> None:
+    package_dir.mkdir(parents=True)
+    (package_dir / "ProtobufConfig.cmake").write_text(
+        "\n".join(
+            [
+                "add_executable(protobuf::protoc IMPORTED)",
+                "set_target_properties(",
+                "    protobuf::protoc",
+                "    PROPERTIES",
+                f'        IMPORTED_LOCATION "{target_protoc.as_posix()}"',
+                '        CROSSCOMPILING_EMULATOR "${CMAKE_COMMAND};-E;env"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def _installed_protocyte_plugin() -> Path:
@@ -2262,11 +2311,21 @@ def test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix(
     library_mode: str,
 ) -> None:
     if shutil.which("ninja") is None:
-        pytest.skip("Ninja is required for the install/export integration test")
+        _incremental_requirement_unavailable(
+            "Ninja is required for the install/export integration test",
+            additional_required_env=_CI_REQUIRE_INSTALL_EXPORT_TEST_ENV,
+        )
 
     repo_root = Path(__file__).resolve().parents[1]
-    protoc = _find_real_protoc(repo_root)
-    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    protoc = _find_real_protoc(
+        repo_root,
+        additional_required_env=_CI_REQUIRE_INSTALL_EXPORT_TEST_ENV,
+    )
+    protobuf_import_dir = _find_protobuf_import_dir(
+        repo_root,
+        protoc,
+        additional_required_env=_CI_REQUIRE_INSTALL_EXPORT_TEST_ENV,
+    )
     (tmp_path / "tools").mkdir()
     plugin = _write_python_plugin_wrapper(
         tmp_path / "tools" / "protoc-gen-protocyte", repo_root
@@ -2612,18 +2671,29 @@ def test_protoc_target_preserves_generator_expression_and_target_dependency(
     ]
 
 
+@pytest.mark.parametrize("variable_storage", ["normal", "cache"])
 def test_explicit_host_protoc_overrides_target_when_cross_compiling(
     tmp_path: Path,
+    variable_storage: str,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir = tmp_path / "project"
     build_dir = tmp_path / "build"
     source_dir.mkdir()
-    host_protoc = _write_protobuf_toolchain(source_dir / "host-toolchain")
+    host_protoc = _write_runnable_host_protoc(source_dir / "host-toolchain")
     target_protoc = source_dir / "target-toolchain" / "bin" / "protoc"
     target_protoc.parent.mkdir(parents=True)
     target_protoc.write_text("", encoding="utf-8")
     selected = build_dir / "selected.txt"
+    if variable_storage == "cache":
+        protoc_setting = (
+            f'set(Protobuf_PROTOC_EXECUTABLE "{host_protoc.as_posix()}" '
+            'CACHE FILEPATH "")'
+        )
+    else:
+        protoc_setting = (
+            f'set(Protobuf_PROTOC_EXECUTABLE "{host_protoc.as_posix()}")'
+        )
 
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
@@ -2636,7 +2706,7 @@ def test_explicit_host_protoc_overrides_target_when_cross_compiling(
                 "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
                 "add_executable(protobuf::protoc IMPORTED)",
                 f'set_target_properties(protobuf::protoc PROPERTIES IMPORTED_LOCATION "{target_protoc.as_posix()}")',
-                f'set(Protobuf_PROTOC_EXECUTABLE "{host_protoc.as_posix()}")',
+                protoc_setting,
                 f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{(source_dir / "host-toolchain" / "include").as_posix()}")',
                 f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
                 "_protocyte_ensure_protobuf(FALSE)",
@@ -2666,6 +2736,459 @@ def test_explicit_host_protoc_overrides_target_when_cross_compiling(
         host_protoc.as_posix(),
         host_protoc.as_posix(),
     ]
+
+
+@pytest.mark.parametrize("variable_storage", ["normal", "cache"])
+def test_cross_compile_rejects_non_runnable_explicit_protoc(
+    tmp_path: Path,
+    variable_storage: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    target_protoc = _write_protobuf_toolchain(source_dir / "target-toolchain")
+    if variable_storage == "cache":
+        protoc_setting = (
+            f'set(Protobuf_PROTOC_EXECUTABLE "{target_protoc.as_posix()}" '
+            'CACHE FILEPATH "")'
+        )
+    else:
+        protoc_setting = (
+            f'set(Protobuf_PROTOC_EXECUTABLE "{target_protoc.as_posix()}")'
+        )
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_explicit_protoc_probe LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                protoc_setting,
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{(source_dir / "target-toolchain" / "include").as_posix()}")',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "_protocyte_ensure_protobuf(FALSE)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = " ".join((result.stdout + result.stderr).split())
+
+    assert result.returncode != 0
+    assert "requires Protobuf_PROTOC_EXECUTABLE to name a host-runnable compiler" in output
+    assert "Protobuf_PROTOC_EXECUTABLE is not host-runnable" in output
+    assert target_protoc.as_posix() in output
+
+
+@pytest.mark.parametrize("host_runnable", [True, False])
+def test_cross_compile_probes_protoc_inherited_from_prior_find_package(
+    tmp_path: Path,
+    host_runnable: bool,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    toolchain_root = source_dir / "protobuf-package"
+    if host_runnable:
+        package_protoc = _write_runnable_host_protoc(toolchain_root)
+    else:
+        package_protoc = _write_protobuf_toolchain(toolchain_root)
+    package_dir = toolchain_root / "lib" / "cmake" / "protobuf"
+    package_dir.mkdir(parents=True)
+    (package_dir / "ProtobufConfig.cmake").write_text(
+        f'set(Protobuf_PROTOC_EXECUTABLE "{package_protoc.as_posix()}")\n',
+        encoding="utf-8",
+    )
+    selected = build_dir / "selected.txt"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_inherited_protoc_probe LANGUAGES NONE)",
+                f'find_package(Protobuf CONFIG REQUIRED PATHS "{package_dir.as_posix()}" NO_DEFAULT_PATH)',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{(toolchain_root / "include").as_posix()}")',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "_protocyte_ensure_protobuf(FALSE)",
+                f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    if host_runnable:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert selected.read_text(encoding="utf-8").splitlines() == [
+            package_protoc.as_posix(),
+            package_protoc.as_posix(),
+        ]
+    else:
+        output = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode != 0
+        assert "Protobuf_PROTOC_EXECUTABLE is not host-runnable" in output
+        assert package_protoc.as_posix() in output
+
+
+@pytest.mark.parametrize("shadow_variable", ["CMAKE_PROGRAM_PATH", "CMAKE_PREFIX_PATH"])
+def test_cross_compile_host_lookup_ignores_cmake_target_search_paths(
+    tmp_path: Path,
+    shadow_variable: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    host_protoc = _write_runnable_host_protoc(source_dir / "host-toolchain")
+    executable_name = "protoc.exe" if os.name == "nt" else "protoc"
+    if shadow_variable == "CMAKE_PROGRAM_PATH":
+        shadow_root = source_dir / "target-programs"
+        target_protoc = shadow_root / executable_name
+    else:
+        shadow_root = source_dir / "target-prefix"
+        target_protoc = shadow_root / "bin" / executable_name
+    target_protoc.parent.mkdir(parents=True)
+    target_protoc.write_text("target-architecture executable\n", encoding="utf-8")
+    if os.name != "nt":
+        target_protoc.chmod(0o755)
+    selected = build_dir / "selected.txt"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_path_only_protoc LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'set({shadow_variable} "{shadow_root.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{(source_dir / "host-toolchain" / "include").as_posix()}")',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "_protocyte_ensure_protobuf(FALSE)",
+                f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join([str(host_protoc.parent), env.get("PATH", "")])
+
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert selected.read_text(encoding="utf-8").splitlines() == [
+        host_protoc.as_posix(),
+        host_protoc.as_posix(),
+    ]
+
+
+def test_cross_compile_host_path_precedes_target_protobuf_package(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    host_protoc = _write_runnable_host_protoc(source_dir / "host-toolchain")
+    target_executable_name = "protoc.exe" if os.name == "nt" else "protoc"
+    target_protoc = source_dir / "target-sysroot" / "bin" / target_executable_name
+    target_protoc.parent.mkdir(parents=True)
+    target_protoc.write_text("target-architecture executable\n", encoding="utf-8")
+    protobuf_package = source_dir / "target-sysroot" / "lib" / "cmake" / "protobuf"
+    _write_target_protobuf_package(protobuf_package, target_protoc)
+    selected = build_dir / "selected.txt"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_path_host_protoc LANGUAGES NONE)",
+                'if(NOT CMAKE_CROSSCOMPILING)',
+                '    message(FATAL_ERROR "fixture did not configure as a cross build")',
+                "endif()",
+                f'find_package(Protobuf CONFIG REQUIRED PATHS "{protobuf_package.as_posix()}" NO_DEFAULT_PATH)',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "_protocyte_ensure_protobuf(FALSE)",
+                f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join([str(host_protoc.parent), env.get("PATH", "")])
+
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert selected.read_text(encoding="utf-8").splitlines() == [
+        host_protoc.as_posix(),
+        host_protoc.as_posix(),
+    ]
+
+
+def test_cross_compile_rejects_target_protoc_and_its_emulator(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    target_executable_name = "protoc.exe" if os.name == "nt" else "protoc"
+    target_protoc = source_dir / "target-sysroot" / "bin" / target_executable_name
+    target_protoc.parent.mkdir(parents=True)
+    target_protoc.write_text("target-architecture executable\n", encoding="utf-8")
+    protobuf_package = source_dir / "target-sysroot" / "lib" / "cmake" / "protobuf"
+    _write_target_protobuf_package(protobuf_package, target_protoc)
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_target_protoc_rejection LANGUAGES NONE)",
+                f'find_package(Protobuf CONFIG REQUIRED PATHS "{protobuf_package.as_posix()}" NO_DEFAULT_PATH)',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH FALSE)",
+                "set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)",
+                'set(ENV{PATH} "")',
+                "_protocyte_ensure_protobuf(FALSE)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = " ".join((result.stdout + result.stderr).split())
+
+    assert result.returncode != 0
+    assert "could not find a host-runnable protoc while cross-compiling" in output
+    assert "target 'protobuf::protoc' for project configuration" in output
+    assert "is not host-runnable" in output
+    assert target_protoc.as_posix() in output
+    assert "target emulators are not propagated" in output
+
+
+def test_cross_compile_accepts_host_runnable_imported_protoc_target(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    host_protoc = _write_runnable_host_protoc(source_dir / "host-toolchain")
+    protobuf_package = source_dir / "host-toolchain" / "lib" / "cmake" / "protobuf"
+    _write_target_protobuf_package(protobuf_package, host_protoc)
+    selected = build_dir / "selected.txt"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_imported_host_protoc LANGUAGES NONE)",
+                f'find_package(Protobuf CONFIG REQUIRED PATHS "{protobuf_package.as_posix()}" NO_DEFAULT_PATH)',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_PATH FALSE)",
+                "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH FALSE)",
+                "set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH FALSE)",
+                'set(ENV{PATH} "")',
+                "_protocyte_ensure_protobuf(FALSE)",
+                f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert selected.read_text(encoding="utf-8").splitlines() == [
+        host_protoc.as_posix(),
+        host_protoc.as_posix(),
+    ]
+
+
+def test_cross_compile_imported_multiconfig_mapping_tracks_selected_file(
+    tmp_path: Path,
+) -> None:
+    cmake = shutil.which("cmake")
+    ninja = shutil.which("ninja")
+    if cmake is None or ninja is None:
+        pytest.skip("CMake and Ninja are required for the multi-config mapping test")
+    cmake_help = subprocess.run(
+        [cmake, "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if "Ninja Multi-Config" not in cmake_help:
+        pytest.skip("CMake does not provide the Ninja Multi-Config generator")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    empty_path = source_dir / "empty-path"
+    empty_path.mkdir()
+    debug_protoc = _write_runnable_host_protoc(source_dir / "debug-toolchain")
+    release_protoc = _write_runnable_host_protoc(source_dir / "release-toolchain")
+    selected = build_dir / "selected.txt"
+    generated_stamp = build_dir / "generated.stamp"
+
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(cross_imported_multiconfig LANGUAGES NONE)",
+                "add_executable(protobuf::protoc IMPORTED)",
+                "set_target_properties(",
+                "    protobuf::protoc",
+                "    PROPERTIES",
+                '        IMPORTED_CONFIGURATIONS "Debug;Release"',
+                f'        IMPORTED_LOCATION_DEBUG "{debug_protoc.as_posix()}"',
+                f'        IMPORTED_LOCATION_RELEASE "{release_protoc.as_posix()}"',
+                '        MAP_IMPORTED_CONFIG_DEBUG "Missing;Release"',
+                ")",
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{(source_dir / "release-toolchain" / "include").as_posix()}")',
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "_protocyte_ensure_protobuf(FALSE)",
+                f'file(WRITE "{selected.as_posix()}" "${{PROTOCYTE_PROTOC_EXECUTABLE}}\n${{PROTOCYTE_PROTOC_DEPENDENCY}}\n")',
+                "add_custom_command(",
+                f'    OUTPUT "{generated_stamp.as_posix()}"',
+                f'    COMMAND "${{PROTOCYTE_PROTOC_EXECUTABLE}}" -E touch "{generated_stamp.as_posix()}"',
+                '    DEPENDS "${PROTOCYTE_PROTOC_DEPENDENCY}"',
+                "    VERBATIM",
+                ")",
+                f'add_custom_target(generate ALL DEPENDS "{generated_stamp.as_posix()}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = str(empty_path)
+    subprocess.run(
+        [
+            cmake,
+            "-G",
+            "Ninja Multi-Config",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            "-DCMAKE_SYSTEM_NAME=Generic",
+            "-DCMAKE_CONFIGURATION_TYPES=Debug",
+            f"-DCMAKE_MAKE_PROGRAM={Path(ninja).as_posix()}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert selected.read_text(encoding="utf-8").splitlines() == [
+        release_protoc.as_posix(),
+        release_protoc.as_posix(),
+    ]
+    build_command = [cmake, "--build", str(build_dir), "--config", "Debug"]
+    subprocess.run(build_command, check=True, env=env)
+    initial_stamp_mtime = generated_stamp.stat().st_mtime_ns
+
+    _touch_newer_than(debug_protoc, generated_stamp)
+    subprocess.run(build_command, check=True, env=env)
+    assert generated_stamp.stat().st_mtime_ns == initial_stamp_mtime
+
+    _touch_newer_than(release_protoc, generated_stamp)
+    subprocess.run(build_command, check=True, env=env)
+    assert generated_stamp.stat().st_mtime_ns > initial_stamp_mtime
 
 
 def test_path_protoc_precedes_fetch_and_ignores_generic_target(
