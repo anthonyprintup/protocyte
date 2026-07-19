@@ -5851,6 +5851,46 @@ def test_relative_managed_environment_root_is_canonical_and_confined(
     _assert_no_managed_environment_transaction_leftovers(expected_root)
 
 
+def test_add_subdirectory_publishes_normal_parent_environment_root(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "consumer"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(parent_environment_root LANGUAGES NONE)",
+                'set(PROTOCYTE_PYTHON_ENV_ROOT "parent-managed-python")',
+                "set(PROTOCYTE_FETCH_PROTOBUF OFF)",
+                "set(PROTOCYTE_INSTALL OFF)",
+                f'add_subdirectory("{repo_root.as_posix()}" "${{CMAKE_CURRENT_BINARY_DIR}}/protocyte" EXCLUDE_FROM_ALL)',
+                "_protocyte_get_internal(managed_root PYTHON_ENV_ROOT)",
+                "get_property(cached_root CACHE PROTOCYTE_PYTHON_ENV_ROOT PROPERTY VALUE)",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/roots.txt" "${PROTOCYTE_PYTHON_ENV_ROOT}\n${managed_root}\n${cached_root}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    expected_root = build_dir / "parent-managed-python"
+    configured_roots = (build_dir / "roots.txt").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert [Path(root) for root in configured_roots] == [expected_root] * 3
+
+
 def test_relative_managed_environment_root_cache_is_canonical(
     tmp_path: Path,
 ) -> None:

@@ -328,7 +328,8 @@ Subsequent configurations reuse the environment while the Python interpreter,
 protocyte sources, and package metadata remain unchanged. Set
 `PROTOCYTE_PYTHON_ENV_ROOT` before making protocyte available to choose another
 build-local environment directory. Relative values are normalized against
-`CMAKE_BINARY_DIR`. The environment root must not contain a semicolon. Set
+`CMAKE_BINARY_DIR`, then the canonical absolute path is published back to the
+consumer scope and CMake cache. The environment root must not contain a semicolon. Set
 `PROTOCYTE_PLUGIN_EXECUTABLE` to a preinstalled plugin when dependency
 provisioning must be managed externally. Its path must also be semicolon-free;
 when the actual tool is beneath such a path, provide a wrapper from a

@@ -25,15 +25,13 @@ function(_protocyte_configure_python_environment_root)
         )
     endif()
 
-    if(DEFINED CACHE{PROTOCYTE_PYTHON_ENV_ROOT})
-        set(
-            PROTOCYTE_PYTHON_ENV_ROOT
-            "${canonical_root}"
-            CACHE PATH
-            "Directory for Protocyte-managed Python virtual environments."
-            FORCE
-        )
-    endif()
+    set(
+        PROTOCYTE_PYTHON_ENV_ROOT
+        "${canonical_root}"
+        CACHE PATH
+        "Directory for Protocyte-managed Python virtual environments."
+        FORCE
+    )
     set(PROTOCYTE_PYTHON_ENV_ROOT "${canonical_root}" PARENT_SCOPE)
     set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_ENV_ROOT "${canonical_root}")
 endfunction()

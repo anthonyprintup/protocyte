@@ -157,6 +157,7 @@ def test_readme_documents_managed_tool_path_contracts() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "Relative values are normalized against\n`CMAKE_BINARY_DIR`" in readme
+    assert "published back to the\nconsumer scope and CMake cache" in readme
     assert "The environment root must not contain a semicolon" in readme
     assert "provide a wrapper from a\nsemicolon-free location" in readme
 
