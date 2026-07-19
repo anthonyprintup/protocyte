@@ -4827,10 +4827,41 @@ TEST_CASE("Direct fallible Span APIs reject non-empty null inputs before mutatio
     CHECK(writer.position() == 0u);
     CHECK(encoded[0] == 0u);
 
+    require_failure(protocyte::validate_unknown_field_bytes(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    require_failure(protocyte::decode_unknown_field_at(invalid_bytes, 0u), protocyte::ErrorCode::invalid_argument);
+    const protocyte::UnknownFieldRange invalid_unknown_fields {invalid_bytes};
+    require_failure(invalid_unknown_fields.field(0u), protocyte::ErrorCode::invalid_argument);
+
+    const protocyte::UnknownFieldView invalid_varint {
+        protocyte::Tag {.field_number = 16u, .wire_type = protocyte::WireType::VARINT}, invalid_bytes, invalid_bytes};
+    require_failure(invalid_varint.varint(), protocyte::ErrorCode::invalid_argument);
+    const protocyte::UnknownFieldView invalid_group {
+        protocyte::Tag {.field_number = 17u, .wire_type = protocyte::WireType::SGROUP}, invalid_bytes, invalid_bytes};
+    require_failure(invalid_group.group(), protocyte::ErrorCode::invalid_argument);
+
+    protocyte::u8 canonical[8] {};
+    protocyte::SliceWriter canonical_writer {canonical, sizeof(canonical)};
+    require_failure(protocyte::write_canonical_unknown_fields(canonical_writer, invalid_bytes,
+                                                              protocyte::Limits::default_max_recursion_depth),
+                    protocyte::ErrorCode::invalid_argument);
+    CHECK(canonical_writer.position() == 0u);
+    CHECK(canonical[0] == 0u);
+
     PreservingCompatMessage preserving(ctx);
     auto unknown = preserving.mutable_unknown_fields();
     require_failure(unknown.add_length_delimited(17u, invalid_bytes), protocyte::ErrorCode::invalid_argument);
     CHECK(unknown.empty());
+
+    require_success(unknown.add_varint(16u, 23u));
+    const auto unknown_before = preserving.unknown_field_bytes();
+    const std::vector<protocyte::u8> expected_unknown {unknown_before.begin(), unknown_before.end()};
+    const auto unknown_allocation = ctx.total_allocated_bytes;
+    require_failure(unknown.add_group(17u, invalid_unknown_fields), protocyte::ErrorCode::invalid_argument);
+    require_failure(unknown.merge_from(invalid_unknown_fields), protocyte::ErrorCode::invalid_argument);
+    CHECK(unknown.field_count() == 1u);
+    CHECK(view_equal(preserving.unknown_field_bytes(),
+                     protocyte::Span<const protocyte::u8> {expected_unknown.data(), expected_unknown.size()}));
+    CHECK(ctx.total_allocated_bytes == unknown_allocation);
 }
 
 TEST_CASE("generated repeated fields accept contiguous range operations", "[smoke][runtime][repeated]") {

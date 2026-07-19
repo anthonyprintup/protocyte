@@ -5103,7 +5103,11 @@ namespace protocyte {
             if (wire_type() != WireType::VARINT) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            SliceReader reader {value_.data(), value_.size()};
+            const auto value = checked_value();
+            if (!value) {
+                return protocyte::unexpected(value.error());
+            }
+            SliceReader reader {value->data(), value->size()};
             const auto decoded = read_varint(reader);
             if (!decoded) {
                 return protocyte::unexpected(with_field(decoded.error(), field_number()));
@@ -5118,7 +5122,11 @@ namespace protocyte {
             if (wire_type() != WireType::I32) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            SliceReader reader {value_.data(), value_.size()};
+            const auto value = checked_value();
+            if (!value) {
+                return protocyte::unexpected(value.error());
+            }
+            SliceReader reader {value->data(), value->size()};
             return with_field(read_fixed32(reader), field_number());
         }
 
@@ -5126,7 +5134,11 @@ namespace protocyte {
             if (wire_type() != WireType::I64) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            SliceReader reader {value_.data(), value_.size()};
+            const auto value = checked_value();
+            if (!value) {
+                return protocyte::unexpected(value.error());
+            }
+            SliceReader reader {value->data(), value->size()};
             return with_field(read_fixed64(reader), field_number());
         }
 
@@ -5134,12 +5146,16 @@ namespace protocyte {
             if (wire_type() != WireType::LEN) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
             }
-            return value_;
+            return checked_value();
         }
 
         Result<UnknownFieldRange> group() const noexcept;
 
     protected:
+        Result<Span<const u8>> checked_value() const noexcept {
+            return with_field(checked_span_of(value_), field_number());
+        }
+
         Tag tag_ {};
         Span<const u8> encoded_ {};
         Span<const u8> value_ {};
@@ -5154,6 +5170,10 @@ namespace protocyte {
     inline Result<DecodedUnknownField>
     decode_unknown_field_at(const Span<const u8> bytes, const usize offset,
                             const usize max_recursion_depth = Limits::default_max_recursion_depth) noexcept {
+        const auto checked_bytes = checked_span_of(bytes);
+        if (!checked_bytes) {
+            return protocyte::unexpected(checked_bytes.error());
+        }
         if (offset >= bytes.size()) {
             return protocyte::unexpected(ErrorCode::unexpected_eof, offset);
         }
@@ -5366,7 +5386,11 @@ namespace protocyte {
         if (wire_type() != WireType::SGROUP) {
             return protocyte::unexpected(ErrorCode::invalid_argument, {}, field_number());
         }
-        return UnknownFieldRange {value_, group_recursion_depth_};
+        const auto value = checked_value();
+        if (!value) {
+            return protocyte::unexpected(value.error());
+        }
+        return UnknownFieldRange {*value, group_recursion_depth_};
     }
 
     template<class Config> struct UnknownFieldWriter {
@@ -5417,9 +5441,13 @@ namespace protocyte {
 
     template<class Writer> Status write_canonical_unknown_fields(Writer &writer, const Span<const u8> bytes,
                                                                  const usize max_recursion_depth) noexcept {
+        const auto checked_bytes = checked_span_of(bytes);
+        if (!checked_bytes) {
+            return checked_bytes.status();
+        }
         usize offset {};
-        while (offset < bytes.size()) {
-            const auto decoded = decode_unknown_field_at(bytes, offset, max_recursion_depth);
+        while (offset < checked_bytes->size()) {
+            const auto decoded = decode_unknown_field_at(*checked_bytes, offset, max_recursion_depth);
             if (!decoded) {
                 return decoded.status();
             }
@@ -5678,12 +5706,16 @@ namespace protocyte {
         }
 
         Status add_group(const u32 field_number, const UnknownFieldRange value) noexcept {
+            const auto checked_value = checked_span_of(value.encoded());
+            if (!checked_value) {
+                return with_field(checked_value.status(), field_number);
+            }
             if (!ctx_->limits.max_recursion_depth) {
                 return protocyte::unexpected(ErrorCode::recursion_limit, {}, field_number);
             }
             return append_field_transactional(field_number, WireType::SGROUP, [&](auto &writer) noexcept -> Status {
                 if (const auto st =
-                        write_canonical_unknown_fields(writer, value.encoded(), ctx_->limits.max_recursion_depth - 1u);
+                        write_canonical_unknown_fields(writer, *checked_value, ctx_->limits.max_recursion_depth - 1u);
                     !st) {
                     return st;
                 }
@@ -5692,7 +5724,11 @@ namespace protocyte {
         }
 
         Status merge_from(const UnknownFieldRange value) noexcept {
-            if (value.empty()) {
+            const auto checked_value = checked_span_of(value.encoded());
+            if (!checked_value) {
+                return checked_value.status();
+            }
+            if (checked_value->empty()) {
                 return {};
             }
             Storage output {ctx_};
@@ -5709,7 +5745,7 @@ namespace protocyte {
             }
             UnknownFieldWriter<Config> writer {output, ctx_->limits.max_unknown_field_bytes};
             if (const auto st =
-                    write_canonical_unknown_fields(writer, value.encoded(), ctx_->limits.max_recursion_depth);
+                    write_canonical_unknown_fields(writer, *checked_value, ctx_->limits.max_recursion_depth);
                 !st) {
                 return st;
             }
