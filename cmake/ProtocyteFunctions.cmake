@@ -60,11 +60,131 @@ endfunction()
 function(_protocyte_output_lock_key out_var output_path)
     set(output_identity "${output_path}")
     cmake_path(NORMAL_PATH output_identity)
-    if(WIN32)
+    if(CMAKE_HOST_WIN32)
         string(TOLOWER "${output_identity}" output_identity)
     endif()
     string(SHA256 output_lock_key "${output_identity}")
     set(${out_var} "${output_lock_key}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_shared_output_lock_directory out_var)
+    if(
+        DEFINED PROTOCYTE_OUTPUT_LOCK_ROOT
+        AND NOT "${PROTOCYTE_OUTPUT_LOCK_ROOT}" STREQUAL ""
+    )
+        if("${PROTOCYTE_OUTPUT_LOCK_ROOT}" MATCHES "\\$<")
+            message(
+                FATAL_ERROR
+                "PROTOCYTE_OUTPUT_LOCK_ROOT must be a configure-time absolute path, not a generator expression"
+            )
+        endif()
+        if(NOT IS_ABSOLUTE "${PROTOCYTE_OUTPUT_LOCK_ROOT}")
+            message(
+                FATAL_ERROR
+                "PROTOCYTE_OUTPUT_LOCK_ROOT must be absolute so independent build trees use the same lock namespace: "
+                "${PROTOCYTE_OUTPUT_LOCK_ROOT}"
+            )
+        endif()
+        cmake_path(
+            NORMAL_PATH PROTOCYTE_OUTPUT_LOCK_ROOT
+            OUTPUT_VARIABLE output_lock_directory
+        )
+        set(${out_var} "${output_lock_directory}" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(output_lock_base "")
+    if(CMAKE_HOST_WIN32)
+        foreach(environment_name IN ITEMS LOCALAPPDATA TEMP TMP)
+            if(
+                "${output_lock_base}" STREQUAL ""
+                AND NOT "$ENV{${environment_name}}" STREQUAL ""
+                AND IS_ABSOLUTE "$ENV{${environment_name}}"
+            )
+                set(output_lock_base "$ENV{${environment_name}}")
+            endif()
+        endforeach()
+    else()
+        if(
+            NOT "$ENV{XDG_CACHE_HOME}" STREQUAL ""
+            AND IS_ABSOLUTE "$ENV{XDG_CACHE_HOME}"
+        )
+            set(output_lock_base "$ENV{XDG_CACHE_HOME}")
+        elseif(NOT "$ENV{HOME}" STREQUAL "" AND IS_ABSOLUTE "$ENV{HOME}")
+            set(output_lock_base "$ENV{HOME}/.cache")
+        endif()
+    endif()
+
+    if("${output_lock_base}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "Protocyte could not choose a user-scoped output lock directory. "
+            "Set PROTOCYTE_OUTPUT_LOCK_ROOT to an absolute writable directory shared by build trees "
+            "that generate the same outputs."
+        )
+    endif()
+    set(output_lock_directory "${output_lock_base}/protocyte/output-locks-v1")
+    cmake_path(NORMAL_PATH output_lock_directory)
+    set(${out_var} "${output_lock_directory}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_import_root_inventory out_var import_root)
+    if("${import_root}" STREQUAL "")
+        set(${out_var} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    cmake_path(NORMAL_PATH import_root OUTPUT_VARIABLE normalized_import_root)
+    string(SHA256 import_root_key "${normalized_import_root}")
+    set(inventory_property "PROTOCYTE_INTERNAL_IMPORT_INVENTORY_${import_root_key}")
+    get_property(inventory_is_registered GLOBAL PROPERTY "${inventory_property}" SET)
+    if(inventory_is_registered)
+        get_property(inventory_file GLOBAL PROPERTY "${inventory_property}")
+        set(${out_var} "${inventory_file}" PARENT_SCOPE)
+        return()
+    endif()
+
+    file(
+        GLOB_RECURSE import_root_entries
+        LIST_DIRECTORIES FALSE
+        RELATIVE "${normalized_import_root}"
+        CONFIGURE_DEPENDS
+        FOLLOW_SYMLINKS
+        "${normalized_import_root}/*.proto"
+    )
+    set(encoded_import_root_entries)
+    foreach(import_root_entry IN LISTS import_root_entries)
+        string(HEX "${import_root_entry}" encoded_import_root_entry)
+        list(APPEND encoded_import_root_entries "${encoded_import_root_entry}")
+    endforeach()
+    list(REMOVE_DUPLICATES encoded_import_root_entries)
+    list(SORT encoded_import_root_entries)
+
+    string(HEX "${normalized_import_root}" encoded_import_root)
+    set(inventory_content "version=1\nroot=${encoded_import_root}\n")
+    foreach(encoded_import_root_entry IN LISTS encoded_import_root_entries)
+        string(APPEND inventory_content "file=${encoded_import_root_entry}\n")
+    endforeach()
+
+    set(
+        inventory_file
+        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-import-inventories/${import_root_key}.list"
+    )
+    cmake_path(GET inventory_file PARENT_PATH inventory_directory)
+    file(MAKE_DIRECTORY "${inventory_directory}")
+    set(write_inventory TRUE)
+    if(EXISTS "${inventory_file}")
+        file(READ "${inventory_file}" existing_inventory_content)
+        if(existing_inventory_content STREQUAL inventory_content)
+            set(write_inventory FALSE)
+        endif()
+    endif()
+    if(write_inventory)
+        file(WRITE "${inventory_file}" "${inventory_content}")
+    endif()
+
+    set_property(GLOBAL PROPERTY "${inventory_property}" "${inventory_file}")
+    set(${out_var} "${inventory_file}" PARENT_SCOPE)
 endfunction()
 
 function(
@@ -677,6 +797,13 @@ function(_protocyte_owned_output_key out_var output_path)
     set(${out_var} "${output_key}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_owned_output_claim_key out_var output_path)
+    cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
+    string(TOLOWER "${normalized_output_path}" portable_output_identity)
+    string(SHA256 output_claim_key "${portable_output_identity}")
+    set(${out_var} "${output_claim_key}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_generated_output_path_is_safe out_var output_path output_root)
     set(is_safe FALSE)
     if(IS_ABSOLUTE "${output_path}" AND IS_ABSOLUTE "${output_root}")
@@ -1132,6 +1259,27 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
     foreach(output_path IN LISTS ${outputs_var})
         cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
         _protocyte_owned_output_key(output_key "${normalized_output_path}")
+        _protocyte_owned_output_claim_key(output_claim_key "${normalized_output_path}")
+        set(claim_owner_property "PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLAIM_OWNER_${output_claim_key}")
+        set(claim_path_property "PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLAIM_PATH_${output_claim_key}")
+        get_property(output_is_claimed GLOBAL PROPERTY "${claim_owner_property}" SET)
+        if(output_is_claimed)
+            get_property(existing_owner GLOBAL PROPERTY "${claim_owner_property}")
+            get_property(existing_path GLOBAL PROPERTY "${claim_path_property}")
+            if(NOT existing_owner STREQUAL target_name)
+                message(
+                    FATAL_ERROR
+                    "Protocyte generated output '${normalized_output_path}' for target '${target_name}' "
+                    "collides with portable-equivalent output '${existing_path}' already owned by target "
+                    "'${existing_owner}'. Each generated file must have one current code-generation owner. "
+                    "Use a distinct OUT_DIR, select disjoint descriptor files, or generate the shared file "
+                    "once and reuse its generation target."
+                )
+            endif()
+        else()
+            set_property(GLOBAL PROPERTY "${claim_owner_property}" "${target_name}")
+            set_property(GLOBAL PROPERTY "${claim_path_property}" "${normalized_output_path}")
+        endif()
         list(APPEND current_output_keys "${output_key}")
         set_property(
             GLOBAL PROPERTY
@@ -2595,6 +2743,12 @@ function(protocyte_generate)
             "${PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}"
         )
         list(REMOVE_DUPLICATES protocyte_import_dirs)
+        set(protocyte_import_inventory_depends)
+        foreach(import_dir IN LISTS protocyte_import_dirs)
+            _protocyte_import_root_inventory(import_inventory "${import_dir}")
+            list(APPEND protocyte_import_inventory_depends "${import_inventory}")
+        endforeach()
+        list(REMOVE_DUPLICATES protocyte_import_inventory_depends)
 
         set(has_protobuf_descriptor_proto FALSE)
         foreach(import_dir IN LISTS protocyte_import_dirs)
@@ -2734,6 +2888,7 @@ function(protocyte_generate)
                     "${dependency_depfile_target}"
                 DEPENDS
                     "${proto_file_dependency}"
+                    ${protocyte_import_inventory_depends}
                     "${dependency_response_file}"
                     "${protocyte_dependency_scan_script}"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
@@ -2799,7 +2954,7 @@ function(protocyte_generate)
         "generation|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
         "${protocyte_response_content}"
     )
-    set(protocyte_lock_dir "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-locks")
+    _protocyte_shared_output_lock_directory(protocyte_lock_dir)
     set(protocyte_generation_lock_keys)
     foreach(command_output IN LISTS protocyte_command_outputs)
         _protocyte_output_lock_key(output_lock_key "${command_output}")
