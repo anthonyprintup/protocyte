@@ -23,6 +23,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       archive_name: ${{ steps.version.outputs.archive_name }}
+      wheel_name: ${{ steps.version.outputs.wheel_name }}
+      sdist_name: ${{ steps.version.outputs.sdist_name }}
       prerelease: ${{ steps.version.outputs.prerelease }}
 
     steps:
@@ -70,6 +72,8 @@ jobs:
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "archive_name=protocyte-${version}-cmake-prefix.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "wheel_name=protocyte-${expected_package_version}-py3-none-any.whl" >> "$GITHUB_OUTPUT"
+          echo "sdist_name=protocyte-${expected_package_version}.tar.gz" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   release-gate:
@@ -85,6 +89,12 @@ jobs:
       - validate-tag
       - release-gate
     runs-on: ubuntu-latest
+    env:
+      CMAKE_VERSION: "4.3.2"
+      LC_ALL: C.UTF-8
+      PYTHONHASHSEED: "0"
+      TZ: UTC
+      UV_PYTHON: "3.12.9"
 
     steps:
       - name: Check out repository
@@ -93,30 +103,111 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          python-version: "3.12.9"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
+          version: "0.11.7"
+
+      - name: Set normalized release timestamp
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
 
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
-      - name: Build plugin package
-        run: uv build
+      - name: Build and normalize plugin packages twice
+        shell: bash
+        run: |
+          for build in first second; do
+            source_dir="staging/reproducibility/${build}/source"
+            output_dir="staging/reproducibility/${build}/dist"
+            mkdir -p "$source_dir"
+            git archive HEAD | tar -x -C "$source_dir"
+            uv build "$source_dir" --out-dir "$output_dir"
+            uv run python .github/scripts/reproducible_archive.py \
+              --epoch "$SOURCE_DATE_EPOCH" normalize zip \
+              "$output_dir/${{ needs.validate-tag.outputs.wheel_name }}"
+            uv run python .github/scripts/reproducible_archive.py \
+              --epoch "$SOURCE_DATE_EPOCH" normalize tar-gz \
+              "$output_dir/${{ needs.validate-tag.outputs.sdist_name }}"
+          done
 
-      - name: Configure release install tree
-        run: cmake -S . -B build/release-install
+          cmp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "staging/reproducibility/second/dist/${{ needs.validate-tag.outputs.wheel_name }}"
+          cmp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "staging/reproducibility/second/dist/${{ needs.validate-tag.outputs.sdist_name }}"
 
-      - name: Install and archive CMake package
+          mkdir -p dist
+          cp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}"
+          cp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}"
+
+      - name: Build and normalize CMake prefix twice
         shell: bash
         run: |
           version="${{ needs.validate-tag.outputs.version }}"
-          prefix_dir="staging/protocyte-${version}-cmake-prefix"
-          mkdir -p "$prefix_dir"
-          cmake --install build/release-install --prefix "$prefix_dir"
-          tar -C staging -czf "staging/${{ needs.validate-tag.outputs.archive_name }}" "protocyte-${version}-cmake-prefix"
+          prefix_name="protocyte-${version}-cmake-prefix"
+          for build in first second; do
+            build_root="staging/reproducibility/${build}"
+            source_dir="${build_root}/source"
+            prefix_dir="${build_root}/${prefix_name}"
+            uvx --from "cmake==$CMAKE_VERSION" cmake \
+              -S "$source_dir" -B "${build_root}/cmake-build"
+            uvx --from "cmake==$CMAKE_VERSION" cmake \
+              --install "${build_root}/cmake-build" --prefix "$prefix_dir"
+            uv run python .github/scripts/reproducible_archive.py \
+              --epoch "$SOURCE_DATE_EPOCH" pack-tar-gz "$prefix_dir" \
+              "${build_root}/${{ needs.validate-tag.outputs.archive_name }}"
+          done
+
+          cmp \
+            "staging/reproducibility/first/${{ needs.validate-tag.outputs.archive_name }}" \
+            "staging/reproducibility/second/${{ needs.validate-tag.outputs.archive_name }}"
+          cp \
+            "staging/reproducibility/first/${{ needs.validate-tag.outputs.archive_name }}" \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}"
+
+      - name: Test exact wheel artifact
+        shell: bash
+        run: |
+          python="staging/release-tests/wheel-venv/bin/python"
+          uv venv "staging/release-tests/wheel-venv" --python 3.12
+          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.wheel_name }}"
+          "$python" -m protocyte --help
+          "$python" -m protocyte --version
+          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --help
+          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --version
+
+      - name: Test exact source artifact
+        shell: bash
+        run: |
+          python="staging/release-tests/sdist-venv/bin/python"
+          uv venv "staging/release-tests/sdist-venv" --python 3.12
+          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.sdist_name }}"
+          "$python" -m protocyte --help
+          "$python" -m protocyte --version
+          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --help
+          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --version
+
+      - name: Test exact CMake prefix artifact
+        shell: bash
+        run: |
+          mkdir -p staging/release-tests/cmake-prefix
+          python -m tarfile -e \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            staging/release-tests/cmake-prefix
+          uvx --from "cmake==$CMAKE_VERSION" cmake \
+            -S tests/release_cmake_consumer \
+            -B staging/release-tests/cmake-build \
+            -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -125,6 +216,6 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ needs.validate-tag.outputs.prerelease }}
           files: |
-            dist/*.whl
-            dist/*.tar.gz
+            dist/${{ needs.validate-tag.outputs.wheel_name }}
+            dist/${{ needs.validate-tag.outputs.sdist_name }}
             staging/${{ needs.validate-tag.outputs.archive_name }}

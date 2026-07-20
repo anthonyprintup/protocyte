@@ -177,3 +177,53 @@ def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
         "test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import"
         in visual_studio_job
     )
+
+
+def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    publish = _job_named(release, "publish")
+
+    assert 'version: "0.11.7"' in publish
+    assert 'python-version: "3.12.9"' in publish
+    assert 'CMAKE_VERSION: "4.3.2"' in publish
+    assert 'PYTHONHASHSEED: "0"' in publish
+    assert "TZ: UTC" in publish
+    assert 'UV_PYTHON: "3.12.9"' in publish
+    assert "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" in publish
+    assert "for build in first second; do" in publish
+    assert 'git archive HEAD | tar -x -C "$source_dir"' in publish
+    assert publish.count("reproducible_archive.py") == 3
+    assert publish.count("cmp \\") == 3
+    assert 'uv build "$source_dir" --out-dir "$output_dir"' in publish
+    assert '-S "$source_dir" -B "${build_root}/cmake-build"' in publish
+    assert 'uvx --from "cmake==$CMAKE_VERSION" cmake \\' in publish
+
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires = ["setuptools==80.9.0"]' in pyproject
+
+
+def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    publish = _job_named(release, "publish")
+    publish_step = _step_containing(publish, "softprops/action-gh-release@")
+
+    test_step_names = {
+        "wheel_name": "Test exact wheel artifact",
+        "sdist_name": "Test exact source artifact",
+        "archive_name": "Test exact CMake prefix artifact",
+    }
+    for output, test_step_name in test_step_names.items():
+        artifact = f"${{{{ needs.validate-tag.outputs.{output} }}}}"
+        assert artifact in publish_step
+        assert publish.index(test_step_name) < publish.index("Publish GitHub release")
+
+    assert "dist/*.whl" not in publish_step
+    assert "dist/*.tar.gz" not in publish_step
+    assert "python -m tarfile -e" in publish
+    assert "-S tests/release_cmake_consumer" in publish
+    assert publish.count("-m protocyte --help") == 2
+    assert publish.count('protoc-gen-protocyte" --help') == 2
