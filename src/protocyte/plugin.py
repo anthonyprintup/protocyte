@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields
 
 from google.protobuf import descriptor_pb2
@@ -30,12 +31,27 @@ class GeneratorPolicy:
             if not item.name.startswith("max_"):
                 continue
             value = getattr(self, item.name)
-            if value is not None and value < 0:
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{item.name} must be an integer or None")
+            if value < 0:
                 raise ValueError(f"{item.name} must not be negative")
-        if (
-            self.formatter_timeout_seconds is not None
-            and self.formatter_timeout_seconds <= 0
-        ):
+
+        timeout = self.formatter_timeout_seconds
+        if timeout is None:
+            return
+        if isinstance(timeout, bool) or not isinstance(timeout, int | float):
+            raise TypeError(
+                "formatter_timeout_seconds must be a real number or None"
+            )
+        try:
+            finite = math.isfinite(timeout)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError("formatter_timeout_seconds must be finite")
+        if timeout <= 0:
             raise ValueError("formatter_timeout_seconds must be positive")
 
 

@@ -57,6 +57,17 @@ def _basic_request(*, parameter: str = "") -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+def _request_with_enum(
+    *, syntax: str = "proto3", nested: bool = False
+) -> tuple[plugin_pb2.CodeGeneratorRequest, descriptor_pb2.EnumDescriptorProto]:
+    request = _basic_request(parameter="format=off")
+    request.proto_file[0].syntax = syntax
+    owner = request.proto_file[0].message_type[0] if nested else request.proto_file[0]
+    enum = owner.enum_type.add(name="State")
+    enum.value.add(name="STATE_UNSPECIFIED", number=0)
+    return request, enum
+
+
 def _add_source_documentation(
     file: descriptor_pb2.FileDescriptorProto,
     path: list[int],
@@ -579,6 +590,200 @@ def test_map_field_must_be_repeated() -> None:
     response = generate_response(request)
 
     assert response.error == "demo.Sample.items: map fields must be repeated"
+    assert not response.file
+
+
+def test_empty_enum_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.ClearField("value")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State: enum must declare at least one value"
+    assert not response.file
+
+
+def test_empty_enum_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.ClearField("name")
+
+    response = generate_response(request)
+
+    assert response.error == "simple.proto: enum name must not be empty"
+    assert not response.file
+
+
+def test_empty_nested_enum_name_identifies_its_owner() -> None:
+    request, enum = _request_with_enum(nested=True)
+    enum.ClearField("name")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample: enum name must not be empty"
+    assert not response.file
+
+
+def test_empty_enum_value_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.value[0].ClearField("name")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State: enum value at index 0 has no name"
+    assert not response.file
+
+
+def test_missing_enum_value_number_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.value[0].ClearField("number")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State.STATE_UNSPECIFIED: enum number is missing"
+    assert not response.file
+
+
+def test_proto3_enum_first_value_must_be_zero() -> None:
+    request, enum = _request_with_enum()
+    enum.value[0].number = 1
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State.STATE_UNSPECIFIED: first value in a proto3 enum must have number 0"
+    )
+    assert not response.file
+
+
+def test_proto2_enum_first_value_may_be_nonzero() -> None:
+    request, enum = _request_with_enum(syntax="proto2")
+    request.proto_file[0].message_type[0].field[1].proto3_optional = False
+    enum.value[0].number = 1
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+def test_duplicate_enum_value_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.options.allow_alias = True
+    enum.value.add(name="STATE_UNSPECIFIED", number=1)
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State.STATE_UNSPECIFIED: duplicate enum value name"
+    )
+    assert not response.file
+
+
+def test_duplicate_enum_number_requires_allow_alias() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_DEFAULT", number=0)
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State.STATE_DEFAULT: enum number 0 is already used by "
+        "'STATE_UNSPECIFIED'; set option allow_alias = true to allow aliases"
+    )
+    assert not response.file
+
+
+def test_duplicate_enum_number_is_allowed_with_allow_alias() -> None:
+    request, enum = _request_with_enum()
+    enum.options.allow_alias = True
+    enum.value.add(name="STATE_DEFAULT", number=0)
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+@pytest.mark.parametrize("reserved_name", ["", "STATE_UNSPECIFIED"])
+def test_invalid_reserved_enum_names_return_descriptor_errors(
+    reserved_name: str,
+) -> None:
+    request, enum = _request_with_enum(nested=True)
+    enum.reserved_name.append(reserved_name)
+
+    response = generate_response(request)
+
+    if reserved_name:
+        assert response.error == (
+            "demo.Sample.State.STATE_UNSPECIFIED: enum value name is reserved"
+        )
+    else:
+        assert response.error == (
+            "demo.Sample.State: reserved enum value name must not be empty"
+        )
+    assert not response.file
+
+
+def test_duplicate_reserved_enum_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.reserved_name.extend(["STATE_RETIRED", "STATE_RETIRED"])
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State: duplicate reserved enum value name 'STATE_RETIRED'"
+    )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("ranges", "error"),
+    [
+        ([(2, 1)], "invalid reserved enum range [2, 1]"),
+        (
+            [(2, 4), (4, 5)],
+            "reserved enum ranges [2, 4] and [4, 5] overlap",
+        ),
+    ],
+)
+def test_invalid_reserved_enum_ranges_return_descriptor_errors(
+    ranges: list[tuple[int, int]], error: str
+) -> None:
+    request, enum = _request_with_enum()
+    for start, end in ranges:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == f"demo.State: {error}"
+    assert not response.file
+
+
+def test_reserved_enum_range_requires_both_endpoints() -> None:
+    request, enum = _request_with_enum()
+    reserved_range = enum.reserved_range.add()
+    reserved_range.start = 1
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State: reserved enum range must specify start and end"
+    )
+    assert not response.file
+
+
+def test_reserved_enum_range_is_inclusive() -> None:
+    request, enum = _request_with_enum()
+    reserved_range = enum.reserved_range.add()
+    reserved_range.start = 0
+    reserved_range.end = 0
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State.STATE_UNSPECIFIED: enum number 0 is reserved"
+    )
     assert not response.file
 
 
@@ -2609,11 +2814,75 @@ def test_generator_policy_short_circuits_genuinely_deep_descriptors() -> None:
     assert not response.file
 
 
-def test_generator_policy_rejects_invalid_limit_configuration() -> None:
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "max_request_bytes",
+        "max_files_to_generate",
+        "max_proto_files",
+        "max_descriptor_nodes",
+        "max_nesting_depth",
+        "max_generated_bytes",
+    ],
+)
+@pytest.mark.parametrize("invalid_value", [True, 1.0, "1", float("nan")])
+def test_generator_policy_rejects_non_integer_limits(
+    field_name: str, invalid_value: object
+) -> None:
+    with pytest.raises(TypeError, match=rf"{field_name} must be an integer or None"):
+        GeneratorPolicy(**{field_name: invalid_value})  # type: ignore[arg-type]
+
+
+def test_generator_policy_rejects_negative_limit_configuration() -> None:
     with pytest.raises(ValueError, match="max_request_bytes must not be negative"):
         GeneratorPolicy(max_request_bytes=-1)
+
+
+@pytest.mark.parametrize("invalid_value", [True, "1", 1 + 0j])
+def test_generator_policy_rejects_non_real_formatter_timeout(
+    invalid_value: object,
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match="formatter_timeout_seconds must be a real number or None",
+    ):
+        GeneratorPolicy(formatter_timeout_seconds=invalid_value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), -float("inf")])
+def test_generator_policy_rejects_non_finite_formatter_timeout(
+    invalid_value: float,
+) -> None:
+    with pytest.raises(ValueError, match="formatter_timeout_seconds must be finite"):
+        GeneratorPolicy(formatter_timeout_seconds=invalid_value)
+
+
+@pytest.mark.parametrize("invalid_value", [0, 0.0, -1, -0.5])
+def test_generator_policy_rejects_non_positive_formatter_timeout(
+    invalid_value: float,
+) -> None:
     with pytest.raises(ValueError, match="formatter_timeout_seconds must be positive"):
-        GeneratorPolicy(formatter_timeout_seconds=0)
+        GeneratorPolicy(formatter_timeout_seconds=invalid_value)
+
+
+def test_generator_policy_preserves_valid_limits_and_timeout() -> None:
+    policy = GeneratorPolicy(
+        formatter_timeout_seconds=0.5,
+        max_request_bytes=0,
+        max_files_to_generate=1,
+        max_proto_files=2,
+        max_descriptor_nodes=3,
+        max_nesting_depth=4,
+        max_generated_bytes=5,
+    )
+
+    assert policy.formatter_timeout_seconds == 0.5
+    assert policy.max_request_bytes == 0
+    assert policy.max_files_to_generate == 1
+    assert policy.max_proto_files == 2
+    assert policy.max_descriptor_nodes == 3
+    assert policy.max_nesting_depth == 4
+    assert policy.max_generated_bytes == 5
 
 
 def test_generation_decodes_explicit_clang_format_override_from_transport_parameter(

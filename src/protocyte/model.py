@@ -1712,6 +1712,8 @@ def _validate_descriptor_invariants(
             raise ProtocyteError(
                 f"{file.name}: unsupported protobuf syntax {file.syntax!r}"
             )
+        for enum, path in _walk_descriptor_enums(file):
+            _validate_enum_descriptor(file, enum, path)
         for message, path, parent_full_name in _walk_descriptor_messages(file):
             message_descriptors.append((file, message, path, parent_full_name))
             _validate_message_descriptor(file, message, path)
@@ -1741,6 +1743,16 @@ def _validate_descriptor_invariants(
                 raise ProtocyteError(f"{label}: map fields must be repeated")
 
 
+def _walk_descriptor_enums(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> Iterable[tuple[descriptor_pb2.EnumDescriptorProto, str]]:
+    for enum in file.enum_type:
+        yield enum, enum.name
+    for message, path, _ in _walk_descriptor_messages(file):
+        for enum in message.enum_type:
+            yield enum, f"{path}.{enum.name}" if enum.name else path
+
+
 def _walk_descriptor_messages(
     file: descriptor_pb2.FileDescriptorProto,
 ) -> Iterable[tuple[descriptor_pb2.DescriptorProto, str, str | None]]:
@@ -1756,6 +1768,90 @@ def _walk_descriptor_messages(
 
     for message in file.message_type:
         yield from walk(message, message.name, None)
+
+
+def _validate_enum_descriptor(
+    file: descriptor_pb2.FileDescriptorProto,
+    enum: descriptor_pb2.EnumDescriptorProto,
+    path: str,
+) -> None:
+    if not enum.name:
+        label = proto_full_name(file, path) if path else file.name
+        raise ProtocyteError(f"{label}: enum name must not be empty")
+
+    owner_full_name = proto_full_name(file, path)
+    if not enum.value:
+        raise ProtocyteError(f"{owner_full_name}: enum must declare at least one value")
+
+    value_names: set[str] = set()
+    value_numbers: dict[int, str] = {}
+    for index, value in enumerate(enum.value):
+        if not value.name:
+            raise ProtocyteError(
+                f"{owner_full_name}: enum value at index {index} has no name"
+            )
+        label = f"{owner_full_name}.{value.name}"
+        if not value.HasField("number"):
+            raise ProtocyteError(f"{label}: enum number is missing")
+        if value.name in value_names:
+            raise ProtocyteError(f"{label}: duplicate enum value name")
+        value_names.add(value.name)
+
+        first_value = value_numbers.get(value.number)
+        if first_value is not None and not enum.options.allow_alias:
+            raise ProtocyteError(
+                f"{label}: enum number {value.number} is already used by "
+                f"{first_value!r}; set option allow_alias = true to allow aliases"
+            )
+        value_numbers.setdefault(value.number, value.name)
+
+    if _file_syntax(file) == "proto3" and enum.value[0].number != 0:
+        first = enum.value[0]
+        raise ProtocyteError(
+            f"{owner_full_name}.{first.name}: first value in a proto3 enum must "
+            "have number 0"
+        )
+
+    reserved_names: set[str] = set()
+    for name in enum.reserved_name:
+        if not name:
+            raise ProtocyteError(
+                f"{owner_full_name}: reserved enum value name must not be empty"
+            )
+        if name in reserved_names:
+            raise ProtocyteError(
+                f"{owner_full_name}: duplicate reserved enum value name {name!r}"
+            )
+        if name in value_names:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: enum value name is reserved"
+            )
+        reserved_names.add(name)
+
+    ranges: list[tuple[int, int]] = []
+    for reserved_range in enum.reserved_range:
+        if not reserved_range.HasField("start") or not reserved_range.HasField("end"):
+            raise ProtocyteError(
+                f"{owner_full_name}: reserved enum range must specify start and end"
+            )
+        start = reserved_range.start
+        end = reserved_range.end
+        if start > end:
+            raise ProtocyteError(
+                f"{owner_full_name}: invalid reserved enum range [{start}, {end}]"
+            )
+        for previous_start, previous_end in ranges:
+            if start <= previous_end and previous_start <= end:
+                raise ProtocyteError(
+                    f"{owner_full_name}: reserved enum ranges "
+                    f"[{previous_start}, {previous_end}] and [{start}, {end}] overlap"
+                )
+        for number, name in value_numbers.items():
+            if start <= number <= end:
+                raise ProtocyteError(
+                    f"{owner_full_name}.{name}: enum number {number} is reserved"
+                )
+        ranges.append((start, end))
 
 
 def _validate_message_descriptor(
