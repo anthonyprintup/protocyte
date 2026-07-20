@@ -8957,10 +8957,12 @@ def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> N
         _windows_shared_reflection_requirement_unavailable(
             "Ninja is required for the MSVC shared reflection integration test"
         )
-    if shutil.which("cl") is None:
+    msvc_compiler = shutil.which("cl")
+    if msvc_compiler is None:
         _windows_shared_reflection_requirement_unavailable(
             "an MSVC developer environment is required for the shared reflection integration test"
         )
+    msvc_compiler = Path(msvc_compiler).resolve()
 
     repo_root = Path(__file__).resolve().parents[1]
     protoc = _find_real_protoc(
@@ -9072,6 +9074,7 @@ def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> N
             "-B",
             str(build_dir),
             "-DCMAKE_BUILD_TYPE=Release",
+            f"-DCMAKE_CXX_COMPILER={msvc_compiler}",
         ],
         check=True,
     )
