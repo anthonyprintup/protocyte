@@ -217,6 +217,17 @@ def test_ground_zero_python_commands_use_uv_managed_environments() -> None:
     assert '$("$python" -c "from pathlib import Path; import protocyte;' in guide
 
 
+def test_installed_cmake_python_requirements_are_explicit() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+
+    for document in (readme, guide):
+        assert "`venv`" in document
+        assert "`ensurepip`" in document
+        assert "python3-venv" in document
+        assert 'python3.12 -c "import ensurepip, venv"' in document
+
+
 def test_documented_proto_locator_runs_from_separate_consumer_directory(
     tmp_path: Path,
 ) -> None:

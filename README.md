@@ -331,7 +331,12 @@ environment under the build tree, and installs protocyte and its Python
 dependencies there from the exact versions in the bundled CMake constraints
 file. The install is built from a writable staged copy, so it never modifies
 the CMake package prefix, installs packages globally, or changes the selected
-base interpreter.
+base interpreter. That interpreter must include Python's `venv` module and
+`ensurepip`; on Debian and Ubuntu these may require installing `python3-venv`
+or the version-specific package such as `python3.12-venv`. A stripped Python
+installation without either capability cannot provision the managed
+environment. You can verify a candidate before configuring with
+`python3.12 -c "import ensurepip, venv"`.
 
 The initial configuration may access the configured Python package index.
 Subsequent configurations reuse the environment while the Python interpreter,
@@ -550,10 +555,12 @@ The installed CMake package installs:
 - `protocyte/options.proto`
 
 The installed package does not embed Python or protobuf. Consumers that run
-code generation still need a working Python 3.12+ base interpreter. Protocyte
-installs its Python package and Python dependencies into an isolated directory
-under `PROTOCYTE_PYTHON_ENV_ROOT`; `protoc` and the C++ protobuf files remain
-caller-supplied unless the fetch fallback is enabled:
+code generation still need a working Python 3.12+ base interpreter with the
+standard-library `venv` and `ensurepip` modules available. On Debian and Ubuntu,
+install `python3-venv` or the matching version-specific package if those modules
+are absent. Protocyte installs its Python package and Python dependencies into
+an isolated directory under `PROTOCYTE_PYTHON_ENV_ROOT`; `protoc` and the C++
+protobuf files remain caller-supplied unless the fetch fallback is enabled:
 
 ```cmake
 set(PROTOCYTE_FETCH_PROTOBUF ON CACHE BOOL "" FORCE)

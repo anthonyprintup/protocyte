@@ -19,6 +19,58 @@ foreach(tool_variable IN ITEMS PROTOC_EXECUTABLE PROTOCYTE_PLUGIN_EXECUTABLE)
     set(${tool_variable} "${resolved_tool_path}")
 endforeach()
 
+function(_quickstart_probe_tool tool_variable tool_name version_pattern expected_version)
+    execute_process(
+        COMMAND "${${tool_variable}}" --version
+        RESULT_VARIABLE probe_result
+        OUTPUT_VARIABLE probe_output
+        ERROR_VARIABLE probe_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 10
+    )
+
+    if(NOT "${probe_result}" STREQUAL "0")
+        message(
+            FATAL_ERROR
+            "The selected ${tool_name} executable could not run '${tool_name} --version'.\n"
+            "${tool_variable}: ${${tool_variable}}\n"
+            "Result: ${probe_result}\n"
+            "Standard output: ${probe_output}\n"
+            "Standard error: ${probe_error}\n"
+            "Install a host-runnable ${tool_name}, set ${tool_variable} to its executable, "
+            "and configure again."
+        )
+    endif()
+
+    string(STRIP "${probe_output}\n${probe_error}" reported_version)
+    if(NOT reported_version MATCHES "${version_pattern}")
+        message(
+            FATAL_ERROR
+            "The selected ${tool_name} executable returned an unrecognized version.\n"
+            "${tool_variable}: ${${tool_variable}}\n"
+            "Expected ${expected_version}; received: ${reported_version}\n"
+            "Set ${tool_variable} to the intended host-runnable ${tool_name} executable "
+            "and configure again."
+        )
+    endif()
+
+    message(STATUS "Using ${tool_name}: ${${tool_variable}} (${reported_version})")
+endfunction()
+
+_quickstart_probe_tool(
+    PROTOC_EXECUTABLE
+    protoc
+    "^libprotoc[ \t]+[0-9]+([.][0-9]+)+"
+    "output such as 'libprotoc 33.0' from '--version'"
+)
+_quickstart_probe_tool(
+    PROTOCYTE_PLUGIN_EXECUTABLE
+    protoc-gen-protocyte
+    "^[0-9]+([.][0-9]+)+"
+    "a numeric Protocyte version such as '0.1.0' from '--version'"
+)
+
 set(PROTO_FILE "${CMAKE_CURRENT_SOURCE_DIR}/quickstart.proto")
 set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(GENERATED_HEADER "${GENERATED_DIR}/quickstart.protocyte.hpp")

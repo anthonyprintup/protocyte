@@ -194,7 +194,12 @@ configure time. When code generation is first requested, it creates a
 fingerprinted virtual environment under `PROTOCYTE_PYTHON_ENV_ROOT` in the build
 tree and installs protocyte plus its pinned Python dependencies there from a
 writable staged copy. The installed CMake prefix and global or user-site Python
-packages are not modified. A host-runnable `protoc` and required protobuf import
+packages are not modified. The selected interpreter must provide Python's
+`venv` module and `ensurepip`; Debian and Ubuntu users may need `python3-venv`
+or a version-specific package such as `python3.12-venv`. Verify a candidate with
+`python3.12 -c "import ensurepip, venv"`, or set
+`PROTOCYTE_PLUGIN_EXECUTABLE` to a separately managed compatible plugin.
+A host-runnable `protoc` and required protobuf import
 sources are caller-supplied by default. For native builds, set
 `PROTOCYTE_FETCH_PROTOBUF=ON` before calling
 `find_package(protocyte CONFIG REQUIRED)` to fetch either missing input as a
