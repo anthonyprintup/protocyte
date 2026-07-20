@@ -143,6 +143,42 @@ def test_transaction_state_directory_rejects_links(
         owned_transactions._state_directory()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction check")
+def test_windows_transaction_state_directory_rejects_junctions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "junction-target"
+    target.mkdir()
+    state_directory = tmp_path / "state-junction"
+    result = subprocess.run(
+        [
+            "cmd.exe",
+            "/d",
+            "/c",
+            "mklink",
+            "/J",
+            state_directory.name,
+            target.name,
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="linked transaction state directory"):
+            owned_transactions._state_directory()
+    finally:
+        state_directory.rmdir()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ownership check")
 def test_transaction_state_directory_rejects_wrong_owner(
     tmp_path: Path,
@@ -181,6 +217,137 @@ def test_transaction_state_directory_rejects_insecure_permissions(
 
     with pytest.raises(RuntimeError, match="private 0700 permissions"):
         owned_transactions._state_directory()
+
+
+def _grant_windows_everyone_read(path: Path) -> None:
+    result = subprocess.run(
+        ["icacls", str(path), "/grant", "*S-1-1-0:R"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"could not prepare an insecure Windows ACL: {result.stderr}")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL check")
+@pytest.mark.parametrize("entry_kind", ("root", "registry", "destination"))
+def test_windows_transaction_state_rejects_insecure_acls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_kind: str,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owned_transactions._state_directory()
+
+    if entry_kind == "root":
+        insecure_path = state_directory
+    elif entry_kind == "registry":
+        with install_protoc.locked_destination(destination):
+            pass
+        insecure_path = state_directory / owned_transactions._REGISTRY_LOCK_NAME
+    else:
+        destination_state = owned_transactions._ensure_destination_state_directory(
+            destination,
+            state_directory,
+        )
+        insecure_path = destination_state / owned_transactions._DESTINATION_LOCK_NAME
+        owned_transactions._open_state_file(
+            insecure_path,
+            os.O_RDWR | os.O_CREAT,
+        ).close()
+
+    _grant_windows_everyone_read(insecure_path)
+
+    with pytest.raises(RuntimeError, match="private Windows ACL"):
+        with install_protoc.locked_destination(destination):
+            pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows reparse-point check")
+@pytest.mark.parametrize("entry_kind", ("registry", "destination"))
+def test_windows_transaction_locks_reject_file_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_kind: str,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owned_transactions._state_directory()
+    target = tmp_path / "target.lock"
+    target.write_bytes(b"\0")
+
+    if entry_kind == "registry":
+        lock_path = state_directory / owned_transactions._REGISTRY_LOCK_NAME
+    else:
+        destination_state = owned_transactions._ensure_destination_state_directory(
+            destination,
+            state_directory,
+        )
+        lock_path = destination_state / owned_transactions._DESTINATION_LOCK_NAME
+    try:
+        lock_path.symlink_to(target)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="linked transaction state entry"):
+        with install_protoc.locked_destination(destination):
+            pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended-length path check")
+def test_windows_long_transaction_state_path_supports_lock_and_marker_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path.joinpath(
+        *(f"private-state-segment-{index:02d}" for index in range(16))
+    )
+    assert len(os.fspath(state_directory)) >= 450
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+
+    with install_protoc.locked_destination(destination):
+        owner = install_protoc._create_install_transaction(
+            destination,
+            "transaction",
+        )
+        (owner.path / "dead").write_text("dead\n", encoding="utf-8")
+        marker_path = owner.marker_path
+        owned_path = owner.path
+        owner.close(remove_marker=False)
+
+        assert marker_path.is_file()
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not marker_path.exists()
+    assert not owned_path.exists()
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended-length path check")
+def test_windows_extended_path_conversion_handles_local_and_unc_paths() -> None:
+    local = owned_transactions._windows_extended_path(Path("C:/state"))
+    unc = owned_transactions._windows_extended_path(Path("//server/share/state"))
+
+    assert local == r"\\?\C:\state"
+    assert unc == r"\\?\UNC\server\share\state"
 
 
 def _transaction_state_entries(state_directory: Path) -> set[str]:
@@ -239,12 +406,36 @@ def test_nested_transaction_state_is_isolated_from_unreleased_flat_v2_state(
             install_protoc._remove_path,
         )
 
-    v3_state = owned_transactions._state_directory()
-    assert v3_state != v2_state
-    assert _transaction_state_entries(v3_state) == {"registry.lock"}
+    current_state = owned_transactions._state_directory()
+    assert current_state != v2_state
+    assert _transaction_state_entries(current_state) == {"registry.lock"}
     assert legacy_lock.read_bytes() == b"\0"
     assert legacy_marker.read_text(encoding="utf-8") == "unreleased-v2-state\n"
     assert legacy_sibling.is_dir()
+
+
+def test_private_acl_namespace_is_isolated_from_pre_hardening_v3_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(owned_transactions._STATE_DIRECTORY_ENV, raising=False)
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+    v3_state = tmp_path / (
+        "protocyte-owned-transactions-v3-" + owned_transactions._user_namespace()
+    )
+    v3_state.mkdir(mode=0o700)
+    v3_state.chmod(0o700)
+    sentinel = v3_state / "untrusted-state"
+    sentinel.write_text("preserve\n", encoding="utf-8")
+
+    current_state = owned_transactions._state_directory()
+
+    assert current_state != v3_state
+    assert sentinel.read_text(encoding="utf-8") == "preserve\n"
 
 
 def test_destination_lock_pruning_preserves_a_live_marker(

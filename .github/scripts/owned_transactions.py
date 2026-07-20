@@ -17,10 +17,416 @@ from typing import BinaryIO, Callable, Iterator
 
 _MARKER_SCHEMA = 3
 _STATE_DIRECTORY_ENV = "PROTOCYTE_TRANSACTION_STATE_DIR"
-_STATE_DIRECTORY_NAME = "protocyte-owned-transactions-v3"
+# v4 never reuses state created before Windows handles and private ACLs were enforced.
+_STATE_DIRECTORY_NAME = "protocyte-owned-transactions-v4"
 _REGISTRY_LOCK_NAME = "registry.lock"
 _DESTINATION_STATE_SUFFIX = ".destination"
 _DESTINATION_LOCK_NAME = "destination.lock"
+
+
+if os.name == "nt":
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    _ERROR_ALREADY_EXISTS = 183
+    _GENERIC_READ = 0x80000000
+    _GENERIC_WRITE = 0x40000000
+    _READ_CONTROL = 0x00020000
+    _FILE_SHARE_READ = 0x00000001
+    _FILE_SHARE_WRITE = 0x00000002
+    _FILE_SHARE_DELETE = 0x00000004
+    _CREATE_NEW = 1
+    _OPEN_EXISTING = 3
+    _OPEN_ALWAYS = 4
+    _FILE_ATTRIBUTE_NORMAL = 0x00000080
+    _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    _FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
+    _SE_FILE_OBJECT = 1
+    _OWNER_SECURITY_INFORMATION = 0x00000001
+    _DACL_SECURITY_INFORMATION = 0x00000004
+    _ACL_SIZE_INFORMATION_CLASS = 2
+    _TOKEN_QUERY = 0x0008
+    _TOKEN_USER_CLASS = 1
+    _SDDL_REVISION_1 = 1
+    _ACCESS_ALLOWED_ACE_TYPES = frozenset({0, 4, 5, 9, 11})
+    _ACCESS_ALLOWED_COMPOUND_ACE_TYPE = 4
+    _OBJECT_ACE_TYPES = frozenset({5, 6, 7, 8, 11, 12, 13, 15})
+    _ACE_OBJECT_TYPE_PRESENT = 0x00000001
+    _ACE_INHERITED_OBJECT_TYPE_PRESENT = 0x00000002
+
+    class _WindowsSecurityAttributes(ctypes.Structure):
+        _fields_ = (
+            ("nLength", wintypes.DWORD),
+            ("lpSecurityDescriptor", wintypes.LPVOID),
+            ("bInheritHandle", wintypes.BOOL),
+        )
+
+    class _WindowsFileAttributeTagInfo(ctypes.Structure):
+        _fields_ = (
+            ("FileAttributes", wintypes.DWORD),
+            ("ReparseTag", wintypes.DWORD),
+        )
+
+    class _WindowsAclSizeInformation(ctypes.Structure):
+        _fields_ = (
+            ("AceCount", wintypes.DWORD),
+            ("AclBytesInUse", wintypes.DWORD),
+            ("AclBytesFree", wintypes.DWORD),
+        )
+
+    class _WindowsAceHeader(ctypes.Structure):
+        _fields_ = (
+            ("AceType", ctypes.c_ubyte),
+            ("AceFlags", ctypes.c_ubyte),
+            ("AceSize", wintypes.WORD),
+        )
+
+    class _WindowsTokenUser(ctypes.Structure):
+        _fields_ = (("Sid", wintypes.LPVOID), ("Attributes", wintypes.DWORD))
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+    _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.CreateDirectoryW.argtypes = (
+        wintypes.LPCWSTR,
+        ctypes.POINTER(_WindowsSecurityAttributes),
+    )
+    _kernel32.CreateDirectoryW.restype = wintypes.BOOL
+    _kernel32.CreateFileW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(_WindowsSecurityAttributes),
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    _kernel32.CreateFileW.restype = wintypes.HANDLE
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _kernel32.GetFileInformationByHandleEx.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    _kernel32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+    _kernel32.LocalFree.argtypes = (wintypes.HLOCAL,)
+    _kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    _advapi32.ConvertSidToStringSidW.argtypes = (
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPWSTR),
+    )
+    _advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = (
+        wintypes.BOOL
+    )
+    _advapi32.EqualSid.argtypes = (wintypes.LPVOID, wintypes.LPVOID)
+    _advapi32.EqualSid.restype = wintypes.BOOL
+    _advapi32.GetAce.argtypes = (
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+    )
+    _advapi32.GetAce.restype = wintypes.BOOL
+    _advapi32.GetAclInformation.argtypes = (
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.c_int,
+    )
+    _advapi32.GetAclInformation.restype = wintypes.BOOL
+    _advapi32.GetLengthSid.argtypes = (wintypes.LPVOID,)
+    _advapi32.GetLengthSid.restype = wintypes.DWORD
+    _advapi32.GetSecurityInfo.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.LPVOID),
+    )
+    _advapi32.GetSecurityInfo.restype = wintypes.DWORD
+    _advapi32.GetTokenInformation.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    _advapi32.GetTokenInformation.restype = wintypes.BOOL
+    _advapi32.IsValidSid.argtypes = (wintypes.LPVOID,)
+    _advapi32.IsValidSid.restype = wintypes.BOOL
+    _advapi32.OpenProcessToken.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    )
+    _advapi32.OpenProcessToken.restype = wintypes.BOOL
+
+
+@contextmanager
+def _windows_private_security_attributes() -> Iterator[object]:
+    if os.name != "nt":
+        raise RuntimeError("Windows security attributes requested on another platform")
+
+    token = wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(
+        _kernel32.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(token)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        required = wintypes.DWORD()
+        _advapi32.GetTokenInformation(
+            token, _TOKEN_USER_CLASS, None, 0, ctypes.byref(required)
+        )
+        buffer = ctypes.create_string_buffer(required.value)
+        if not _advapi32.GetTokenInformation(
+            token,
+            _TOKEN_USER_CLASS,
+            buffer,
+            required,
+            ctypes.byref(required),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        user_sid = ctypes.cast(buffer, ctypes.POINTER(_WindowsTokenUser)).contents.Sid
+        sid_string = wintypes.LPWSTR()
+        if not _advapi32.ConvertSidToStringSidW(user_sid, ctypes.byref(sid_string)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            sddl = (
+                f"O:{sid_string.value}D:P"
+                "(A;;FA;;;SY)(A;;FA;;;BA)"
+                f"(A;;FA;;;{sid_string.value})"
+            )
+        finally:
+            _kernel32.LocalFree(sid_string)
+
+        descriptor = wintypes.LPVOID()
+        if not _advapi32.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl,
+            _SDDL_REVISION_1,
+            ctypes.byref(descriptor),
+            None,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            attributes = _WindowsSecurityAttributes(
+                ctypes.sizeof(_WindowsSecurityAttributes), descriptor, False
+            )
+            yield attributes
+        finally:
+            _kernel32.LocalFree(descriptor)
+    finally:
+        _kernel32.CloseHandle(token)
+
+
+def _windows_current_user_sid() -> bytes:
+    token = wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(
+        _kernel32.GetCurrentProcess(), _TOKEN_QUERY, ctypes.byref(token)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        required = wintypes.DWORD()
+        _advapi32.GetTokenInformation(
+            token, _TOKEN_USER_CLASS, None, 0, ctypes.byref(required)
+        )
+        buffer = ctypes.create_string_buffer(required.value)
+        if not _advapi32.GetTokenInformation(
+            token,
+            _TOKEN_USER_CLASS,
+            buffer,
+            required,
+            ctypes.byref(required),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        sid = ctypes.cast(buffer, ctypes.POINTER(_WindowsTokenUser)).contents.Sid
+        return ctypes.string_at(sid, _advapi32.GetLengthSid(sid))
+    finally:
+        _kernel32.CloseHandle(token)
+
+
+def _windows_sid_from_string(value: str) -> bytes:
+    sid = wintypes.LPVOID()
+    convert = _advapi32.ConvertStringSidToSidW
+    convert.argtypes = (wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID))
+    convert.restype = wintypes.BOOL
+    if not convert(value, ctypes.byref(sid)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return ctypes.string_at(sid, _advapi32.GetLengthSid(sid))
+    finally:
+        _kernel32.LocalFree(sid)
+
+
+def _windows_validate_private_handle(
+    handle: object,
+    path: Path,
+    *,
+    directory: bool,
+) -> None:
+    info = _WindowsFileAttributeTagInfo()
+    if not _kernel32.GetFileInformationByHandleEx(
+        handle,
+        _FILE_ATTRIBUTE_TAG_INFO_CLASS,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if info.FileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+        if directory:
+            raise RuntimeError(
+                f"refusing to use a linked transaction state directory: {path}"
+            )
+        raise RuntimeError(f"refusing to use a linked transaction state entry: {path}")
+    is_directory = bool(info.FileAttributes & _FILE_ATTRIBUTE_DIRECTORY)
+    if is_directory != directory:
+        expected = "directory" if directory else "regular file"
+        raise RuntimeError(f"transaction state entry is not a {expected}: {path}")
+
+    owner = wintypes.LPVOID()
+    dacl = wintypes.LPVOID()
+    descriptor = wintypes.LPVOID()
+    result = _advapi32.GetSecurityInfo(
+        handle,
+        _SE_FILE_OBJECT,
+        _OWNER_SECURITY_INFORMATION | _DACL_SECURITY_INFORMATION,
+        ctypes.byref(owner),
+        None,
+        ctypes.byref(dacl),
+        None,
+        ctypes.byref(descriptor),
+    )
+    if result:
+        raise ctypes.WinError(result)
+    try:
+        current_user = _windows_current_user_sid()
+        if (
+            not owner
+            or ctypes.string_at(owner, _advapi32.GetLengthSid(owner)) != current_user
+        ):
+            raise RuntimeError(
+                f"transaction state entry is not owned by the current user: {path}"
+            )
+        if not dacl:
+            raise RuntimeError(
+                f"transaction state entry must have a private Windows ACL: {path}"
+            )
+
+        # SYSTEM and administrators are trusted machine principals; Windows grants
+        # them recovery access while excluding other users and broad groups.
+        allowed_sids = {
+            current_user,
+            _windows_sid_from_string("S-1-5-18"),
+            _windows_sid_from_string("S-1-5-32-544"),
+        }
+        acl_info = _WindowsAclSizeInformation()
+        if not _advapi32.GetAclInformation(
+            dacl,
+            ctypes.byref(acl_info),
+            ctypes.sizeof(acl_info),
+            _ACL_SIZE_INFORMATION_CLASS,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        for index in range(acl_info.AceCount):
+            ace = wintypes.LPVOID()
+            if not _advapi32.GetAce(dacl, index, ctypes.byref(ace)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            header = ctypes.cast(ace, ctypes.POINTER(_WindowsAceHeader)).contents
+            if header.AceType not in _ACCESS_ALLOWED_ACE_TYPES:
+                continue
+            sid_offset = 8
+            if header.AceType == _ACCESS_ALLOWED_COMPOUND_ACE_TYPE:
+                sid_offset = 12
+            elif header.AceType in _OBJECT_ACE_TYPES:
+                object_flags = ctypes.c_uint32.from_address(ace.value + 8).value
+                sid_offset = 12
+                if object_flags & _ACE_OBJECT_TYPE_PRESENT:
+                    sid_offset += 16
+                if object_flags & _ACE_INHERITED_OBJECT_TYPE_PRESENT:
+                    sid_offset += 16
+            sid = wintypes.LPVOID(ace.value + sid_offset)
+            if not _advapi32.IsValidSid(sid):
+                raise RuntimeError(
+                    f"transaction state entry has an invalid Windows ACL: {path}"
+                )
+            sid_value = ctypes.string_at(sid, _advapi32.GetLengthSid(sid))
+            if sid_value not in allowed_sids:
+                raise RuntimeError(
+                    f"transaction state entry must have a private Windows ACL: {path}"
+                )
+    finally:
+        _kernel32.LocalFree(descriptor)
+
+
+def _windows_extended_path(path: Path) -> str:
+    absolute = os.path.normpath(os.path.abspath(os.fspath(path)))
+    if absolute.startswith("\\\\?\\"):
+        return absolute
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
+
+
+def _windows_open_path(path: Path, *, directory: bool) -> object:
+    flags = _FILE_FLAG_OPEN_REPARSE_POINT
+    if directory:
+        flags |= _FILE_FLAG_BACKUP_SEMANTICS
+    handle = _kernel32.CreateFileW(
+        _windows_extended_path(path),
+        _READ_CONTROL,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+        None,
+        _OPEN_EXISTING,
+        flags,
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    return handle
+
+
+def _windows_create_private_directory(path: Path) -> None:
+    with _windows_private_security_attributes() as attributes:
+        if _kernel32.CreateDirectoryW(
+            _windows_extended_path(path), ctypes.byref(attributes)
+        ):
+            return
+        error = ctypes.get_last_error()
+    if error != _ERROR_ALREADY_EXISTS:
+        raise ctypes.WinError(error)
+
+
+def _windows_ensure_private_directory(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
+    while True:
+        try:
+            current.lstat()
+            break
+        except FileNotFoundError:
+            missing.append(current)
+            parent = current.parent
+            if parent == current:
+                raise
+            current = parent
+    for entry in reversed(missing):
+        _windows_create_private_directory(entry)
 
 
 class _KernelFileLock:
@@ -119,6 +525,14 @@ def _user_namespace() -> str:
 
 
 def _validate_state_directory(state: Path) -> None:
+    if os.name == "nt":
+        handle = _windows_open_path(state, directory=True)
+        try:
+            _windows_validate_private_handle(handle, state, directory=True)
+        finally:
+            _kernel32.CloseHandle(handle)
+        return
+
     try:
         state_stat = state.lstat()
     except FileNotFoundError as exc:
@@ -160,15 +574,57 @@ def _state_directory() -> Path:
         else Path(tempfile.gettempdir())
         / f"{_STATE_DIRECTORY_NAME}-{_user_namespace()}"
     )
-    try:
-        state.mkdir(mode=0o700, parents=True, exist_ok=False)
-    except FileExistsError:
-        pass
+    if os.name == "nt":
+        _windows_ensure_private_directory(state)
+    else:
+        try:
+            state.mkdir(mode=0o700, parents=True, exist_ok=False)
+        except FileExistsError:
+            pass
     _validate_state_directory(state)
     return state
 
 
 def _open_state_file(path: Path, flags: int) -> BinaryIO:
+    if os.name == "nt":
+        if flags & os.O_EXCL:
+            disposition = _CREATE_NEW
+        elif flags & os.O_CREAT:
+            disposition = _OPEN_ALWAYS
+        else:
+            disposition = _OPEN_EXISTING
+        with _windows_private_security_attributes() as attributes:
+            handle = _kernel32.CreateFileW(
+                _windows_extended_path(path),
+                _GENERIC_READ | _GENERIC_WRITE | _READ_CONTROL,
+                _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+                ctypes.byref(attributes),
+                disposition,
+                _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT,
+                None,
+            )
+            if handle == wintypes.HANDLE(-1).value:
+                error = ctypes.get_last_error()
+                if error in {80, _ERROR_ALREADY_EXISTS} and flags & os.O_EXCL:
+                    raise FileExistsError(error, os.strerror(error), path)
+                if error in {2, 3}:
+                    raise FileNotFoundError(error, os.strerror(error), path)
+                raise ctypes.WinError(error)
+        try:
+            _windows_validate_private_handle(handle, path, directory=False)
+            descriptor = msvcrt.open_osfhandle(
+                handle,
+                os.O_RDWR | getattr(os, "O_BINARY", 0),
+            )
+        except BaseException:
+            _kernel32.CloseHandle(handle)
+            raise
+        try:
+            return os.fdopen(descriptor, "r+b", buffering=0)
+        except BaseException:
+            os.close(descriptor)
+            raise
+
     open_flags = flags | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, open_flags, 0o600)
     try:
@@ -225,10 +681,13 @@ def _ensure_destination_state_directory(
     state_directory: Path,
 ) -> Path:
     destination_state = _destination_state_directory(destination, state_directory)
-    try:
-        destination_state.mkdir(mode=0o700, exist_ok=False)
-    except FileExistsError:
-        pass
+    if os.name == "nt":
+        _windows_create_private_directory(destination_state)
+    else:
+        try:
+            destination_state.mkdir(mode=0o700, exist_ok=False)
+        except FileExistsError:
+            pass
     _validate_state_directory(destination_state)
     return destination_state
 
