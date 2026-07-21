@@ -40,6 +40,17 @@ def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     assert "    uses: ./.github/workflows/ci.yml\n" in release
 
 
+def test_ci_private_path_guard_scans_the_complete_checkout_object_database() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    guard = _job_named(ci, "private-path-guard")
+
+    assert "fetch-depth: 0" in guard
+    assert "python .github/scripts/check_private_paths.py" in guard
+    assert "Reject private absolute paths" in guard
+
+
 def test_protobuf_fallback_gates_linux_and_windows_source_builds() -> None:
     fallback = (
         REPO_ROOT / ".github" / "workflows" / "protobuf-fallback.yml"

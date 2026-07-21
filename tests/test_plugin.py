@@ -541,6 +541,86 @@ def test_duplicate_field_numbers_return_descriptor_errors() -> None:
     assert not response.file
 
 
+def test_overlapping_reserved_field_ranges_return_sorted_diagnostic() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for start, end in [(12, 16), (10, 14)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample: reserved field ranges [10, 14) and [12, 16) overlap"
+    )
+    assert not response.file
+
+
+def test_reserved_field_intersection_uses_declared_field_order() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for name, number in [("twenty", 20), ("nine", 9)]:
+        message.field.add(
+            name=name,
+            number=number,
+            label=F.LABEL_OPTIONAL,
+            type=F.TYPE_INT32,
+        )
+    for start, end in [(19, 22), (8, 11)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.twenty: field number 20 is reserved"
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("field_number", "expected_error"),
+    [
+        (8, "demo.Sample.boundary: field number 8 is reserved"),
+        (9, ""),
+    ],
+)
+def test_reserved_field_range_end_is_exclusive(
+    field_number: int,
+    expected_error: str,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    message.field.add(
+        name="boundary",
+        number=field_number,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    reserved_range = message.reserved_range.add()
+    reserved_range.start = 8
+    reserved_range.end = 9
+
+    response = generate_response(request)
+
+    assert response.error == expected_error
+    assert bool(response.file) is not bool(expected_error)
+
+
+def test_adjacent_reserved_field_ranges_do_not_overlap() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for start, end in [(8, 9), (9, 10)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
 def test_missing_field_label_returns_descriptor_error() -> None:
     request = _basic_request()
     request.proto_file[0].message_type[0].field[0].ClearField("label")
@@ -743,6 +823,10 @@ def test_duplicate_reserved_enum_name_returns_descriptor_error() -> None:
             [(2, 4), (4, 5)],
             "reserved enum ranges [2, 4] and [4, 5] overlap",
         ),
+        (
+            [(4, 5), (2, 4)],
+            "reserved enum ranges [2, 4] and [4, 5] overlap",
+        ),
     ],
 )
 def test_invalid_reserved_enum_ranges_return_descriptor_errors(
@@ -785,6 +869,62 @@ def test_reserved_enum_range_is_inclusive() -> None:
         "demo.State.STATE_UNSPECIFIED: enum number 0 is reserved"
     )
     assert not response.file
+
+
+def test_reserved_enum_value_intersection_uses_declared_value_order() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_TWENTY", number=20)
+    enum.value.add(name="STATE_NINE", number=9)
+    for start, end in [(19, 21), (8, 10)]:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State.STATE_TWENTY: enum number 20 is reserved"
+    assert not response.file
+
+
+def test_adjacent_reserved_enum_ranges_do_not_overlap() -> None:
+    request, enum = _request_with_enum()
+    for start, end in [(1, 1), (2, 2)]:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+def test_large_disjoint_reserved_range_sets_validate_without_pairwise_work() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("many_ranges.proto")
+    file = request.proto_file.add(
+        name="many_ranges.proto",
+        package="demo",
+        syntax="proto2",
+    )
+    enum = file.enum_type.add(name="State")
+    enum.value.add(name="STATE_UNSPECIFIED", number=0)
+    message = file.message_type.add(name="Payload")
+
+    # Cardinality is the regression oracle; a wall-clock threshold would be flaky.
+    for index in range(20_000):
+        enum_start = index * 2 + 1
+        enum_range = enum.reserved_range.add()
+        enum_range.start = enum_start
+        enum_range.end = enum_start
+        message_range = message.reserved_range.add()
+        message_range.start = enum_start
+        message_range.end = enum_start + 1
+
+    model = build_model(request)
+
+    assert "demo.State" in model.enums
+    assert "demo.Payload" in model.messages
 
 
 def test_malformed_recognized_option_payload_returns_descriptor_error() -> None:
@@ -1426,6 +1566,116 @@ def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages()
         "::protocyte::ReflectionFieldLabel::optional, false, false},\n"
         "  }};"
         in source
+    )
+
+
+def test_reflection_symbols_distinguish_trailing_underscores_across_files_and_packages() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, package, message_names in (
+        ("reflection_symbols.proto", "demo.reflection", ("Foo", "Foo_fields")),
+        (
+            "reflection_symbols_other.proto",
+            "demo.reflection",
+            ("Foo_", "Foo_fields_"),
+        ),
+        ("reflection_symbols_package.proto", "demo.reflection_", ("Foo", "Foo_")),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(name=file_name, package=package, syntax="proto3")
+        for message_name in message_names:
+            file.message_type.add(name=message_name)
+
+    response = generate_response(request)
+
+    assert not response.error
+    sources = {file.name: file.content for file in response.file if file.name.endswith(".cpp")}
+    assert "Foo_fields {{" in sources["reflection_symbols.protocyte.cpp"]
+    assert "Foo_fields_fields {{" in sources["reflection_symbols.protocyte.cpp"]
+    assert "Foo_fields_ {{" in sources["reflection_symbols_other.protocyte.cpp"]
+    assert "Foo_fields_fields_ {{" in sources["reflection_symbols_other.protocyte.cpp"]
+    assert "namespace demo::reflection_ {" in sources[
+        "reflection_symbols_package.protocyte.cpp"
+    ]
+    assert "Foo_fields {{" in sources["reflection_symbols_package.protocyte.cpp"]
+    assert "Foo_fields_ {{" in sources["reflection_symbols_package.protocyte.cpp"]
+
+
+def test_reflection_symbol_validation_rejects_colliding_table_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, message_name in (
+        ("first_reflection.proto", "First"),
+        ("second_reflection.proto", "Second"),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(
+            name=file_name, package="demo.reflection", syntax="proto3"
+        )
+        file.message_type.add(name=message_name)
+
+    monkeypatch.setattr(protocyte_cpp, "_reflection_name", lambda message: "Fields")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "demo.reflection.Second" in response.error
+    assert "generated reflection symbol 'Fields' collides with 'demo.reflection.First'" in response.error
+
+
+def test_reflection_symbol_validation_rejects_type_in_reflection_package() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(
+        ["reflection_namespace.proto", "reflection_namespace_type.proto"]
+    )
+    reflection_file = request.proto_file.add(
+        name="reflection_namespace.proto", package="demo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Foo")
+    type_file = request.proto_file.add(
+        name="reflection_namespace_type.proto",
+        package="demo.protocyte_reflection",
+        syntax="proto3",
+    )
+    type_file.message_type.add(name="Foo_fields")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "demo.Foo: generated reflection symbol 'Foo_fields' collides with generated "
+        "type 'demo.protocyte_reflection.Foo_fields'"
+        in response.error
+    )
+
+
+def test_reflection_symbol_validation_rejects_package_constant_in_reflection_package() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(
+        ["reflection_constant.proto", "reflection_package_constant.proto"]
+    )
+    reflection_file = request.proto_file.add(
+        name="reflection_constant.proto", package="demo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Foo")
+    constant_file = request.proto_file.add(
+        name="reflection_package_constant.proto",
+        package="demo.protocyte_reflection",
+        syntax="proto3",
+    )
+    constant_file.dependency.append("protocyte/options.proto")
+    constant_file.options.ParseFromString(
+        _package_constant_options_bytes([("Foo_fields", "i32", 1)])
+    )
+    request.proto_file.append(_options_file())
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "demo.Foo: generated reflection symbol 'Foo_fields' collides with generated "
+        "package constant 'demo.protocyte_reflection.Foo_fields'"
+        in response.error
     )
 
 
@@ -2486,6 +2736,33 @@ def test_generates_closed_enum_validation_for_proto2_enums() -> None:
     assert "entry_is_unknown = false;" in header
 
 
+def test_cross_syntax_enum_openness_follows_the_declaring_file() -> None:
+    request = _cross_syntax_enum_request()
+
+    model = build_model(request)
+    consumer = model.files["legacy_consumer.proto"].messages[0]
+    fields = {field.name: field for field in consumer.fields}
+    assert not fields["imported_open_enum"].enum_closed
+    assert not fields["imported_open_unpacked"].enum_closed
+    assert not fields["imported_open_packed"].enum_closed
+    assert not fields["imported_open_oneof"].enum_closed
+    assert fields["imported_open_by_name"].map_value is not None
+    assert not fields["imported_open_by_name"].map_value.enum_closed
+    assert fields["local_closed_enum"].enum_closed
+
+    response = generate_response(request)
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["legacy_consumer.protocyte.hpp"]
+    assert '#include "open_enum.protocyte.hpp"' in header
+    assert "set_imported_open_enum_raw(const ::protocyte::i32 value) noexcept {\n    imported_open_enum_ = value;" in header
+    assert "set_imported_open_oneof_raw(const ::protocyte::i32 value) noexcept {\n    clear_imported_open_choice();" in header
+    assert "packed_imported_open_packed_unknown_fields" not in header
+    assert "staged_imported_open_by_name_entry" not in header
+    assert "if (value != 0 && value != 1) {" in header
+
+
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("uses_legacy.proto")
@@ -2811,6 +3088,77 @@ def test_generator_policy_short_circuits_genuinely_deep_descriptors() -> None:
     assert response.error == (
         "generator policy limit exceeded for message nesting depth: 65 > 64"
     )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "entry_kind",
+    [
+        "enum reserved names",
+        "enum reserved ranges",
+        "message reserved names",
+        "message reserved ranges",
+        "message extension ranges",
+    ],
+)
+def test_descriptor_node_policy_counts_reserved_and_extension_entries(
+    entry_kind: str,
+) -> None:
+    request, enum = _request_with_enum()
+    message = request.proto_file[0].message_type[0]
+    baseline, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    entry_count = 32
+
+    if entry_kind == "enum reserved names":
+        enum.reserved_name.extend(
+            f"STATE_RETIRED_{index}" for index in range(entry_count)
+        )
+    elif entry_kind == "enum reserved ranges":
+        for index in range(entry_count):
+            reserved_range = enum.reserved_range.add()
+            reserved_range.start = index * 2 + 100
+            reserved_range.end = index * 2 + 100
+    elif entry_kind == "message reserved names":
+        message.reserved_name.extend(
+            f"retired_{index}" for index in range(entry_count)
+        )
+    elif entry_kind == "message reserved ranges":
+        for index in range(entry_count):
+            reserved_range = message.reserved_range.add()
+            reserved_range.start = index * 2 + 100
+            reserved_range.end = index * 2 + 101
+    else:
+        for index in range(entry_count):
+            extension_range = message.extension_range.add()
+            extension_range.start = index * 2 + 100
+            extension_range.end = index * 2 + 101
+
+    total, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    assert total == baseline + entry_count
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            max_descriptor_nodes=baseline,
+            format_outputs=False,
+        ),
+    )
+
+    error_prefix = "generator policy limit exceeded for descriptor nodes: "
+    assert response.error.startswith(error_prefix)
+    reported, limit = (
+        int(part) for part in response.error.removeprefix(error_prefix).split(" > ")
+    )
+    assert baseline < reported <= total
+    assert limit == baseline
     assert not response.file
 
 
@@ -5984,6 +6332,8 @@ def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
     assert class_scope.owner("unknown_fields_") == "generated unknown field storage"
     assert class_scope.owner("serialize") == "generated serialize function"
     assert class_scope.owner("serialize_to") is None
+    assert class_scope.owner("merge_field_from_") == "generated merge field helper"
+    assert class_scope.owner("merge_fields_from") == "generated merge fields helper"
     assert class_scope.owner("choice_") == "oneof choice storage"
     assert class_scope.owner("choice_case_") == "oneof choice case storage"
     assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
@@ -6077,6 +6427,29 @@ def test_allows_serialize_to_field_after_span_overload_rename() -> None:
     assert not response.error
     header = next(file.content for file in response.file if file.name.endswith(".hpp"))
     assert "serialize_to() const noexcept" in header
+
+
+@pytest.mark.parametrize("nested_name", ["merge_field_from_", "merge_fields_from"])
+def test_rejects_nested_messages_that_collide_with_generated_merge_helpers(
+    nested_name: str,
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="merge_helper_collision.proto", package="demo", syntax="proto3"
+    )
+    parent = file.message_type.add(name="Container")
+    nested = parent.nested_type.add(name=nested_name)
+    nested.field.add(
+        name="value", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert response.error == (
+        f"demo.Container.{nested_name}: nested type alias collides with generated API"
+    )
 
 
 def test_cpp_function_registry_rejects_parameters_that_shadow_visible_storage() -> None:
@@ -8110,6 +8483,91 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     field.type_name = ".defaults.Defaults.ChoicesByNameEntry"
 
     return file
+
+
+def _cross_syntax_enum_request() -> plugin_pb2.CodeGeneratorRequest:
+    open_enum = descriptor_pb2.FileDescriptorProto()
+    open_enum.name = "open_enum.proto"
+    open_enum.package = "open"
+    open_enum.syntax = "proto3"
+    enum = open_enum.enum_type.add()
+    enum.name = "Mode"
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    enum.value.add(name="MODE_READY", number=1)
+
+    consumer = descriptor_pb2.FileDescriptorProto()
+    consumer.name = "legacy_consumer.proto"
+    consumer.package = "legacy"
+    consumer.syntax = "proto2"
+    consumer.dependency.append(open_enum.name)
+
+    local_enum = consumer.enum_type.add()
+    local_enum.name = "ClosedMode"
+    local_enum.value.add(name="CLOSED_MODE_UNSPECIFIED", number=0)
+    local_enum.value.add(name="CLOSED_MODE_READY", number=1)
+
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    message.oneof_decl.add(name="imported_open_choice")
+
+    def add_open_enum_field(
+        name: str,
+        number: int,
+        *,
+        label: int = F.LABEL_OPTIONAL,
+        packed: bool | None = None,
+        oneof_index: int | None = None,
+    ) -> None:
+        field = message.field.add()
+        field.name = name
+        field.number = number
+        field.label = label
+        field.type = F.TYPE_ENUM
+        field.type_name = ".open.Mode"
+        if packed is not None:
+            field.options.packed = packed
+        if oneof_index is not None:
+            field.oneof_index = oneof_index
+
+    add_open_enum_field("imported_open_enum", 1)
+    add_open_enum_field("imported_open_unpacked", 2, label=F.LABEL_REPEATED, packed=False)
+    add_open_enum_field("imported_open_packed", 3, label=F.LABEL_REPEATED, packed=True)
+    add_open_enum_field("imported_open_oneof", 4, oneof_index=0)
+
+    entry = message.nested_type.add()
+    entry.name = "ImportedOpenByNameEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_ENUM
+    value.type_name = ".open.Mode"
+
+    map_field = message.field.add()
+    map_field.name = "imported_open_by_name"
+    map_field.number = 5
+    map_field.label = F.LABEL_REPEATED
+    map_field.type = F.TYPE_MESSAGE
+    map_field.type_name = ".legacy.Consumer.ImportedOpenByNameEntry"
+
+    closed_field = message.field.add()
+    closed_field.name = "local_closed_enum"
+    closed_field.number = 6
+    closed_field.label = F.LABEL_OPTIONAL
+    closed_field.type = F.TYPE_ENUM
+    closed_field.type_name = ".legacy.ClosedMode"
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.parameter = "format=off"
+    request.file_to_generate.append(consumer.name)
+    request.proto_file.extend([open_enum, consumer])
+    return request
 
 
 def _proto2_dependency_file() -> descriptor_pb2.FileDescriptorProto:

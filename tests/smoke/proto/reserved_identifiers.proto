@@ -58,6 +58,16 @@ message Config {
 
 message Reader {}
 
+message MergeHelperNeighbors {
+  message merge_field_from {
+    int32 value = 1;
+  }
+
+  message merge_fields_from_ {
+    int32 value = 1;
+  }
+}
+
 enum LegacyMode {
   option deprecated = true;
 

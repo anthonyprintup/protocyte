@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
+
 foreach(
     required_variable
     IN ITEMS
@@ -13,12 +15,135 @@ foreach(
         OUT_DIR_OWNER_MARKER
         OUT_DIR_OWNER_LOCK
         BUILD_OWNER_HASH
+        OWNERSHIP_MANIFEST_DIR
         SOURCE_DIRECTORY_HEX
 )
     if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
         message(FATAL_ERROR "Protocyte generation requires ${required_variable}")
     endif()
 endforeach()
+
+function(_protocyte_load_generation_outputs out_var)
+    if(
+        NOT IS_DIRECTORY "${OWNERSHIP_MANIFEST_DIR}"
+        OR IS_SYMLINK "${OWNERSHIP_MANIFEST_DIR}"
+    )
+        message(
+            FATAL_ERROR
+            "Protocyte generation ownership manifest is missing or unsafe for target "
+            "'${GENERATION_TARGET}'. No generated output was changed."
+        )
+    endif()
+    set(output_root_file "${OWNERSHIP_MANIFEST_DIR}/output-root.path")
+    if(
+        NOT EXISTS "${output_root_file}"
+        OR IS_DIRECTORY "${output_root_file}"
+        OR IS_SYMLINK "${output_root_file}"
+    )
+        message(
+            FATAL_ERROR
+            "Protocyte generation ownership manifest has no safe output root for target "
+            "'${GENERATION_TARGET}'. No generated output was changed."
+        )
+    endif()
+    file(READ "${output_root_file}" manifest_output_root)
+    _protocyte_normalized_path_identity(
+        manifest_output_root_identity
+        "${manifest_output_root}"
+    )
+    _protocyte_normalized_path_identity(
+        generation_output_root_identity
+        "${OUTPUT_DIRECTORY}"
+    )
+    if(NOT manifest_output_root_identity STREQUAL generation_output_root_identity)
+        message(
+            FATAL_ERROR
+            "Protocyte generation ownership manifest names a different output root for target "
+            "'${GENERATION_TARGET}'. No generated output was changed."
+        )
+    endif()
+
+    file(GLOB output_markers LIST_DIRECTORIES TRUE "${OWNERSHIP_MANIFEST_DIR}/*.path")
+    list(REMOVE_ITEM output_markers "${output_root_file}")
+    set(generation_outputs)
+    set(manifest_output_keys)
+    foreach(output_marker IN LISTS output_markers)
+        if(IS_DIRECTORY "${output_marker}" OR IS_SYMLINK "${output_marker}")
+            message(
+                FATAL_ERROR
+                "Protocyte generation ownership manifest contains an unsafe output marker for target "
+                "'${GENERATION_TARGET}'. No generated output was changed."
+            )
+        endif()
+        cmake_path(GET output_marker STEM output_key)
+        string(LENGTH "${output_key}" output_key_length)
+        if(NOT output_key_length EQUAL 64 OR NOT output_key MATCHES "^[0-9a-f]+$")
+            message(
+                FATAL_ERROR
+                "Protocyte generation ownership manifest contains an invalid output identity for target "
+                "'${GENERATION_TARGET}'. No generated output was changed."
+            )
+        endif()
+        file(READ "${output_marker}" owned_output)
+        cmake_path(NORMAL_PATH owned_output OUTPUT_VARIABLE normalized_owned_output)
+        _protocyte_normalized_path_identity(output_identity "${normalized_owned_output}")
+        string(SHA256 recorded_output_key "${output_identity}")
+        list(FIND output_lock_keys "${output_key}" output_lock_index)
+        _protocyte_generated_output_path_is_safe(
+            output_is_safe
+            "${normalized_owned_output}"
+            "${manifest_output_root}"
+        )
+        if(
+            NOT recorded_output_key STREQUAL output_key
+            OR output_lock_index EQUAL -1
+            OR NOT output_is_safe
+        )
+            message(
+                FATAL_ERROR
+                "Protocyte generated-output canonical containment check failed for target "
+                "'${GENERATION_TARGET}'. No generated output was changed."
+            )
+        endif()
+        list(APPEND generation_outputs "${normalized_owned_output}")
+        list(APPEND manifest_output_keys "${output_key}")
+    endforeach()
+    list(REMOVE_DUPLICATES manifest_output_keys)
+    list(SORT manifest_output_keys)
+    if(NOT manifest_output_keys STREQUAL output_lock_keys)
+        message(
+            FATAL_ERROR
+            "Protocyte generation ownership manifest does not match its output locks for target "
+            "'${GENERATION_TARGET}'. No generated output was changed."
+        )
+    endif()
+    set(${out_var} "${generation_outputs}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_validate_generation_paths)
+    _protocyte_generated_output_root_is_safe(output_root_is_safe "${OUTPUT_DIRECTORY}")
+    if(NOT output_root_is_safe)
+        message(
+            FATAL_ERROR
+            "Protocyte generated-output canonical containment check failed for target "
+            "'${GENERATION_TARGET}'. No generated output was changed."
+        )
+    endif()
+    foreach(generation_output IN LISTS generation_outputs)
+        _protocyte_generated_output_path_is_safe(
+            output_is_safe
+            "${generation_output}"
+            "${OUTPUT_DIRECTORY}"
+        )
+        if(NOT output_is_safe)
+            message(
+                FATAL_ERROR
+                "Protocyte generated-output canonical containment check failed for target "
+                "'${GENERATION_TARGET}'. No generated output was changed."
+            )
+        endif()
+    endforeach()
+endfunction()
 
 if(NOT EXISTS "${LOCK_MANIFEST}")
     message(FATAL_ERROR "Protocyte generation lock manifest does not exist: ${LOCK_MANIFEST}")
@@ -59,6 +184,9 @@ foreach(output_lock_key IN LISTS output_lock_keys)
         )
     endif()
 endforeach()
+
+_protocyte_load_generation_outputs(generation_outputs)
+_protocyte_validate_generation_paths()
 
 function(_protocyte_publish_build_owner owner_marker)
     set(owner_staging "${owner_marker}.${BUILD_OWNER_HASH}.tmp")
@@ -145,6 +273,7 @@ foreach(output_lock_key IN LISTS missing_output_owner_keys)
 endforeach()
 
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+_protocyte_validate_generation_paths()
 
 execute_process(
     COMMAND
@@ -198,22 +327,11 @@ if(
                 string(TOLOWER "${output_identity}" output_identity)
             endif()
             string(SHA256 recorded_output_key "${output_identity}")
-            set(output_is_safe FALSE)
-            if(IS_ABSOLUTE "${normalized_owned_output}" AND IS_ABSOLUTE "${output_root}")
-                cmake_path(
-                    IS_PREFIX output_root
-                    "${normalized_owned_output}"
-                    NORMALIZE
-                    output_is_under_root
-                )
-                if(
-                    output_is_under_root
-                    AND normalized_owned_output MATCHES
-                        "([.]protocyte[.](hpp|cpp)|/runtime[.]hpp)$"
-                )
-                    set(output_is_safe TRUE)
-                endif()
-            endif()
+            _protocyte_generated_output_path_is_safe(
+                output_is_safe
+                "${normalized_owned_output}"
+                "${output_root}"
+            )
             if(
                 output_is_safe
                 AND recorded_output_key STREQUAL output_key
