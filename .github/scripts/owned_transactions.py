@@ -1180,6 +1180,7 @@ def _prune_destination_state(
             held_lock.close()
         return
 
+    _prune_abandoned_owner_state(destination, destination_state)
     lock_path = destination_state / _DESTINATION_LOCK_NAME
     entries = tuple(destination_state.iterdir())
     if any(entry != lock_path for entry in entries):
@@ -1296,6 +1297,98 @@ def _journal_paths(marker_path: Path) -> tuple[tuple[int, Path], ...]:
         if (generation := _journal_generation(path, marker_path)) is not None
     )
     return tuple(sorted(journals))
+
+
+def _marker_owner_identity(path: Path) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"([a-z][a-z0-9-]*)\.([0-9a-f]{32})\.owner",
+        path.name,
+    )
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _journal_owner_identity(path: Path) -> tuple[str, str] | None:
+    match = re.fullmatch(
+        r"([a-z][a-z0-9-]*)\.([0-9a-f]{32})\."
+        rf"[0-9]{{{_JOURNAL_GENERATION_WIDTH}}}(?:\.[0-9a-f]{{32}})?\."
+        r"state(?:\.tmp)?",
+        path.name,
+    )
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _owned_sibling_candidates_absent(
+    destination: Path,
+    kind: str,
+    token: str,
+) -> bool:
+    sibling = _owned_sibling_path(destination, kind, token)
+    candidates = [
+        sibling,
+        _owned_sibling_cleanup_path(destination, kind, token),
+    ]
+    if os.name != "nt":
+        candidates.append(_posix_staging_path(sibling))
+    return not any(_path_exists_without_following(path) for path in candidates)
+
+
+def _prune_abandoned_owner_state(
+    destination: Path,
+    destination_state: Path,
+) -> None:
+    changed = False
+    for marker_path in tuple(destination_state.iterdir()):
+        identity = _marker_owner_identity(marker_path)
+        if identity is None or _journal_paths(marker_path):
+            continue
+        kind, token = identity
+        if not _owned_sibling_candidates_absent(destination, kind, token):
+            continue
+        try:
+            marker_file = _open_state_file(marker_path, os.O_RDWR)
+        except FileNotFoundError:
+            continue
+        lease = _KernelFileLock(marker_file)
+        try:
+            marker_file.seek(0)
+            lease_content = marker_file.read()
+            if lease_content not in {b"", b"\0"}:
+                continue
+            if not lease_content:
+                _ensure_lock_byte(marker_file)
+            if not lease.acquire(blocking=False):
+                continue
+            if not lease.matches_path(marker_path):
+                continue
+        finally:
+            lease.close()
+        try:
+            marker_path.unlink()
+            changed = True
+        except FileNotFoundError:
+            pass
+        _remove_journal_artifacts(marker_path)
+
+    live_owners = {
+        identity
+        for path in tuple(destination_state.iterdir())
+        if (identity := _marker_owner_identity(path)) is not None
+    }
+    for path in tuple(destination_state.iterdir()):
+        identity = _journal_owner_identity(path)
+        if identity is None or identity in live_owners:
+            continue
+        try:
+            path.unlink()
+            changed = True
+        except FileNotFoundError:
+            pass
+    if changed:
+        _sync_directory(destination_state)
 
 
 def _marker_payload(
@@ -1585,6 +1678,14 @@ def _owned_windows_entry_phase(_phase: str, _path: Path) -> None:
     """Test seam for child replacement during handle-relative cleanup."""
 
 
+def _owned_namespace_phase(_phase: str, _path: Path) -> None:
+    """Test seam after an owned sibling namespace mutation is durable."""
+
+
+def _owned_retirement_phase(_phase: str, _path: Path) -> None:
+    """Test seam while retiring lease and journal state under the registry."""
+
+
 def _directory_identity_from_stat(
     path_stat: os.stat_result,
     recorded_path: Path,
@@ -1864,6 +1965,77 @@ def _validate_posix_staging_directory(
     return path_stat
 
 
+def _validate_posix_ancestor_chain(
+    path: Path,
+    expected: os.stat_result,
+) -> None:
+    # Every pathname component must be controlled by root/current-euid. A
+    # sticky writable directory protects a trusted-owned child entry; an
+    # ordinary group/other-writable directory does not. This keeps later
+    # caller pathname I/O inside the same explicit UID trust boundary.
+    effective_user_id = _effective_user_id()
+    if effective_user_id is None:
+        raise RuntimeError("cannot verify POSIX ancestor ownership on this platform")
+    trusted_owners = {0, effective_user_id}
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    parts = absolute.parts
+    if not absolute.anchor or not parts:
+        raise RuntimeError(f"cannot anchor POSIX ancestor validation for: {path}")
+
+    descriptor = os.open(absolute.anchor, _posix_directory_open_flags())
+    try:
+        for name in parts[1:]:
+            parent_stat = os.fstat(descriptor)
+            parent_mode = stat.S_IMODE(parent_stat.st_mode)
+            if (
+                not stat.S_ISDIR(parent_stat.st_mode)
+                or int(parent_stat.st_uid) not in trusted_owners
+                or (parent_mode & 0o022 and not parent_stat.st_mode & stat.S_ISVTX)
+            ):
+                raise RuntimeError(
+                    "refusing a POSIX owned sibling beneath an untrusted writable "
+                    f"ancestor: {absolute}"
+                )
+            entry_stat = os.stat(
+                name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(entry_stat.st_mode)
+                or stat.S_ISLNK(entry_stat.st_mode)
+                or int(entry_stat.st_uid) not in trusted_owners
+            ):
+                raise RuntimeError(
+                    "refusing a POSIX owned sibling beneath an untrusted ancestor "
+                    f"entry: {absolute}"
+                )
+            child = os.open(name, _posix_directory_open_flags(), dir_fd=descriptor)
+            opened_stat = os.fstat(child)
+            if not _same_posix_identity(entry_stat, opened_stat):
+                os.close(child)
+                raise RuntimeError(
+                    "POSIX ancestor changed identity during validation; refusing "
+                    f"owned sibling creation: {absolute}"
+                )
+            os.close(descriptor)
+            descriptor = child
+
+        final_stat = os.fstat(descriptor)
+        final_mode = stat.S_IMODE(final_stat.st_mode)
+        if (
+            int(final_stat.st_uid) not in trusted_owners
+            or (final_mode & 0o022 and not final_stat.st_mode & stat.S_ISVTX)
+            or not _same_posix_identity(final_stat, expected)
+        ):
+            raise RuntimeError(
+                "refusing an untrusted or replaced POSIX ancestor chain for owned "
+                f"sibling creation: {absolute}"
+            )
+    finally:
+        os.close(descriptor)
+
+
 def _validate_posix_creation_parent(
     descriptor: int,
     path: Path,
@@ -1892,6 +2064,7 @@ def _validate_posix_creation_parent(
             "refusing an untrusted or replaced parent directory for POSIX owned "
             f"sibling creation: {path}"
         )
+    _validate_posix_ancestor_chain(path, opened)
     return opened
 
 
@@ -2006,6 +2179,8 @@ def _posix_create_owned_directory(path: Path) -> int:
                 f"publication; refusing to remove it: {stage_path}"
             )
         os.rmdir(stage_name, dir_fd=parent)
+        os.fsync(parent)
+        _owned_namespace_phase("after_create_parent_fsync", path.parent)
         returned = True
         return child
     finally:
@@ -2075,7 +2250,9 @@ def _windows_directory_entries(
                             "little",
                         ),
                         int(information.FileAttributes),
-                        int(information.ReparsePointTag),
+                        int(information.ReparsePointTag)
+                        if information.FileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT
+                        else 0,
                     )
                 )
             next_offset = int(information.NextEntryOffset)
@@ -2149,8 +2326,12 @@ def _remove_windows_directory_contents(
             _owned_windows_entry_phase("after_enumerate", child_path)
             try:
                 child = _windows_open_child_handle(handle, name, child_path)
-            except FileNotFoundError:
-                continue
+            except FileNotFoundError as exc:
+                _owned_windows_entry_phase("after_missing", child_path)
+                raise RuntimeError(
+                    "owned transaction child disappeared after enumeration; "
+                    f"refusing removal: {child_path}"
+                ) from exc
             try:
                 identity = _windows_handle_identity(child, child_path)
                 expected_type = (
@@ -2277,6 +2458,8 @@ class _OwnedDirectoryHandle:
                 os.close(parent)
         if not self.matches_path(target, recorded_path):
             raise _unowned_sibling_error(target)
+        _sync_directory(target.parent)
+        _owned_namespace_phase("after_detach_parent_fsync", target.parent)
 
     def remove_tree(self, path: Path, recorded_path: Path) -> None:
         if self._handle is None:
@@ -2289,6 +2472,8 @@ class _OwnedDirectoryHandle:
             _remove_windows_directory_contents(self._handle, path, root_device)
             _windows_delete_handle(self._handle)
             self.close()
+            _sync_directory(path.parent)
+            _owned_namespace_phase("after_remove_parent_fsync", path.parent)
             return
         root_device = int(os.fstat(self._handle).st_dev)
         _remove_posix_directory_contents(self._handle, root_device)
@@ -2313,6 +2498,8 @@ class _OwnedDirectoryHandle:
             ):
                 raise _unowned_sibling_error(path)
             os.rmdir(path.name, dir_fd=parent)
+            os.fsync(parent)
+            _owned_namespace_phase("after_remove_parent_fsync", path.parent)
         finally:
             os.close(parent)
         self.close()
@@ -2426,13 +2613,14 @@ class OwnedSibling:
                         "ownership lease was replaced; refusing to remove state: "
                         f"{self.marker_path}"
                     )
-                _remove_journal_artifacts(self.marker_path)
                 self._lease.close()
                 try:
                     self.marker_path.unlink()
                 except FileNotFoundError:
                     pass
                 _sync_directory(self.marker_path.parent)
+                _owned_retirement_phase("after_lease_unlink", self.marker_path)
+                _remove_journal_artifacts(self.marker_path)
                 _prune_destination_state(self.destination, state_directory)
         finally:
             self._lease.close()
@@ -2602,12 +2790,12 @@ def create_owned_sibling(destination: Path, kind: str) -> OwnedSibling:
             )
         except BaseException:
             lease.close()
-            _remove_journal_artifacts(marker_path)
             try:
                 marker_path.unlink()
             except FileNotFoundError:
                 pass
             _sync_directory(marker_path.parent)
+            _remove_journal_artifacts(marker_path)
             _prune_destination_state(destination, state_directory)
             raise
 
@@ -2626,6 +2814,9 @@ def create_owned_sibling(destination: Path, kind: str) -> OwnedSibling:
     try:
         directory = _OwnedDirectoryHandle.create(path)
         owner._directory = directory
+        if os.name == "nt":
+            _sync_directory(path.parent)
+            _owned_namespace_phase("after_create_parent_fsync", path.parent)
         identity = directory.identity(path)
         owner._owned_paths = {_OWNED_SIBLING_LABEL: identity}
         owner._sibling_location = "original"
@@ -2702,6 +2893,7 @@ def _owned_marker_identities(
         )
         if destination_state is None:
             return ()
+        _prune_abandoned_owner_state(destination, destination_state)
         identities: list[tuple[str, str]] = []
         for marker_path in tuple(destination_state.iterdir()):
             match = marker_pattern.fullmatch(marker_path.name)
