@@ -778,21 +778,139 @@ def _windows_create_private_directory(path: Path) -> None:
         raise ctypes.WinError(error)
 
 
-def _windows_ensure_private_directory(path: Path) -> None:
-    missing: list[Path] = []
-    current = path
-    while True:
-        try:
-            current.lstat()
-            break
-        except FileNotFoundError:
-            missing.append(current)
-            parent = current.parent
-            if parent == current:
+def _windows_create_private_child_directory(
+    parent: object,
+    name: str,
+    recorded_path: Path,
+) -> object:
+    name_buffer = ctypes.create_unicode_buffer(name)
+    object_name = _WindowsUnicodeString(
+        len(name.encode("utf-16-le")),
+        len(name_buffer) * ctypes.sizeof(wintypes.WCHAR),
+        ctypes.cast(name_buffer, wintypes.LPWSTR),
+    )
+    io_status = _WindowsIoStatusBlock()
+    handle = wintypes.HANDLE()
+    with _windows_private_security_attributes() as security:
+        attributes = _WindowsObjectAttributes(
+            ctypes.sizeof(_WindowsObjectAttributes),
+            parent,
+            ctypes.pointer(object_name),
+            _OBJ_CASE_INSENSITIVE,
+            security.lpSecurityDescriptor,
+            None,
+        )
+        status = _ntdll.NtCreateFile(
+            ctypes.byref(handle),
+            _DELETE
+            | _READ_CONTROL
+            | _SYNCHRONIZE
+            | _FILE_LIST_DIRECTORY
+            | _FILE_READ_ATTRIBUTES,
+            ctypes.byref(attributes),
+            ctypes.byref(io_status),
+            None,
+            _FILE_ATTRIBUTE_NORMAL,
+            _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+            _NT_FILE_CREATE,
+            _FILE_DIRECTORY_FILE
+            | _FILE_SYNCHRONOUS_IO_NONALERT
+            | _NT_FILE_OPEN_REPARSE_POINT,
+            None,
+            0,
+        )
+    if status < 0:
+        error = int(_ntdll.RtlNtStatusToDosError(status))
+        if error in {80, _ERROR_ALREADY_EXISTS}:
+            raise FileExistsError(error, os.strerror(error), recorded_path)
+        raise OSError(error, os.strerror(error), recorded_path)
+    return handle
+
+
+def _windows_validate_state_directory_handle(
+    handle: object,
+    path: Path,
+    *,
+    ancestor: bool,
+) -> None:
+    identity = _windows_handle_identity(handle, path)
+    if identity["reparse_tag"] != 0:
+        location = "ancestor" if ancestor else "directory"
+        raise RuntimeError(
+            f"refusing to use a linked transaction state {location}: {path}"
+        )
+    if identity["type"] != stat.S_IFDIR:
+        if ancestor:
+            raise RuntimeError(f"transaction state ancestor is not a directory: {path}")
+        raise RuntimeError(f"transaction state path is not a directory: {path}")
+
+
+def _windows_ensure_private_directory(path: Path) -> tuple[object, ...]:
+    absolute = Path(os.path.normpath(os.path.abspath(os.fspath(path))))
+    if not absolute.anchor:
+        raise RuntimeError(f"cannot anchor Windows transaction state directory: {path}")
+
+    current_path = Path(absolute.anchor)
+    inspection_access = _READ_CONTROL | _SYNCHRONIZE | _FILE_READ_ATTRIBUTES
+    handles = [_windows_open_path(current_path, directory=True)]
+    try:
+        _windows_validate_state_directory_handle(
+            handles[-1],
+            current_path,
+            ancestor=True,
+        )
+        for name in absolute.parts[1:]:
+            child_path = current_path / name
+            for attempt in range(100):
+                try:
+                    child = _windows_open_child_handle(
+                        handles[-1],
+                        name,
+                        child_path,
+                        access=inspection_access,
+                    )
+                    break
+                except FileNotFoundError:
+                    try:
+                        child = _windows_create_private_child_directory(
+                            handles[-1],
+                            name,
+                            child_path,
+                        )
+                        break
+                    except FileExistsError:
+                        pass
+                except OSError as exc:
+                    if exc.errno != errno.EPIPE:
+                        raise
+                time.sleep(0.01)
+            else:
+                raise RuntimeError(
+                    "transaction state directory remained unavailable while opening "
+                    f"it: {child_path}"
+                )
+            try:
+                _windows_validate_state_directory_handle(
+                    child,
+                    child_path,
+                    ancestor=child_path != absolute,
+                )
+            except BaseException:
+                _kernel32.CloseHandle(child)
                 raise
-            current = parent
-    for entry in reversed(missing):
-        _windows_create_private_directory(entry)
+            handles.append(child)
+            current_path = child_path
+        if current_path == absolute:
+            _windows_validate_private_handle(
+                handles[-1],
+                current_path,
+                directory=True,
+            )
+        return tuple(handles)
+    except BaseException:
+        for handle in reversed(handles):
+            _kernel32.CloseHandle(handle)
+        raise
 
 
 class _KernelFileLock:
@@ -924,23 +1042,46 @@ def _validate_state_directory(state: Path) -> None:
             )
 
 
-def _state_directory() -> Path:
-    configured = os.environ.get(_STATE_DIRECTORY_ENV)
-    state = (
-        Path(configured)
-        if configured
-        else Path(tempfile.gettempdir())
-        / f"{_STATE_DIRECTORY_NAME}-{_user_namespace()}"
-    )
-    if os.name == "nt":
-        _windows_ensure_private_directory(state)
+def _absolute_state_directory(configured: str | None) -> Path:
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            legacy_path = candidate.resolve(strict=False)
+            raise RuntimeError(
+                f"{_STATE_DIRECTORY_ENV} must be an absolute path; relative state "
+                "roots historically resolve from each process working directory "
+                "and can split transaction locks. To preserve this working "
+                "directory's existing v7 state, set the variable to this canonical "
+                f"absolute target before retrying: {legacy_path}"
+            )
     else:
+        trusted_temp_directory = Path(tempfile.gettempdir()).resolve(strict=True)
+        candidate = trusted_temp_directory / (
+            f"{_STATE_DIRECTORY_NAME}-{_user_namespace()}"
+        )
+    return Path(os.path.normpath(os.path.abspath(os.fspath(candidate))))
+
+
+@contextmanager
+def _pinned_state_directory() -> Iterator[Path]:
+    configured = os.environ.get(_STATE_DIRECTORY_ENV)
+    state = _absolute_state_directory(configured)
+    if os.name == "nt":
+        handles = _windows_ensure_private_directory(state)
         try:
-            state.mkdir(mode=0o700, parents=True, exist_ok=False)
-        except FileExistsError:
-            pass
-    _validate_state_directory(state)
-    return state
+            yield state
+        finally:
+            for handle in reversed(handles):
+                _kernel32.CloseHandle(handle)
+        return
+
+    _posix_ensure_private_state_directory(state)
+    yield state
+
+
+def _state_directory() -> Path:
+    with _pinned_state_directory() as state:
+        return state
 
 
 def _open_state_file(path: Path, flags: int) -> BinaryIO:
@@ -1194,8 +1335,16 @@ def _existing_destination_state_directory(
 
 
 @contextmanager
-def _locked_registry() -> Iterator[Path]:
-    state_directory = _state_directory()
+def _locked_registry(
+    pinned_state_directory: Path | None = None,
+) -> Iterator[Path]:
+    if pinned_state_directory is None:
+        with _pinned_state_directory() as state_directory:
+            with _locked_registry(state_directory) as locked_state_directory:
+                yield locked_state_directory
+        return
+
+    state_directory = pinned_state_directory
     registry_path = state_directory / _REGISTRY_LOCK_NAME
     file = _open_state_file(registry_path, os.O_RDWR | os.O_CREAT)
     lock = _KernelFileLock(file)
@@ -1286,9 +1435,10 @@ def _prune_destination_state(
 def _release_destination_lock(
     destination: Path,
     lock: _KernelFileLock,
+    state_directory: Path,
 ) -> None:
     try:
-        with _locked_registry() as state_directory:
+        with _locked_registry(state_directory):
             _prune_destination_state(destination, state_directory, lock)
     finally:
         lock.close()
@@ -1296,16 +1446,17 @@ def _release_destination_lock(
 
 @contextmanager
 def locked_destination(destination: Path) -> Iterator[None]:
-    lock: _KernelFileLock | None = None
-    while lock is None:
-        with _locked_registry() as state_directory:
-            lock = _try_destination_lock(destination, state_directory)
-        if lock is None:
-            time.sleep(0.05)
-    try:
-        yield
-    finally:
-        _release_destination_lock(destination, lock)
+    with _pinned_state_directory() as state_directory:
+        lock: _KernelFileLock | None = None
+        while lock is None:
+            with _locked_registry(state_directory):
+                lock = _try_destination_lock(destination, state_directory)
+            if lock is None:
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            _release_destination_lock(destination, lock, state_directory)
 
 
 def _validate_kind(kind: str) -> None:
@@ -1779,6 +1930,138 @@ def _posix_directory_open_flags() -> int:
         | getattr(os, "O_DIRECTORY", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
+
+
+def _posix_validate_state_ancestor(
+    descriptor: int,
+    path: Path,
+) -> None:
+    path_stat = os.fstat(descriptor)
+    effective_user_id = _effective_user_id()
+    if effective_user_id is None:
+        raise RuntimeError(
+            "cannot verify transaction state directory ownership on this platform"
+        )
+    mode = stat.S_IMODE(path_stat.st_mode)
+    if (
+        not stat.S_ISDIR(path_stat.st_mode)
+        or int(path_stat.st_uid) not in {0, effective_user_id}
+        or (mode & 0o022 and not path_stat.st_mode & stat.S_ISVTX)
+    ):
+        raise RuntimeError(
+            f"refusing an untrusted transaction state ancestor directory: {path}"
+        )
+
+
+def _posix_validate_private_state_directory(
+    descriptor: int,
+    path: Path,
+) -> None:
+    path_stat = os.fstat(descriptor)
+    effective_user_id = _effective_user_id()
+    if effective_user_id is None:
+        raise RuntimeError(
+            "cannot verify transaction state directory ownership on this platform"
+        )
+    if not stat.S_ISDIR(path_stat.st_mode):
+        raise RuntimeError(f"transaction state path is not a directory: {path}")
+    if int(path_stat.st_uid) != effective_user_id:
+        raise RuntimeError(
+            f"transaction state directory is not owned by the current user: {path}"
+        )
+    if stat.S_IMODE(path_stat.st_mode) != stat.S_IRWXU:
+        raise RuntimeError(
+            f"transaction state directory must have private 0700 permissions: {path}"
+        )
+
+
+def _posix_open_state_child_directory(
+    parent: int,
+    name: str,
+    path: Path,
+    *,
+    final: bool,
+) -> int:
+    try:
+        entry_stat = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+        else:
+            os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
+        try:
+            entry_stat = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"transaction state directory disappeared while opening it: {path}"
+            ) from exc
+
+    if stat.S_ISLNK(entry_stat.st_mode) or int(
+        getattr(entry_stat, "st_reparse_tag", 0)
+    ):
+        location = "directory" if final else "ancestor"
+        raise RuntimeError(
+            f"refusing to use a linked transaction state {location}: {path}"
+        )
+    if not stat.S_ISDIR(entry_stat.st_mode):
+        if final:
+            raise RuntimeError(f"transaction state path is not a directory: {path}")
+        raise RuntimeError(f"transaction state ancestor is not a directory: {path}")
+    try:
+        descriptor = os.open(name, _posix_directory_open_flags(), dir_fd=parent)
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            location = "directory" if final else "ancestor"
+            raise RuntimeError(
+                f"refusing to use a linked transaction state {location}: {path}"
+            ) from exc
+        raise
+    opened_stat = os.fstat(descriptor)
+    if not _same_posix_identity(entry_stat, opened_stat):
+        os.close(descriptor)
+        raise RuntimeError(
+            f"transaction state path changed identity while opening it: {path}"
+        )
+    return descriptor
+
+
+def _posix_ensure_private_state_directory(path: Path) -> None:
+    if not path.is_absolute() or not path.anchor:
+        raise RuntimeError(f"cannot anchor POSIX transaction state directory: {path}")
+    if not getattr(os, "O_NOFOLLOW", 0):
+        raise RuntimeError(
+            "O_NOFOLLOW is unavailable; refusing transaction state directory creation"
+        )
+
+    current_path = Path(path.anchor)
+    descriptor = os.open(current_path, _posix_directory_open_flags())
+    try:
+        _posix_validate_state_ancestor(descriptor, current_path)
+        for name in path.parts[1:]:
+            child_path = current_path / name
+            child = _posix_open_state_child_directory(
+                descriptor,
+                name,
+                child_path,
+                final=child_path == path,
+            )
+            try:
+                if child_path == path:
+                    _posix_validate_private_state_directory(child, child_path)
+                else:
+                    _posix_validate_state_ancestor(child, child_path)
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+            current_path = child_path
+        if current_path == path:
+            _posix_validate_private_state_directory(descriptor, current_path)
+    finally:
+        os.close(descriptor)
 
 
 class _PosixOpenHow(ctypes.Structure):
@@ -2333,6 +2616,14 @@ def _windows_open_child_handle(
     parent: object,
     name: str,
     recorded_path: Path,
+    *,
+    access: int = (
+        _DELETE
+        | _READ_CONTROL
+        | _SYNCHRONIZE
+        | _FILE_LIST_DIRECTORY
+        | _FILE_READ_ATTRIBUTES
+    ),
 ) -> object:
     name_buffer = ctypes.create_unicode_buffer(name)
     object_name = _WindowsUnicodeString(
@@ -2352,11 +2643,7 @@ def _windows_open_child_handle(
     child = wintypes.HANDLE()
     status = _ntdll.NtCreateFile(
         ctypes.byref(child),
-        _DELETE
-        | _READ_CONTROL
-        | _SYNCHRONIZE
-        | _FILE_LIST_DIRECTORY
-        | _FILE_READ_ATTRIBUTES,
+        access,
         ctypes.byref(attributes),
         ctypes.byref(io_status),
         None,
