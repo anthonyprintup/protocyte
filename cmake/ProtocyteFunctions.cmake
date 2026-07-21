@@ -2,6 +2,7 @@ include_guard(GLOBAL)
 
 include(CMakeParseArguments)
 include(FetchContent)
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
 
 function(_protocyte_configure_python_environment_root)
     if(NOT DEFINED PROTOCYTE_PYTHON_ENV_ROOT OR "${PROTOCYTE_PYTHON_ENV_ROOT}" STREQUAL "")
@@ -1022,25 +1023,6 @@ function(_protocyte_owned_output_claim_key out_var output_path)
     set(${out_var} "${output_claim_key}" PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_generated_output_path_is_safe out_var output_path output_root)
-    set(is_safe FALSE)
-    if(IS_ABSOLUTE "${output_path}" AND IS_ABSOLUTE "${output_root}")
-        cmake_path(
-            IS_PREFIX output_root
-            "${output_path}"
-            NORMALIZE
-            output_is_under_root
-        )
-        if(
-            output_is_under_root
-            AND output_path MATCHES "([.]protocyte[.](hpp|cpp)|/runtime[.]hpp)$"
-        )
-            set(is_safe TRUE)
-        endif()
-    endif()
-    set(${out_var} "${is_safe}" PARENT_SCOPE)
-endfunction()
-
 function(_protocyte_schedule_owned_output_cleanup)
     if(DEFINED CMAKE_SCRIPT_MODE_FILE)
         return()
@@ -1212,6 +1194,7 @@ function(
     output_path
     output_key
     trusted_hash
+    output_root
 )
     _protocyte_shared_output_lock_directory(output_lock_directory)
     file(MAKE_DIRECTORY "${output_lock_directory}")
@@ -1226,6 +1209,16 @@ function(
             FATAL_ERROR
             "Protocyte could not lock retired generated output '${output_path}': ${output_lock_result}"
         )
+    endif()
+
+    _protocyte_generated_output_path_is_safe(
+        output_path_is_safe
+        "${output_path}"
+        "${output_root}"
+    )
+    if(NOT output_path_is_safe)
+        set(${out_var} "unsafe" PARENT_SCOPE)
+        return()
     endif()
 
     _protocyte_build_tree_owner_hash(build_tree_hash)
@@ -1344,6 +1337,7 @@ function(_protocyte_finalize_owned_outputs)
 
         set(pending_output_keys)
         set(unnotified_pending_outputs)
+        set(unnotified_unsafe_outputs)
         foreach(manifest_dir IN LISTS ${manifest_dirs_variable})
             set(previous_output_root_file "${manifest_dir}/output-root.path")
             set(previous_output_root "")
@@ -1356,8 +1350,8 @@ function(_protocyte_finalize_owned_outputs)
                 cmake_path(GET previous_marker STEM previous_output_key)
                 file(READ "${previous_marker}" previous_output)
                 _protocyte_owned_output_key(recorded_output_key "${previous_output}")
-                _protocyte_generated_output_path_is_safe(
-                    previous_output_is_safe
+                _protocyte_generated_output_path_is_lexically_owned(
+                    previous_output_is_owned
                     "${previous_output}"
                     "${previous_output_root}"
                 )
@@ -1372,7 +1366,7 @@ function(_protocyte_finalize_owned_outputs)
                     "${previous_hash_file}"
                 )
                 if(
-                    previous_output_is_safe
+                    previous_output_is_owned
                     AND recorded_output_key STREQUAL previous_output_key
                     AND NOT output_is_still_owned
                 )
@@ -1381,8 +1375,12 @@ function(_protocyte_finalize_owned_outputs)
                         "${previous_output}"
                         "${previous_output_key}"
                         "${previous_output_hash}"
+                        "${previous_output_root}"
                     )
-                    if(retired_output_result STREQUAL "pending")
+                    if(
+                        retired_output_result STREQUAL "pending"
+                        OR retired_output_result STREQUAL "unsafe"
+                    )
                         list(APPEND pending_output_keys "${previous_output_key}")
                         set(
                             protocyte_pending_output_${previous_output_key}
@@ -1392,11 +1390,25 @@ function(_protocyte_finalize_owned_outputs)
                             protocyte_pending_output_root_${previous_output_key}
                             "${previous_output_root}"
                         )
+                        set(
+                            protocyte_pending_output_hash_${previous_output_key}
+                            "${previous_output_hash}"
+                        )
+                        if(retired_output_result STREQUAL "unsafe")
+                            set(
+                                protocyte_pending_output_reason_${previous_output_key}
+                                "unsafe"
+                            )
+                        endif()
                         if(
                             NOT EXISTS
                                 "${manifest_dir}/${previous_output_key}.pending-notified"
                         )
-                            list(APPEND unnotified_pending_outputs "${previous_output}")
+                            if(retired_output_result STREQUAL "unsafe")
+                                list(APPEND unnotified_unsafe_outputs "${previous_output}")
+                            else()
+                                list(APPEND unnotified_pending_outputs "${previous_output}")
+                            endif()
                         endif()
                     endif()
                 endif()
@@ -1404,6 +1416,7 @@ function(_protocyte_finalize_owned_outputs)
         endforeach()
         list(REMOVE_DUPLICATES pending_output_keys)
         list(REMOVE_DUPLICATES unnotified_pending_outputs)
+        list(REMOVE_DUPLICATES unnotified_unsafe_outputs)
 
         foreach(manifest_dir IN LISTS ${manifest_dirs_variable})
             file(REMOVE_RECURSE "${manifest_dir}")
@@ -1446,6 +1459,17 @@ function(_protocyte_finalize_owned_outputs)
                 pending_output_root
                 "${protocyte_pending_output_root_${pending_output_key}}"
             )
+            set(
+                pending_output_hash
+                "${protocyte_pending_output_hash_${pending_output_key}}"
+            )
+            set(
+                pending_output_reason
+                "${protocyte_pending_output_reason_${pending_output_key}}"
+            )
+            if(pending_output_reason STREQUAL "")
+                set(pending_output_reason "unverified legacy output")
+            endif()
             string(
                 SHA256
                 pending_manifest_target_key
@@ -1463,8 +1487,15 @@ function(_protocyte_finalize_owned_outputs)
             file(
                 WRITE
                 "${pending_manifest_dir}/${pending_output_key}.pending"
-                "unverified legacy output\n"
+                "${pending_output_reason}\n"
             )
+            if(NOT pending_output_hash STREQUAL "")
+                file(
+                    WRITE
+                    "${pending_manifest_dir}/${pending_output_key}.sha256"
+                    "${pending_output_hash}"
+                )
+            endif()
             file(
                 WRITE
                 "${pending_manifest_dir}/${pending_output_key}.pending-notified"
@@ -1480,6 +1511,16 @@ function(_protocyte_finalize_owned_outputs)
                 "Remove obsolete files manually. To restore automatic cleanup, temporarily restore a "
                 "code-generation target that declares these outputs, back up any edits, delete the outputs, "
                 "and build that target once before removing them again."
+            )
+        endif()
+        if(unnotified_unsafe_outputs)
+            list(JOIN unnotified_unsafe_outputs "\n  " unsafe_output_text)
+            message(
+                WARNING
+                "Protocyte preserved retired generated output(s) because canonical containment under the "
+                "recorded OUT_DIR could not be verified:\n  ${unsafe_output_text}\n"
+                "Replace any nested symbolic link or junction with a real directory and reconfigure to retry "
+                "automatic cleanup, or remove obsolete files and their ownership records manually."
             )
         endif()
     endforeach()
@@ -3583,6 +3624,10 @@ function(protocyte_generate)
         protocyte_generation_lock_keys
     )
     set(protocyte_generation_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerate.cmake")
+    set(
+        protocyte_output_safety_script
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteOutputSafety.cmake"
+    )
     string(HEX "${CMAKE_CURRENT_SOURCE_DIR}" protocyte_source_directory_hex)
 
     add_custom_command(
@@ -3608,6 +3653,7 @@ function(protocyte_generate)
             "${protocyte_response_file}"
             "${protocyte_generation_lock_manifest}"
             "${protocyte_generation_script}"
+            "${protocyte_output_safety_script}"
             "${PROTOCYTE_PROTOC_DEPENDENCY}"
             "${protocyte_plugin_executable}"
             "${protocyte_options_proto}"
