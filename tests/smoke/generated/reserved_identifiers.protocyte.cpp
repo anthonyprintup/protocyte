@@ -40,7 +40,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_fields_from_fields {{
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_fields_from_fields_ {{
             {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
