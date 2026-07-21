@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -31,6 +32,29 @@ def _load_install_protoc_module():
 
 install_protoc = _load_install_protoc_module()
 owned_transactions = sys.modules[install_protoc.locked_destination.__module__]
+
+
+def _owner_journal_payload(owner: object) -> dict[str, object]:
+    return owned_transactions._read_latest_journal_payload(
+        owner.marker_path,
+        owner.destination,
+        owner.kind,
+        owner.token,
+    )
+
+
+def _marker_journal_payload(
+    marker_path: Path,
+    destination: Path,
+) -> dict[str, object]:
+    match = re.fullmatch(r"([a-z][a-z0-9-]*)\.([0-9a-f]{32})\.owner", marker_path.name)
+    assert match is not None
+    return owned_transactions._read_latest_journal_payload(
+        marker_path,
+        destination,
+        match.group(1),
+        match.group(2),
+    )
 
 
 def test_default_transaction_state_directory_is_per_user_and_private(
@@ -79,9 +103,10 @@ def test_transaction_state_metadata_is_private_and_redacts_paths(
             marker_paths = list(state_directory.rglob("*.owner"))
             assert len(marker_paths) == 1
             marker_path = marker_paths[0]
-            owner._lease._file.seek(0)
-            payload = json.loads(owner._lease._file.read().decode("utf-8"))
+            payload = _owner_journal_payload(owner)
             marker_mode = stat.S_IMODE(marker_path.stat().st_mode)
+            owner._lease._file.seek(0)
+            assert owner._lease._file.read() == b"\0"
         finally:
             owner.cleanup(install_protoc._remove_path)
 
@@ -90,8 +115,10 @@ def test_transaction_state_metadata_is_private_and_redacts_paths(
         "destination_key",
         "kind",
         "token",
+        "sibling_location",
         "owned_paths",
     }
+    assert payload["sibling_location"] == "original"
     assert payload["destination_key"] == owned_transactions._destination_key(
         destination
     )
@@ -106,6 +133,20 @@ def test_transaction_state_metadata_is_private_and_redacts_paths(
     assert rollback_identity["path_key"] == owned_transactions._destination_key(
         rollback
     )
+    sibling_identity = payload["owned_paths"]["sibling"]
+    assert set(sibling_identity) == {
+        "path_key",
+        "device",
+        "inode",
+        "type",
+        "reparse_tag",
+    }
+    assert sibling_identity["path_key"] == owned_transactions._destination_key(
+        owner.path
+    )
+    assert sibling_identity["inode"] > 0
+    assert sibling_identity["type"] == stat.S_IFDIR
+    assert sibling_identity["reparse_tag"] == 0
     serialized_payload = json.dumps(payload, sort_keys=True)
     assert (
         owned_transactions._normalized_destination(destination)
@@ -114,10 +155,16 @@ def test_transaction_state_metadata_is_private_and_redacts_paths(
     assert (
         owned_transactions._normalized_destination(rollback) not in serialized_payload
     )
+    assert (
+        owned_transactions._normalized_destination(owner.path) not in serialized_payload
+    )
 
     if os.name != "nt":
         assert stat.S_IMODE(state_directory.stat().st_mode) == 0o700
         assert marker_mode == 0o600
+        journal_paths = list(state_directory.rglob("*.state"))
+        assert journal_paths
+        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in journal_paths)
         lock_paths = list(state_directory.rglob("*.lock"))
         assert lock_paths
         assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in lock_paths)
@@ -357,6 +404,1468 @@ def _transaction_state_entries(state_directory: Path) -> set[str]:
     }
 
 
+def _create_owned_sibling_lookalike(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if result.returncode != 0:
+            pytest.skip("Windows junction creation is unavailable: " + result.stderr)
+        return
+    link.symlink_to(target, target_is_directory=True)
+
+
+def _remove_owned_sibling_lookalike(link: Path) -> None:
+    if os.name == "nt":
+        os.rmdir(link)
+    else:
+        link.unlink()
+
+
+def _release_owned_directory_handle(owner) -> None:
+    if owner._directory is not None:
+        owner._directory.close()
+        owner._directory = None
+
+
+@pytest.mark.parametrize("dead_owner", [False, True], ids=["live", "dead-owner"])
+@pytest.mark.parametrize("replacement_kind", ["directory", "link"])
+def test_owned_sibling_cleanup_refuses_renamed_replacements_and_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dead_owner: bool,
+    replacement_kind: str,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "owned").write_text("owned\n", encoding="utf-8")
+    _release_owned_directory_handle(owner)
+    original = tmp_path / "renamed-owned-sibling"
+    owner.path.rename(original)
+    lookalike_target = tmp_path / "lookalike-target"
+    if replacement_kind == "link":
+        lookalike_target.mkdir()
+        replacement_file = lookalike_target / "keep"
+        _create_owned_sibling_lookalike(owner.path, lookalike_target)
+    else:
+        owner.path.mkdir()
+        replacement_file = owner.path / "keep"
+    replacement_file.write_text("unowned\n", encoding="utf-8")
+    marker_path = owner.marker_path
+
+    try:
+        if dead_owner:
+            owner.close(remove_marker=False)
+
+        def cleanup() -> None:
+            if not dead_owner:
+                owner.cleanup(install_protoc._remove_path)
+                return
+            install_protoc.recover_owned_siblings(
+                destination,
+                ("transaction",),
+                install_protoc._remove_path,
+            )
+
+        with pytest.raises(RuntimeError, match="unowned, replaced, or linked"):
+            with install_protoc.locked_destination(destination):
+                cleanup()
+
+        assert replacement_file.read_text(encoding="utf-8") == "unowned\n"
+        assert (original / "owned").read_text(encoding="utf-8") == "owned\n"
+        assert marker_path.is_file()
+    finally:
+        if replacement_kind == "link" and owner.path.exists():
+            _remove_owned_sibling_lookalike(owner.path)
+        elif replacement_kind == "directory":
+            install_protoc._remove_path(owner.path)
+        if original.exists():
+            install_protoc._remove_path(original)
+        owner.close(remove_marker=True)
+
+
+@pytest.mark.parametrize("dead_owner", [False, True], ids=["live", "dead-owner"])
+def test_owned_sibling_cleanup_never_delegates_recursive_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dead_owner: bool,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    nested = owner.path / "nested"
+    nested.mkdir()
+    (nested / "owned").write_text("owned\n", encoding="utf-8")
+    marker_path = owner.marker_path
+    callback_called = False
+
+    def unsafe_path_callback(_candidate: Path) -> None:
+        nonlocal callback_called
+        callback_called = True
+        raise AssertionError("verified cleanup delegated to a pathname callback")
+
+    if dead_owner:
+        owner.close(remove_marker=False)
+        with install_protoc.locked_destination(destination):
+            install_protoc.recover_owned_siblings(
+                destination,
+                ("transaction",),
+                unsafe_path_callback,
+            )
+    else:
+        owner.cleanup(unsafe_path_callback)
+
+    assert not callback_called
+    assert not owner.path.exists()
+    assert not owner.cleanup_path.exists()
+    assert not marker_path.exists()
+
+
+def test_owned_sibling_cleanup_does_not_follow_linked_children(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    linked_target = tmp_path / "linked-target"
+    linked_target.mkdir()
+    keep = linked_target / "keep"
+    keep.write_text("unowned\n", encoding="utf-8")
+    _create_owned_sibling_lookalike(owner.path / "linked", linked_target)
+
+    owner.cleanup(install_protoc._remove_path)
+
+    assert keep.read_text(encoding="utf-8") == "unowned\n"
+    assert not owner.path.exists()
+    assert not owner.cleanup_path.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle-relative cleanup race")
+def test_windows_owned_cleanup_rejects_child_replacement_after_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    nested = owner.path / "nested"
+    nested.mkdir()
+    (nested / "owned").write_text("owned\n", encoding="utf-8")
+    raced = tmp_path / "raced-child"
+    replacement_keep: Path | None = None
+    replaced = False
+
+    def replace_child(phase: str, path: Path) -> None:
+        nonlocal replacement_keep, replaced
+        if phase != "after_enumerate" or path.name != "nested" or replaced:
+            return
+        replaced = True
+        path.rename(raced)
+        path.mkdir()
+        replacement_keep = path / "keep"
+        replacement_keep.write_text("unowned\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_windows_entry_phase",
+        replace_child,
+    )
+
+    with pytest.raises(RuntimeError, match="child changed identity"):
+        owner.cleanup(install_protoc._remove_path)
+
+    assert replaced
+    assert replacement_keep is not None
+    assert replacement_keep.read_text(encoding="utf-8") == "unowned\n"
+    assert (raced / "owned").read_text(encoding="utf-8") == "owned\n"
+    assert owner.marker_path.is_file()
+    install_protoc._remove_path(owner.cleanup_path)
+    install_protoc._remove_path(raced)
+    owner.close(remove_marker=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows missing-child lookup gap")
+def test_windows_owned_cleanup_rejects_disappearance_before_reenumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    nested = owner.path / "nested"
+    nested.mkdir()
+    (nested / "owned").write_text("owned\n", encoding="utf-8")
+    moved = tmp_path / "moved-enumerated-child"
+    replacement_keep: Path | None = None
+    moved_once = False
+
+    def replace_after_missing(phase: str, path: Path) -> None:
+        nonlocal moved_once, replacement_keep
+        if path.name != "nested":
+            return
+        if phase == "after_enumerate" and not moved_once:
+            moved_once = True
+            path.rename(moved)
+        elif phase == "after_missing":
+            path.mkdir()
+            replacement_keep = path / "keep"
+            replacement_keep.write_text("unowned\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_windows_entry_phase",
+        replace_after_missing,
+    )
+
+    with pytest.raises(RuntimeError, match="disappeared after enumeration"):
+        owner.cleanup(install_protoc._remove_path)
+
+    assert moved_once
+    assert replacement_keep is not None
+    assert replacement_keep.read_text(encoding="utf-8") == "unowned\n"
+    assert (moved / "owned").read_text(encoding="utf-8") == "owned\n"
+    assert owner.marker_path.is_file()
+    install_protoc._remove_path(owner.cleanup_path)
+    install_protoc._remove_path(moved)
+    owner.close(remove_marker=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory entry metadata")
+def test_windows_normal_entries_report_a_zero_reparse_tag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "normal").write_text("owned\n", encoding="utf-8")
+    assert owner._directory is not None
+
+    entries = owned_transactions._windows_directory_entries(owner._directory._handle)
+    normal = next(entry for entry in entries if entry[0] == "normal")
+
+    assert not normal[2] & owned_transactions._FILE_ATTRIBUTE_REPARSE_POINT
+    assert normal[3] == 0
+    owner.cleanup(install_protoc._remove_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ancestor handle pinning")
+def test_windows_owned_cleanup_blocks_ancestor_junction_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    nested = owner.path / "nested"
+    inner = nested / "inner"
+    inner.mkdir(parents=True)
+    (inner / "owned").write_text("owned\n", encoding="utf-8")
+    junction_target = tmp_path / "junction-target"
+    junction_target.mkdir()
+    keep = junction_target / "keep"
+    keep.write_text("unowned\n", encoding="utf-8")
+    raced = tmp_path / "raced-ancestor"
+    attempted = False
+    blocked = False
+
+    def swap_ancestor(phase: str, path: Path) -> None:
+        nonlocal attempted, blocked
+        if phase != "after_enumerate" or path.name != "inner" or attempted:
+            return
+        attempted = True
+        ancestor = path.parent
+        try:
+            ancestor.rename(raced)
+        except OSError:
+            blocked = True
+            return
+        _create_owned_sibling_lookalike(ancestor, junction_target)
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_windows_entry_phase",
+        swap_ancestor,
+    )
+
+    owner.cleanup(install_protoc._remove_path)
+
+    assert attempted
+    assert blocked
+    assert not raced.exists()
+    assert keep.read_text(encoding="utf-8") == "unowned\n"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows durable parent pinning")
+def test_windows_root_removal_flushes_the_pinned_parent_after_swap_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    parent = tmp_path / "owned-parent"
+    parent.mkdir()
+    destination = parent / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "owned").write_text("owned\n", encoding="utf-8")
+    moved_parent = tmp_path / "moved-owned-parent"
+    junction_target = tmp_path / "junction-target"
+    junction_target.mkdir()
+    keep = junction_target / "keep"
+    keep.write_text("unowned\n", encoding="utf-8")
+    original_path_sync = owned_transactions._sync_directory
+    original_handle_sync = owned_transactions._windows_sync_directory_handle
+    attempted = False
+    blocked = False
+    replacement_created = False
+    pinned_identity_preserved = False
+
+    def forbid_post_delete_path_reopen(path: Path) -> None:
+        if path == parent and not owner.cleanup_path.exists():
+            raise AssertionError("removed root parent was reopened by pathname")
+        original_path_sync(path)
+
+    def swap_during_pinned_flush(handle: object) -> None:
+        nonlocal attempted, blocked, replacement_created, pinned_identity_preserved
+        if attempted or owner.cleanup_path.exists():
+            original_handle_sync(handle)
+            return
+        attempted = True
+        before = owned_transactions._windows_handle_identity(handle, parent)
+        try:
+            parent.rename(moved_parent)
+        except OSError:
+            blocked = True
+        else:
+            _create_owned_sibling_lookalike(parent, junction_target)
+            replacement_created = True
+        after = owned_transactions._windows_handle_identity(handle, parent)
+        pinned_identity_preserved = owned_transactions._same_filesystem_object(
+            before,
+            after,
+        )
+        original_handle_sync(handle)
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_sync_directory",
+        forbid_post_delete_path_reopen,
+    )
+    monkeypatch.setattr(
+        owned_transactions,
+        "_windows_sync_directory_handle",
+        swap_during_pinned_flush,
+    )
+
+    try:
+        owner.cleanup(install_protoc._remove_path)
+        assert attempted
+        assert pinned_identity_preserved
+        assert blocked or replacement_created
+        assert keep.read_text(encoding="utf-8") == "unowned\n"
+    finally:
+        if replacement_created and parent.exists():
+            _remove_owned_sibling_lookalike(parent)
+        if moved_parent.exists():
+            install_protoc._remove_path(moved_parent)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mount-boundary cleanup")
+def test_posix_owned_cleanup_fails_closed_when_mount_guard_refuses_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    nested = owner.path / "nested"
+    nested.mkdir()
+    keep = nested / "keep"
+    keep.write_text("owned\n", encoding="utf-8")
+    original_open = owned_transactions._posix_open_child_directory
+
+    def refuse_child(parent: int, name: str, root_device: int) -> int:
+        if name == "nested":
+            raise owned_transactions._mount_boundary_error(name)
+        return original_open(parent, name, root_device)
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_posix_open_child_directory",
+        refuse_child,
+    )
+
+    with pytest.raises(RuntimeError, match="mount boundary"):
+        owner.cleanup(install_protoc._remove_path)
+
+    assert (owner.cleanup_path / "nested" / "keep").read_text(
+        encoding="utf-8"
+    ) == "owned\n"
+    assert owner.marker_path.is_file()
+    monkeypatch.setattr(
+        owned_transactions,
+        "_posix_open_child_directory",
+        original_open,
+    )
+    owner.cleanup(install_protoc._remove_path)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: -1)() != 0,
+    reason="privileged Linux bind-mount check",
+)
+def test_linux_owned_cleanup_refuses_a_same_device_bind_mount(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mount_command = shutil.which("mount")
+    unmount_command = shutil.which("umount")
+    if mount_command is None or unmount_command is None:
+        pytest.skip("mount utilities are unavailable")
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    nested = owner.path / "nested"
+    nested.mkdir()
+    target = tmp_path / "mount-target"
+    target.mkdir()
+    keep = target / "keep"
+    keep.write_text("unowned\n", encoding="utf-8")
+    result = subprocess.run(
+        [mount_command, "--bind", str(target), str(nested)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        owner.cleanup(install_protoc._remove_path)
+        pytest.skip("bind mounts are unavailable: " + result.stderr)
+
+    try:
+        with pytest.raises(RuntimeError, match="mount boundary"):
+            owner.cleanup(install_protoc._remove_path)
+    finally:
+        subprocess.run(
+            [unmount_command, str(owner.cleanup_path / "nested")],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    assert keep.read_text(encoding="utf-8") == "unowned\n"
+    assert owner.marker_path.is_file()
+    owner.cleanup(install_protoc._remove_path)
+
+
+@pytest.mark.parametrize("dead_owner", [False, True], ids=["live", "dead-owner"])
+def test_owned_sibling_cleanup_stays_anchored_after_detached_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dead_owner: bool,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "owned").write_text("owned\n", encoding="utf-8")
+    raced_owned_path = tmp_path / "detached-owned-sibling"
+    replacement_file = owner.cleanup_path / "keep"
+    attempted = False
+    blocked = False
+    callback_called = False
+
+    def replace_after_verification(phase: str, path: Path) -> None:
+        nonlocal attempted, blocked
+        if phase != "after_verify":
+            return
+        attempted = True
+        try:
+            path.rename(raced_owned_path)
+        except OSError:
+            blocked = True
+            return
+        path.mkdir()
+        replacement_file.write_text("unowned\n", encoding="utf-8")
+
+    def unsafe_path_callback(_candidate: Path) -> None:
+        nonlocal callback_called
+        callback_called = True
+        raise AssertionError("cleanup delegated to an unverified pathname")
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_sibling_cleanup_phase",
+        replace_after_verification,
+    )
+    if dead_owner:
+        owner.close(remove_marker=False)
+
+    if os.name == "nt":
+        if dead_owner:
+            with install_protoc.locked_destination(destination):
+                install_protoc.recover_owned_siblings(
+                    destination,
+                    ("transaction",),
+                    unsafe_path_callback,
+                )
+        else:
+            owner.cleanup(unsafe_path_callback)
+        assert blocked
+        assert not raced_owned_path.exists()
+        assert not owner.cleanup_path.exists()
+        assert not owner.marker_path.exists()
+    else:
+        with pytest.raises(RuntimeError, match="unowned, replaced, or linked"):
+            if dead_owner:
+                with install_protoc.locked_destination(destination):
+                    install_protoc.recover_owned_siblings(
+                        destination,
+                        ("transaction",),
+                        unsafe_path_callback,
+                    )
+            else:
+                owner.cleanup(unsafe_path_callback)
+        assert replacement_file.read_text(encoding="utf-8") == "unowned\n"
+        assert raced_owned_path.is_dir()
+        assert owner.marker_path.is_file()
+        install_protoc._remove_path(owner.cleanup_path)
+        install_protoc._remove_path(raced_owned_path)
+        owner.close(remove_marker=True)
+
+    assert attempted
+    assert not callback_called
+
+
+@pytest.mark.parametrize(
+    ("interrupted_phase", "journal_location", "detached"),
+    [
+        ("before_detach", "detaching", False),
+        ("after_detach", "detaching", True),
+        ("before_remove", "cleanup", True),
+    ],
+)
+def test_dead_owner_recovery_resumes_a_persisted_cleanup_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interrupted_phase: str,
+    journal_location: str,
+    detached: bool,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "owned").write_text("owned\n", encoding="utf-8")
+
+    def interrupt(phase: str, _path: Path) -> None:
+        if phase == interrupted_phase:
+            raise KeyboardInterrupt(phase)
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_sibling_cleanup_phase",
+        interrupt,
+    )
+    with pytest.raises(KeyboardInterrupt, match=interrupted_phase):
+        owner.cleanup(install_protoc._remove_path)
+
+    marker_path = owner.marker_path
+    marker_payload = _owner_journal_payload(owner)
+    assert marker_payload["sibling_location"] == journal_location
+    interrupted_path = owner.cleanup_path if detached else owner.path
+    assert (interrupted_path / "owned").read_text(encoding="utf-8") == "owned\n"
+    assert not (owner.path if detached else owner.cleanup_path).exists()
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_sibling_cleanup_phase",
+        lambda _phase, _path: None,
+    )
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not owner.cleanup_path.exists()
+    assert not marker_path.exists()
+
+
+def test_dead_owner_recovery_resumes_a_hard_exit_after_sibling_detach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    environment = _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    script_path = Path(install_protoc.__file__).resolve()
+    script = r"""
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("detach_crash_install_protoc", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+transactions = sys.modules[module.locked_destination.__module__]
+
+def hard_exit(phase: str, _path: Path) -> None:
+    if phase == "after_detach":
+        os._exit(91)
+
+transactions._owned_sibling_cleanup_phase = hard_exit
+owner = module._create_install_transaction(destination, "transaction")
+(owner.path / "owned").write_text("owned\n", encoding="utf-8")
+owner.cleanup(module._remove_path)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(script_path), str(destination)],
+        cwd=script_path.parents[2],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 91, result.stdout + result.stderr
+
+    marker_paths = list(state_directory.rglob("*.owner"))
+    assert len(marker_paths) == 1
+    payload = _marker_journal_payload(marker_paths[0], destination)
+    cleanup_path = owned_transactions._owned_sibling_cleanup_path(
+        destination,
+        payload["kind"],
+        payload["token"],
+    )
+    assert payload["sibling_location"] == "detaching"
+    assert (cleanup_path / "owned").read_text(encoding="utf-8") == "owned\n"
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not cleanup_path.exists()
+    assert not marker_paths[0].exists()
+
+
+def test_owner_lease_identity_is_stable_across_journal_transitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    rollback = tmp_path / "rollback"
+    rollback.mkdir()
+    before = owner.marker_path.stat()
+
+    owner.bind_path("rollback", rollback)
+
+    after = owner.marker_path.stat()
+    assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
+    owner._lease._file.seek(0)
+    assert owner._lease._file.read() == b"\0"
+    journals = owned_transactions._journal_paths(owner.marker_path)
+    assert 1 <= len(journals) <= owned_transactions._JOURNAL_RETAINED_GENERATIONS
+    install_protoc._remove_path(rollback)
+    owner.cleanup(install_protoc._remove_path)
+
+
+def test_dead_owner_recovery_ignores_a_torn_temporary_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    keep = owner.path / "owned"
+    keep.write_text("owned\n", encoding="utf-8")
+    temporary = owned_transactions._journal_temporary_path(
+        owner.marker_path,
+        owner._generation + 1,
+    )
+    file = owned_transactions._open_state_file(
+        temporary,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL,
+    )
+    file.write(b'{"torn":')
+    file.flush()
+    os.fsync(file.fileno())
+    file.close()
+    owner.close(remove_marker=False)
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not temporary.exists()
+    assert not owner.path.exists()
+    assert not owner.marker_path.exists()
+
+
+def test_dead_owner_recovery_fails_closed_on_a_torn_published_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    keep = owner.path / "keep"
+    keep.write_text("owned\n", encoding="utf-8")
+    invalid = owned_transactions._journal_path(
+        owner.marker_path,
+        owner._generation + 1,
+    )
+    file = owned_transactions._open_state_file(
+        invalid,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL,
+    )
+    file.write(b'{"torn":')
+    file.flush()
+    os.fsync(file.fileno())
+    file.close()
+    owned_transactions._sync_directory(invalid.parent)
+    owner.close(remove_marker=False)
+
+    with pytest.raises(RuntimeError, match="journal is incomplete or invalid"):
+        with install_protoc.locked_destination(destination):
+            install_protoc.recover_owned_siblings(
+                destination,
+                ("transaction",),
+                install_protoc._remove_path,
+            )
+
+    assert keep.read_text(encoding="utf-8") == "owned\n"
+    assert owner.marker_path.is_file()
+    invalid.unlink()
+    owned_transactions._sync_directory(invalid.parent)
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+
+@pytest.mark.parametrize("candidate_location", ["original", "cleanup"])
+def test_dead_owner_recovery_fails_closed_when_a_lease_has_no_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate_location: str,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    keep = owner.path / "keep"
+    keep.write_text("owned\n", encoding="utf-8")
+    candidate = owner.path
+    if candidate_location == "cleanup":
+        _release_owned_directory_handle(owner)
+        owner.path.rename(owner.cleanup_path)
+        candidate = owner.cleanup_path
+        keep = candidate / "keep"
+    for _generation, journal in owned_transactions._journal_paths(owner.marker_path):
+        journal.unlink()
+    owned_transactions._sync_directory(owner.marker_path.parent)
+    owner.close(remove_marker=False)
+
+    with pytest.raises(RuntimeError, match="no committed state journal"):
+        with install_protoc.locked_destination(destination):
+            install_protoc.recover_owned_siblings(
+                destination,
+                ("transaction",),
+                install_protoc._remove_path,
+            )
+
+    assert keep.read_text(encoding="utf-8") == "owned\n"
+    install_protoc._remove_path(candidate)
+    owner.close(remove_marker=True)
+
+
+def test_recovery_prunes_a_pre_generation_lease_when_no_candidates_exist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    token = "a" * 32
+    with owned_transactions._locked_registry() as registry:
+        owned_transactions._ensure_destination_state_directory(destination, registry)
+        marker_path = owned_transactions._marker_path(
+            destination,
+            "transaction",
+            token,
+            registry,
+        )
+        owned_transactions._open_state_file(
+            marker_path,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL,
+        ).close()
+
+    assert marker_path.read_bytes() == b""
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not marker_path.exists()
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
+@pytest.mark.parametrize(
+    ("journal_phase", "expected_location"),
+    [
+        ("after_temporary_fsync", "detaching"),
+        ("after_publish", "cleanup"),
+        ("after_directory_fsync", "cleanup"),
+    ],
+)
+def test_dead_owner_recovery_survives_hard_exit_during_post_detach_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    journal_phase: str,
+    expected_location: str,
+) -> None:
+    state_directory = tmp_path / "state"
+    environment = _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    script_path = Path(install_protoc.__file__).resolve()
+    script = r"""
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+journal_phase = sys.argv[3]
+spec = importlib.util.spec_from_file_location("journal_crash_install_protoc", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+transactions = sys.modules[module.locked_destination.__module__]
+owner = module._create_install_transaction(destination, "transaction")
+(owner.path / "owned").write_text("owned\n", encoding="utf-8")
+observed = 0
+
+def hard_exit(phase: str, _path: Path) -> None:
+    global observed
+    if phase != journal_phase:
+        return
+    observed += 1
+    if observed == 2:
+        if phase == "after_temporary_fsync":
+            with open(_path, "r+b", buffering=0) as journal:
+                journal.truncate(7)
+                journal.flush()
+                os.fsync(journal.fileno())
+        os._exit(92)
+
+transactions._owned_journal_phase = hard_exit
+owner.cleanup(module._remove_path)
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(script_path),
+            str(destination),
+            journal_phase,
+        ],
+        cwd=script_path.parents[2],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 92, result.stdout + result.stderr
+
+    marker_paths = list(state_directory.rglob("*.owner"))
+    assert len(marker_paths) == 1
+    payload = _marker_journal_payload(marker_paths[0], destination)
+    assert payload["sibling_location"] == expected_location
+    cleanup_path = owned_transactions._owned_sibling_cleanup_path(
+        destination,
+        payload["kind"],
+        payload["token"],
+    )
+    assert (cleanup_path / "owned").read_text(encoding="utf-8") == "owned\n"
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not cleanup_path.exists()
+    assert not marker_paths[0].exists()
+
+
+def test_recovery_prunes_journals_after_hard_exit_during_state_retirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    environment = _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    script_path = Path(install_protoc.__file__).resolve()
+    script = r"""
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("retirement_crash_install_protoc", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+transactions = sys.modules[module.locked_destination.__module__]
+owner = module._create_install_transaction(destination, "transaction")
+(owner.path / "owned").write_text("owned\n", encoding="utf-8")
+
+def hard_exit(phase: str, _path: Path) -> None:
+    if phase == "after_lease_unlink":
+        if _path.exists() or not list(_path.parent.glob("*.state")):
+            os._exit(96)
+        os._exit(95)
+
+transactions._owned_retirement_phase = hard_exit
+owner.cleanup(module._remove_path)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(script_path), str(destination)],
+        cwd=script_path.parents[2],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 95, result.stdout + result.stderr
+    assert not list(state_directory.rglob("*.owner"))
+    assert list(state_directory.rglob("*.state"))
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert _transaction_state_entries(state_directory) == {"registry.lock"}
+
+
+@pytest.mark.parametrize(
+    "journal_phase", ["after_temporary_fsync", "after_publish", "after_directory_fsync"]
+)
+@pytest.mark.parametrize(
+    ("transition", "expect_recovery_refusal"),
+    [
+        ("creating", False),
+        ("original", True),
+        ("detaching", False),
+    ],
+)
+def test_journal_hard_exit_is_safe_at_each_pre_detach_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    journal_phase: str,
+    transition: str,
+    expect_recovery_refusal: bool,
+) -> None:
+    state_directory = tmp_path / "state"
+    environment = _install_crash_test_environment(monkeypatch, state_directory)
+    destination = tmp_path / "protoc"
+    script_path = Path(install_protoc.__file__).resolve()
+    script = r"""
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+transition = sys.argv[3]
+journal_phase = sys.argv[4]
+spec = importlib.util.spec_from_file_location("transition_crash_install_protoc", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+transactions = sys.modules[module.locked_destination.__module__]
+observed = 0
+target_occurrence = 2 if transition == "original" else 1
+
+def hard_exit(phase: str, path: Path) -> None:
+    global observed
+    if phase != journal_phase:
+        return
+    observed += 1
+    if observed != target_occurrence:
+        return
+    if phase == "after_temporary_fsync":
+        with open(path, "r+b", buffering=0) as journal:
+            journal.truncate(7)
+            journal.flush()
+            os.fsync(journal.fileno())
+    os._exit(93)
+
+if transition in {"creating", "original"}:
+    transactions._owned_journal_phase = hard_exit
+owner = module._create_install_transaction(destination, "transaction")
+(owner.path / "owned").write_text("owned\n", encoding="utf-8")
+if transition == "detaching":
+    transactions._owned_journal_phase = hard_exit
+    owner.cleanup(module._remove_path)
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(script_path),
+            str(destination),
+            transition,
+            journal_phase,
+        ],
+        cwd=script_path.parents[2],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert result.returncode == 93, result.stdout + result.stderr
+
+    marker_paths = list(state_directory.rglob("*.owner"))
+    assert len(marker_paths) == 1
+    marker_path = marker_paths[0]
+    match = re.fullmatch(
+        r"([a-z][a-z0-9-]*)\.([0-9a-f]{32})\.owner",
+        marker_path.name,
+    )
+    assert match is not None
+    sibling = owned_transactions._owned_sibling_path(
+        destination,
+        match.group(1),
+        match.group(2),
+    )
+
+    should_refuse = expect_recovery_refusal and journal_phase == "after_temporary_fsync"
+    if should_refuse:
+        with pytest.raises(RuntimeError, match="no committed|unowned"):
+            with install_protoc.locked_destination(destination):
+                install_protoc.recover_owned_siblings(
+                    destination,
+                    ("transaction",),
+                    install_protoc._remove_path,
+                )
+        if transition == "original":
+            assert sibling.is_dir()
+            install_protoc._remove_path(sibling)
+        else:
+            assert not sibling.exists()
+        owned_transactions._remove_journal_artifacts(marker_path)
+        marker_path.unlink()
+    else:
+        with install_protoc.locked_destination(destination):
+            install_protoc.recover_owned_siblings(
+                destination,
+                ("transaction",),
+                install_protoc._remove_path,
+            )
+        assert not sibling.exists()
+        assert not marker_path.exists()
+
+
+def test_owned_sibling_creation_binds_the_handle_created_object(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    raced_owned_path = tmp_path / "created-owned-sibling"
+    replacement_path: Path | None = None
+    replacement_blocked = False
+
+    def replace_after_create(_phase: str, path: Path) -> None:
+        nonlocal replacement_path, replacement_blocked
+        replacement_path = path
+        try:
+            path.rename(raced_owned_path)
+        except OSError:
+            replacement_blocked = True
+            return
+        path.mkdir()
+        (path / "keep").write_text("unowned\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_sibling_creation_phase",
+        replace_after_create,
+    )
+    if os.name == "nt":
+        owner = install_protoc._create_install_transaction(destination, "transaction")
+        assert replacement_blocked
+        assert replacement_path == owner.path
+        assert not raced_owned_path.exists()
+        owner.cleanup(install_protoc._remove_path)
+    else:
+        with pytest.raises(RuntimeError, match="unowned, replaced, or linked"):
+            install_protoc._create_install_transaction(destination, "transaction")
+        assert replacement_path is not None
+        assert (replacement_path / "keep").read_text(encoding="utf-8") == "unowned\n"
+        assert raced_owned_path.is_dir()
+        install_protoc._remove_path(replacement_path)
+        install_protoc._remove_path(raced_owned_path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX staged creation race")
+def test_posix_owned_sibling_rejects_replacement_between_mkdir_and_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    staged_child: Path | None = None
+    moved_child: Path | None = None
+
+    def replace_staged_child(phase: str, path: Path) -> None:
+        nonlocal staged_child, moved_child
+        if phase != "after_staging_child_mkdir":
+            return
+        staged_child = path
+        moved_child = path.with_name("moved-owned")
+        path.rename(moved_child)
+        path.mkdir(mode=0o700)
+        (path / "keep").write_text("unowned\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_sibling_creation_phase",
+        replace_staged_child,
+    )
+
+    with pytest.raises(RuntimeError, match="staged child changed identity"):
+        install_protoc._create_install_transaction(destination, "transaction")
+
+    assert staged_child is not None
+    assert moved_child is not None
+    assert (staged_child / "keep").read_text(encoding="utf-8") == "unowned\n"
+    assert moved_child.is_dir()
+    marker_paths = list(state_directory.rglob("*.owner"))
+    assert len(marker_paths) == 1
+    install_protoc._remove_path(staged_child.parent)
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+    assert not marker_paths[0].exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX parent trust boundary")
+def test_posix_owned_sibling_rejects_an_unsafe_writable_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    parent = tmp_path / "unsafe-parent"
+    parent.mkdir(mode=0o777)
+    parent.chmod(0o777)
+
+    with pytest.raises(RuntimeError, match="untrusted or replaced parent"):
+        install_protoc._create_install_transaction(
+            parent / "protoc",
+            "transaction",
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ancestor trust boundary")
+def test_posix_owned_sibling_rejects_a_private_parent_under_unsafe_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    unsafe_ancestor = tmp_path / "unsafe-ancestor"
+    unsafe_ancestor.mkdir(mode=0o777)
+    unsafe_ancestor.chmod(0o777)
+    private_parent = unsafe_ancestor / "private-parent"
+    private_parent.mkdir(mode=0o700)
+
+    with pytest.raises(RuntimeError, match="untrusted writable ancestor"):
+        install_protoc._create_install_transaction(
+            private_parent / "protoc",
+            "transaction",
+        )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX sticky ancestor boundary")
+def test_posix_owned_sibling_accepts_a_private_parent_under_sticky_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    sticky_ancestor = tmp_path / "sticky-ancestor"
+    sticky_ancestor.mkdir(mode=0o700)
+    sticky_ancestor.chmod(0o1777)
+    private_parent = sticky_ancestor / "private-parent"
+    private_parent.mkdir(mode=0o700)
+
+    owner = install_protoc._create_install_transaction(
+        private_parent / "protoc",
+        "transaction",
+    )
+    owner.cleanup(install_protoc._remove_path)
+
+
+def test_namespace_mutations_are_durable_before_their_journal_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    events: list[str] = []
+    original_publish = owned_transactions._publish_journal
+
+    def record_publish(
+        marker_path: Path,
+        recorded_destination: Path,
+        kind: str,
+        token: str,
+        owned_paths: dict[str, dict[str, object]],
+        sibling_location: str,
+        previous_generation: int,
+    ) -> int:
+        events.append(f"journal:{sibling_location}")
+        return original_publish(
+            marker_path,
+            recorded_destination,
+            kind,
+            token,
+            owned_paths,
+            sibling_location,
+            previous_generation,
+        )
+
+    monkeypatch.setattr(owned_transactions, "_publish_journal", record_publish)
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_namespace_phase",
+        lambda phase, _path: events.append(phase),
+    )
+
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+
+    assert events.index("after_create_parent_fsync") < events.index("journal:original")
+    events.clear()
+    owner.cleanup(install_protoc._remove_path)
+    assert events == [
+        "journal:detaching",
+        "after_detach_parent_fsync",
+        "journal:cleanup",
+        "before_remove_parent_fsync",
+        "after_remove_parent_fsync",
+    ]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX parent descriptor race")
+def test_posix_owned_sibling_rejects_a_replaced_parent_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    moved_parent = tmp_path / "moved-parent"
+    replacement_keep = parent / "keep"
+
+    def replace_parent(phase: str, _path: Path) -> None:
+        if phase != "after_staging_mkdir":
+            return
+        parent.rename(moved_parent)
+        parent.mkdir()
+        replacement_keep.write_text("unowned\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_owned_sibling_creation_phase",
+        replace_parent,
+    )
+
+    with pytest.raises(RuntimeError, match="untrusted or replaced parent"):
+        install_protoc._create_install_transaction(
+            parent / "protoc",
+            "transaction",
+        )
+
+    assert replacement_keep.read_text(encoding="utf-8") == "unowned\n"
+    assert moved_parent.is_dir()
+    install_protoc._remove_path(moved_parent)
+
+
+@pytest.mark.parametrize("candidate_exists", [False, True])
+def test_interrupted_owned_sibling_creation_requires_persisted_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    candidate_exists: bool,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    destination = tmp_path / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    _release_owned_directory_handle(owner)
+    owner._owned_paths = {}
+    owner._sibling_location = "creating"
+    owner._replace_marker()
+    if not candidate_exists:
+        owner.path.rmdir()
+    marker_path = owner.marker_path
+    owner.close(remove_marker=False)
+
+    if candidate_exists:
+        with pytest.raises(RuntimeError, match="unowned, replaced, or linked"):
+            with install_protoc.locked_destination(destination):
+                install_protoc.recover_owned_siblings(
+                    destination,
+                    ("transaction",),
+                    install_protoc._remove_path,
+                )
+        assert owner.path.is_dir()
+        assert marker_path.is_file()
+        owner.path.rmdir()
+        owner.close(remove_marker=True)
+    else:
+        with install_protoc.locked_destination(destination):
+            install_protoc.recover_owned_siblings(
+                destination,
+                ("transaction",),
+                install_protoc._remove_path,
+            )
+        assert not marker_path.exists()
+
+
 def test_destination_lock_state_is_bounded_across_distinct_destinations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -436,6 +1945,45 @@ def test_private_acl_namespace_is_isolated_from_pre_hardening_v3_state(
 
     assert current_state != v3_state
     assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+
+
+def test_identity_bound_namespace_does_not_recover_unbound_v4_siblings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(owned_transactions._STATE_DIRECTORY_ENV, raising=False)
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+    destination = tmp_path / "protoc"
+    token = "a" * 32
+    v4_state = tmp_path / (
+        "protocyte-owned-transactions-v4-" + owned_transactions._user_namespace()
+    )
+    destination_state = v4_state / (
+        owned_transactions._destination_key(destination) + ".destination"
+    )
+    destination_state.mkdir(mode=0o700, parents=True)
+    destination_state.chmod(0o700)
+    legacy_marker = destination_state / f"transaction.{token}.owner"
+    legacy_marker.write_text("unbound-v4-marker\n", encoding="utf-8")
+    legacy_marker.chmod(0o600)
+    legacy_sibling = tmp_path / f".protoc.protocyte-transaction-{token}"
+    legacy_sibling.mkdir()
+    (legacy_sibling / "keep").write_text("preserve\n", encoding="utf-8")
+
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert owned_transactions._state_directory() != v4_state
+    assert legacy_marker.read_text(encoding="utf-8") == "unbound-v4-marker\n"
+    assert (legacy_sibling / "keep").read_text(encoding="utf-8") == "preserve\n"
 
 
 def test_destination_lock_pruning_preserves_a_live_marker(
