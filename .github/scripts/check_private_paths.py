@@ -11,22 +11,35 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_HOME_ACCOUNT = (
-    rb"[A-Za-z0-9_()&\x80-\xff]"
-    rb"(?:[A-Za-z0-9._ ()&'#$!~^%-]|[\x80-\xff])*+"
-)
 _HOME_PATH_BOUNDARY = rb"(?:[\\/]|(?=$|[\x00\r\n\t \"'`),;:!?)}\]]))"
+_EXPLICIT_HOME_PLACEHOLDER = (
+    rb"(?:"
+    rb"%[A-Za-z_][A-Za-z0-9_.-]*%|"
+    rb"\$\{[^{}\\/]+\}|"
+    rb"\{[^{}\\/]+\}|"
+    rb"<[^<>\\/]+>|"
+    rb"\[[^\[\]\\/]+\]"
+    rb")"
+)
+_WINDOWS_HOME_ACCOUNT = (
+    rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + rb"(?=[\\/]|$))"
+    + rb"[^\x00-\x1f<>:\"/\\|?*]++"
+)
+_POSIX_HOME_ACCOUNT = (
+    rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + rb"(?=/|$))"
+    + rb"[^\x00/]++"
+)
 
 
 _PRIVATE_PATH_PATTERNS = (
     re.compile(
         rb"(?<![A-Za-z0-9])(?:[A-Za-z]:|/[A-Za-z]:)[\\/]+"
-        rb"Users[\\/]+" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
+        rb"Users[\\/]+" + _WINDOWS_HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
     re.compile(
         rb"(?<![A-Za-z0-9._-])/(?:mnt/[A-Za-z]|cygdrive/[A-Za-z]|[A-Za-z])/"
-        rb"Users/" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
+        rb"Users/" + _WINDOWS_HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
     re.compile(
@@ -34,12 +47,12 @@ _PRIVATE_PATH_PATTERNS = (
         rb"(?:\?[\\/]UNC[\\/])?"
         rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*[\\/]+"
         rb"(?:[A-Za-z]\$[\\/]+)?"
-        rb"Users[\\/]+" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
+        rb"Users[\\/]+" + _WINDOWS_HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
     re.compile(
         rb"(?<![A-Za-z0-9._-])/(?:home|Users)/"
-        + _HOME_ACCOUNT
+        + _POSIX_HOME_ACCOUNT
         + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
@@ -59,7 +72,9 @@ _TREE_STATE_MOUNT_BASE = 4
 _TREE_STATE_MOUNT_DRIVE = 5
 _TREE_STATE_UNC_SERVER = 6
 _TREE_STATE_UNC_ADMIN = 7
-_TREE_STATE_ACCOUNT = 8
+_TREE_STATE_WINDOWS_ACCOUNT = 8
+_TREE_STATE_NESTED_WORD = 9
+_TREE_STATE_POSIX_ACCOUNT = 10
 
 _TREE_STATE_CANONICAL = {
     _TREE_STATE_BOUNDARY: b")",
@@ -69,10 +84,12 @@ _TREE_STATE_CANONICAL = {
     _TREE_STATE_MOUNT_DRIVE: b"/mnt/c",
     _TREE_STATE_UNC_SERVER: b"\\\\server",
     _TREE_STATE_UNC_ADMIN: b"\\\\server/C$",
-    _TREE_STATE_ACCOUNT: b"C:/Users",
+    _TREE_STATE_WINDOWS_ACCOUNT: b"C:/Users",
+    _TREE_STATE_NESTED_WORD: b"x",
+    _TREE_STATE_POSIX_ACCOUNT: b"/home",
 }
 
-_TREE_ACCOUNT_PREFIX_PATTERNS = (
+_TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS = (
     re.compile(
         rb"(?<![A-Za-z0-9])(?:[A-Za-z]:|/[A-Za-z]:)[\\/]+Users$",
         re.IGNORECASE,
@@ -88,7 +105,9 @@ _TREE_ACCOUNT_PREFIX_PATTERNS = (
         rb"(?:[A-Za-z]\$[\\/]+)?Users$",
         re.IGNORECASE,
     ),
-    re.compile(rb"(?<![A-Za-z0-9._-])/(?:home|Users)$", re.IGNORECASE),
+)
+_TREE_POSIX_ACCOUNT_PREFIX = re.compile(
+    rb"(?<![A-Za-z0-9._-])/(?:home|Users)$", re.IGNORECASE
 )
 _TREE_UNC_ADMIN_PREFIX = re.compile(
     rb"(?<![:\\/A-Za-z0-9])[\\/]{2}(?:\?[\\/]UNC[\\/])?"
@@ -203,6 +222,25 @@ class _Utf16SegmentScanner:
         self._decoded_tail, matched = _scan_window(self._decoded_tail, decoded)
         return matched
 
+    def _next_byte_order_mark(
+        self, data: bytes, position: int
+    ) -> tuple[int, str] | None:
+        candidates: list[tuple[int, str]] = []
+        for marker, encoding in (
+            (codecs.BOM_UTF16_LE, "utf-16-le"),
+            (codecs.BOM_UTF16_BE, "utf-16-be"),
+        ):
+            marker_position = data.find(marker, position)
+            while (
+                marker_position >= 0
+                and self._encoding is not None
+                and (marker_position - position) % 2 != 0
+            ):
+                marker_position = data.find(marker, marker_position + 1)
+            if marker_position >= 0:
+                candidates.append((marker_position, encoding))
+        return min(candidates) if candidates else None
+
     def feed(self, chunk: bytes, *, final: bool) -> bool:
         data = self._pending + chunk
         self._pending = b""
@@ -210,17 +248,10 @@ class _Utf16SegmentScanner:
         matched = False
 
         while True:
-            byte_order_marks = [
-                (index, encoding)
-                for marker, encoding in (
-                    (codecs.BOM_UTF16_LE, "utf-16-le"),
-                    (codecs.BOM_UTF16_BE, "utf-16-be"),
-                )
-                if (index := data.find(marker, position)) >= 0
-            ]
-            if not byte_order_marks:
+            next_marker = self._next_byte_order_mark(data, position)
+            if next_marker is None:
                 break
-            marker_position, encoding = min(byte_order_marks)
+            marker_position, encoding = next_marker
             matched = self._scan_decoded(data[position:marker_position]) or matched
             self._encoding = encoding
             self._decoded_tail = b""
@@ -389,8 +420,13 @@ def _scan_stored_objects(
 
 
 def _tree_path_state(path_suffix: bytes) -> int:
-    if any(pattern.search(path_suffix) for pattern in _TREE_ACCOUNT_PREFIX_PATTERNS):
-        return _TREE_STATE_ACCOUNT
+    if any(
+        pattern.search(path_suffix)
+        for pattern in _TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS
+    ):
+        return _TREE_STATE_WINDOWS_ACCOUNT
+    if _TREE_POSIX_ACCOUNT_PREFIX.search(path_suffix):
+        return _TREE_STATE_POSIX_ACCOUNT
     if _TREE_UNC_ADMIN_PREFIX.search(path_suffix):
         return _TREE_STATE_UNC_ADMIN
     if _TREE_UNC_SERVER_PREFIX.search(path_suffix):
@@ -409,7 +445,7 @@ def _tree_path_state(path_suffix: bytes) -> int:
         b"0123456789._-"
     ):
         return _TREE_STATE_BOUNDARY
-    return _TREE_STATE_NONE
+    return _TREE_STATE_NESTED_WORD
 
 
 def _scan_tree_paths(

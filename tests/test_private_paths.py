@@ -15,6 +15,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / ".github" / "scripts" / "check_private_paths.py"
 HOOKS = ROOT / ".githooks"
+LEGAL_WINDOWS_PROFILE_COMPONENTS = (
+    "'alice",
+    "#alice",
+    "+alice",
+    "a@corp",
+    "a[b",
+    "a]b",
+    "a{b",
+    "a}b",
+    "a=b",
+    "a,b",
+    "a;b",
+)
+LEGAL_POSIX_PROFILE_COMPONENTS = ("a:b", "a|b", "a*b")
 
 
 def _git(repository: Path, *arguments: str, input_bytes: bytes | None = None) -> None:
@@ -115,11 +129,34 @@ def _private_path(style: str) -> str:
     raise AssertionError(f"unknown path style: {style}")
 
 
-def _assert_redacted(result: subprocess.CompletedProcess[str]) -> None:
+def _private_path_for_account(form: str, account: str) -> str:
+    project = "synthetic-project"
+    if form == "drive":
+        return "/".join(("C:", "Users", account, project))
+    if form == "extended-unc":
+        return "\\".join(
+            ("", "", "?", "UNC", "synthetic-server", "Users", account, project)
+        )
+    if form == "admin-share":
+        return "\\".join(
+            ("", "", "synthetic-server", "C$", "Users", account, project)
+        )
+    raise AssertionError(f"unknown path form: {form}")
+
+
+def _private_posix_path(account: str) -> str:
+    return "/" + "/".join(("home", account, "synthetic-project"))
+
+
+def _assert_redacted(
+    result: subprocess.CompletedProcess[str], *additional_secrets: str
+) -> None:
     output = result.stdout + result.stderr
     assert "matched path text is redacted" in result.stderr
     assert "synthetic-account" not in output
     assert "synthetic-project" not in output
+    for secret in additional_secrets:
+        assert secret not in output
 
 
 def _assert_hook_redacted(
@@ -165,6 +202,38 @@ def _private_tree(repository: Path) -> str:
     )
     users = _store_tree(repository, [(b"40000", b"Users", account)])
     return _store_tree(repository, [(b"40000", b"C:", users)])
+
+
+def _private_tree_for_account(
+    repository: Path, form: str, account_name: str
+) -> str:
+    blob = _store_blob(repository, b"portable content\n")
+    account = _store_tree(
+        repository, [(b"100644", account_name.encode("utf-8"), blob)]
+    )
+    users = _store_tree(repository, [(b"40000", b"Users", account)])
+    if form == "drive":
+        return _store_tree(repository, [(b"40000", b"C:", users)])
+    if form == "extended-unc":
+        server = "\\".join(("", "", "?", "UNC", "synthetic-server"))
+        return _store_tree(
+            repository, [(b"40000", server.encode("utf-8"), users)]
+        )
+    if form == "admin-share":
+        admin = _store_tree(repository, [(b"40000", b"C$", users)])
+        server = "\\".join(("", "", "synthetic-server"))
+        return _store_tree(
+            repository, [(b"40000", server.encode("utf-8"), admin)]
+        )
+    raise AssertionError(f"unknown tree path form: {form}")
+
+
+def _private_posix_tree(repository: Path, account_name: str) -> str:
+    blob = _store_blob(repository, b"portable content\n")
+    account = _store_tree(
+        repository, [(b"100644", account_name.encode("utf-8"), blob)]
+    )
+    return _store_tree(repository, [(b"40000", b"/home", account)])
 
 
 def _write_raw_sha1_index(repository: Path, object_id: str, path: bytes) -> None:
@@ -267,6 +336,39 @@ def test_guard_rejects_private_paths_in_the_tracked_index(
     assert result.returncode == 1
     assert "tracked index blob" in result.stderr
     _assert_redacted(result)
+
+
+@pytest.mark.parametrize("account_name", LEGAL_WINDOWS_PROFILE_COMPONENTS)
+@pytest.mark.parametrize("form", ["drive", "extended-unc", "admin-share"])
+def test_guard_rejects_every_legal_profile_component_in_blob_paths(
+    tmp_path: Path, form: str, account_name: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    private_path = _private_path_for_account(form, account_name)
+    (repository / "fixture.txt").write_text(private_path, encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result, account_name)
+
+
+@pytest.mark.parametrize("account_name", LEGAL_POSIX_PROFILE_COMPONENTS)
+def test_guard_rejects_posix_profile_punctuation_in_blob_paths(
+    tmp_path: Path, account_name: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    private_path = _private_posix_path(account_name)
+    (repository / "fixture.txt").write_text(private_path, encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result, account_name)
 
 
 def test_guard_rejects_private_paths_in_raw_index_names(tmp_path: Path) -> None:
@@ -408,6 +510,35 @@ def test_guard_switches_utf16_endianness_across_a_scan_chunk_boundary(
     _assert_redacted(result)
 
 
+@pytest.mark.parametrize(
+    ("byte_order_mark", "encoding", "unaligned_marker_text"),
+    [
+        (codecs.BOM_UTF16_LE, "utf-16-le", "\uff12\u34fe"),
+        (codecs.BOM_UTF16_BE, "utf-16-be", "\u12fe\uff34"),
+    ],
+)
+def test_guard_ignores_unaligned_bom_like_bytes_inside_utf16_text(
+    tmp_path: Path,
+    byte_order_mark: bytes,
+    encoding: str,
+    unaligned_marker_text: str,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    content = (
+        byte_order_mark
+        + unaligned_marker_text.encode(encoding)
+        + _private_path("windows-forward").encode(encoding)
+    )
+    (repository / "fixture.bin").write_bytes(content)
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
 def test_guard_rejects_private_paths_in_reachable_commit_messages(
     tmp_path: Path,
 ) -> None:
@@ -516,6 +647,35 @@ def test_guard_reconstructs_private_paths_from_stored_tree_entries(
     _assert_redacted(result)
 
 
+@pytest.mark.parametrize("account_name", LEGAL_WINDOWS_PROFILE_COMPONENTS)
+@pytest.mark.parametrize("form", ["drive", "extended-unc", "admin-share"])
+def test_guard_rejects_every_legal_profile_component_in_stored_tree_paths(
+    tmp_path: Path, form: str, account_name: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    _private_tree_for_account(repository, form, account_name)
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "stored Git tree path" in result.stderr
+    _assert_redacted(result, account_name)
+
+
+@pytest.mark.parametrize("account_name", LEGAL_POSIX_PROFILE_COMPONENTS)
+def test_guard_rejects_posix_profile_punctuation_in_stored_tree_paths(
+    tmp_path: Path, account_name: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    _private_posix_tree(repository, account_name)
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "stored Git tree path" in result.stderr
+    _assert_redacted(result, account_name)
+
+
 def test_guard_scans_shared_tree_dags_in_polynomial_time(tmp_path: Path) -> None:
     repository = _repository(tmp_path / "repository")
     blob = _store_blob(repository, b"portable content\n")
@@ -559,6 +719,24 @@ def test_guard_keeps_distinct_path_states_for_a_shared_subtree(
     assert result.returncode == 1
     assert "stored Git tree path" in result.stderr
     _assert_redacted(result)
+
+
+def test_guard_does_not_promote_a_nested_unc_like_tree_name_to_a_root(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    blob = _store_blob(repository, b"portable content\n")
+    account = _store_tree(repository, [(b"100644", b"alice", blob)])
+    users = _store_tree(repository, [(b"40000", b"Users", account)])
+    unc_like_name = "\\".join(("", "", "server")).encode("utf-8")
+    unc_like = _store_tree(
+        repository, [(b"40000", unc_like_name, users)]
+    )
+    _store_tree(repository, [(b"40000", b"ordinary", unc_like)])
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_tracked_hooks_block_staged_content_before_creating_a_commit(
@@ -732,6 +910,8 @@ def test_guard_accepts_portable_tracked_content_and_history(tmp_path: Path) -> N
                 "https://example.invalid/Users/synthetic-account",
                 "https://example.invalid/mnt/c/Users/synthetic-account",
                 "/home/<account>/project",
+                "/home/[account]/project",
+                "/home/${USER}/project",
                 "C:/Users/{account}/project",
                 "/mnt/c/Users/{account}/project",
                 "/c/Users/%USERNAME%/project",
