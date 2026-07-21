@@ -2717,6 +2717,283 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
     }
 }
 
+TEST_CASE("Runtime containers preserve aliased insertion arguments", "[smoke][runtime][alias]") {
+    struct LifetimeProbe {
+        size_t copies {};
+        size_t moves {};
+        size_t destructions {};
+        size_t live {};
+    };
+
+    struct AliasedValue {
+        LifetimeProbe *probe {};
+        int value {};
+
+        explicit AliasedValue(const int initial_value, LifetimeProbe *lifetime_probe = nullptr) noexcept:
+            probe {lifetime_probe}, value {initial_value} {
+            if (probe != nullptr) {
+                ++probe->live;
+            }
+        }
+        AliasedValue(const AliasedValue &other) noexcept: probe {other.probe}, value {other.value} {
+            if (probe != nullptr) {
+                ++probe->copies;
+                ++probe->live;
+            }
+        }
+        AliasedValue(AliasedValue &&other) noexcept: probe {other.probe}, value {other.value} {
+            if (probe != nullptr) {
+                ++probe->moves;
+                ++probe->live;
+            }
+            other.value = -1;
+        }
+        AliasedValue &operator=(const AliasedValue &) = delete;
+        AliasedValue &operator=(AliasedValue &&) = delete;
+        ~AliasedValue() noexcept {
+            if (probe != nullptr) {
+                ++probe->destructions;
+                --probe->live;
+            }
+            value = -99;
+        }
+    };
+
+    const auto free_retained_allocations = [](RetainedAllocationProbe &probe) noexcept {
+        for (size_t index {}; index < probe.count; ++index) { free(probe.pointers[index]); }
+    };
+
+    const auto mapped_value = [](auto &values, const protocyte::i32 key) noexcept -> AliasedValue * {
+        for (auto entry : values) {
+            if (entry.key == key) {
+                return &entry.value;
+            }
+        }
+        return nullptr;
+    };
+
+    constexpr protocyte::i32 aliased_key {1};
+    const protocyte::i32 colliding_new_key = [aliased_key]() noexcept {
+        for (protocyte::i32 candidate {100};; ++candidate) {
+            if ((Config::hash(candidate) & 15u) == (Config::hash(aliased_key) & 15u)) {
+                return candidate;
+            }
+        }
+    }();
+
+    const auto populate_rehash_map = [aliased_key](auto &values, LifetimeProbe &probe) {
+        require_success(values.insert_or_assign(aliased_key, AliasedValue {41, &probe}));
+        for (protocyte::i32 key {2}; key <= 5; ++key) {
+            require_success(values.insert_or_assign(key, AliasedValue {static_cast<int>(key)}));
+        }
+    };
+
+    SECTION("Vector consumes lvalue and rvalue elements before reallocation invalidates them") {
+        RetainedAllocationProbe allocation_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+
+        LifetimeProbe lvalue_probe {};
+        {
+            Config::Vector<AliasedValue> lvalue_values(&ctx);
+            require_success(lvalue_values.reserve(1u));
+            require_success(lvalue_values.emplace_back(41, &lvalue_probe));
+            require_success(lvalue_values.emplace_back(lvalue_values[0]));
+            REQUIRE(lvalue_values.size() == 2u);
+            CHECK(lvalue_values[0].value == 41);
+            CHECK(lvalue_values[1].value == 41);
+            CHECK(lvalue_probe.copies == 1u);
+            CHECK(lvalue_probe.moves == 1u);
+            CHECK(lvalue_probe.destructions == 1u);
+            CHECK(lvalue_probe.live == 2u);
+        }
+        CHECK(lvalue_probe.destructions == 3u);
+        CHECK(lvalue_probe.live == 0u);
+
+        LifetimeProbe rvalue_probe {};
+        {
+            Config::Vector<AliasedValue> rvalue_values(&ctx);
+            require_success(rvalue_values.reserve(1u));
+            require_success(rvalue_values.emplace_back(42, &rvalue_probe));
+            require_success(rvalue_values.push_back(protocyte::move(rvalue_values[0])));
+            REQUIRE(rvalue_values.size() == 2u);
+            CHECK(rvalue_values[0].value == -1);
+            CHECK(rvalue_values[1].value == 42);
+            CHECK(rvalue_probe.copies == 0u);
+            CHECK(rvalue_probe.moves == 2u);
+            CHECK(rvalue_probe.destructions == 1u);
+            CHECK(rvalue_probe.live == 2u);
+        }
+        CHECK(rvalue_probe.destructions == 3u);
+        CHECK(rvalue_probe.live == 0u);
+
+        CHECK(allocation_probe.count == 4u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("Vector leaves an aliased rvalue untouched when growth allocation fails") {
+        AllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        {
+            Config::Vector<AliasedValue> values(&ctx);
+            require_success(values.reserve(1u));
+            require_success(values.emplace_back(41, &lifetime_probe));
+            ctx.allocator = protocyte::Allocator {&allocation_probe, reject_allocation, smoke_deallocate};
+
+            require_failure(values.push_back(protocyte::move(values[0])), protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 1u);
+            CHECK(values[0].value == 41);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == 0u);
+            CHECK(lifetime_probe.destructions == 0u);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(allocation_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.destructions == 1u);
+        CHECK(lifetime_probe.live == 0u);
+    }
+
+    SECTION("HashMap replacement consumes aliased mapped values before resetting the bucket") {
+        auto ctx = make_context();
+        Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+        require_success(values.insert_or_assign(7, AliasedValue {41}));
+
+        auto lvalue_entry = *values.begin();
+        require_success(values.insert_or_assign(lvalue_entry.key, lvalue_entry.value));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).value.value == 41);
+
+        auto rvalue_entry = *values.begin();
+        require_success(values.insert_or_assign(rvalue_entry.key, protocyte::move(rvalue_entry.value)));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).value.value == 41);
+    }
+
+    SECTION("HashMap copies an aliased lvalue before a colliding rehash") {
+        RetainedAllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto copies_before = lifetime_probe.copies;
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+
+            require_success(values.insert_or_assign(colliding_new_key, *source));
+            REQUIRE(values.size() == 6u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            REQUIRE(mapped_value(values, colliding_new_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key)->value == 41);
+            CHECK(lifetime_probe.copies == copies_before + 1u);
+            CHECK(lifetime_probe.moves == moves_before + 1u);
+            CHECK(lifetime_probe.destructions == destructions_before + 1u);
+            CHECK(lifetime_probe.live == 2u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(allocation_probe.count == 2u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("HashMap moves an aliased rvalue before a colliding rehash") {
+        RetainedAllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+
+            require_success(values.insert_or_assign(colliding_new_key, protocyte::move(*source)));
+            REQUIRE(values.size() == 6u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            REQUIRE(mapped_value(values, colliding_new_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == -1);
+            CHECK(mapped_value(values, colliding_new_key)->value == 41);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == moves_before + 2u);
+            CHECK(lifetime_probe.destructions == destructions_before + 1u);
+            CHECK(lifetime_probe.live == 2u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(allocation_probe.count == 2u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("HashMap leaves an aliased lvalue untouched when a colliding rehash allocation fails") {
+        RetainedAllocationProbe retained_probe {};
+        AllocationProbe failure_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&retained_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto copies_before = lifetime_probe.copies;
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+            ctx.allocator = protocyte::Allocator {&failure_probe, reject_allocation, nullptr};
+
+            require_failure(values.insert_or_assign(colliding_new_key, *source), protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 5u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key) == nullptr);
+            CHECK(lifetime_probe.copies == copies_before);
+            CHECK(lifetime_probe.moves == moves_before);
+            CHECK(lifetime_probe.destructions == destructions_before);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(failure_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(retained_probe.count == 1u);
+        free_retained_allocations(retained_probe);
+    }
+
+    SECTION("HashMap leaves an aliased rvalue untouched when a colliding rehash allocation fails") {
+        RetainedAllocationProbe retained_probe {};
+        AllocationProbe failure_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&retained_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+            ctx.allocator = protocyte::Allocator {&failure_probe, reject_allocation, nullptr};
+
+            require_failure(values.insert_or_assign(colliding_new_key, protocyte::move(*source)),
+                            protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 5u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key) == nullptr);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == moves_before);
+            CHECK(lifetime_probe.destructions == destructions_before);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(failure_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(retained_probe.count == 1u);
+        free_retained_allocations(retained_probe);
+    }
+}
+
 TEST_CASE("Runtime context rebinding preserves allocator ownership", "[smoke][runtime][allocator][bind]") {
     SECTION("unallocated vectors can bind and live vectors reject context changes") {
         auto first_ctx = make_context();
