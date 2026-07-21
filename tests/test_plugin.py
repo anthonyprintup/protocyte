@@ -541,6 +541,86 @@ def test_duplicate_field_numbers_return_descriptor_errors() -> None:
     assert not response.file
 
 
+def test_overlapping_reserved_field_ranges_return_sorted_diagnostic() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for start, end in [(12, 16), (10, 14)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample: reserved field ranges [10, 14) and [12, 16) overlap"
+    )
+    assert not response.file
+
+
+def test_reserved_field_intersection_uses_declared_field_order() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for name, number in [("twenty", 20), ("nine", 9)]:
+        message.field.add(
+            name=name,
+            number=number,
+            label=F.LABEL_OPTIONAL,
+            type=F.TYPE_INT32,
+        )
+    for start, end in [(19, 22), (8, 11)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.twenty: field number 20 is reserved"
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("field_number", "expected_error"),
+    [
+        (8, "demo.Sample.boundary: field number 8 is reserved"),
+        (9, ""),
+    ],
+)
+def test_reserved_field_range_end_is_exclusive(
+    field_number: int,
+    expected_error: str,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    message.field.add(
+        name="boundary",
+        number=field_number,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    reserved_range = message.reserved_range.add()
+    reserved_range.start = 8
+    reserved_range.end = 9
+
+    response = generate_response(request)
+
+    assert response.error == expected_error
+    assert bool(response.file) is not bool(expected_error)
+
+
+def test_adjacent_reserved_field_ranges_do_not_overlap() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for start, end in [(8, 9), (9, 10)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
 def test_missing_field_label_returns_descriptor_error() -> None:
     request = _basic_request()
     request.proto_file[0].message_type[0].field[0].ClearField("label")
@@ -743,6 +823,10 @@ def test_duplicate_reserved_enum_name_returns_descriptor_error() -> None:
             [(2, 4), (4, 5)],
             "reserved enum ranges [2, 4] and [4, 5] overlap",
         ),
+        (
+            [(4, 5), (2, 4)],
+            "reserved enum ranges [2, 4] and [4, 5] overlap",
+        ),
     ],
 )
 def test_invalid_reserved_enum_ranges_return_descriptor_errors(
@@ -785,6 +869,62 @@ def test_reserved_enum_range_is_inclusive() -> None:
         "demo.State.STATE_UNSPECIFIED: enum number 0 is reserved"
     )
     assert not response.file
+
+
+def test_reserved_enum_value_intersection_uses_declared_value_order() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_TWENTY", number=20)
+    enum.value.add(name="STATE_NINE", number=9)
+    for start, end in [(19, 21), (8, 10)]:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State.STATE_TWENTY: enum number 20 is reserved"
+    assert not response.file
+
+
+def test_adjacent_reserved_enum_ranges_do_not_overlap() -> None:
+    request, enum = _request_with_enum()
+    for start, end in [(1, 1), (2, 2)]:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+def test_large_disjoint_reserved_range_sets_validate_without_pairwise_work() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("many_ranges.proto")
+    file = request.proto_file.add(
+        name="many_ranges.proto",
+        package="demo",
+        syntax="proto2",
+    )
+    enum = file.enum_type.add(name="State")
+    enum.value.add(name="STATE_UNSPECIFIED", number=0)
+    message = file.message_type.add(name="Payload")
+
+    # Cardinality is the regression oracle; a wall-clock threshold would be flaky.
+    for index in range(20_000):
+        enum_start = index * 2 + 1
+        enum_range = enum.reserved_range.add()
+        enum_range.start = enum_start
+        enum_range.end = enum_start
+        message_range = message.reserved_range.add()
+        message_range.start = enum_start
+        message_range.end = enum_start + 1
+
+    model = build_model(request)
+
+    assert "demo.State" in model.enums
+    assert "demo.Payload" in model.messages
 
 
 def test_malformed_recognized_option_payload_returns_descriptor_error() -> None:
@@ -2811,6 +2951,77 @@ def test_generator_policy_short_circuits_genuinely_deep_descriptors() -> None:
     assert response.error == (
         "generator policy limit exceeded for message nesting depth: 65 > 64"
     )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "entry_kind",
+    [
+        "enum reserved names",
+        "enum reserved ranges",
+        "message reserved names",
+        "message reserved ranges",
+        "message extension ranges",
+    ],
+)
+def test_descriptor_node_policy_counts_reserved_and_extension_entries(
+    entry_kind: str,
+) -> None:
+    request, enum = _request_with_enum()
+    message = request.proto_file[0].message_type[0]
+    baseline, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    entry_count = 32
+
+    if entry_kind == "enum reserved names":
+        enum.reserved_name.extend(
+            f"STATE_RETIRED_{index}" for index in range(entry_count)
+        )
+    elif entry_kind == "enum reserved ranges":
+        for index in range(entry_count):
+            reserved_range = enum.reserved_range.add()
+            reserved_range.start = index * 2 + 100
+            reserved_range.end = index * 2 + 100
+    elif entry_kind == "message reserved names":
+        message.reserved_name.extend(
+            f"retired_{index}" for index in range(entry_count)
+        )
+    elif entry_kind == "message reserved ranges":
+        for index in range(entry_count):
+            reserved_range = message.reserved_range.add()
+            reserved_range.start = index * 2 + 100
+            reserved_range.end = index * 2 + 101
+    else:
+        for index in range(entry_count):
+            extension_range = message.extension_range.add()
+            extension_range.start = index * 2 + 100
+            extension_range.end = index * 2 + 101
+
+    total, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    assert total == baseline + entry_count
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            max_descriptor_nodes=baseline,
+            format_outputs=False,
+        ),
+    )
+
+    error_prefix = "generator policy limit exceeded for descriptor nodes: "
+    assert response.error.startswith(error_prefix)
+    reported, limit = (
+        int(part) for part in response.error.removeprefix(error_prefix).split(" > ")
+    )
+    assert baseline < reported <= total
+    assert limit == baseline
     assert not response.file
 
 

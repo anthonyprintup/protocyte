@@ -138,12 +138,23 @@ def _request_descriptor_complexity(
     nodes = 0
     max_depth = 0
     for file in request.proto_file:
-        nodes += 1 + len(file.extension)
-        _check_limit("descriptor nodes", nodes, max_descriptor_nodes)
-        nodes += sum(_enum_node_count(enum) for enum in file.enum_type)
-        _check_limit("descriptor nodes", nodes, max_descriptor_nodes)
-        nodes += sum(1 + len(service.method) for service in file.service)
-        _check_limit("descriptor nodes", nodes, max_descriptor_nodes)
+        nodes = _add_descriptor_nodes(
+            nodes,
+            1 + len(file.extension),
+            max_descriptor_nodes,
+        )
+        for enum in file.enum_type:
+            nodes = _add_descriptor_nodes(
+                nodes,
+                _enum_node_count(enum),
+                max_descriptor_nodes,
+            )
+        for service in file.service:
+            nodes = _add_descriptor_nodes(
+                nodes,
+                1 + len(service.method),
+                max_descriptor_nodes,
+            )
         _check_limit(
             "descriptor nodes",
             nodes + len(file.message_type),
@@ -153,12 +164,17 @@ def _request_descriptor_complexity(
         while stack:
             message, depth = stack.pop()
             _check_limit("message nesting depth", depth, max_nesting_depth)
-            nodes += 1 + len(message.field) + len(message.extension) + len(
-                message.oneof_decl
+            nodes = _add_descriptor_nodes(
+                nodes,
+                _message_node_count(message),
+                max_descriptor_nodes,
             )
-            _check_limit("descriptor nodes", nodes, max_descriptor_nodes)
-            nodes += sum(_enum_node_count(enum) for enum in message.enum_type)
-            _check_limit("descriptor nodes", nodes, max_descriptor_nodes)
+            for enum in message.enum_type:
+                nodes = _add_descriptor_nodes(
+                    nodes,
+                    _enum_node_count(enum),
+                    max_descriptor_nodes,
+                )
             max_depth = max(max_depth, depth)
             _check_limit(
                 "descriptor nodes",
@@ -169,5 +185,28 @@ def _request_descriptor_complexity(
     return nodes, max_depth
 
 
+def _add_descriptor_nodes(nodes: int, count: int, limit: int | None) -> int:
+    nodes += count
+    _check_limit("descriptor nodes", nodes, limit)
+    return nodes
+
+
 def _enum_node_count(enum: descriptor_pb2.EnumDescriptorProto) -> int:
-    return 1 + len(enum.value)
+    return (
+        1
+        + len(enum.value)
+        + len(enum.reserved_name)
+        + len(enum.reserved_range)
+    )
+
+
+def _message_node_count(message: descriptor_pb2.DescriptorProto) -> int:
+    return (
+        1
+        + len(message.field)
+        + len(message.extension)
+        + len(message.oneof_decl)
+        + len(message.extension_range)
+        + len(message.reserved_range)
+        + len(message.reserved_name)
+    )
