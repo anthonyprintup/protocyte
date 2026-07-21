@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_HOME_ACCOUNT = rb"[A-Za-z0-9_\x80-\xff](?:[A-Za-z0-9._ -]|[\x80-\xff])*+"
+_HOME_ACCOUNT = (
+    rb"[A-Za-z0-9_()&\x80-\xff]"
+    rb"(?:[A-Za-z0-9._ ()&'#$!~^%-]|[\x80-\xff])*+"
+)
 _HOME_PATH_BOUNDARY = rb"(?:[\\/]|(?=$|[\x00\r\n\t \"'`),;:!?)}\]]))"
 
 
@@ -28,7 +31,9 @@ _PRIVATE_PATH_PATTERNS = (
     ),
     re.compile(
         rb"(?<![:\\/A-Za-z0-9])(?:[\\/]{2})"
+        rb"(?:\?[\\/]UNC[\\/])?"
         rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*[\\/]+"
+        rb"(?:[A-Za-z]\$[\\/]+)?"
         rb"Users[\\/]+" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
@@ -45,6 +50,66 @@ _PRIVATE_PATH_PATTERNS = (
 )
 _SCAN_CHUNK_BYTES = 1024 * 1024
 _SCAN_OVERLAP_BYTES = 4096
+
+_TREE_STATE_NONE = 0
+_TREE_STATE_BOUNDARY = 1
+_TREE_STATE_SEPARATOR = 2
+_TREE_STATE_DRIVE = 3
+_TREE_STATE_MOUNT_BASE = 4
+_TREE_STATE_MOUNT_DRIVE = 5
+_TREE_STATE_UNC_SERVER = 6
+_TREE_STATE_UNC_ADMIN = 7
+_TREE_STATE_ACCOUNT = 8
+
+_TREE_STATE_CANONICAL = {
+    _TREE_STATE_BOUNDARY: b")",
+    _TREE_STATE_SEPARATOR: b"\\",
+    _TREE_STATE_DRIVE: b"C:",
+    _TREE_STATE_MOUNT_BASE: b"/mnt",
+    _TREE_STATE_MOUNT_DRIVE: b"/mnt/c",
+    _TREE_STATE_UNC_SERVER: b"\\\\server",
+    _TREE_STATE_UNC_ADMIN: b"\\\\server/C$",
+    _TREE_STATE_ACCOUNT: b"C:/Users",
+}
+
+_TREE_ACCOUNT_PREFIX_PATTERNS = (
+    re.compile(
+        rb"(?<![A-Za-z0-9])(?:[A-Za-z]:|/[A-Za-z]:)[\\/]+Users$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rb"(?<![A-Za-z0-9._-])/(?:mnt/[A-Za-z]|cygdrive/[A-Za-z]|[A-Za-z])/"
+        rb"Users$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rb"(?<![:\\/A-Za-z0-9])[\\/]{2}(?:\?[\\/]UNC[\\/])?"
+        rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*[\\/]+"
+        rb"(?:[A-Za-z]\$[\\/]+)?Users$",
+        re.IGNORECASE,
+    ),
+    re.compile(rb"(?<![A-Za-z0-9._-])/(?:home|Users)$", re.IGNORECASE),
+)
+_TREE_UNC_ADMIN_PREFIX = re.compile(
+    rb"(?<![:\\/A-Za-z0-9])[\\/]{2}(?:\?[\\/]UNC[\\/])?"
+    rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*[\\/]+[A-Za-z]\$$",
+    re.IGNORECASE,
+)
+_TREE_UNC_SERVER_PREFIX = re.compile(
+    rb"(?<![:\\/A-Za-z0-9])[\\/]{2}(?:\?[\\/]UNC[\\/])?"
+    rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*$",
+    re.IGNORECASE,
+)
+_TREE_MOUNT_DRIVE_PREFIX = re.compile(
+    rb"(?<![A-Za-z0-9._-])/(?:mnt/[A-Za-z]|cygdrive/[A-Za-z]|[A-Za-z])$",
+    re.IGNORECASE,
+)
+_TREE_MOUNT_BASE_PREFIX = re.compile(
+    rb"(?<![A-Za-z0-9._-])/(?:mnt|cygdrive)$", re.IGNORECASE
+)
+_TREE_DRIVE_PREFIX = re.compile(
+    rb"(?<![A-Za-z0-9])(?:[A-Za-z]:|/[A-Za-z]:)$", re.IGNORECASE
+)
 
 
 class GitCommandError(RuntimeError):
@@ -74,6 +139,19 @@ def _run_git(
     )
     if completed.returncode != 0:
         raise GitCommandError("a required Git command failed; details are redacted")
+    return completed.stdout
+
+
+def _read_git_config(repository: Path, key: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "-C", str(repository), "config", "--null", "--get-all", key],
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode == 1:
+        return b""
+    if completed.returncode != 0:
+        raise GitCommandError("Git configuration could not be read; details are redacted")
     return completed.stdout
 
 
@@ -112,14 +190,65 @@ def _scan_window(tail: bytes, chunk: bytes) -> tuple[bytes, bool]:
     return window[-_SCAN_OVERLAP_BYTES:], _matches_private_path(window)
 
 
+class _Utf16SegmentScanner:
+    def __init__(self) -> None:
+        self._encoding: str | None = None
+        self._pending = b""
+        self._decoded_tail = b""
+
+    def _scan_decoded(self, data: bytes) -> bool:
+        if self._encoding is None or not data:
+            return False
+        decoded = data.decode(self._encoding, errors="replace").encode("utf-8")
+        self._decoded_tail, matched = _scan_window(self._decoded_tail, decoded)
+        return matched
+
+    def feed(self, chunk: bytes, *, final: bool) -> bool:
+        data = self._pending + chunk
+        self._pending = b""
+        position = 0
+        matched = False
+
+        while True:
+            byte_order_marks = [
+                (index, encoding)
+                for marker, encoding in (
+                    (codecs.BOM_UTF16_LE, "utf-16-le"),
+                    (codecs.BOM_UTF16_BE, "utf-16-be"),
+                )
+                if (index := data.find(marker, position)) >= 0
+            ]
+            if not byte_order_marks:
+                break
+            marker_position, encoding = min(byte_order_marks)
+            matched = self._scan_decoded(data[position:marker_position]) or matched
+            self._encoding = encoding
+            self._decoded_tail = b""
+            position = marker_position + 2
+
+        remaining = data[position:]
+        if final:
+            return self._scan_decoded(remaining) or matched
+
+        if self._encoding is None:
+            self._pending = remaining[-1:]
+            return matched
+
+        retained_bytes = 2 if len(remaining) % 2 == 0 else 1
+        if len(remaining) > retained_bytes:
+            matched = self._scan_decoded(remaining[:-retained_bytes]) or matched
+            self._pending = remaining[-retained_bytes:]
+        else:
+            self._pending = remaining
+        return matched
+
+
 def _read_and_scan_payload(
     stream, size: int, *, capture: bool
 ) -> tuple[bool, bytes | None]:
     found = False
     raw_tail = b""
-    decoded_tail = b""
-    bom_tail = b""
-    decoder = None
+    utf16_scanner = _Utf16SegmentScanner()
     captured = bytearray() if capture else None
     remaining = size
 
@@ -135,24 +264,7 @@ def _read_and_scan_payload(
 
         raw_tail, raw_match = _scan_window(raw_tail, chunk)
         found = found or raw_match
-
-        decode_chunk = chunk
-        if decoder is None:
-            bom_window = bom_tail + chunk
-            bom_positions = [
-                position
-                for byte_order_mark in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
-                if (position := bom_window.find(byte_order_mark)) >= 0
-            ]
-            if bom_positions:
-                decoder = codecs.getincrementaldecoder("utf-16")(errors="replace")
-                decode_chunk = bom_window[min(bom_positions) :]
-            else:
-                bom_tail = bom_window[-1:]
-        if decoder is not None:
-            decoded = decoder.decode(decode_chunk, final=remaining == 0).encode("utf-8")
-            decoded_tail, decoded_match = _scan_window(decoded_tail, decoded)
-            found = found or decoded_match
+        found = utf16_scanner.feed(chunk, final=remaining == 0) or found
 
     return found, bytes(captured) if captured is not None else None
 
@@ -276,6 +388,30 @@ def _scan_stored_objects(
     return content_violations, trees, commit_trees
 
 
+def _tree_path_state(path_suffix: bytes) -> int:
+    if any(pattern.search(path_suffix) for pattern in _TREE_ACCOUNT_PREFIX_PATTERNS):
+        return _TREE_STATE_ACCOUNT
+    if _TREE_UNC_ADMIN_PREFIX.search(path_suffix):
+        return _TREE_STATE_UNC_ADMIN
+    if _TREE_UNC_SERVER_PREFIX.search(path_suffix):
+        return _TREE_STATE_UNC_SERVER
+    if _TREE_MOUNT_DRIVE_PREFIX.search(path_suffix):
+        return _TREE_STATE_MOUNT_DRIVE
+    if _TREE_MOUNT_BASE_PREFIX.search(path_suffix):
+        return _TREE_STATE_MOUNT_BASE
+    if _TREE_DRIVE_PREFIX.search(path_suffix):
+        return _TREE_STATE_DRIVE
+    if path_suffix.endswith((b"/", b"\\")):
+        return _TREE_STATE_SEPARATOR
+    if path_suffix and path_suffix[-1] not in (
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        b"abcdefghijklmnopqrstuvwxyz"
+        b"0123456789._-"
+    ):
+        return _TREE_STATE_BOUNDARY
+    return _TREE_STATE_NONE
+
+
 def _scan_tree_paths(
     trees: dict[str, tuple[_TreeEntry, ...]], commit_trees: set[str]
 ) -> set[str]:
@@ -287,16 +423,22 @@ def _scan_tree_paths(
     }
     roots = (set(trees) - child_trees) | (commit_trees & set(trees))
     violations: set[str] = set()
-    stack = [(root, b"") for root in sorted(roots)]
+    visited: set[tuple[str, int]] = set()
+    stack = [(root, _TREE_STATE_NONE) for root in sorted(roots)]
 
     while stack:
-        tree_id, prefix = stack.pop()
+        tree_id, state = stack.pop()
+        if (tree_id, state) in visited:
+            continue
+        visited.add((tree_id, state))
+        prefix = _TREE_STATE_CANONICAL.get(state, b"")
         for entry in trees[tree_id]:
             path = prefix + b"/" + entry.name if prefix else entry.name
             if _matches_private_path(path):
                 violations.add(tree_id)
+                continue
             if entry.child_tree in trees:
-                stack.append((entry.child_tree, path))
+                stack.append((entry.child_tree, _tree_path_state(path)))
     return violations
 
 
@@ -322,6 +464,10 @@ def _pending_commit_violations(
     )
     if _read_and_scan_payload_bytes(identities):
         violations.append(Violation("pending commit metadata"))
+
+    commit_encoding = _read_git_config(repository, "i18n.commitEncoding")
+    if _read_and_scan_payload_bytes(commit_encoding):
+        violations.append(Violation("pending commit encoding header"))
     return violations
 
 

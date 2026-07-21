@@ -6,6 +6,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -47,7 +48,7 @@ def _repository(path: Path) -> Path:
 
 
 def _run_guard(
-    repository: Path, *arguments: str
+    repository: Path, *arguments: str, timeout: float | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -60,12 +61,19 @@ def _run_guard(
         check=False,
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
 
 
 def _private_path(style: str) -> str:
     account = "synthetic-account"
     project = "synthetic-project"
+    if style == "windows-parenthesized-account":
+        account = "synthetic " + "(" + "work" + ")"
+        return "/".join(("C:", "Users", account, project))
+    if style == "mounted-ampersand-account":
+        account = "synthetic" + "&" + "peer"
+        return "/" + "/".join(("mnt", "c", "Users", account, project))
     if style == "windows-forward":
         return "/".join(("C:", "Users", account, "Desktop", project, ".venv"))
     if style == "windows-backward":
@@ -90,6 +98,14 @@ def _private_path(style: str) -> str:
         return "\\".join(("", "", "synthetic-server", "Users", account, project))
     if style == "windows-unc-home":
         return "\\".join(("", "", "synthetic-server", "Users", account))
+    if style == "windows-extended-unc":
+        return "\\".join(
+            ("", "", "?", "UNC", "synthetic-server", "Users", account, project)
+        )
+    if style == "windows-admin-share":
+        return "\\".join(
+            ("", "", "synthetic-server", "C$", "Users", account, project)
+        )
     if style == "wsl-mount":
         return "/" + "/".join(("mnt", "c", "Users", account, project))
     if style == "msys-mount":
@@ -104,6 +120,17 @@ def _assert_redacted(result: subprocess.CompletedProcess[str]) -> None:
     assert "matched path text is redacted" in result.stderr
     assert "synthetic-account" not in output
     assert "synthetic-project" not in output
+
+
+def _assert_hook_redacted(
+    result: subprocess.CompletedProcess[str], repository: Path
+) -> None:
+    output = result.stdout + result.stderr
+    assert "private-path guard blocked this Git operation" in result.stderr
+    assert "all failure details are redacted" in result.stderr
+    assert "synthetic-account" not in output
+    assert "synthetic-project" not in output
+    assert str(repository) not in output
 
 
 def _store_blob(repository: Path, content: bytes) -> str:
@@ -152,10 +179,11 @@ def _write_raw_sha1_index(repository: Path, object_id: str, path: bytes) -> None
     (repository / ".git" / "index").write_bytes(body + hashlib.sha1(body).digest())
 
 
-def _install_tracked_hooks(repository: Path) -> None:
+def _install_tracked_hooks(repository: Path, *, copy_guard: bool = True) -> None:
     scripts = repository / ".github" / "scripts"
     scripts.mkdir(parents=True)
-    shutil.copy2(GUARD, scripts / GUARD.name)
+    if copy_guard:
+        shutil.copy2(GUARD, scripts / GUARD.name)
     shutil.copytree(HOOKS, repository / HOOKS.name)
     _git(repository, "config", "core.hooksPath", HOOKS.name)
 
@@ -185,7 +213,7 @@ def test_tracked_hooks_use_portable_shell_files() -> None:
     attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
 
     assert ".githooks/* text eol=lf" in attributes
-    for hook_name in ("pre-commit", "commit-msg"):
+    for hook_name in ("pre-commit", "commit-msg", "pre-push"):
         hook = (HOOKS / hook_name).read_bytes()
         assert hook.startswith(b"#!/bin/sh\n")
         assert b"\r\n" not in hook
@@ -218,6 +246,10 @@ def test_tracked_hooks_allow_a_portable_commit(tmp_path: Path) -> None:
         "linux-root-home",
         "windows-unc",
         "windows-unc-home",
+        "windows-extended-unc",
+        "windows-admin-share",
+        "windows-parenthesized-account",
+        "mounted-ampersand-account",
         "wsl-mount",
         "msys-mount",
         "cygwin-mount",
@@ -313,6 +345,59 @@ def test_guard_rejects_bom_marked_utf16_blobs(
     content = prefix + byte_order_mark + _private_path("windows-forward").encode(
         encoding
     )
+    (repository / "fixture.bin").write_bytes(content)
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+@pytest.mark.parametrize(
+    ("first_mark", "first_encoding", "second_mark", "second_encoding"),
+    [
+        (codecs.BOM_UTF16_LE, "utf-16-le", codecs.BOM_UTF16_BE, "utf-16-be"),
+        (codecs.BOM_UTF16_BE, "utf-16-be", codecs.BOM_UTF16_LE, "utf-16-le"),
+    ],
+)
+def test_guard_switches_endianness_between_utf16_bom_segments(
+    tmp_path: Path,
+    first_mark: bytes,
+    first_encoding: str,
+    second_mark: bytes,
+    second_encoding: str,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    decoy = "portable segment".encode(first_encoding)
+    private = _private_path("windows-forward").encode(second_encoding)
+    (repository / "fixture.bin").write_bytes(
+        first_mark + decoy + second_mark + private
+    )
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+def test_guard_switches_utf16_endianness_across_a_scan_chunk_boundary(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    chunk_bytes = 1024 * 1024
+    padding = "a" * ((chunk_bytes - 4) // 2)
+    content = (
+        b"x"
+        + codecs.BOM_UTF16_LE
+        + padding.encode("utf-16-le")
+        + codecs.BOM_UTF16_BE
+        + _private_path("windows-forward").encode("utf-16-be")
+    )
+    assert content[chunk_bytes - 1 : chunk_bytes + 1] == codecs.BOM_UTF16_BE
     (repository / "fixture.bin").write_bytes(content)
     _git(repository, "add", "fixture.bin")
 
@@ -431,6 +516,51 @@ def test_guard_reconstructs_private_paths_from_stored_tree_entries(
     _assert_redacted(result)
 
 
+def test_guard_scans_shared_tree_dags_in_polynomial_time(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "repository")
+    blob = _store_blob(repository, b"portable content\n")
+    shared_tree = _store_tree(repository, [(b"100644", b"leaf", blob)])
+    for _ in range(23):
+        shared_tree = _store_tree(
+            repository,
+            [
+                (b"40000", b"left", shared_tree),
+                (b"40000", b"right", shared_tree),
+            ],
+        )
+
+    started = time.perf_counter()
+    result = _run_guard(repository, timeout=8.0)
+    elapsed = time.perf_counter() - started
+
+    assert result.returncode == 0, result.stderr
+    assert elapsed < 8.0
+
+
+def test_guard_keeps_distinct_path_states_for_a_shared_subtree(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    blob = _store_blob(repository, b"portable content\n")
+    account = _store_tree(
+        repository, [(b"100644", b"synthetic-account", blob)]
+    )
+    shared = _store_tree(repository, [(b"40000", b"Users", account)])
+    _store_tree(
+        repository,
+        [
+            (b"40000", b"C:", shared),
+            (b"40000", b"portable", shared),
+        ],
+    )
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "stored Git tree path" in result.stderr
+    _assert_redacted(result)
+
+
 def test_tracked_hooks_block_staged_content_before_creating_a_commit(
     tmp_path: Path,
 ) -> None:
@@ -445,7 +575,7 @@ def test_tracked_hooks_block_staged_content_before_creating_a_commit(
     assert result.returncode == 1
     assert _git_output(repository, "rev-list", "--all", "--count") == b"0"
     assert _stored_commit_count(repository) == 0
-    _assert_redacted(result)
+    _assert_hook_redacted(result, repository)
 
 
 @pytest.mark.parametrize("private_input", ["message", "identity"])
@@ -471,10 +601,111 @@ def test_tracked_hooks_block_pending_commit_metadata_before_object_creation(
 
     assert result.returncode == 1
     assert _git_output(repository, "rev-list", "--all", "--count") == b"0"
-    expected_source = "message" if private_input == "message" else "metadata"
-    assert f"pending commit {expected_source}" in result.stderr
     assert _stored_commit_count(repository) == 0
-    _assert_redacted(result)
+    _assert_hook_redacted(result, repository)
+
+
+def test_commit_hook_rejects_a_private_commit_encoding_header(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    _install_tracked_hooks(repository)
+    _git(repository, "config", "i18n.commitEncoding", _private_path("linux"))
+    (repository / "fixture.txt").write_text("portable content\n", encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+    message_file = repository / "message.txt"
+    message_file.write_text("portable message\n", encoding="utf-8")
+
+    direct_result = _run_guard(
+        repository, "--commit-message", str(message_file)
+    )
+    commit_result = _run_commit(repository, "portable message")
+
+    assert direct_result.returncode == 1
+    assert "pending commit encoding header" in direct_result.stderr
+    _assert_redacted(direct_result)
+    assert commit_result.returncode == 1
+    assert _stored_commit_count(repository) == 0
+    _assert_hook_redacted(commit_result, repository)
+
+
+@pytest.mark.parametrize("failure", ["missing", "syntax"])
+def test_commit_hooks_fail_closed_without_raw_python_diagnostics(
+    tmp_path: Path, failure: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    _install_tracked_hooks(repository, copy_guard=failure != "missing")
+    guard = repository / ".github" / "scripts" / GUARD.name
+    if failure == "syntax":
+        guard.write_text("def broken(:\n", encoding="utf-8")
+    (repository / "fixture.txt").write_text("portable content\n", encoding="utf-8")
+    _git(repository, "add", "--all")
+
+    result = _run_commit(repository, "portable message")
+
+    assert result.returncode == 1
+    assert _stored_commit_count(repository) == 0
+    _assert_hook_redacted(result, repository)
+    assert GUARD.name not in result.stdout + result.stderr
+
+
+def test_pre_push_hook_rejects_a_finalized_signer_header(tmp_path: Path) -> None:
+    repository = _repository(tmp_path / "repository")
+    remote = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-q", str(remote)],
+        check=True,
+        capture_output=True,
+    )
+    _install_tracked_hooks(repository)
+    (repository / "fixture.txt").write_text("portable content\n", encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+    assert _run_commit(repository, "portable message").returncode == 0
+    _git(repository, "remote", "add", "origin", str(remote))
+    _git(repository, "push", "-q", "origin", "HEAD:refs/heads/main")
+
+    parent = _git_output(repository, "rev-parse", "HEAD").decode("ascii")
+    tree = _git_output(repository, "rev-parse", "HEAD^{tree}").decode("ascii")
+    identity = b"Synthetic <tests@example.invalid> 0 +0000"
+    commit_payload = b"\n".join(
+        (
+            f"tree {tree}".encode("ascii"),
+            f"parent {parent}".encode("ascii"),
+            b"author " + identity,
+            b"committer " + identity,
+            b"gpgsig -----BEGIN SYNTHETIC SIGNATURE-----",
+            b" " + _private_path("linux").encode("utf-8"),
+            b" -----END SYNTHETIC SIGNATURE-----",
+            b"",
+            b"portable message",
+            b"",
+        )
+    )
+    finalized = _git_output(
+        repository,
+        "hash-object",
+        "--literally",
+        "-t",
+        "commit",
+        "-w",
+        "--stdin",
+        input_bytes=commit_payload,
+    ).decode("ascii")
+    _git(repository, "update-ref", "HEAD", finalized, parent)
+
+    result = subprocess.run(
+        ["git", "push", "-q", "origin", "HEAD:refs/heads/main"],
+        cwd=repository,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert _git_output(remote, "rev-parse", "refs/heads/main") == parent.encode(
+        "ascii"
+    )
+    _assert_hook_redacted(result, repository)
 
 
 def test_guard_redacts_git_failures() -> None:
@@ -506,6 +737,29 @@ def test_guard_accepts_portable_tracked_content_and_history(tmp_path: Path) -> N
                 "/c/Users/%USERNAME%/project",
                 "/cygdrive/c/Users/<account>/project",
                 r"\\synthetic-server\Users\%USERNAME%\project",
+                "\\".join(
+                    (
+                        "",
+                        "",
+                        "?",
+                        "UNC",
+                        "synthetic-server",
+                        "Users",
+                        "%USERNAME%",
+                        "project",
+                    )
+                ),
+                "\\".join(
+                    (
+                        "",
+                        "",
+                        "synthetic-server",
+                        "C$",
+                        "Users",
+                        "{account}",
+                        "project",
+                    )
+                ),
                 "/rooted/project",
                 "",
             )

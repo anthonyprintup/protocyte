@@ -76,7 +76,10 @@ def test_readme_documents_the_local_private_path_guard() -> None:
 
     assert "git config --local core.hooksPath .githooks" in contributing
     assert "python .github/scripts/check_private_paths.py" in contributing
-    assert "before Git\ncreates the commit object" in contributing
+    assert "before Git creates an ordinary unsigned commit object" in contributing
+    assert "final signer-produced header cannot be pre-scanned" in contributing
+    assert "tracked pre-push hook scans finalized local objects" in contributing
+    assert "unreachable only in a\nlocal object database" in contributing
     assert "including unreachable objects" in contributing
     assert "`--no-verify`" in contributing
 
