@@ -996,9 +996,11 @@ def _assert_no_managed_environment_transaction_leftovers(
     leftovers = [
         candidate
         for candidate in environment_root.iterdir()
-        if candidate.is_dir()
-        and (
-            candidate.name.endswith(".staging") or candidate.name.endswith(".previous")
+        if (
+            candidate.name.endswith(".staging")
+            or candidate.name.endswith(".previous")
+            or ".protocyte-managed-environment-" in candidate.name
+            or ".protocyte-cleanup-managed-environment-" in candidate.name
         )
     ]
     assert not leftovers, leftovers
@@ -2885,7 +2887,71 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert any(prefix.rglob("protocyteConfig.cmake"))
     assert any(prefix.rglob("ProtocyteDependencyScan.cmake"))
     assert any(prefix.rglob("ProtocyteGenerate.cmake"))
+    assert any(prefix.rglob("ProtocyteManagedEnvironment.py"))
+    assert any(prefix.rglob("owned_transactions.py"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
+
+
+def test_relocated_install_provisions_managed_python_environment(
+    tmp_path: Path,
+) -> None:
+    _build_dir, prefix = _configure_fetchcontent_install_fixture(
+        tmp_path,
+        protocyte_install=True,
+    )
+    relocated_prefix = tmp_path / "relocated-prefix"
+    prefix.replace(relocated_prefix)
+    source_dir = tmp_path / "installed-consumer"
+    build_dir = tmp_path / "installed-consumer-build"
+    environment_root = tmp_path / "installed-managed-environments"
+    source_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_installed_managed_environment LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'set(PROTOCYTE_PYTHON_ENV_ROOT "{environment_root.as_posix()}")',
+                "find_package(protocyte CONFIG REQUIRED)",
+                "_protocyte_prepare_plugin()",
+                "_protocyte_get_internal(managed_plugin PLUGIN_EXECUTABLE)",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-plugin.txt" "${managed_plugin}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configured = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            f"-DCMAKE_PREFIX_PATH={relocated_prefix}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    plugin = Path(
+        (build_dir / "managed-plugin.txt").read_text(encoding="utf-8").strip()
+    )
+    assert plugin.is_file()
+    assert (
+        subprocess.run(
+            [str(plugin), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == __version__
+    )
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
 
 
 @pytest.mark.parametrize("library_mode", ["source", "descriptor-set"])
@@ -10853,6 +10919,150 @@ def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
         == __version__
     )
     _assert_no_managed_environment_transaction_leftovers(environment_root)
+
+
+def _run_managed_environment_transaction(
+    action: str,
+    destination: Path,
+    fingerprint: str,
+    transaction: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    helper = (
+        Path(__file__).resolve().parents[1]
+        / "cmake"
+        / "ProtocyteManagedEnvironment.py"
+    )
+    command = [
+        sys.executable,
+        str(helper),
+        action,
+        "--destination",
+        str(destination),
+        "--fingerprint",
+        fingerprint,
+    ]
+    if transaction is not None:
+        command.extend(("--transaction", str(transaction)))
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def test_managed_environment_leaves_legacy_previous_lookalike_untouched(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    lookalike = environment_root / f".{environment.name}.previous"
+    lookalike.mkdir()
+    sentinel = lookalike / "keep.txt"
+    sentinel.write_text("user-owned\n", encoding="utf-8")
+
+    incremental = _configure_managed_environment(source_dir, build_dir)
+
+    assert incremental.returncode == 0, incremental.stdout + incremental.stderr
+    assert sentinel.read_text(encoding="utf-8") == "user-owned\n"
+
+
+def test_managed_environment_ignores_unowned_predictable_transaction_lookalike(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    lookalike = environment_root / (
+        f".{environment.name}.protocyte-transaction-{'f' * 32}"
+    )
+    lookalike.mkdir()
+    owner = lookalike / ".protocyte-managed-environment.owner"
+    owner.write_text("not an ownership record\n", encoding="utf-8")
+
+    retry = _configure_managed_environment(source_dir, build_dir)
+
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert owner.read_text(encoding="utf-8") == "not an ownership record\n"
+    assert (environment / ".protocyte-ready").is_file()
+
+
+def test_managed_environment_recovers_an_identity_bound_interrupted_repair(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    fingerprint = (environment / ".protocyte-ready").read_text(
+        encoding="utf-8"
+    ).strip()
+    created = _run_managed_environment_transaction(
+        "create", environment, fingerprint
+    )
+    assert created.returncode == 0, created.stdout + created.stderr
+    transaction = Path(created.stdout.strip())
+    backed_up = _run_managed_environment_transaction(
+        "backup", environment, fingerprint, transaction
+    )
+    assert backed_up.returncode == 0, backed_up.stdout + backed_up.stderr
+    assert not environment.exists()
+
+    recovered = _configure_managed_environment(source_dir, build_dir)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert (environment / ".protocyte-ready").read_text(encoding="utf-8").strip() == (
+        fingerprint
+    )
+    assert not transaction.exists()
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
+
+
+def test_managed_environment_refuses_a_replaced_identity_bound_backup(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    fingerprint = (environment / ".protocyte-ready").read_text(
+        encoding="utf-8"
+    ).strip()
+    created = _run_managed_environment_transaction(
+        "create", environment, fingerprint
+    )
+    assert created.returncode == 0, created.stdout + created.stderr
+    transaction = Path(created.stdout.strip())
+    backed_up = _run_managed_environment_transaction(
+        "backup", environment, fingerprint, transaction
+    )
+    assert backed_up.returncode == 0, backed_up.stdout + backed_up.stderr
+    previous = transaction / "previous"
+    preserved_backup = tmp_path / "preserved-backup"
+    previous.replace(preserved_backup)
+    previous.mkdir()
+    (previous / ".protocyte-ready").write_text(
+        f"{fingerprint}\n", encoding="utf-8"
+    )
+
+    recovered = _configure_managed_environment(source_dir, build_dir)
+
+    assert recovered.returncode != 0
+    assert "Failed to recover Protocyte's managed Python environment transaction" in (
+        recovered.stdout + recovered.stderr
+    )
+    assert (preserved_backup / ".protocyte-ready").read_text(
+        encoding="utf-8"
+    ).strip() == fingerprint
+    assert (previous / ".protocyte-ready").read_text(encoding="utf-8").strip() == (
+        fingerprint
+    )
 
 
 def test_cmake_fingerprint_inputs_trigger_automatic_reconfiguration(

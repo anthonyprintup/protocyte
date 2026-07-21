@@ -2912,6 +2912,25 @@ class OwnedSibling:
             raise ValueError(f"reserved owned path label: {label!r}")
         self._bind_path(label, path, identity_source=identity_source)
 
+    def bind_identity(
+        self,
+        label: str,
+        path: Path,
+        identity: dict[str, object],
+    ) -> None:
+        if re.fullmatch(r"[a-z][a-z0-9_]*", label) is None:
+            raise ValueError(f"invalid owned path label: {label!r}")
+        if label == _OWNED_SIBLING_LABEL:
+            raise ValueError(f"reserved owned path label: {label!r}")
+        if not _valid_owned_sibling_identity(identity, path):
+            raise RuntimeError(
+                f"cannot establish a durable identity for owned path: {path}"
+            )
+        owned_paths = dict(self._owned_paths)
+        owned_paths[label] = dict(identity)
+        self._owned_paths = owned_paths
+        self._replace_marker()
+
     def _bind_path(
         self,
         label: str,

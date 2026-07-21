@@ -2651,6 +2651,98 @@ def test_replace_destination_restores_previous_if_staging_rename_fails(
     assert marker.read_text(encoding="utf-8") == "preserve"
 
 
+def test_replace_destination_retries_transient_windows_promotion_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = tmp_path / "transaction"
+    transaction.mkdir()
+    staging = transaction / "install"
+    staging.mkdir()
+    (staging / "new").write_text("new", encoding="utf-8")
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    (destination / "old").write_text("old", encoding="utf-8")
+    original_replace = Path.replace
+    promotion_attempts = 0
+    retry_delays: list[float] = []
+
+    def transient_windows_failure() -> PermissionError:
+        error = PermissionError(13, "Access is denied")
+        error.winerror = 5
+        return error
+
+    def retry_promotion(source: Path, target: Path) -> Path:
+        nonlocal promotion_attempts
+        if source == staging:
+            promotion_attempts += 1
+            if promotion_attempts < 3:
+                raise transient_windows_failure()
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", retry_promotion)
+    monkeypatch.setattr(
+        install_protoc,
+        "_is_transient_windows_promotion_error",
+        lambda error: getattr(error, "winerror", None) == 5,
+    )
+    monkeypatch.setattr(install_protoc.time, "sleep", retry_delays.append)
+
+    install_protoc.replace_destination(staging, destination)
+
+    assert promotion_attempts == 3
+    assert retry_delays == [0.05, 0.1]
+    assert (destination / "new").read_text(encoding="utf-8") == "new"
+    assert not (destination / "old").exists()
+
+
+def test_replace_destination_reports_exhausted_windows_promotion_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = tmp_path / "transaction"
+    transaction.mkdir()
+    staging = transaction / "install"
+    staging.mkdir()
+    (staging / "new").write_text("new", encoding="utf-8")
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    marker = destination / "known-good"
+    marker.write_text("preserve", encoding="utf-8")
+    original_replace = Path.replace
+    promotion_attempts = 0
+    retry_delays: list[float] = []
+
+    def exhausted_windows_failure() -> PermissionError:
+        error = PermissionError(13, "Access is denied")
+        error.winerror = 5
+        return error
+
+    def fail_every_promotion(source: Path, target: Path) -> Path:
+        nonlocal promotion_attempts
+        if source == staging:
+            promotion_attempts += 1
+            raise exhausted_windows_failure()
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_every_promotion)
+    monkeypatch.setattr(
+        install_protoc,
+        "_is_transient_windows_promotion_error",
+        lambda error: getattr(error, "winerror", None) == 5,
+    )
+    monkeypatch.setattr(install_protoc.time, "sleep", retry_delays.append)
+
+    with pytest.raises(PermissionError, match="Access is denied") as raised:
+        install_protoc.replace_destination(staging, destination)
+
+    assert promotion_attempts == install_protoc._WINDOWS_PROMOTION_RETRY_ATTEMPTS
+    assert retry_delays == [0.05, 0.1, 0.2, 0.4]
+    assert "retried the Windows protoc promotion" in "\n".join(raised.value.__notes__)
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert (staging / "new").read_text(encoding="utf-8") == "new"
+
+
 @pytest.mark.parametrize("promoted_new_install", [False, True])
 def test_next_install_recovers_an_interrupted_swap(
     tmp_path: Path,

@@ -40,6 +40,9 @@ MAX_ARCHIVE_MEMBERS = 4_096
 MAX_ARCHIVE_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 VERSION_MARKER = ".protocyte-protobuf-version"
+_WINDOWS_PROMOTION_RETRY_ATTEMPTS = 5
+_WINDOWS_PROMOTION_RETRY_INITIAL_DELAY_SECONDS = 0.05
+_TRANSIENT_WINDOWS_PROMOTION_ERRORS = frozenset({5, 32, 33})
 
 
 class ProtocAsset(NamedTuple):
@@ -360,6 +363,31 @@ def _installation_rollback_path(destination: Path) -> Path:
     return destination.with_name(f".{destination.name}.protocyte-rollback")
 
 
+def _is_transient_windows_promotion_error(error: OSError) -> bool:
+    return (
+        os.name == "nt"
+        and getattr(error, "winerror", None) in _TRANSIENT_WINDOWS_PROMOTION_ERRORS
+    )
+
+
+def _promote_staging(staging: Path, destination: Path) -> None:
+    for attempt in range(_WINDOWS_PROMOTION_RETRY_ATTEMPTS):
+        try:
+            staging.replace(destination)
+            return
+        except OSError as error:
+            if not _is_transient_windows_promotion_error(error):
+                raise
+            if attempt + 1 == _WINDOWS_PROMOTION_RETRY_ATTEMPTS:
+                error.add_note(
+                    "Protocyte retried the Windows protoc promotion "
+                    f"{_WINDOWS_PROMOTION_RETRY_ATTEMPTS} times after transient "
+                    "rename failures; the destination was left for rollback."
+                )
+                raise
+            time.sleep(_WINDOWS_PROMOTION_RETRY_INITIAL_DELAY_SECONDS * (2**attempt))
+
+
 def _install_swap_phase(_phase: str) -> None:
     """Test seam for process interruptions between atomic filesystem operations."""
 
@@ -466,7 +494,7 @@ def replace_destination(
             destination.replace(rollback)
         _install_swap_phase("after_backup")
         _install_swap_phase("before_promote")
-        staging.replace(destination)
+        _promote_staging(staging, destination)
         _install_swap_phase("after_promote")
         _install_swap_phase("before_commit")
         if had_previous:
