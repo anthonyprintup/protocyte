@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import codecs
 import hashlib
+import runpy
 import shutil
 import struct
 import subprocess
 import sys
 import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -388,6 +390,11 @@ def test_guard_accepts_placeholder_accounts_at_text_boundaries(
             windows_users + "/$USERNAME/project",
             windows_users + "/.../project",
             posix_home + "/…/project",
+            windows_users + "/{account}.",
+            posix_home + "/$USER.",
+            '"' + windows_users + "/{account}." + '"',
+            '"' + posix_home + "/$USER." + '"',
+            windows_users + "/{account}), prose",
         )
     )
     (repository / "fixture.txt").write_text(content, encoding="utf-8")
@@ -396,6 +403,37 @@ def test_guard_accepts_placeholder_accounts_at_text_boundaries(
     result = _run_guard(repository)
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("path_style", "account", "suffix"),
+    [
+        ("windows", "{alice}", ")/repo"),
+        ("windows", "{alice}", ")evil"),
+        ("windows", "$alice", ","),
+        ("windows", "[alice]", ";suffix"),
+        ("posix", "$alice", ")/repo"),
+        ("posix", "{alice}", ",suffix"),
+        ("posix", "[alice]", "`suffix"),
+    ],
+)
+def test_guard_rejects_concrete_accounts_with_placeholder_prefixes(
+    tmp_path: Path, path_style: str, account: str, suffix: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    if path_style == "windows":
+        home = "/".join(("C:", "Users"))
+    else:
+        home = "/" + "home"
+    private_path = home + "/" + account + suffix
+    (repository / "fixture.txt").write_text(private_path, encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result, "alice")
 
 
 def test_guard_does_not_treat_invalid_windows_components_as_posix_accounts(
@@ -749,6 +787,45 @@ def test_guard_rejects_an_unreachable_commit_object(tmp_path: Path) -> None:
     _assert_redacted(result)
 
 
+def test_guard_streams_large_commits_with_bounded_python_memory(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    root_tree = _git_output(repository, "mktree", input_bytes=b"").decode("ascii")
+    payload = (
+        b"tree "
+        + root_tree.encode("ascii")
+        + b"\n\n"
+        + b"x" * (16 * 1024 * 1024)
+    )
+    commit = _git_output(
+        repository,
+        "hash-object",
+        "--literally",
+        "-t",
+        "commit",
+        "-w",
+        "--stdin",
+        input_bytes=payload,
+    ).decode("ascii")
+    del payload
+    guard_module = runpy.run_path(str(GUARD))
+
+    tracemalloc.start()
+    try:
+        violations, trees, commit_trees = guard_module["_scan_stored_objects"](
+            repository
+        )
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert commit not in violations
+    assert root_tree in trees
+    assert root_tree in commit_trees
+    assert peak_bytes < 24 * 1024 * 1024
+
+
 def test_guard_rejects_private_paths_in_reachable_annotated_tag_messages(
     tmp_path: Path,
 ) -> None:
@@ -862,6 +939,24 @@ def test_guard_does_not_reinterpret_windows_drive_tails_in_stored_trees(
     users = _store_tree(repository, [(b"40000", b"Users", account)])
     drive = _store_tree(repository, [(b"40000", b"c", users)])
     _store_tree(repository, [(b"40000", b"C$", drive)])
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_guard_preserves_mounted_account_separator_rules_in_stored_trees(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    blob = _store_blob(repository, b"portable content\n")
+    account = _store_tree(
+        repository, [(b"100644", b"\\" + b"server", blob)]
+    )
+    users = _store_tree(repository, [(b"40000", b"Users", account)])
+    drive = _store_tree(repository, [(b"40000", b"c", users)])
+    placeholder = b"{" + b"account" + b"}"
+    _store_tree(repository, [(b"40000", placeholder, drive)])
 
     result = _run_guard(repository)
 

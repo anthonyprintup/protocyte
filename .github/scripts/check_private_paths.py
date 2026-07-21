@@ -15,7 +15,7 @@ _EXPLICIT_HOME_PLACEHOLDER = (
     rb"(?:"
     rb"%[A-Za-z_][A-Za-z0-9_.-]*%|"
     rb"\$\{[^{}\\/]+\}|"
-    rb"\$[A-Za-z_][A-Za-z0-9_]*|"
+    rb"\$(?-i:[A-Z_][A-Z0-9_]*)|"
     rb"\{[^{}\\/]+\}|"
     rb"<[^<>\\/]+>|"
     rb"\[[^\[\]\\/]+\]|"
@@ -23,8 +23,13 @@ _EXPLICIT_HOME_PLACEHOLDER = (
     rb"\xe2\x80\xa6"
     rb")"
 )
+_TERMINAL_PROSE_PUNCTUATION = rb"[\"'`),.;:!?}\]]"
 _EXPLICIT_HOME_PLACEHOLDER_BOUNDARY = (
-    rb"(?=[\\/]|$|[\x00\r\n\t \"'`),;:!?}\]])"
+    rb"(?:"
+    rb"(?=[\\/]|$)|"
+    + _TERMINAL_PROSE_PUNCTUATION
+    + rb"{1,8}(?=$|[\x00\x09-\x0d ])"
+    rb")"
 )
 _WINDOWS_HOME_ACCOUNT = (
     rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + _EXPLICIT_HOME_PLACEHOLDER_BOUNDARY + rb")"
@@ -68,6 +73,7 @@ _PRIVATE_PATH_PATTERNS = (
 )
 _SCAN_CHUNK_BYTES = 1024 * 1024
 _SCAN_OVERLAP_BYTES = 4096
+_COMMIT_TREE_HEADER_CAPTURE_BYTES = len(b"tree ") + 64 + len(b"\n")
 
 _TREE_STATE_NONE = 0
 _TREE_STATE_BOUNDARY = 1
@@ -80,6 +86,7 @@ _TREE_STATE_UNC_ADMIN = 7
 _TREE_STATE_WINDOWS_ACCOUNT = 8
 _TREE_STATE_NESTED_WORD = 9
 _TREE_STATE_POSIX_ACCOUNT = 10
+_TREE_STATE_MOUNT_ACCOUNT = 11
 
 _TREE_STATE_CANONICAL = {
     _TREE_STATE_BOUNDARY: b")",
@@ -92,6 +99,7 @@ _TREE_STATE_CANONICAL = {
     _TREE_STATE_WINDOWS_ACCOUNT: b"C:/Users",
     _TREE_STATE_NESTED_WORD: b"x",
     _TREE_STATE_POSIX_ACCOUNT: b"/home",
+    _TREE_STATE_MOUNT_ACCOUNT: b"/mnt/c/Users",
 }
 
 _TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS = (
@@ -100,16 +108,15 @@ _TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        rb"(?<![A-Za-z0-9._-])/(?:mnt/[A-Za-z]|cygdrive/[A-Za-z]|[A-Za-z])/"
-        rb"Users$",
-        re.IGNORECASE,
-    ),
-    re.compile(
         rb"(?<![:\\/A-Za-z0-9])[\\/]{2}(?:\?[\\/]UNC[\\/])?"
         rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*[\\/]+"
         rb"(?:[A-Za-z]\$[\\/]+)?Users$",
         re.IGNORECASE,
     ),
+)
+_TREE_MOUNT_ACCOUNT_PREFIX = re.compile(
+    rb"(?<![A-Za-z0-9._-])/(?:mnt/[A-Za-z]|cygdrive/[A-Za-z]|[A-Za-z])/Users$",
+    re.IGNORECASE,
 )
 _TREE_POSIX_ACCOUNT_PREFIX = re.compile(
     rb"(?<![:A-Za-z0-9._-])/(?:home|Users)$", re.IGNORECASE
@@ -262,12 +269,12 @@ class _Utf16ParallelScanner:
 
 
 def _read_and_scan_payload(
-    stream, size: int, *, capture: bool
+    stream, size: int, *, capture_limit: int | None
 ) -> tuple[bool, bytes | None]:
     found = False
     raw_tail = b""
     utf16_scanner = _Utf16ParallelScanner()
-    captured = bytearray() if capture else None
+    captured = bytearray() if capture_limit is not None else None
     remaining = size
 
     while remaining:
@@ -278,7 +285,9 @@ def _read_and_scan_payload(
             )
         remaining -= len(chunk)
         if captured is not None:
-            captured.extend(chunk)
+            retained = capture_limit - len(captured)
+            if retained > 0:
+                captured.extend(chunk[:retained])
 
         raw_tail, raw_match = _scan_window(raw_tail, chunk)
         found = found or raw_match
@@ -374,9 +383,13 @@ def _scan_stored_objects(
             object_id = object_id_bytes_text.decode("ascii")
             object_type = object_type_bytes.decode("ascii")
             size = int(size_bytes)
-            capture = object_type in ("commit", "tree")
+            capture_limit = None
+            if object_type == "tree":
+                capture_limit = size
+            elif object_type == "commit":
+                capture_limit = _COMMIT_TREE_HEADER_CAPTURE_BYTES
             matched, payload = _read_and_scan_payload(
-                process.stdout, size, capture=capture
+                process.stdout, size, capture_limit=capture_limit
             )
             if process.stdout.read(1) != b"\n":
                 raise GitCommandError(
@@ -412,6 +425,8 @@ def _tree_path_state(path_suffix: bytes) -> int:
         for pattern in _TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS
     ):
         return _TREE_STATE_WINDOWS_ACCOUNT
+    if _TREE_MOUNT_ACCOUNT_PREFIX.search(path_suffix):
+        return _TREE_STATE_MOUNT_ACCOUNT
     if _TREE_POSIX_ACCOUNT_PREFIX.search(path_suffix):
         return _TREE_STATE_POSIX_ACCOUNT
     if _TREE_UNC_ADMIN_PREFIX.search(path_suffix):
@@ -496,7 +511,7 @@ def _pending_commit_violations(
 
 def _read_and_scan_payload_bytes(payload: bytes) -> bool:
     matched, _ = _read_and_scan_payload(
-        io.BytesIO(payload), len(payload), capture=False
+        io.BytesIO(payload), len(payload), capture_limit=None
     )
     return matched
 
