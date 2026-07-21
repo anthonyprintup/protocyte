@@ -16,8 +16,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
             Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> Protocyte_escaped_5f5f4c494e455f5f_fields;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Class_Struct_fields;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Class_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Class_Struct_fields_;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Class_fields_;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Config_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Reader_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> MergeHelperNeighbors_fields;

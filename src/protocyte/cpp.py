@@ -491,6 +491,7 @@ def _resolve_clang_format_config(options: GeneratorOptions) -> str | None:
 def _validate_generated_cpp_names(
     model: DescriptorModel, options: GeneratorOptions
 ) -> None:
+    _validate_generated_reflection_symbols(model, options)
     for file_model in model.generated_files():
         namespace_parts = _namespace_parts(file_model, options)
         if namespace_parts[:1] == ["protocyte"]:
@@ -504,6 +505,67 @@ def _validate_generated_cpp_names(
         for message in _walk_generated_messages(file_model.messages):
             if not message.is_map_entry:
                 _build_message_cpp_name_registry(message, options)
+
+
+def _validate_generated_reflection_symbols(
+    model: DescriptorModel, options: GeneratorOptions
+) -> None:
+    reflection_symbols: dict[tuple[str, ...], dict[str, str]] = {}
+    type_owners: dict[tuple[str, ...], dict[str, str]] = {}
+    constant_owners: dict[tuple[str, ...], dict[str, str]] = {}
+
+    for file_model in model.files.values():
+        namespace = tuple(_namespace_parts(file_model, options))
+        owners = type_owners.setdefault(namespace, {})
+        constants = constant_owners.setdefault(namespace, {})
+        for constant in file_model.constants:
+            constants[constant.cpp_name] = constant.full_name
+        for enum in file_model.enums:
+            owners[enum.cpp_name] = enum.full_name
+        for message in _walk_generated_messages(file_model.messages):
+            if not message.is_map_entry:
+                owners[message.cpp_name] = message.full_name
+
+    for file_model in model.generated_files():
+        messages = [
+            message
+            for message in _walk_generated_messages(file_model.messages)
+            if not message.is_map_entry
+        ]
+        if not messages:
+            continue
+
+        namespace = (*_namespace_parts(file_model, options), "protocyte_reflection")
+        symbols = reflection_symbols.setdefault(namespace, {})
+        for message in messages:
+            symbol = _reflection_name(message)
+            first = symbols.get(symbol)
+            if first is not None:
+                raise ProtocyteError(
+                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"collides with {first!r}"
+                )
+            type_owner = type_owners.get(namespace, {}).get(symbol)
+            if type_owner is not None:
+                raise ProtocyteError(
+                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"collides with generated type {type_owner!r}"
+                )
+            constant_owner = constant_owners.get(namespace, {}).get(symbol)
+            if constant_owner is not None:
+                raise ProtocyteError(
+                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"collides with generated package constant {constant_owner!r}"
+                )
+            symbols[symbol] = message.full_name
+
+    for reflection_namespace in reflection_symbols:
+        namespace = reflection_namespace[:-1]
+        owner = type_owners.get(namespace, {}).get("protocyte_reflection")
+        if owner is not None:
+            raise ProtocyteError(
+                f"{owner}: type collides with generated reflection namespace"
+            )
 
 
 def _walk_generated_messages(messages: list[MessageModel]) -> Iterator[MessageModel]:
@@ -4167,8 +4229,14 @@ def _include_guard(proto_name: str) -> str:
 
 
 def _cpp_suffix_identifier(identifier: str, suffix: str) -> str:
-    separator = "" if identifier.endswith("_") else "_"
-    return f"{identifier}{separator}{suffix}"
+    if identifier.endswith("_"):
+        # A second underscore would be reserved to the implementation, while
+        # omitting it makes Foo and Foo_ collide.  Moving the separator after
+        # the suffix is portable and makes the two output domains disjoint:
+        # ordinary identifiers end in ``_{suffix}``, escaped ones in
+        # ``_{suffix}_``.
+        return f"{identifier}{suffix}_"
+    return f"{identifier}_{suffix}"
 
 
 def _namespace_parts(file_model: FileModel, options: GeneratorOptions) -> list[str]:

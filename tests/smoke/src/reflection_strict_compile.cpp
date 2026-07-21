@@ -1,5 +1,7 @@
 #include "proto2_required.protocyte.hpp"
 
+int reflection_symbols_compile_check();
+
 int main() {
     using ::protocyte::ReflectionFieldLabel;
     using namespace ::test::required::protocyte_reflection;
@@ -24,5 +26,5 @@ int main() {
         return 4;
     }
 
-    return 0;
+    return reflection_symbols_compile_check();
 }
