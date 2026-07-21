@@ -1,0 +1,239 @@
+import importlib.util
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_PATH = REPO_ROOT / ".github" / "scripts" / "publish_release.py"
+SPEC = importlib.util.spec_from_file_location("publish_release", SCRIPT_PATH)
+assert SPEC is not None
+assert SPEC.loader is not None
+publish_release = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = publish_release
+SPEC.loader.exec_module(publish_release)
+
+
+def _release(
+    release_id: int,
+    *,
+    tag: str = "v1.2.3",
+    draft: bool,
+    prerelease: bool = False,
+    immutable: bool = False,
+) -> dict[str, Any]:
+    return {
+        "id": release_id,
+        "tag_name": tag,
+        "draft": draft,
+        "prerelease": prerelease,
+        "immutable": immutable,
+        "upload_url": (
+            "https://uploads.github.com/repos/example/protocyte/releases/"
+            f"{release_id}/assets{{?name,label}}"
+        ),
+    }
+
+
+class FakeReleaseAPI:
+    def __init__(self) -> None:
+        self.policy_enabled = True
+        self.releases: list[dict[str, Any]] = []
+        self.assets: dict[int, list[dict[str, Any]]] = {}
+        self.successful_mutations: list[tuple[str, int, str | None]] = []
+        self.create_race = False
+        self.competing_release_after_create = False
+        self.publish_before_next_state_read = False
+        self.disable_policy_after_create = False
+
+    def immutable_releases_enabled(self) -> bool:
+        return self.policy_enabled
+
+    def list_releases(self) -> list[dict[str, Any]]:
+        return [release.copy() for release in self.releases]
+
+    def create_release(self, spec: publish_release.ReleaseSpec) -> dict[str, Any]:
+        if self.create_race:
+            self.releases.append(
+                _release(99, tag=spec.tag, draft=False, immutable=True)
+            )
+            raise publish_release.ApiError(
+                "POST", "https://api.github.com/releases", 422, "already exists"
+            )
+
+        created = _release(
+            41,
+            tag=spec.tag,
+            draft=True,
+            prerelease=spec.prerelease,
+        )
+        self.releases.append(created)
+        if self.competing_release_after_create:
+            self.releases.append(
+                _release(99, tag=spec.tag, draft=False, immutable=True)
+            )
+        self.assets[41] = []
+        self.successful_mutations.append(("create", 41, None))
+        if self.disable_policy_after_create:
+            self.policy_enabled = False
+        return created.copy()
+
+    def get_release(self, release_id: int) -> dict[str, Any]:
+        release = next(item for item in self.releases if item["id"] == release_id)
+        if self.publish_before_next_state_read:
+            release["draft"] = False
+            release["immutable"] = True
+            self.publish_before_next_state_read = False
+        return release.copy()
+
+    def list_assets(self, release_id: int) -> list[dict[str, Any]]:
+        return [asset.copy() for asset in self.assets[release_id]]
+
+    def upload_asset(
+        self,
+        release_id: int,
+        upload_url: str,
+        artifact: publish_release.Artifact,
+    ) -> dict[str, Any]:
+        assert f"/releases/{release_id}/assets" in upload_url
+        asset = {
+            "name": artifact.name,
+            "state": "uploaded",
+            "size": artifact.size,
+            "digest": artifact.digest,
+        }
+        self.assets[release_id].append(asset)
+        self.successful_mutations.append(("upload", release_id, artifact.name))
+        return asset.copy()
+
+    def publish_release(self, release_id: int) -> dict[str, Any]:
+        release = next(item for item in self.releases if item["id"] == release_id)
+        release["draft"] = False
+        release["immutable"] = True
+        self.successful_mutations.append(("publish", release_id, None))
+        return release.copy()
+
+
+def _spec(*, prerelease: bool = False) -> publish_release.ReleaseSpec:
+    return publish_release.ReleaseSpec(
+        repository="example/protocyte",
+        tag="v1.2.3",
+        target="a" * 40,
+        prerelease=prerelease,
+    )
+
+
+def _artifacts(tmp_path: Path) -> list[Path]:
+    artifacts = [
+        tmp_path / "protocyte-1.2.3-py3-none-any.whl",
+        tmp_path / "protocyte-1.2.3.tar.gz",
+        tmp_path / "protocyte-1.2.3-cmake-prefix.tar.gz",
+    ]
+    for index, artifact in enumerate(artifacts):
+        artifact.write_bytes(f"artifact-{index}\n".encode())
+    return artifacts
+
+
+@pytest.mark.parametrize("prerelease", [False, True])
+def test_release_transaction_binds_every_mutation_to_created_id_and_state(
+    tmp_path: Path, prerelease: bool
+) -> None:
+    api = FakeReleaseAPI()
+
+    release_id = publish_release.publish(
+        api, _spec(prerelease=prerelease), _artifacts(tmp_path)
+    )
+
+    assert release_id == 41
+    assert api.successful_mutations == [
+        ("create", 41, None),
+        ("upload", 41, "protocyte-1.2.3-py3-none-any.whl"),
+        ("upload", 41, "protocyte-1.2.3.tar.gz"),
+        ("upload", 41, "protocyte-1.2.3-cmake-prefix.tar.gz"),
+        ("publish", 41, None),
+    ]
+    assert api.releases[0]["immutable"] is True
+    assert api.releases[0]["prerelease"] is prerelease
+
+
+@pytest.mark.parametrize("draft", [False, True])
+def test_existing_release_is_terminal_without_mutation(
+    tmp_path: Path, draft: bool
+) -> None:
+    api = FakeReleaseAPI()
+    api.releases.append(_release(17, draft=draft, immutable=not draft))
+
+    with pytest.raises(publish_release.ReleaseError, match="never mutates existing"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == []
+
+
+def test_absent_to_public_race_does_not_mutate_competing_release(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.create_race = True
+
+    with pytest.raises(publish_release.ReleaseError, match="existence race"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == []
+    assert api.releases == [_release(99, draft=False, immutable=True)]
+    assert api.assets == {}
+
+
+def test_duplicate_creation_race_aborts_before_uploading_to_owned_draft(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.competing_release_after_create = True
+
+    with pytest.raises(publish_release.ReleaseError, match="raced"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == [("create", 41, None)]
+    assert api.assets == {41: []}
+    assert api.releases[1] == _release(99, draft=False, immutable=True)
+
+
+def test_draft_to_public_race_aborts_before_asset_or_release_mutation(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.publish_before_next_state_read = True
+
+    with pytest.raises(publish_release.ReleaseError, match="expected draft state"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == [("create", 41, None)]
+    assert api.assets == {41: []}
+    assert api.releases[0]["draft"] is False
+    assert api.releases[0]["immutable"] is True
+
+
+def test_disabled_immutable_release_policy_fails_before_mutation(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.policy_enabled = False
+
+    with pytest.raises(publish_release.ReleaseError, match="immutability"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == []
+
+
+def test_immutable_policy_drift_after_creation_aborts_before_upload(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.disable_policy_after_create = True
+
+    with pytest.raises(publish_release.ReleaseError, match="changed during creation"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == [("create", 41, None)]
+    assert api.assets == {41: []}

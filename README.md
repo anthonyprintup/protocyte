@@ -397,6 +397,27 @@ normalized version spelling `X.Y.ZrcN` in the wheel and sdist filenames,
 while the CMake prefix archive keeps the Git tag spelling
 `protocyte-X.Y.Z-rcN-cmake-prefix.tar.gz`.
 
+Release publication requires GitHub release immutability to be enabled for the
+repository. Create a protected `release` environment and configure its
+`RELEASE_IMMUTABILITY_TOKEN` secret with a fine-grained credential that has only
+`Administration: read` access. An isolated, checkout-free preflight uses that
+credential to reject a missing secret or disabled policy before the release
+gate and artifact builds run.
+
+The build job has only `contents: read` access. It hands the three tested files
+and their SHA-256 manifest to a separate `release`-environment job as one
+immutable Actions artifact. On a fresh runner, publication checks out the tag
+commit again, binds the handoff's numeric artifact ID, name, workflow run, tag
+commit, and server-side digest, and verifies the downloaded archive and exact
+file manifest under the runner's temporary directory. Only then does the clean
+checkout's publication script receive the short-lived `GITHUB_TOKEN` scoped to
+`contents: write` and the administration-read policy token.
+
+The workflow never resumes, repairs, or replaces assets on an existing release.
+If a failed run leaves an unpublished draft, inspect it and manually delete that
+draft before rerunning the tag workflow. A published release is terminal and
+must not be deleted merely to retry a workflow run.
+
 ### FetchContent
 
 Minimal source-consumption setup:
