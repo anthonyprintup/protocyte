@@ -21,6 +21,7 @@ from protocyte.model import (
     MessageModel,
     OneofModel,
     SourceDocumentation,
+    _cpp_string_literal,
     cpp_identifier,
     cpp_derivable_identifier,
     cpp_pascal_identifier,
@@ -1104,7 +1105,8 @@ def generate_source(
             with w.indent():
                 for item in message.fields:
                     w.line(
-                        f'{{"{_escape(item.name)}", {item.number}u, "{item.kind}", '
+                        f"{{{_cpp_string_literal(item.name.encode('utf-8'))}, {item.number}u, "
+                        f'"{item.kind}", '
                         f"::protocyte::ReflectionFieldLabel::{_reflection_label(item)}, "
                         f"{_cpp_bool(item.has_explicit_presence)}, {_cpp_bool(item.packed)}}},"
                     )
@@ -4268,10 +4270,6 @@ def _close_namespace(w: CppWriter, parts: list[str]) -> None:
     if parts:
         w.line()
         w.line(f"}}  // namespace {'::'.join(parts)}")
-
-
-def _escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _cpp_bool(value: bool) -> str:
