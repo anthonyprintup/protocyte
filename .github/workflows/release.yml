@@ -97,13 +97,25 @@ jobs:
             exit 1
           fi
 
-          enabled="$(
-            gh api --method GET \
+          policy_response="$RUNNER_TEMP/release-immutability-policy.json"
+          status="$(
+            curl --disable --silent --show-error --max-redirs 0 \
               -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              "repos/$GITHUB_REPOSITORY/immutable-releases" \
-              --jq '.enabled'
+              --output "$policy_response" \
+              --write-out "%{http_code}" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/immutable-releases"
           )"
+          if [[ "$status" =~ ^30[0-9]$ ]]; then
+            echo "Authenticated GitHub API requests must not follow redirects." >&2
+            exit 1
+          fi
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "GitHub release policy request failed with HTTP status $status." >&2
+            exit 1
+          fi
+          enabled="$(jq -r '.enabled' "$policy_response")"
           if [[ "$enabled" != "true" ]]; then
             echo "GitHub immutable releases must be enabled before building a release." >&2
             exit 1
@@ -332,11 +344,23 @@ jobs:
           fi
 
           metadata="$RUNNER_TEMP/release-artifact.json"
-          gh api --method GET \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" \
-            > "$metadata"
+          status="$(
+            curl --disable --silent --show-error --max-redirs 0 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --output "$metadata" \
+              --write-out "%{http_code}" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+          )"
+          if [[ "$status" =~ ^30[0-9]$ ]]; then
+            echo "Authenticated GitHub API requests must not follow redirects." >&2
+            exit 1
+          fi
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "GitHub artifact metadata request failed with HTTP status $status." >&2
+            exit 1
+          fi
 
           actual_id="$(jq -r '.id // empty' "$metadata")"
           actual_name="$(jq -r '.name // empty' "$metadata")"
@@ -357,12 +381,33 @@ jobs:
           fi
 
           archive="$RUNNER_TEMP/release-handoff.zip"
-          curl --fail --silent --show-error --location \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
-            --output "$archive"
+          redirect_headers="$RUNNER_TEMP/release-handoff-redirect.headers"
+          status="$(
+            curl --disable --silent --show-error --max-redirs 0 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --dump-header "$redirect_headers" \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"
+          )"
+          if [[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]; then
+            echo "GitHub artifact download did not return an expected redirect." >&2
+            exit 1
+          fi
+          redirect_url="$(python -I .github/scripts/parse_release_redirect.py "$redirect_headers")"
+          status="$(
+            curl --disable --silent --show-error --location --max-redirs 3 \
+              --proto '=https' --proto-redir '=https' \
+              --output "$archive" \
+              --write-out "%{http_code}" \
+              "$redirect_url"
+          )"
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "GitHub artifact download failed with HTTP status $status." >&2
+            exit 1
+          fi
           downloaded_digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
           if [[ "$downloaded_digest" != "$expected_digest" ]]; then
             echo "The downloaded release artifact failed SHA-256 verification." >&2

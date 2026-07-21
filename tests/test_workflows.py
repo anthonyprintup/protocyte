@@ -311,8 +311,10 @@ def test_release_policy_preflight_is_checkout_free_and_gates_expensive_work() ->
     assert "actions/checkout@" not in policy
     assert "RELEASE_IMMUTABILITY_TOKEN" in preflight
     assert 'if [[ -z "$GH_TOKEN" ]]' in preflight
-    assert '"repos/$GITHUB_REPOSITORY/immutable-releases"' in preflight
-    assert "--jq '.enabled'" in preflight
+    assert '"$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/immutable-releases"' in preflight
+    assert "curl --disable --silent --show-error --max-redirs 0" in preflight
+    assert '-H "Authorization: Bearer $GH_TOKEN"' in preflight
+    assert "Authenticated GitHub API requests must not follow redirects." in preflight
     assert '[[ "$enabled" != "true" ]]' in preflight
     assert "- release-policy" in gate
     assert "- release-gate" in build
@@ -393,7 +395,7 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
         "${{ needs.build-release.outputs.artifact_digest }}" in binding
     )
     for fragment in (
-        '"repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"',
+        '"$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"',
         ".workflow_run.id",
         ".workflow_run.head_sha",
         ".digest",
@@ -413,6 +415,41 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
     assert "sha256sum --check --strict SHA256SUMS" in extraction
     assert ".github/scripts" not in upload
     assert "$GITHUB_WORKSPACE" not in extraction
+
+
+def test_authenticated_release_http_requests_reject_redirects() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    policy = _job_named(release, "release-policy")
+    publish = _job_named(release, "publish")
+    binding = _steps_by_name(publish)["Bind and download immutable release handoff"]
+
+    assert "gh api" not in policy
+    assert "gh api" not in binding
+    for authenticated_request in (policy, binding):
+        assert (
+            "curl --disable --silent --show-error --max-redirs 0"
+            in authenticated_request
+        )
+        assert '-H "Authorization: Bearer $GH_TOKEN"' in authenticated_request
+    artifact_probe = binding.split('archive="$RUNNER_TEMP/release-handoff.zip"', 1)[1]
+    artifact_probe = artifact_probe.split(
+        'redirect_url="$(python -I .github/scripts/parse_release_redirect.py', 1
+    )[0]
+    assert artifact_probe.count('Authorization: Bearer $GH_TOKEN') == 1
+    assert "Authenticated GitHub API requests must not follow redirects." in policy
+    assert "Authenticated GitHub API requests must not follow redirects." in binding
+    assert '--dump-header "$redirect_headers"' in binding
+    assert '[[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]' in binding
+    assert "python -I .github/scripts/parse_release_redirect.py" in binding
+    assert "--location --max-redirs 3" in binding
+    assert "--proto '=https' --proto-redir '=https'" in binding
+    signed_download = binding.split(
+        'redirect_url="$(python -I .github/scripts/parse_release_redirect.py',
+        maxsplit=1,
+    )[1]
+    assert "Authorization: Bearer $GH_TOKEN" not in signed_download
 
 
 def test_release_transaction_is_create_only_id_bound_and_immutable() -> None:
