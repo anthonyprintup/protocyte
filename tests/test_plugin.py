@@ -3953,7 +3953,13 @@ def test_formatter_policy_uses_live_output_cap(
         (GeneratorPolicy(max_request_bytes=0), "serialized request bytes"),
         (GeneratorPolicy(max_files_to_generate=0), "files to generate"),
         (GeneratorPolicy(max_proto_files=0), "proto files"),
-        (GeneratorPolicy(max_descriptor_nodes=1), "descriptor nodes"),
+        (
+            GeneratorPolicy(
+                max_descriptor_nodes=1,
+                max_descriptor_metadata_bytes=1_000_000,
+            ),
+            "descriptor nodes",
+        ),
         (GeneratorPolicy(max_nesting_depth=0), "message nesting depth"),
         (GeneratorPolicy(max_generated_bytes=1), "generated output bytes"),
     ],
@@ -4002,6 +4008,234 @@ def test_generator_policy_short_circuits_genuinely_deep_descriptors() -> None:
 
     assert response.error == (
         "generator policy limit exceeded for message nesting depth: 65 > 64"
+    )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "dependency_field",
+    ["dependency", "public_dependency", "weak_dependency"],
+)
+def test_generator_policy_metadata_limit_covers_dependency_surfaces(
+    dependency_field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    baseline = _metadata_limit(request)
+    if dependency_field == "dependency":
+        file.dependency.extend(f"dependency/{index}.proto" for index in range(4_096))
+    else:
+        getattr(file, dependency_field).extend(range(4_096))
+
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail("dependency metadata must be rejected before model construction"),
+    )
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=baseline,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {baseline}"
+    )
+    assert not response.file
+
+
+def _metadata_limit(request: plugin_pb2.CodeGeneratorRequest) -> int:
+    return request.ByteSize()
+
+
+@pytest.mark.parametrize("surface", ["locations", "comments", "path and span"])
+def test_generator_policy_rejects_source_metadata_before_model_construction(
+    surface: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    baseline = _metadata_limit(request)
+
+    if surface == "locations":
+        for _ in range(8_192):
+            file.source_code_info.location.add()
+    else:
+        location = file.source_code_info.location.add()
+        if surface == "comments":
+            location.leading_detached_comments.extend(("detached",) * 128)
+            location.leading_comments = "documentation " * 8_192
+            location.trailing_comments = "trailing " * 8_192
+        else:
+            location.path.extend(range(8_192))
+            location.span.extend(range(8_192))
+
+    assert _metadata_limit(request) > baseline
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail("source metadata must be rejected before model construction"),
+    )
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=baseline,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {baseline}"
+    )
+    assert not response.file
+
+
+def test_metadata_limit_precedes_all_descriptor_traversal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    for index in range(4_096):
+        file.message_type.add().name = f"M{index}"
+        file.source_code_info.location.add()
+    limit = 0
+
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "_request_descriptor_complexity",
+        lambda *args, **kwargs: pytest.fail(
+            "metadata rejection must precede descriptor traversal"
+        ),
+    )
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail("metadata rejection must precede model construction"),
+    )
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=limit,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {limit}"
+    )
+    assert not response.file
+
+
+def test_generator_policy_source_metadata_exact_boundary_preserves_documentation() -> (
+    None
+):
+    request = _basic_request(parameter="format=off")
+    _add_source_documentation(
+        request.proto_file[0],
+        [4, 0],
+        detached=("Context.\n",),
+        leading="A bounded documented message.\n",
+        trailing="More detail.\n",
+    )
+    limit = _metadata_limit(request)
+
+    accepted = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=limit,
+        ),
+    )
+    rejected = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=limit - 1,
+        ),
+    )
+
+    assert not accepted.error
+    assert "A bounded documented message." in next(
+        file.content for file in accepted.file if file.name.endswith(".hpp")
+    )
+    assert rejected.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{limit} > {limit - 1}"
+    )
+    assert not rejected.file
+
+
+def test_legacy_descriptor_node_limit_also_bounds_source_metadata() -> None:
+    request = _basic_request(parameter="format=off")
+    _add_source_documentation(
+        request.proto_file[0],
+        [4, 0],
+        leading="source documentation " * 1_024,
+    )
+    nodes, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    metadata_bytes = _metadata_limit(request)
+    assert metadata_bytes > nodes
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(max_descriptor_nodes=nodes, format_outputs=False),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{metadata_bytes} > {nodes}"
+    )
+    assert not response.file
+
+
+def _wire_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def test_generator_policy_counts_unknown_descriptor_wire_payload_before_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    baseline = _metadata_limit(request)
+    unknown_payload = b"x" * 65_536
+    request.proto_file[0].MergeFromString(
+        _wire_varint((50_000 << 3) | 2)
+        + _wire_varint(len(unknown_payload))
+        + unknown_payload
+    )
+    assert _metadata_limit(request) > baseline
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail("unknown descriptor payload must be rejected before model construction"),
+    )
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=baseline,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {baseline}"
     )
     assert not response.file
 
@@ -4061,6 +4295,7 @@ def test_descriptor_node_policy_counts_reserved_and_extension_entries(
         request,
         policy=GeneratorPolicy(
             max_descriptor_nodes=baseline,
+            max_descriptor_metadata_bytes=request.ByteSize(),
             format_outputs=False,
         ),
     )
@@ -4082,6 +4317,7 @@ def test_descriptor_node_policy_counts_reserved_and_extension_entries(
         "max_files_to_generate",
         "max_proto_files",
         "max_descriptor_nodes",
+        "max_descriptor_metadata_bytes",
         "max_nesting_depth",
         "max_generated_bytes",
     ],
@@ -4142,8 +4378,9 @@ def test_generator_policy_preserves_valid_limits_and_timeout() -> None:
         max_files_to_generate=1,
         max_proto_files=2,
         max_descriptor_nodes=3,
-        max_nesting_depth=4,
-        max_generated_bytes=5,
+        max_descriptor_metadata_bytes=4,
+        max_nesting_depth=5,
+        max_generated_bytes=6,
     )
 
     assert policy.formatter_timeout_seconds == 0.5
@@ -4151,8 +4388,9 @@ def test_generator_policy_preserves_valid_limits_and_timeout() -> None:
     assert policy.max_files_to_generate == 1
     assert policy.max_proto_files == 2
     assert policy.max_descriptor_nodes == 3
-    assert policy.max_nesting_depth == 4
-    assert policy.max_generated_bytes == 5
+    assert policy.max_descriptor_metadata_bytes == 4
+    assert policy.max_nesting_depth == 5
+    assert policy.max_generated_bytes == 6
 
 
 def test_generation_decodes_explicit_clang_format_override_from_transport_parameter(

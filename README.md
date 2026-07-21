@@ -1158,6 +1158,7 @@ policy = GeneratorPolicy(
     max_files_to_generate=256,
     max_proto_files=1_024,
     max_descriptor_nodes=50_000,
+    max_descriptor_metadata_bytes=4 * 1024 * 1024,
     max_nesting_depth=64,
     max_generated_bytes=64 * 1024 * 1024,
 )
@@ -1179,6 +1180,16 @@ Malformed requests return a contextual response error without generated files.
 The values above are an example deployment profile, not protobuf format
 limits. Choose budgets for the service workload. `max_request_bytes` is checked
 on the parsed request, so the transport must also cap bytes before parsing.
+`max_descriptor_nodes` retains its declaration-node accounting.
+`max_descriptor_metadata_bytes` bounds the complete serialized request before
+model construction, including source-code locations, paths, spans, comments,
+dependency strings, and unknown descriptor fields. If an existing policy sets
+`max_descriptor_nodes` but not `max_descriptor_metadata_bytes`, Protocyte uses
+the node limit as a conservative metadata-byte limit; set both explicitly to
+tune them independently. These Python API policy checks apply to
+`generate_response()`; the command-line plugin and descriptor-set inspection
+commands are intended for trusted local build input and should run with
+process-level resource limits when that assumption does not hold.
 `max_generated_bytes` is enforced cumulatively while generated source lines are
 appended and while formatter stdout and stderr are streamed. Formatter capture
 uses the remaining cumulative byte budget and terminates the process before

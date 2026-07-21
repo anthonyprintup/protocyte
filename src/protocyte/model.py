@@ -23,6 +23,7 @@ from protocyte._deterministic_math import (
     evaluate_unary,
 )
 from protocyte.descriptor_set import (
+    render_diagnostic_context,
     validate_generation_capabilities,
     validate_virtual_file_name,
 )
@@ -674,11 +675,13 @@ def _source_documentation(location) -> SourceDocumentation:
 
 def _normalize_source_comment(value: str) -> str:
     lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n".join(line.rstrip() for line in lines)
+    first = 0
+    last = len(lines)
+    while first < last and not lines[first].strip():
+        first += 1
+    while first < last and not lines[last - 1].strip():
+        last -= 1
+    return "\n".join(line.rstrip() for line in lines[first:last])
 
 
 @dataclass(slots=True)
@@ -1332,7 +1335,8 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     missing = [name for name in file_to_generate if name not in files_by_name]
     if missing:
         raise ProtocyteError(
-            f"protoc request is missing file descriptors for: {', '.join(missing)}"
+            "protoc request is missing file descriptors for: "
+            f"{', '.join(render_diagnostic_context(name) for name in missing)}"
         )
 
     for name in file_to_generate:
@@ -1429,7 +1433,10 @@ def _index_request_files(
     for file in proto_files:
         validate_virtual_file_name(file.name)
         if file.name in files:
-            raise ProtocyteError(f"duplicate descriptor file name: {file.name}")
+            raise ProtocyteError(
+                "duplicate descriptor file name: "
+                f"{render_diagnostic_context(file.name)}"
+            )
         files[file.name] = file
     return files
 

@@ -403,6 +403,17 @@ def _wire_length_delimited(field_number: int, payload: bytes) -> bytes:
     return bytes([(field_number << 3) | 2, len(payload)]) + payload
 
 
+def _wire_large_length_delimited(field_number: int, payload: bytes) -> bytes:
+    assert field_number < 16
+    encoded_length = bytearray()
+    length = len(payload)
+    while length > 0x7F:
+        encoded_length.append((length & 0x7F) | 0x80)
+        length >>= 7
+    encoded_length.append(length)
+    return bytes([(field_number << 3) | 2]) + bytes(encoded_length) + payload
+
+
 def test_plugin_entrypoint_reports_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert plugin_main(["--version"]) == 0
     assert capsys.readouterr().out.strip() == __version__
@@ -532,6 +543,47 @@ def test_descriptor_set_cli_rejects_malformed_descriptor_utf8(
         "protocyte: invalid UTF-8 in descriptor string field "
         "FileDescriptorSet.file[0].name: b'api/invalid-\\xff.proto'"
     )
+
+
+def test_descriptor_set_cli_bounds_malformed_string_diagnostics(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    malformed_file = _wire_large_length_delimited(
+        1, b"api/" + b"x" * 4_096 + b"\xff"
+    )
+    path.write_bytes(_wire_large_length_delimited(1, malformed_file))
+
+    with pytest.raises(SystemExit) as exc_info:
+        descriptor_set_main(["list", str(path)])
+
+    assert exc_info.value.code == 1
+    error = capsys.readouterr().err.strip()
+    assert error.startswith(
+        "protocyte: invalid UTF-8 in descriptor string field "
+    )
+    assert "[truncated" in error
+    assert len(error) < 700
+
+
+def test_descriptor_set_cli_bounds_capability_name_diagnostics(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    descriptor = _file(f"api/{'x' * 4_096}.proto")
+    descriptor.syntax = "editions"
+    _write_descriptor_set(path, descriptor)
+
+    with pytest.raises(SystemExit) as exc_info:
+        descriptor_set_main(["list", str(path)])
+
+    assert exc_info.value.code == 1
+    error = capsys.readouterr().err.strip()
+    assert error.startswith('protocyte: target file "api/')
+    assert "[truncated" in error
+    assert len(error) < 700
 
 
 def test_validate_descriptor_set_rejects_duplicate_file_names(tmp_path: Path) -> None:
