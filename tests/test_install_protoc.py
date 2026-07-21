@@ -731,6 +731,83 @@ def test_windows_owned_cleanup_blocks_ancestor_junction_swap(
     assert keep.read_text(encoding="utf-8") == "unowned\n"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows durable parent pinning")
+def test_windows_root_removal_flushes_the_pinned_parent_after_swap_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    parent = tmp_path / "owned-parent"
+    parent.mkdir()
+    destination = parent / "protoc"
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "owned").write_text("owned\n", encoding="utf-8")
+    moved_parent = tmp_path / "moved-owned-parent"
+    junction_target = tmp_path / "junction-target"
+    junction_target.mkdir()
+    keep = junction_target / "keep"
+    keep.write_text("unowned\n", encoding="utf-8")
+    original_path_sync = owned_transactions._sync_directory
+    original_handle_sync = owned_transactions._windows_sync_directory_handle
+    attempted = False
+    blocked = False
+    replacement_created = False
+    pinned_identity_preserved = False
+
+    def forbid_post_delete_path_reopen(path: Path) -> None:
+        if path == parent and not owner.cleanup_path.exists():
+            raise AssertionError("removed root parent was reopened by pathname")
+        original_path_sync(path)
+
+    def swap_during_pinned_flush(handle: object) -> None:
+        nonlocal attempted, blocked, replacement_created, pinned_identity_preserved
+        if attempted or owner.cleanup_path.exists():
+            original_handle_sync(handle)
+            return
+        attempted = True
+        before = owned_transactions._windows_handle_identity(handle, parent)
+        try:
+            parent.rename(moved_parent)
+        except OSError:
+            blocked = True
+        else:
+            _create_owned_sibling_lookalike(parent, junction_target)
+            replacement_created = True
+        after = owned_transactions._windows_handle_identity(handle, parent)
+        pinned_identity_preserved = owned_transactions._same_filesystem_object(
+            before,
+            after,
+        )
+        original_handle_sync(handle)
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_sync_directory",
+        forbid_post_delete_path_reopen,
+    )
+    monkeypatch.setattr(
+        owned_transactions,
+        "_windows_sync_directory_handle",
+        swap_during_pinned_flush,
+    )
+
+    try:
+        owner.cleanup(install_protoc._remove_path)
+        assert attempted
+        assert pinned_identity_preserved
+        assert blocked or replacement_created
+        assert keep.read_text(encoding="utf-8") == "unowned\n"
+    finally:
+        if replacement_created and parent.exists():
+            _remove_owned_sibling_lookalike(parent)
+        if moved_parent.exists():
+            install_protoc._remove_path(moved_parent)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mount-boundary cleanup")
 def test_posix_owned_cleanup_fails_closed_when_mount_guard_refuses_child(
     tmp_path: Path,
@@ -1701,6 +1778,7 @@ def test_namespace_mutations_are_durable_before_their_journal_state(
         "journal:detaching",
         "after_detach_parent_fsync",
         "journal:cleanup",
+        "before_remove_parent_fsync",
         "after_remove_parent_fsync",
     ]
 

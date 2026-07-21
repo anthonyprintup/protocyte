@@ -703,6 +703,70 @@ def _windows_open_path(path: Path, *, directory: bool) -> object:
     return handle
 
 
+def _windows_durable_parent_handle(
+    path: Path,
+    child_identity: dict[str, object],
+) -> object:
+    parent_path = path.parent
+    handle = _kernel32.CreateFileW(
+        _windows_extended_path(parent_path),
+        _GENERIC_READ
+        | _GENERIC_WRITE
+        | _READ_CONTROL
+        | _SYNCHRONIZE
+        | _FILE_LIST_DIRECTORY
+        | _FILE_READ_ATTRIBUTES,
+        _FILE_SHARE_READ | _FILE_SHARE_WRITE,
+        None,
+        _OPEN_EXISTING,
+        _FILE_FLAG_OPEN_REPARSE_POINT | _FILE_FLAG_BACKUP_SEMANTICS,
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        parent_identity = _windows_handle_identity(handle, parent_path)
+        if (
+            parent_identity["type"] != stat.S_IFDIR
+            or parent_identity["reparse_tag"] != 0
+            or parent_identity["device"] != child_identity["device"]
+        ):
+            raise RuntimeError(
+                "refusing an unowned or linked Windows parent during cleanup: "
+                f"{parent_path}"
+            )
+        child_entries = [
+            entry
+            for entry in _windows_directory_entries(handle)
+            if entry[1] == child_identity["inode"]
+            and os.path.normcase(entry[0]) == os.path.normcase(path.name)
+        ]
+        if len(child_entries) != 1:
+            raise RuntimeError(
+                "owned Windows sibling is not attached to the pinned parent; "
+                f"refusing removal: {path}"
+            )
+        _name, _file_id, attributes, reparse_tag = child_entries[0]
+        if (
+            not attributes & _FILE_ATTRIBUTE_DIRECTORY
+            or attributes & _FILE_ATTRIBUTE_REPARSE_POINT
+            or reparse_tag != 0
+        ):
+            raise RuntimeError(
+                "owned Windows sibling changed type beneath its pinned parent; "
+                f"refusing removal: {path}"
+            )
+        return handle
+    except BaseException:
+        _kernel32.CloseHandle(handle)
+        raise
+
+
+def _windows_sync_directory_handle(handle: object) -> None:
+    if not _kernel32.FlushFileBuffers(handle):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def _windows_create_private_directory(path: Path) -> None:
     with _windows_private_security_attributes() as attributes:
         if _kernel32.CreateDirectoryW(
@@ -982,8 +1046,7 @@ def _sync_directory(path: Path) -> None:
         if handle == wintypes.HANDLE(-1).value:
             raise ctypes.WinError(ctypes.get_last_error())
         try:
-            if not _kernel32.FlushFileBuffers(handle):
-                raise ctypes.WinError(ctypes.get_last_error())
+            _windows_sync_directory_handle(handle)
         finally:
             _kernel32.CloseHandle(handle)
         return
@@ -2468,12 +2531,18 @@ class _OwnedDirectoryHandle:
             raise _unowned_sibling_error(path)
         _owned_sibling_cleanup_phase("after_verify", path)
         if os.name == "nt":
-            root_device = int(self.identity(recorded_path)["device"])
-            _remove_windows_directory_contents(self._handle, path, root_device)
-            _windows_delete_handle(self._handle)
-            self.close()
-            _sync_directory(path.parent)
-            _owned_namespace_phase("after_remove_parent_fsync", path.parent)
+            root_identity = self.identity(recorded_path)
+            root_device = int(root_identity["device"])
+            parent = _windows_durable_parent_handle(path, root_identity)
+            try:
+                _remove_windows_directory_contents(self._handle, path, root_device)
+                _windows_delete_handle(self._handle)
+                self.close()
+                _owned_namespace_phase("before_remove_parent_fsync", path.parent)
+                _windows_sync_directory_handle(parent)
+                _owned_namespace_phase("after_remove_parent_fsync", path.parent)
+            finally:
+                _kernel32.CloseHandle(parent)
             return
         root_device = int(os.fstat(self._handle).st_dev)
         _remove_posix_directory_contents(self._handle, root_device)
