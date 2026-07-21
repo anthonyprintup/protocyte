@@ -3443,11 +3443,11 @@ function(protocyte_generate)
         set(protocyte_lock_dir "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-locks")
         set(protocyte_dependency_scan_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteDependencyScan.cmake")
         set(protocyte_dependency_outputs)
-        set(protocyte_dependency_file_format_args)
+        set(protocyte_dependency_file_format)
         if(CMAKE_GENERATOR MATCHES "^Ninja")
-            list(APPEND protocyte_dependency_file_format_args --ninja)
+            set(protocyte_dependency_file_format --ninja)
         elseif(CMAKE_GENERATOR MATCHES "^Visual Studio")
-            list(APPEND protocyte_dependency_file_format_args --msbuild)
+            set(protocyte_dependency_file_format --msbuild)
         endif()
         foreach(proto_file IN LISTS normalized_proto_files)
             string(SHA256 proto_file_key "${proto_file}")
@@ -3532,17 +3532,13 @@ function(protocyte_generate)
                     "-DLOCK_FILE=${dependency_lock_file}"
                     "-DPROTO_FILE=${proto_file_display}"
                     "-DSCAN_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
+                    "-DDEPENDENCY_READER=${protocyte_plugin_executable}"
+                    "-DDEPENDENCY_DESCRIPTOR=${dependency_descriptor_rel}"
+                    "-DDEPENDENCY_DEPFILE=${dependency_depfile_rel}"
+                    "-DDEPENDENCY_DEPFILE_TARGET=${dependency_depfile_target}"
+                    "-DDEPENDENCY_FILE_FORMAT=${protocyte_dependency_file_format}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
-                COMMAND
-                    "${protocyte_plugin_executable}"
-                    descriptor-set
-                    dependency-file
-                    ${protocyte_dependency_file_format_args}
-                    "${dependency_descriptor_rel}"
-                    "${dependency_response_file_relative}"
-                    "${dependency_depfile_rel}"
-                    "${dependency_depfile_target}"
                 DEPENDS
                     "${proto_file_dependency}"
                     ${protocyte_import_inventory_depends}

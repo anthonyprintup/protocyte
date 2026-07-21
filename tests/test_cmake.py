@@ -456,6 +456,17 @@ def _write_overlap_detecting_protoc_wrapper(
                 '    sys.stderr.write(f"overlapping {kind} protoc invocation\\n")',
                 "    raise SystemExit(91)",
                 "",
+                'if kind == "dependency" and (',
+                '    STATE_DIR / "active-dependency-reader"',
+                ").exists():",
+                '    (STATE_DIR / f"overlap-{kind}-reader-{pid}").write_text(',
+                '        "overlap\\n", encoding="utf-8"',
+                "    )",
+                '    sys.stderr.write("dependency protoc overlapped its descriptor reader\\n")',
+                "    os.close(active_fd)",
+                "    active.unlink(missing_ok=True)",
+                "    raise SystemExit(91)",
+                "",
                 "try:",
                 "    time.sleep(1.0)",
                 "    result = subprocess.run(",
@@ -466,6 +477,101 @@ def _write_overlap_detecting_protoc_wrapper(
                 "    active.unlink(missing_ok=True)",
                 "",
                 '(STATE_DIR / f"complete-{kind}-{pid}").write_text(',
+                '    f"{result.returncode}\\n", encoding="utf-8"',
+                ")",
+                "raise SystemExit(result.returncode)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'"{sys.executable}" "{script}" %*',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
+def _write_overlap_detecting_dependency_reader_wrapper(
+    path: Path, reader: Path, state_dir: Path
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    script = path.with_suffix(".py")
+    script.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "import os",
+                "import subprocess",
+                "import sys",
+                "import time",
+                "from pathlib import Path",
+                "",
+                f"REAL_READER = Path({str(reader)!r})",
+                f"STATE_DIR = Path({str(state_dir)!r})",
+                "",
+                "",
+                'if sys.argv[1:3] != ["descriptor-set", "dependency-file"]:',
+                "    raise SystemExit(",
+                "        subprocess.run([str(REAL_READER), *sys.argv[1:]], check=False).returncode",
+                "    )",
+                "",
+                "pid = os.getpid()",
+                '(STATE_DIR / f"attempt-reader-{pid}").write_text(',
+                '    "attempt\\n", encoding="utf-8"',
+                ")",
+                'active = STATE_DIR / "active-dependency-reader"',
+                "try:",
+                "    active_fd = os.open(",
+                "        active, os.O_CREAT | os.O_EXCL | os.O_WRONLY",
+                "    )",
+                "except FileExistsError:",
+                '    (STATE_DIR / f"overlap-reader-{pid}").write_text(',
+                '        "overlap\\n", encoding="utf-8"',
+                "    )",
+                '    sys.stderr.write("overlapping dependency descriptor readers\\n")',
+                "    raise SystemExit(91)",
+                "",
+                "try:",
+                '    if (STATE_DIR / "active-dependency").exists():',
+                '        (STATE_DIR / f"overlap-reader-writer-{pid}").write_text(',
+                '            "overlap\\n", encoding="utf-8"',
+                "        )",
+                '        sys.stderr.write("dependency descriptor reader overlapped protoc\\n")',
+                "        raise SystemExit(91)",
+                "    time.sleep(1.0)",
+                "    result = subprocess.run(",
+                "        [str(REAL_READER), *sys.argv[1:]], check=False",
+                "    )",
+                "finally:",
+                "    os.close(active_fd)",
+                "    active.unlink(missing_ok=True)",
+                "",
+                '(STATE_DIR / f"complete-reader-{pid}").write_text(',
                 '    f"{result.returncode}\\n", encoding="utf-8"',
                 ")",
                 "raise SystemExit(result.returncode)",
@@ -529,6 +635,185 @@ def _write_synchronized_build_runner(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _write_python_command_wrapper(path: Path, script: Path) -> Path:
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'"{sys.executable}" "{script}" %*',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
+def test_dependency_scan_serializes_descriptor_reader_with_writer(
+    tmp_path: Path,
+) -> None:
+    cmake = shutil.which("cmake")
+    if cmake is None:
+        pytest.skip("CMake is required for dependency-scan locking coverage")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    scan_script = repo_root / "cmake" / "ProtocyteDependencyScan.cmake"
+    working_directory = tmp_path / "working"
+    tools_directory = tmp_path / "tools"
+    state_directory = tmp_path / "state"
+    working_directory.mkdir()
+    tools_directory.mkdir()
+    argument_file = working_directory / "arguments.rsp"
+    descriptor = working_directory / "CMakeFiles" / "dependency.pb"
+    depfile = working_directory / "CMakeFiles" / "dependency.d"
+    argument_file.write_text(
+        "--include_imports\n--descriptor_set_out=CMakeFiles/dependency.pb\n",
+        encoding="utf-8",
+    )
+
+    fake_protoc_script = tools_directory / "fake-protoc.py"
+    fake_protoc_script.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "",
+                "argument_file = Path(sys.argv[1].removeprefix('@'))",
+                "if not argument_file.is_absolute():",
+                "    argument_file = Path.cwd() / argument_file",
+                "for line in argument_file.read_text(encoding='utf-8').splitlines():",
+                "    if line.startswith('--descriptor_set_out='):",
+                "        descriptor = Path(line.removeprefix('--descriptor_set_out='))",
+                "        if not descriptor.is_absolute():",
+                "            descriptor = Path.cwd() / descriptor",
+                "        descriptor.parent.mkdir(parents=True, exist_ok=True)",
+                "        descriptor.write_bytes(b'descriptor')",
+                "        break",
+                "else:",
+                "    raise SystemExit('missing descriptor output')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    real_protoc = _write_python_command_wrapper(
+        tools_directory / "real-protoc", fake_protoc_script
+    )
+    protoc = _write_overlap_detecting_protoc_wrapper(
+        tools_directory / "protoc", real_protoc, state_directory
+    )
+
+    fake_reader_script = tools_directory / "fake-reader.py"
+    fake_reader_script.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "",
+                "arguments = sys.argv[1:]",
+                "assert arguments[:2] == ['descriptor-set', 'dependency-file']",
+                "while arguments[2].startswith('--'):",
+                "    arguments.pop(2)",
+                "descriptor = Path(arguments[2])",
+                "if not descriptor.is_absolute():",
+                "    descriptor = Path.cwd() / descriptor",
+                "assert descriptor.read_bytes() == b'descriptor'",
+                "depfile = Path(arguments[4])",
+                "if not depfile.is_absolute():",
+                "    depfile = Path.cwd() / depfile",
+                "depfile.parent.mkdir(parents=True, exist_ok=True)",
+                "depfile.write_text('dependency.pb: input.proto\\n', encoding='utf-8')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    real_reader = _write_python_command_wrapper(
+        tools_directory / "real-reader", fake_reader_script
+    )
+    reader = _write_overlap_detecting_dependency_reader_wrapper(
+        tools_directory / "reader", real_reader, state_directory
+    )
+
+    runner = _write_synchronized_build_runner(tmp_path / "build_runner.py")
+    gate = tmp_path / "start-scans"
+    processes: list[subprocess.Popen[str]] = []
+    for worker in range(2):
+        ready = tmp_path / f"worker-{worker}.ready"
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(runner),
+                    str(ready),
+                    str(gate),
+                    cmake,
+                    f"-DPROTOC_EXECUTABLE={protoc}",
+                    "-DARGUMENT_FILE=arguments.rsp",
+                    f"-DLOCK_FILE={tmp_path / 'locks' / 'dependency.lock'}",
+                    "-DPROTO_FILE=demo.proto",
+                    f"-DSCAN_WORKING_DIRECTORY={working_directory}",
+                    f"-DDEPENDENCY_READER={reader}",
+                    "-DDEPENDENCY_DESCRIPTOR=CMakeFiles/dependency.pb",
+                    "-DDEPENDENCY_DEPFILE=CMakeFiles/dependency.d",
+                    "-DDEPENDENCY_DEPFILE_TARGET=CMakeFiles/dependency.pb",
+                    "-DDEPENDENCY_FILE_FORMAT=--ninja",
+                    "-P",
+                    str(scan_script),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+
+    ready_paths = [tmp_path / f"worker-{worker}.ready" for worker in range(2)]
+    deadline = time.monotonic() + 30.0
+    while not all(path.is_file() for path in ready_paths):
+        if any(process.poll() is not None for process in processes):
+            pytest.fail("a synchronized dependency scan exited before reaching the gate")
+        if time.monotonic() >= deadline:
+            pytest.fail("timed out waiting for synchronized dependency scans")
+        time.sleep(0.01)
+    gate.write_text("start\n", encoding="utf-8")
+
+    outputs: list[str] = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=60)
+            outputs.append(stdout + stderr)
+            assert process.returncode == 0, stdout + stderr
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert not list(state_directory.glob("overlap-*")), "\n".join(outputs)
+    assert len(list(state_directory.glob("attempt-dependency-*"))) == 2
+    assert len(list(state_directory.glob("complete-dependency-*"))) == 2
+    assert len(list(state_directory.glob("attempt-reader-*"))) == 2
+    assert len(list(state_directory.glob("complete-reader-*"))) == 2
+    assert not list(state_directory.glob("active-*"))
+    assert descriptor.read_bytes() == b"descriptor"
+    assert depfile.read_text(encoding="utf-8") == "dependency.pb: input.proto\n"
 
 
 def _touch_newer_than(path: Path, output: Path) -> None:
@@ -6734,7 +7019,13 @@ def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
     protoc = _write_overlap_detecting_protoc_wrapper(
         tools_dir / "protoc", real_protoc, state_dir
     )
-    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    plugin = _write_overlap_detecting_dependency_reader_wrapper(
+        tools_dir / "protoc-gen-protocyte",
+        _write_python_plugin_wrapper(
+            tools_dir / "real-protoc-gen-protocyte", repo_root
+        ),
+        state_dir,
+    )
 
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
@@ -6824,6 +7115,8 @@ def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
     assert not list(state_dir.glob("overlap-*")), "\n".join(build_outputs)
     assert len(list(state_dir.glob("attempt-dependency-*"))) == 2
     assert len(list(state_dir.glob("complete-dependency-*"))) == 2
+    assert len(list(state_dir.glob("attempt-reader-*"))) == 2
+    assert len(list(state_dir.glob("complete-reader-*"))) == 2
     assert len(list(state_dir.glob("attempt-generation-*"))) == 2
     assert len(list(state_dir.glob("complete-generation-*"))) == 2
     assert not list(state_dir.glob("active-*"))
