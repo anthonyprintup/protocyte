@@ -19,6 +19,7 @@ set(PROTOCYTE_SMOKE_PROTO_DIR "${CMAKE_CURRENT_LIST_DIR}/proto")
 set(PROTOCYTE_EXAMPLE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/example.proto")
 set(PROTOCYTE_COMPAT_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/compat.proto")
 set(PROTOCYTE_CROSS_PACKAGE_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/cross_package.proto")
+set(PROTOCYTE_OPEN_ENUM_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/open_enum.proto")
 set(PROTOCYTE_PROTO2_REQUIRED_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/proto2_required.proto")
 set(PROTOCYTE_RESERVED_IDENTIFIERS_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/reserved_identifiers.proto")
 set(PROTOCYTE_BENCHMARK_PROTO "${PROTOCYTE_SMOKE_PROTO_DIR}/benchmark.proto")
@@ -42,6 +43,8 @@ set(PROTOCYTE_GENERATED_FILES
     "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/open_enum.protocyte.hpp"
+    "${PROTOCYTE_GENERATED_DIR}/open_enum.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.hpp"
     "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/reserved_identifiers.protocyte.hpp"
@@ -133,6 +136,14 @@ if(PROTOCYTE_SMOKE_REGENERATE)
     )
 
     protocyte_generate(
+        TARGET protocyte_smoke_open_enum_codegen
+        PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
+        OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
+        PROTOS "${PROTOCYTE_OPEN_ENUM_PROTO}"
+        OPTIONS ${PROTOCYTE_SMOKE_FORMAT_OPTIONS}
+    )
+
+    protocyte_generate(
         TARGET protocyte_smoke_proto2_required_codegen
         PROTO_ROOT "${PROTOCYTE_SMOKE_PROTO_DIR}"
         OUT_DIR "${PROTOCYTE_GENERATED_DIR}"
@@ -154,6 +165,7 @@ if(PROTOCYTE_SMOKE_REGENERATE)
         protocyte_smoke_example_codegen
         protocyte_smoke_compat_codegen
         protocyte_smoke_cross_package_codegen
+        protocyte_smoke_open_enum_codegen
         protocyte_smoke_proto2_required_codegen
         protocyte_smoke_reserved_identifiers_codegen
     )
@@ -263,6 +275,7 @@ add_executable(protocyte_host_smoke
     "${PROTOCYTE_GENERATED_DIR}/example.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/compat.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/cross_package.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/open_enum.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
 )
 target_include_directories(protocyte_host_smoke PRIVATE "${PROTOCYTE_GENERATED_DIR}")

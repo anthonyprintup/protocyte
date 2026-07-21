@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package test.open;
+
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  MODE_READY = 1;
+}

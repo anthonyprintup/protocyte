@@ -207,6 +207,7 @@ namespace {
     using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
     using Proto2DefaultMode = test::required::Proto2DefaultMode;
     using Proto2MapMode = test::required::Proto2MapMode;
+    using Proto3OpenMode = test::open::Mode;
     using Proto2DefaultValues = test::required::Proto2DefaultValues<>;
     using PreservingProto2DefaultValues = test::required::Proto2DefaultValues<PreservingConfig>;
     using OneofShadowingValue = test::required::OneofShadowingValue<>;
@@ -3995,6 +3996,55 @@ TEST_CASE("proto2 enum fields preserve undeclared wire values as unknown", "[smo
     const auto value = unknown->varint();
     REQUIRE(value);
     CHECK(*value == 7u);
+}
+
+TEST_CASE("proto2 consumers preserve imported proto3 enum values", "[smoke][proto2][enum][cross-syntax]") {
+    static constexpr uint8_t key_bytes[] = {'m', 'o', 'd', 'e'};
+
+    auto source_ctx = make_context();
+    Proto2DefaultValues source(source_ctx);
+    require_success(source.set_imported_open_enum_raw(7));
+    require_success(source.mutable_imported_open_unpacked().push_back(8));
+    require_success(source.mutable_imported_open_unpacked().push_back(9));
+    require_success(source.mutable_imported_open_packed().push_back(10));
+    require_success(source.mutable_imported_open_packed().push_back(11));
+    require_success(source.set_imported_open_oneof_raw(12));
+
+    Config::String key {&source_ctx};
+    assign_string(key, view_of(key_bytes));
+    require_success(source.mutable_imported_open_by_name().insert_or_assign(protocyte::move(key), 13));
+
+    const auto encoded_size = source.encoded_size();
+    require_success(encoded_size);
+    std::vector<uint8_t> encoded(*encoded_size);
+    protocyte::SliceWriter writer {encoded.data(), encoded.size()};
+    require_success(source.serialize(writer));
+    CHECK(writer.position() == encoded.size());
+
+    auto parsed_ctx = make_context();
+    Proto2DefaultValues parsed(parsed_ctx);
+    protocyte::SliceReader reader {encoded.data(), encoded.size()};
+    require_success(parsed.merge_from(reader));
+    CHECK(reader.eof());
+    CHECK(parsed.has_imported_open_enum());
+    CHECK(parsed.imported_open_enum_raw() == 7);
+    CHECK(parsed.imported_open_enum() == static_cast<Proto3OpenMode>(7));
+
+    static constexpr protocyte::i32 unpacked_values[] = {8, 9};
+    static constexpr protocyte::i32 packed_values[] = {10, 11};
+    check_scalar_sequence(parsed.imported_open_unpacked(), unpacked_values);
+    check_scalar_sequence(parsed.imported_open_packed(), packed_values);
+    CHECK(parsed.has_imported_open_oneof());
+    CHECK(parsed.imported_open_oneof_raw() == 12);
+    REQUIRE(parsed.imported_open_by_name().size() == 1u);
+    bool found_map_value {};
+    for (const auto entry : parsed.imported_open_by_name()) {
+        if (view_equal(entry.key.view(), view_of(key_bytes)) && entry.value == 13) {
+            found_map_value = true;
+        }
+    }
+    CHECK(found_map_value);
+    CHECK(parsed.unknown_fields().empty());
 }
 
 TEST_CASE("packed closed enums commit unknown values atomically", "[smoke][proto2][enum][unknown-fields]") {
