@@ -3,6 +3,11 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
+set_property(
+    GLOBAL
+    PROPERTY PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER
+    "${CMAKE_CURRENT_LIST_DIR}/ProtocyteManagedEnvironment.py"
+)
 
 function(_protocyte_configure_python_environment_root)
     if(NOT DEFINED PROTOCYTE_PYTHON_ENV_ROOT OR "${PROTOCYTE_PYTHON_ENV_ROOT}" STREQUAL "")
@@ -2021,24 +2026,74 @@ function(
 endfunction()
 
 function(
+    _protocyte_run_managed_environment_transaction
+    out_result
+    out_output
+    python_executable
+    destination
+    fingerprint
+    action
+)
+    get_property(
+        transaction_helper
+        GLOBAL
+        PROPERTY PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER
+    )
+    if(NOT EXISTS "${transaction_helper}")
+        message(
+            FATAL_ERROR
+            "Protocyte's managed-environment transaction helper is missing: ${transaction_helper}"
+        )
+    endif()
+    set(transaction_command
+        "${python_executable}"
+        "${transaction_helper}"
+        "${action}"
+        --destination "${destination}"
+        --fingerprint "${fingerprint}"
+    )
+    if(ARGC GREATER 6)
+        list(APPEND transaction_command --transaction "${ARGV6}")
+    endif()
+    execute_process(
+        COMMAND ${transaction_command}
+        RESULT_VARIABLE transaction_result
+        OUTPUT_VARIABLE transaction_output
+        ERROR_VARIABLE transaction_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 60
+    )
+    if(NOT transaction_error STREQUAL "")
+        if(NOT transaction_output STREQUAL "")
+            string(APPEND transaction_output "\n")
+        endif()
+        string(APPEND transaction_output "${transaction_error}")
+    endif()
+    set(${out_result} "${transaction_result}" PARENT_SCOPE)
+    set(${out_output} "${transaction_output}" PARENT_SCOPE)
+endfunction()
+
+function(
     _protocyte_rollback_python_environment
     out_result
+    out_output
+    python_executable
     environment
-    previous_environment
-    had_previous_environment
+    fingerprint
+    transaction
 )
-    file(REMOVE_RECURSE "${environment}")
-    if(had_previous_environment)
-        file(
-            RENAME
-            "${previous_environment}"
-            "${environment}"
-            RESULT rollback_result
-        )
-    else()
-        set(rollback_result "0")
-    endif()
+    _protocyte_run_managed_environment_transaction(
+        rollback_result
+        rollback_output
+        "${python_executable}"
+        "${environment}"
+        "${fingerprint}"
+        restore
+        "${transaction}"
+    )
     set(${out_result} "${rollback_result}" PARENT_SCOPE)
+    set(${out_output} "${rollback_output}" PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_python_provisioning_error action command_text result output error)
@@ -2101,7 +2156,6 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
     )
     string(SUBSTRING "${protocyte_python_fingerprint}" 0 16 protocyte_python_fingerprint_short)
     set(protocyte_python_environment "${protocyte_python_env_root}/${protocyte_python_fingerprint_short}")
-    set(protocyte_python_previous "${protocyte_python_env_root}/.${protocyte_python_fingerprint_short}.previous")
     set(protocyte_python_lock "${protocyte_python_env_root}/.${protocyte_python_fingerprint_short}.lock")
     _protocyte_python_environment_paths(
         protocyte_python_executable
@@ -2125,6 +2179,25 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         )
     endif()
 
+    _protocyte_run_managed_environment_transaction(
+        recovery_result
+        recovery_output
+        "${Python3_EXECUTABLE}"
+        "${protocyte_python_environment}"
+        "${protocyte_python_fingerprint}"
+        recover
+    )
+    if(NOT "${recovery_result}" STREQUAL "0")
+        message(
+            FATAL_ERROR
+            "Failed to recover Protocyte's managed Python environment transaction.\n\n"
+            "Environment: ${protocyte_python_environment}\n\n"
+            "Details:\n${recovery_output}\n\n"
+            "The live environment and any unverified transaction were left unchanged. Inspect them "
+            "before retrying."
+        )
+    endif()
+
     _protocyte_python_environment_is_ready(
         protocyte_python_environment_ready
         "${protocyte_python_environment}"
@@ -2133,49 +2206,55 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         "${protocyte_expected_version}"
     )
 
-    if(protocyte_python_environment_ready AND EXISTS "${protocyte_python_previous}")
-        file(REMOVE_RECURSE "${protocyte_python_previous}")
-    endif()
-
     if(NOT protocyte_python_environment_ready)
-        if(EXISTS "${protocyte_python_previous}")
-            file(REMOVE_RECURSE "${protocyte_python_environment}")
-            file(
-                RENAME
-                "${protocyte_python_previous}"
-                "${protocyte_python_environment}"
-                RESULT recover_previous_result
+        _protocyte_run_managed_environment_transaction(
+            transaction_result
+            protocyte_python_transaction
+            "${Python3_EXECUTABLE}"
+            "${protocyte_python_environment}"
+            "${protocyte_python_fingerprint}"
+            create
+        )
+        if(NOT "${transaction_result}" STREQUAL "0")
+            message(
+                FATAL_ERROR
+                "Failed to create a transaction for Protocyte's managed Python environment.\n\n"
+                "Environment: ${protocyte_python_environment}\n\n"
+                "Details:\n${protocyte_python_transaction}"
             )
-            if(NOT "${recover_previous_result}" STREQUAL "0")
-                message(
-                    FATAL_ERROR
-                    "Failed to recover the previous Protocyte managed Python environment: "
-                    "${recover_previous_result}\nEnvironment: ${protocyte_python_environment}"
-                )
-            endif()
         endif()
+        string(STRIP "${protocyte_python_transaction}" protocyte_python_transaction)
 
-        set(had_previous_environment FALSE)
         if(EXISTS "${protocyte_python_environment}")
-            file(
-                RENAME
+            _protocyte_run_managed_environment_transaction(
+                backup_result
+                backup_output
+                "${Python3_EXECUTABLE}"
                 "${protocyte_python_environment}"
-                "${protocyte_python_previous}"
-                RESULT preserve_previous_result
+                "${protocyte_python_fingerprint}"
+                backup
+                "${protocyte_python_transaction}"
             )
-            if(NOT "${preserve_previous_result}" STREQUAL "0")
+            if(NOT "${backup_result}" STREQUAL "0")
                 message(
                     FATAL_ERROR
-                    "Failed to preserve the previous Protocyte managed Python environment before "
-                    "provisioning its replacement: ${preserve_previous_result}\n"
-                    "Environment: ${protocyte_python_environment}"
+                    "Failed to preserve the identity-bound backup of Protocyte's managed Python environment "
+                    "before provisioning its replacement.\n\n"
+                    "Environment: ${protocyte_python_environment}\n\n"
+                    "Details:\n${backup_output}\n\n"
+                    "The live environment and transaction were left unchanged."
                 )
             endif()
-            set(had_previous_environment TRUE)
         endif()
 
         message(STATUS "Provisioning Protocyte Python environment: ${protocyte_python_environment}")
-        set(venv_arguments -m venv "${protocyte_python_environment}")
+        set(protocyte_python_staging "${protocyte_python_transaction}/staging")
+        _protocyte_python_environment_paths(
+            protocyte_staged_python_executable
+            protocyte_staged_plugin_executable
+            "${protocyte_python_staging}"
+        )
+        set(venv_arguments -m venv "${protocyte_python_staging}")
         execute_process(
             COMMAND "${Python3_EXECUTABLE}" ${venv_arguments}
             RESULT_VARIABLE venv_result
@@ -2187,12 +2266,14 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             string(JOIN " " venv_command ${venv_arguments})
             _protocyte_rollback_python_environment(
                 rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
                 "${protocyte_python_environment}"
-                "${protocyte_python_previous}"
-                "${had_previous_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
             )
             if(NOT "${rollback_result}" STREQUAL "0")
-                string(APPEND venv_error "\nFailed to restore the previous environment: ${rollback_result}")
+                string(APPEND venv_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
                 "create the virtual environment; ensure the selected Python provides venv and ensurepip"
@@ -2203,7 +2284,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             )
         endif()
 
-        set(protocyte_staged_project "${protocyte_python_environment}/project")
+        set(protocyte_staged_project "${protocyte_python_staging}/project")
         set(protocyte_staged_constraints "${protocyte_staged_project}/protocyte-cmake-constraints.txt")
         _protocyte_stage_python_project(
             "${protocyte_python_project_root}"
@@ -2213,7 +2294,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
 
         execute_process(
             COMMAND
-                "${protocyte_python_executable}" -m pip install
+                "${protocyte_staged_python_executable}" -m pip install
                 --disable-pip-version-check
                 --no-input
                 --upgrade
@@ -2228,16 +2309,18 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         if(NOT "${bootstrap_result}" STREQUAL "0")
             _protocyte_rollback_python_environment(
                 rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
                 "${protocyte_python_environment}"
-                "${protocyte_python_previous}"
-                "${had_previous_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
             )
             if(NOT "${rollback_result}" STREQUAL "0")
-                string(APPEND bootstrap_error "\nFailed to restore the previous environment: ${rollback_result}")
+                string(APPEND bootstrap_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
                 "install Protocyte's pinned Python build tools"
-                "\"${protocyte_python_executable}\" -m pip install --disable-pip-version-check --no-input --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" pip setuptools wheel"
+                "\"${protocyte_staged_python_executable}\" -m pip install --disable-pip-version-check --no-input --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" pip setuptools wheel"
                 "${bootstrap_result}"
                 "${bootstrap_output}"
                 "${bootstrap_error}"
@@ -2246,7 +2329,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
 
         execute_process(
             COMMAND
-                "${protocyte_python_executable}" -m pip install
+                "${protocyte_staged_python_executable}" -m pip install
                 --disable-pip-version-check
                 --no-input
                 --no-build-isolation
@@ -2262,16 +2345,18 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         if(NOT "${install_result}" STREQUAL "0")
             _protocyte_rollback_python_environment(
                 rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
                 "${protocyte_python_environment}"
-                "${protocyte_python_previous}"
-                "${had_previous_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
             )
             if(NOT "${rollback_result}" STREQUAL "0")
-                string(APPEND install_error "\nFailed to restore the previous environment: ${rollback_result}")
+                string(APPEND install_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
                 "install Protocyte and its Python dependencies"
-                "\"${protocyte_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" \"${protocyte_staged_project}\""
+                "\"${protocyte_staged_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" \"${protocyte_staged_project}\""
                 "${install_result}"
                 "${install_output}"
                 "${install_error}"
@@ -2282,24 +2367,26 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             verify_result
             verify_output
             verify_error
-            "${protocyte_python_executable}"
-            "${protocyte_plugin_executable}"
+            "${protocyte_staged_python_executable}"
+            "${protocyte_staged_plugin_executable}"
             "${protocyte_python_constraints}"
             "${protocyte_expected_version}"
         )
         if(NOT "${verify_result}" STREQUAL "0")
             _protocyte_rollback_python_environment(
                 rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
                 "${protocyte_python_environment}"
-                "${protocyte_python_previous}"
-                "${had_previous_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
             )
             if(NOT "${rollback_result}" STREQUAL "0")
-                string(APPEND verify_error "\nFailed to restore the previous environment: ${rollback_result}")
+                string(APPEND verify_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
                 "verify the installed Protocyte plugin"
-                "\"${protocyte_plugin_executable}\" --version"
+                "\"${protocyte_staged_plugin_executable}\" --version"
                 "${verify_result}"
                 "${verify_output}"
                 "${verify_error}"
@@ -2308,11 +2395,165 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
 
         file(
             WRITE
-            "${protocyte_python_environment}/.protocyte-ready"
+            "${protocyte_python_staging}/.protocyte-ready"
             "${protocyte_python_fingerprint}\n"
         )
-        if(had_previous_environment)
-            file(REMOVE_RECURSE "${protocyte_python_previous}")
+        _protocyte_run_managed_environment_transaction(
+            prepare_result
+            prepare_output
+            "${Python3_EXECUTABLE}"
+            "${protocyte_python_environment}"
+            "${protocyte_python_fingerprint}"
+            prepare
+            "${protocyte_python_transaction}"
+        )
+        if(NOT "${prepare_result}" STREQUAL "0")
+            _protocyte_rollback_python_environment(
+                rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
+                "${protocyte_python_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
+            )
+            if(NOT "${rollback_result}" STREQUAL "0")
+                string(APPEND prepare_output "\nFailed to restore the previous environment: ${rollback_output}")
+            endif()
+            _protocyte_python_provisioning_error(
+                "prepare the verified Protocyte Python environment for promotion"
+                "${Python3_EXECUTABLE} ${PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER} prepare"
+                "${prepare_result}"
+                ""
+                "${prepare_output}"
+            )
+        endif()
+        _protocyte_run_managed_environment_transaction(
+            promote_result
+            promote_output
+            "${Python3_EXECUTABLE}"
+            "${protocyte_python_environment}"
+            "${protocyte_python_fingerprint}"
+            promote
+            "${protocyte_python_transaction}"
+        )
+        if(NOT "${promote_result}" STREQUAL "0")
+            _protocyte_rollback_python_environment(
+                rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
+                "${protocyte_python_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
+            )
+            if(NOT "${rollback_result}" STREQUAL "0")
+                string(APPEND promote_output "\nFailed to restore the previous environment: ${rollback_output}")
+            endif()
+            _protocyte_python_provisioning_error(
+                "promote the verified Protocyte Python environment"
+                "${Python3_EXECUTABLE} ${PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER} promote"
+                "${promote_result}"
+                ""
+                "${promote_output}"
+            )
+        endif()
+        execute_process(
+            COMMAND
+                "${protocyte_python_executable}" -m pip install
+                --disable-pip-version-check
+                --no-input
+                --no-build-isolation
+                --no-deps
+                --force-reinstall
+                "${protocyte_python_environment}/project"
+            RESULT_VARIABLE relocation_result
+            OUTPUT_VARIABLE relocation_output
+            ERROR_VARIABLE relocation_error
+            TIMEOUT 120
+        )
+        if(NOT "${relocation_result}" STREQUAL "0")
+            _protocyte_rollback_python_environment(
+                rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
+                "${protocyte_python_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
+            )
+            if(NOT "${rollback_result}" STREQUAL "0")
+                string(APPEND relocation_error "\nFailed to restore the previous environment: ${rollback_output}")
+            endif()
+            _protocyte_python_provisioning_error(
+                "rewrite the managed Protocyte plugin entry point after promotion"
+                "\"${protocyte_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --no-deps --force-reinstall \"${protocyte_python_environment}/project\""
+                "${relocation_result}"
+                "${relocation_output}"
+                "${relocation_error}"
+            )
+        endif()
+        _protocyte_verify_python_environment(
+            relocated_verify_result
+            relocated_verify_output
+            relocated_verify_error
+            "${protocyte_python_executable}"
+            "${protocyte_plugin_executable}"
+            "${protocyte_python_constraints}"
+            "${protocyte_expected_version}"
+        )
+        if(NOT "${relocated_verify_result}" STREQUAL "0")
+            _protocyte_rollback_python_environment(
+                rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
+                "${protocyte_python_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
+            )
+            if(NOT "${rollback_result}" STREQUAL "0")
+                string(APPEND relocated_verify_error "\nFailed to restore the previous environment: ${rollback_output}")
+            endif()
+            _protocyte_python_provisioning_error(
+                "verify the promoted Protocyte Python environment"
+                "\"${protocyte_plugin_executable}\" --version"
+                "${relocated_verify_result}"
+                "${relocated_verify_output}"
+                "${relocated_verify_error}"
+            )
+        endif()
+        _protocyte_run_managed_environment_transaction(
+            commit_result
+            commit_output
+            "${Python3_EXECUTABLE}"
+            "${protocyte_python_environment}"
+            "${protocyte_python_fingerprint}"
+            commit
+            "${protocyte_python_transaction}"
+        )
+        if(NOT "${commit_result}" STREQUAL "0")
+            message(
+                FATAL_ERROR
+                "Protocyte verified its promoted managed Python environment but could not commit the "
+                "transaction. A later configure will recover from the identity-bound backup.\n\n"
+                "Environment: ${protocyte_python_environment}\n\n"
+                "Details:\n${commit_output}"
+            )
+        endif()
+        _protocyte_run_managed_environment_transaction(
+            cleanup_result
+            cleanup_output
+            "${Python3_EXECUTABLE}"
+            "${protocyte_python_environment}"
+            "${protocyte_python_fingerprint}"
+            cleanup
+            "${protocyte_python_transaction}"
+        )
+        if(NOT "${cleanup_result}" STREQUAL "0")
+            message(
+                FATAL_ERROR
+                "Protocyte promoted its managed Python environment but could not retire the verified "
+                "transaction. A later configure will retry without touching unverified paths.\n\n"
+                "Environment: ${protocyte_python_environment}\n\n"
+                "Details:\n${cleanup_output}"
+            )
         endif()
     endif()
 
