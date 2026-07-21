@@ -1,0 +1,28 @@
+#!/bin/sh
+
+repository=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "private-path guard failed; repository discovery details are redacted" >&2
+    exit 2
+}
+guard="$repository/.github/scripts/check_private_paths.py"
+
+run_guard() {
+    if "$1" "$guard" --repository "$repository" --commit-message "$2" \
+        >/dev/null 2>/dev/null; then
+        exit 0
+    fi
+    echo "private-path guard blocked this Git operation; all failure details are redacted" >&2
+    exit 1
+}
+
+if command -v python >/dev/null 2>&1 &&
+    python -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1; then
+    run_guard python "$1"
+fi
+if command -v python3 >/dev/null 2>&1 &&
+    python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1; then
+    run_guard python3 "$1"
+fi
+
+echo "private-path guard requires Python 3.12 or newer on PATH" >&2
+exit 2

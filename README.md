@@ -131,6 +131,45 @@ validation before production use.
 Responsibility for the contents of this repository and its releases remains
 with the human maintainers and contributors.
 
+## Contributing
+
+Enable the tracked privacy hooks once in each checkout before committing:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+The pre-commit hook scans raw staged names and content, every commit, tag, and
+blob in the local Git object database (including unreachable objects), and
+reconstructed stored tree paths. The commit-message hook repeats that scan and
+also checks the pending message, author and committer identities, and configured
+commit-encoding header before Git creates an ordinary unsigned commit object.
+The hook wrappers suppress subprocess diagnostics and emit only a generic,
+redacted failure if the guard is missing, broken, or rejects the operation.
+
+Git produces a signed commit's `gpgsig` header after the commit-message hook, so
+that final signer-produced header cannot be pre-scanned by a standard Git hook.
+The tracked pre-push hook scans finalized local objects and blocks a normal push
+if any finalized commit, signed or unsigned, violates the policy. CI repeats the
+same scan for every object available in its full-history checkout.
+
+Run the same complete check directly at any time:
+
+```bash
+python .github/scripts/check_private_paths.py
+```
+
+If the guard finds a private path, remove every reference, reflog entry, staged
+name, and staged file that retains it, then prune the offending unreachable
+object according to the repository's recovery policy. The guard intentionally
+continues to reject content that was unstaged but still exists in the object
+database.
+
+Git hooks are a local safeguard, not an access-control boundary. Contributors
+can bypass them with `--no-verify`, replace or disable `core.hooksPath`, or use
+lower-level object-writing commands. Objects that remain unreachable only in a
+local object database are not transferred for CI to inspect.
+
 ## What It Supports
 
 Protocyte currently targets protobuf message schemas, advertises

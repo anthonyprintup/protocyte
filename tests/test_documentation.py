@@ -68,6 +68,22 @@ def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
         assert fragment in linux_ci
 
 
+def test_readme_documents_the_local_private_path_guard() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    contributing = readme.split("## Contributing", maxsplit=1)[1].split(
+        "## What It Supports", maxsplit=1
+    )[0]
+
+    assert "git config --local core.hooksPath .githooks" in contributing
+    assert "python .github/scripts/check_private_paths.py" in contributing
+    assert "before Git creates an ordinary unsigned commit object" in contributing
+    assert "final signer-produced header cannot be pre-scanned" in contributing
+    assert "tracked pre-push hook scans finalized local objects" in contributing
+    assert "unreachable only in a\nlocal object database" in contributing
+    assert "including unreachable objects" in contributing
+    assert "`--no-verify`" in contributing
+
+
 def test_smoke_regeneration_uses_managed_python_and_documents_portability_ci() -> None:
     guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
 
