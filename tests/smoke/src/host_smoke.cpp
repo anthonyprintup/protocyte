@@ -2994,6 +2994,172 @@ TEST_CASE("Runtime containers preserve aliased insertion arguments", "[smoke][ru
     }
 }
 
+TEST_CASE("HashMap deep-copies noncopyable String lvalue arguments transactionally", "[smoke][runtime][map]") {
+    using String = Config::String;
+    using StringMap = Config::Map<String, String>;
+
+    const auto assign_text = [](String &out, const std::string_view text) {
+        require_success(out.assign(protocyte::Span<const char> {text.data(), text.size()}));
+    };
+    const auto contains = [](const StringMap &values, const std::string_view expected_key,
+                             const std::string_view expected_value) noexcept {
+        for (const auto entry : values) {
+            if (view_equal(entry.key.view(), expected_key) && view_equal(entry.value.view(), expected_value)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    SECTION("lvalue strings are cloned into the map context") {
+        RetainedAllocationProbe destination_probe {};
+        auto source_ctx = make_context();
+        auto destination_ctx = make_context();
+        destination_ctx.allocator = protocyte::Allocator {&destination_probe, retain_allocation, nullptr};
+        {
+            StringMap values(&destination_ctx);
+            String key(&source_ctx);
+            String value(&source_ctx);
+            assign_text(key, "lvalue-key");
+            assign_text(value, "lvalue-value");
+
+            require_success(values.insert_or_assign(key, value));
+            REQUIRE(values.size() == 1u);
+            CHECK(contains(values, "lvalue-key", "lvalue-value"));
+            CHECK(view_equal(key.view(), std::string_view {"lvalue-key"}));
+            CHECK(view_equal(value.view(), std::string_view {"lvalue-value"}));
+            for (const auto entry : values) {
+                CHECK(entry.key.context() == &destination_ctx);
+                CHECK(entry.value.context() == &destination_ctx);
+            }
+
+            key.clear();
+            value.clear();
+            CHECK(contains(values, "lvalue-key", "lvalue-value"));
+        }
+        for (size_t index {}; index < destination_probe.count; ++index) { free(destination_probe.pointers[index]); }
+    }
+
+    SECTION("all key and value categories work with noncopyable strings") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+
+        String lvalue_key(&ctx);
+        String lvalue_value(&ctx);
+        assign_text(lvalue_key, "both-lvalues");
+        assign_text(lvalue_value, "both-lvalue-value");
+        require_success(values.insert_or_assign(lvalue_key, lvalue_value));
+        CHECK(contains(values, "both-lvalues", "both-lvalue-value"));
+        CHECK(view_equal(lvalue_key.view(), std::string_view {"both-lvalues"}));
+        CHECK(view_equal(lvalue_value.view(), std::string_view {"both-lvalue-value"}));
+
+        String lvalue_key_rvalue_value(&ctx);
+        String rvalue_value(&ctx);
+        assign_text(lvalue_key_rvalue_value, "lvalue-key");
+        assign_text(rvalue_value, "rvalue-value");
+        require_success(values.insert_or_assign(lvalue_key_rvalue_value, protocyte::move(rvalue_value)));
+        CHECK(contains(values, "lvalue-key", "rvalue-value"));
+        CHECK(view_equal(lvalue_key_rvalue_value.view(), std::string_view {"lvalue-key"}));
+        CHECK(rvalue_value.empty());
+
+        String rvalue_key_lvalue_value(&ctx);
+        String lvalue_value_rvalue_key(&ctx);
+        assign_text(rvalue_key_lvalue_value, "rvalue-key");
+        assign_text(lvalue_value_rvalue_key, "lvalue-value");
+        require_success(values.insert_or_assign(protocyte::move(rvalue_key_lvalue_value), lvalue_value_rvalue_key));
+        CHECK(contains(values, "rvalue-key", "lvalue-value"));
+        CHECK(view_equal(lvalue_value_rvalue_key.view(), std::string_view {"lvalue-value"}));
+        CHECK(rvalue_key_lvalue_value.empty());
+
+        String rvalue_key(&ctx);
+        String rvalue_mapped_value(&ctx);
+        assign_text(rvalue_key, "both-rvalues");
+        assign_text(rvalue_mapped_value, "both-rvalue-value");
+        require_success(values.insert_or_assign(protocyte::move(rvalue_key), protocyte::move(rvalue_mapped_value)));
+        CHECK(contains(values, "both-rvalues", "both-rvalue-value"));
+        CHECK(rvalue_key.empty());
+        CHECK(rvalue_mapped_value.empty());
+
+        String replacement(&ctx);
+        assign_text(replacement, "replacement-value");
+        require_success(values.insert_or_assign(lvalue_key, replacement));
+        REQUIRE(values.size() == 4u);
+        CHECK(contains(values, "both-lvalues", "replacement-value"));
+        CHECK(view_equal(lvalue_key.view(), std::string_view {"both-lvalues"}));
+        CHECK(view_equal(replacement.view(), std::string_view {"replacement-value"}));
+    }
+
+    SECTION("colliding lvalue strings survive rehash") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+        const auto insert_owned = [&ctx, &assign_text, &values](const std::string_view key_text,
+                                                                const std::string_view value_text) {
+            String key(&ctx);
+            String value(&ctx);
+            assign_text(key, key_text);
+            assign_text(value, value_text);
+            require_success(values.insert_or_assign(protocyte::move(key), protocyte::move(value)));
+        };
+
+        String seed_key(&ctx);
+        assign_text(seed_key, "rehash-seed");
+        const auto seed_bucket = Config::hash(seed_key) & 7u;
+        String seed_value(&ctx);
+        assign_text(seed_value, "seed-value");
+        require_success(values.insert_or_assign(protocyte::move(seed_key), protocyte::move(seed_value)));
+        insert_owned("rehash-one", "one");
+        insert_owned("rehash-two", "two");
+        insert_owned("rehash-three", "three");
+        insert_owned("rehash-four", "four");
+
+        String colliding_key(&ctx);
+        bool found_collision {};
+        for (char suffix {'0'}; suffix <= 'z'; ++suffix) {
+            const char candidate[] {'c', 'o', 'l', 'l', 'i', 'd', 'e', '-', suffix};
+            require_success(colliding_key.assign(protocyte::Span<const char> {candidate, std::size(candidate)}));
+            if ((Config::hash(colliding_key) & 7u) == seed_bucket) {
+                found_collision = true;
+                break;
+            }
+        }
+        REQUIRE(found_collision);
+        String colliding_value(&ctx);
+        assign_text(colliding_value, "colliding-lvalue-value");
+
+        require_success(values.insert_or_assign(colliding_key, colliding_value));
+        REQUIRE(values.size() == 6u);
+        CHECK(contains(values, "rehash-seed", "seed-value"));
+        CHECK(
+            contains(values, std::string_view {colliding_key.data(), colliding_key.size()}, "colliding-lvalue-value"));
+        CHECK(view_equal(colliding_value.view(), std::string_view {"colliding-lvalue-value"}));
+
+        colliding_key.clear();
+        colliding_value.clear();
+        CHECK(contains(values, "rehash-seed", "seed-value"));
+    }
+
+    SECTION("failed lvalue copy leaves a same-bucket aliased source and map unchanged") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+        String key(&ctx);
+        String value(&ctx);
+        assign_text(key, "stable-key");
+        assign_text(value, "stable-value");
+        require_success(values.insert_or_assign(protocyte::move(key), protocyte::move(value)));
+
+        auto source = *values.begin();
+        FailingAllocationProbe failure_probe {.successful_calls_before_failure = 1u};
+        ctx.allocator = protocyte::Allocator {&failure_probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(values.insert_or_assign(source.key, source.value), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(contains(values, "stable-key", "stable-value"));
+        CHECK(view_equal(source.key.view(), std::string_view {"stable-key"}));
+        CHECK(view_equal(source.value.view(), std::string_view {"stable-value"}));
+        CHECK(failure_probe.calls == 2u);
+    }
+}
+
 TEST_CASE("Runtime context rebinding preserves allocator ownership", "[smoke][runtime][allocator][bind]") {
     SECTION("unallocated vectors can bind and live vectors reject context changes") {
         auto first_ctx = make_context();
