@@ -87,6 +87,7 @@ _TREE_STATE_WINDOWS_ACCOUNT = 8
 _TREE_STATE_NESTED_WORD = 9
 _TREE_STATE_POSIX_ACCOUNT = 10
 _TREE_STATE_MOUNT_ACCOUNT = 11
+_TREE_STATE_COLON = 12
 
 _TREE_STATE_CANONICAL = {
     _TREE_STATE_BOUNDARY: b")",
@@ -100,6 +101,7 @@ _TREE_STATE_CANONICAL = {
     _TREE_STATE_NESTED_WORD: b"x",
     _TREE_STATE_POSIX_ACCOUNT: b"/home",
     _TREE_STATE_MOUNT_ACCOUNT: b"/mnt/c/Users",
+    _TREE_STATE_COLON: b":",
 }
 
 _TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS = (
@@ -439,6 +441,8 @@ def _tree_path_state(path_suffix: bytes) -> int:
         return _TREE_STATE_MOUNT_BASE
     if _TREE_DRIVE_PREFIX.search(path_suffix):
         return _TREE_STATE_DRIVE
+    if path_suffix.endswith(b":"):
+        return _TREE_STATE_COLON
     if path_suffix.endswith((b"/", b"\\")):
         return _TREE_STATE_SEPARATOR
     if path_suffix and path_suffix[-1] not in (
@@ -472,7 +476,8 @@ def _scan_tree_paths(
         prefix = _TREE_STATE_CANONICAL.get(state, b"")
         for entry in trees[tree_id]:
             path = prefix + b"/" + entry.name if prefix else entry.name
-            if _matches_private_path(path):
+            match_path = path + b"/" if entry.child_tree is not None else path
+            if _matches_private_path(match_path):
                 violations.add(tree_id)
                 continue
             if entry.child_tree in trees:

@@ -963,6 +963,37 @@ def test_guard_preserves_mounted_account_separator_rules_in_stored_trees(
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(
+    ("components", "expected_match"),
+    [
+        (
+            (b"C:", b"Users", b"[" + b"name" + b"];", b"leaf"),
+            True,
+        ),
+        ((b":", b"Users", b"\\" + b"server"), False),
+    ],
+)
+def test_stored_tree_scanning_matches_direct_adversarial_paths(
+    tmp_path: Path, components: tuple[bytes, ...], expected_match: bool
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    guard_module = runpy.run_path(str(GUARD))
+    direct_path = b"/".join(components)
+    assert guard_module["_matches_private_path"](direct_path) is expected_match
+
+    child = _store_blob(repository, b"portable content\n")
+    for index, component in enumerate(reversed(components)):
+        mode = b"100644" if index == 0 else b"40000"
+        child = _store_tree(repository, [(mode, component, child)])
+
+    result = _run_guard(repository)
+
+    assert (result.returncode == 1) is expected_match, result.stderr
+    if expected_match:
+        assert "stored Git tree path" in result.stderr
+        _assert_redacted(result, "name")
+
+
 def test_guard_scans_shared_tree_dags_in_polynomial_time(tmp_path: Path) -> None:
     repository = _repository(tmp_path / "repository")
     blob = _store_blob(repository, b"portable content\n")
