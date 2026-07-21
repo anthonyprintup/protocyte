@@ -2462,7 +2462,10 @@ def test_rejects_selected_group_fields() -> None:
 
     response = generate_response(request)
 
-    assert "legacy.Legacy.Payload: groups are not supported" in response.error
+    assert response.error == (
+        'target file "legacy_group.proto": field "legacy.Legacy.Payload" '
+        "uses unsupported groups"
+    )
 
 
 def test_rejects_selected_edition_files() -> None:
@@ -2481,6 +2484,260 @@ def test_rejects_selected_edition_files() -> None:
         "target file edition.proto: protobuf Editions are not supported in v1"
         in response.error
     )
+
+
+def test_rejects_fields_that_require_internal_generated_headers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("consumer.proto")
+    consumer = request.proto_file.add()
+    consumer.name = "consumer.proto"
+    consumer.package = "demo"
+    consumer.syntax = "proto3"
+    consumer.dependency.append("protocyte/options.proto")
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    field = message.field.add()
+    field.name = "options"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".protocyte.ArrayOptions"
+    request.proto_file.extend(
+        [
+            descriptor_pb2.FileDescriptorProto.FromString(
+                descriptor_pb2.DESCRIPTOR.serialized_pb
+            ),
+            _options_file(),
+        ]
+    )
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'descriptor "consumer.proto": field "demo.Consumer.options" references type '
+        '".protocyte.ArrayOptions" from "protocyte/options.proto", but '
+        '"protocyte/options.proto" cannot have a generated header because it is '
+        "reserved for Protocyte generator internals"
+    )
+    assert not response.file
+
+
+def test_rejects_fields_that_depend_on_unselected_non_generatable_headers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("consumer.proto")
+    dependency = request.proto_file.add()
+    dependency.name = "legacy_group.proto"
+    dependency.package = "legacy"
+    dependency.syntax = "proto2"
+    dependency.message_type.add().name = "Dependency"
+    unsupported = dependency.message_type.add()
+    unsupported.name = "Unsupported"
+    group = unsupported.field.add()
+    group.name = "Payload"
+    group.number = 1
+    group.label = F.LABEL_OPTIONAL
+    group.type = F.TYPE_GROUP
+    consumer = request.proto_file.add()
+    consumer.name = "consumer.proto"
+    consumer.package = "demo"
+    consumer.syntax = "proto3"
+    consumer.dependency.append(dependency.name)
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    field = message.field.add()
+    field.name = "value"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".legacy.Dependency"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'descriptor "consumer.proto": field "demo.Consumer.value" references type '
+        '".legacy.Dependency" from "legacy_group.proto", but "legacy_group.proto" '
+        'cannot have a generated header because field "legacy.Unsupported.Payload" '
+        "uses unsupported groups"
+    )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("capability", "blocker"),
+    [
+        ("group", 'field "google.protobuf.Unsupported.Payload" uses unsupported groups'),
+        ("edition", "protobuf Editions are not supported in v1"),
+        (
+            "proto3-extension",
+            'extension "google.protobuf.marker" extends unsupported proto3 target '
+            '".google.protobuf.Unsupported"',
+        ),
+    ],
+)
+def test_rejects_unsupported_import_only_runtime_descriptors(
+    capability: str,
+    blocker: str,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("api/request.proto")
+    dependency = request.proto_file.add()
+    dependency.name = "google/protobuf/unsupported.proto"
+    dependency.package = "google.protobuf"
+    dependency.syntax = "proto3"
+    unsupported = dependency.message_type.add()
+    unsupported.name = "Unsupported"
+
+    if capability == "group":
+        dependency.syntax = "proto2"
+        group = unsupported.field.add()
+        group.name = "Payload"
+        group.number = 1
+        group.label = F.LABEL_OPTIONAL
+        group.type = F.TYPE_GROUP
+    elif capability == "edition":
+        dependency.syntax = "editions"
+        dependency.edition = descriptor_pb2.EDITION_2023
+    else:
+        extension = dependency.extension.add()
+        extension.name = "marker"
+        extension.number = 1000
+        extension.label = F.LABEL_OPTIONAL
+        extension.type = F.TYPE_INT32
+        extension.extendee = ".google.protobuf.Unsupported"
+
+    bridge = request.proto_file.add()
+    bridge.name = "google/protobuf/bridge.proto"
+    bridge.package = "google.protobuf"
+    bridge.syntax = "proto3"
+    bridge.dependency.append(dependency.name)
+    bridge.message_type.add().name = "Bridge"
+
+    root = request.proto_file.add()
+    root.name = "api/request.proto"
+    root.package = "api"
+    root.syntax = "proto3"
+    root.dependency.append(bridge.name)
+    root.message_type.add().name = "Request"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'target file "api/request.proto" imports unsupported descriptor '
+        '"google/protobuf/unsupported.proto" through "api/request.proto" -> '
+        '"google/protobuf/bridge.proto" -> '
+        f'"google/protobuf/unsupported.proto": {blocker}'
+    )
+    assert not response.file
+
+
+def test_rejects_cross_file_generated_header_dependency_cycles() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("a.proto")
+    first = request.proto_file.add()
+    first.name = "a.proto"
+    first.package = "cycle"
+    first.syntax = "proto3"
+    first.dependency.append("b.proto")
+    first_message = first.message_type.add()
+    first_message.name = "A"
+    first_field = first_message.field.add()
+    first_field.name = "b"
+    first_field.number = 1
+    first_field.label = F.LABEL_OPTIONAL
+    first_field.type = F.TYPE_MESSAGE
+    first_field.type_name = ".cycle.B"
+
+    second = request.proto_file.add()
+    second.name = "b.proto"
+    second.package = "cycle"
+    second.syntax = "proto3"
+    second.dependency.append("a.proto")
+    second_message = second.message_type.add()
+    second_message.name = "B"
+    second_field = second_message.field.add()
+    second_field.name = "a"
+    second_field.number = 1
+    second_field.label = F.LABEL_OPTIONAL
+    second_field.type = F.TYPE_MESSAGE
+    second_field.type_name = ".cycle.A"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'generated header dependency cycle: "a.proto" field "cycle.A.b" references '
+        'type ".cycle.B" from "b.proto"; "b.proto" field "cycle.B.a" references '
+        'type ".cycle.A" from "a.proto"'
+    )
+    assert not response.file
+
+
+def _deep_cross_file_type_chain(
+    length: int,
+    *,
+    cycle_target: int | None = None,
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("deep/node_0000.proto")
+    for index in range(length):
+        file = request.proto_file.add()
+        file.name = f"deep/node_{index:04}.proto"
+        file.package = "deep"
+        file.syntax = "proto3"
+        message = file.message_type.add()
+        message.name = f"Node{index:04}"
+
+        target = index + 1 if index + 1 < length else cycle_target
+        if target is None:
+            continue
+        target_file = f"deep/node_{target:04}.proto"
+        file.dependency.append(target_file)
+        field = message.field.add()
+        field.name = "next"
+        field.number = 1
+        field.label = F.LABEL_OPTIONAL
+        field.type = F.TYPE_MESSAGE
+        field.type_name = f".deep.Node{target:04}"
+    return request
+
+
+_DEEP_TYPE_CHAIN_LENGTH = 1100
+
+
+def test_accepts_deep_acyclic_generated_header_dependency_chain() -> None:
+    assert _DEEP_TYPE_CHAIN_LENGTH > sys.getrecursionlimit()
+
+    response = generate_response(
+        _deep_cross_file_type_chain(_DEEP_TYPE_CHAIN_LENGTH)
+    )
+
+    assert not response.error
+    assert response.file
+
+
+def test_rejects_deep_generated_header_dependency_cycle_precisely() -> None:
+    cycle_target = _DEEP_TYPE_CHAIN_LENGTH - 5
+    response = generate_response(
+        _deep_cross_file_type_chain(
+            _DEEP_TYPE_CHAIN_LENGTH,
+            cycle_target=cycle_target,
+        )
+    )
+
+    cycle_edges = [
+        (
+            index,
+            index + 1 if index + 1 < _DEEP_TYPE_CHAIN_LENGTH else cycle_target,
+        )
+        for index in range(cycle_target, _DEEP_TYPE_CHAIN_LENGTH)
+    ]
+    details = "; ".join(
+        f'"deep/node_{source:04}.proto" field "deep.Node{source:04}.next" '
+        f'references type ".deep.Node{target:04}" from '
+        f'"deep/node_{target:04}.proto"'
+        for source, target in cycle_edges
+    )
+    assert response.error == f"generated header dependency cycle: {details}"
+    assert not response.file
 
 
 def test_proto2_model_tracks_presence_defaults_required_and_unpacked_repeated() -> None:
