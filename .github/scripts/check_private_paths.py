@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import codecs
+import io
 import re
 import subprocess
 import sys
 from collections import defaultdict
-from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 
-_HOME_ACCOUNT = rb"[A-Za-z0-9_\x80-\xff](?:[A-Za-z0-9._ -]|[\x80-\xff])*"
+_HOME_ACCOUNT = rb"[A-Za-z0-9_\x80-\xff](?:[A-Za-z0-9._ -]|[\x80-\xff])*+"
 _HOME_PATH_BOUNDARY = rb"(?:[\\/]|(?=$|[\x00\r\n\t \"'`),;:!?)}\]]))"
 
 
@@ -20,13 +22,20 @@ _PRIVATE_PATH_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        rb"(?<![A-Za-z0-9._-])/(?:mnt/[A-Za-z]|cygdrive/[A-Za-z]|[A-Za-z])/"
+        rb"Users/" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
+        re.IGNORECASE,
+    ),
+    re.compile(
         rb"(?<![:\\/A-Za-z0-9])(?:[\\/]{2})"
         rb"[A-Za-z0-9_](?:[A-Za-z0-9._-])*[\\/]+"
         rb"Users[\\/]+" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
     re.compile(
-        rb"(?<![A-Za-z0-9._-])/(?:home|Users)/" + _HOME_ACCOUNT + _HOME_PATH_BOUNDARY,
+        rb"(?<![A-Za-z0-9._-])/(?:home|Users)/"
+        + _HOME_ACCOUNT
+        + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
     ),
     re.compile(
@@ -42,6 +51,18 @@ class GitCommandError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class _TreeEntry:
+    name: bytes
+    child_tree: str | None
+
+
+@dataclass(frozen=True, order=True)
+class Violation:
+    source: str
+    object_id: str | None = None
+
+
 def _run_git(
     repository: Path, *arguments: str, input_bytes: bytes | None = None
 ) -> bytes:
@@ -52,205 +73,292 @@ def _run_git(
         capture_output=True,
     )
     if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", errors="replace").strip()
-        raise GitCommandError(detail or f"git {' '.join(arguments)} failed")
+        raise GitCommandError("a required Git command failed; details are redacted")
     return completed.stdout
 
 
-def _index_blob_ids(repository: Path) -> set[str]:
-    blobs: set[str] = set()
+def _matches_private_path(data: bytes) -> bool:
+    lowered = data.lower()
+    if not any(
+        needle in lowered
+        for needle in (
+            b"/" + b"users",
+            b"\\" + b"users",
+            b"/" + b"home",
+            b"/" + b"root",
+        )
+    ):
+        return False
+    return any(pattern.search(data) is not None for pattern in _PRIVATE_PATH_PATTERNS)
+
+
+def _index_state(repository: Path) -> tuple[set[str], bool]:
+    object_ids: set[str] = set()
+    path_violation = False
     for entry in _run_git(repository, "ls-files", "--stage", "-z").split(b"\0"):
         if not entry:
             continue
-        metadata, _path = entry.split(b"\t", maxsplit=1)
+        metadata, path = entry.split(b"\t", maxsplit=1)
         _, object_id, _ = metadata.split(b" ", maxsplit=2)
-        if set(object_id) == {ord("0")}:
-            continue
-        blobs.add(object_id.decode("ascii"))
-    return blobs
+        if set(object_id) != {ord("0")}:
+            object_ids.add(object_id.decode("ascii"))
+        if _matches_private_path(path):
+            path_violation = True
+    return object_ids, path_violation
 
 
-def _reachable_object_ids(repository: Path) -> set[str]:
-    output = _run_git(
-        repository,
-        "rev-list",
-        "--objects",
-        "--all",
-        "--reflog",
-        "--no-object-names",
-    )
-    return {line.decode("ascii") for line in output.splitlines() if line}
+def _scan_window(tail: bytes, chunk: bytes) -> tuple[bytes, bool]:
+    window = tail + chunk
+    return window[-_SCAN_OVERLAP_BYTES:], _matches_private_path(window)
 
 
-def _object_ids_by_type(
-    repository: Path, object_ids: Iterable[str]
-) -> dict[str, set[str]]:
-    requested = sorted(set(object_ids))
-    if not requested:
-        return {}
-    output = _run_git(
-        repository,
-        "cat-file",
-        "--batch-check=%(objectname) %(objecttype)",
-        input_bytes=("\n".join(requested) + "\n").encode("ascii"),
-    )
-    objects: dict[str, set[str]] = defaultdict(set)
-    for line in output.splitlines():
-        object_id, object_type = line.decode("ascii").split(" ", maxsplit=1)
-        objects[object_type].add(object_id)
-    return objects
-
-
-def _contains_private_path(stream, size: int) -> bool:
+def _read_and_scan_payload(
+    stream, size: int, *, capture: bool
+) -> tuple[bool, bytes | None]:
     found = False
-    tail = b""
+    raw_tail = b""
+    decoded_tail = b""
+    bom_tail = b""
+    decoder = None
+    captured = bytearray() if capture else None
     remaining = size
+
     while remaining:
         chunk = stream.read(min(_SCAN_CHUNK_BYTES, remaining))
         if not chunk:
-            raise GitCommandError("git cat-file ended before the advertised blob size")
+            raise GitCommandError(
+                "Git object streaming ended early; details are redacted"
+            )
         remaining -= len(chunk)
-        window = tail + chunk
-        if any(
-            pattern.search(window) is not None for pattern in _PRIVATE_PATH_PATTERNS
-        ):
-            found = True
-        tail = window[-_SCAN_OVERLAP_BYTES:]
-    return found
+        if captured is not None:
+            captured.extend(chunk)
+
+        raw_tail, raw_match = _scan_window(raw_tail, chunk)
+        found = found or raw_match
+
+        decode_chunk = chunk
+        if decoder is None:
+            bom_window = bom_tail + chunk
+            bom_positions = [
+                position
+                for byte_order_mark in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)
+                if (position := bom_window.find(byte_order_mark)) >= 0
+            ]
+            if bom_positions:
+                decoder = codecs.getincrementaldecoder("utf-16")(errors="replace")
+                decode_chunk = bom_window[min(bom_positions) :]
+            else:
+                bom_tail = bom_window[-1:]
+        if decoder is not None:
+            decoded = decoder.decode(decode_chunk, final=remaining == 0).encode("utf-8")
+            decoded_tail, decoded_match = _scan_window(decoded_tail, decoded)
+            found = found or decoded_match
+
+    return found, bytes(captured) if captured is not None else None
 
 
-def _scan_blobs(repository: Path, object_ids: Iterable[str]) -> set[str]:
-    requested = sorted(set(object_ids))
-    if not requested:
-        return set()
+def _object_id_bytes(repository: Path) -> int:
+    object_format = _run_git(repository, "rev-parse", "--show-object-format").strip()
+    if object_format == b"sha1":
+        return 20
+    if object_format == b"sha256":
+        return 32
+    raise GitCommandError("the repository uses an unsupported object format")
 
+
+def _parse_tree(payload: bytes, object_id_bytes: int) -> tuple[_TreeEntry, ...]:
+    entries: list[_TreeEntry] = []
+    position = 0
+    while position < len(payload):
+        mode_end = payload.find(b" ", position)
+        if mode_end < 0:
+            raise GitCommandError("a stored Git tree is malformed; details are redacted")
+        name_end = payload.find(b"\0", mode_end + 1)
+        if name_end < 0:
+            raise GitCommandError("a stored Git tree is malformed; details are redacted")
+        object_end = name_end + 1 + object_id_bytes
+        if object_end > len(payload):
+            raise GitCommandError("a stored Git tree is malformed; details are redacted")
+
+        mode = payload[position:mode_end]
+        name = payload[mode_end + 1 : name_end]
+        child_tree = (
+            payload[name_end + 1 : object_end].hex()
+            if mode in (b"40000", b"040000")
+            else None
+        )
+        entries.append(_TreeEntry(name=name, child_tree=child_tree))
+        position = object_end
+    return tuple(entries)
+
+
+def _commit_tree(payload: bytes, object_id_hex_chars: int) -> str | None:
+    first_line = payload.split(b"\n", maxsplit=1)[0]
+    if not first_line.startswith(b"tree "):
+        return None
+    object_id = first_line.removeprefix(b"tree ")
+    if len(object_id) != object_id_hex_chars:
+        return None
+    try:
+        int(object_id, 16)
+    except ValueError:
+        return None
+    return object_id.decode("ascii")
+
+
+def _scan_stored_objects(
+    repository: Path,
+) -> tuple[dict[str, str], dict[str, tuple[_TreeEntry, ...]], set[str]]:
+    object_id_bytes = _object_id_bytes(repository)
     process = subprocess.Popen(
-        ["git", "-C", str(repository), "cat-file", "--batch"],
-        stdin=subprocess.PIPE,
+        [
+            "git",
+            "-C",
+            str(repository),
+            "cat-file",
+            "--batch",
+            "--batch-all-objects",
+            "--unordered",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    if process.stdin is None or process.stdout is None or process.stderr is None:
+    if process.stdout is None or process.stderr is None:
         process.kill()
-        raise GitCommandError("failed to open git cat-file pipes")
+        raise GitCommandError("failed to open Git object streaming pipes")
 
-    violations: set[str] = set()
-    return_code = -1
-    error_output = b""
+    content_violations: dict[str, str] = {}
+    trees: dict[str, tuple[_TreeEntry, ...]] = {}
+    commit_trees: set[str] = set()
     try:
-        for object_id in requested:
-            process.stdin.write(object_id.encode("ascii") + b"\n")
-            process.stdin.flush()
+        while True:
             header = process.stdout.readline()
             if not header:
-                raise GitCommandError(
-                    "git cat-file ended before returning a blob header"
-                )
+                break
             fields = header.rstrip(b"\n").split(b" ")
-            if len(fields) != 3 or fields[1] != b"blob":
+            if len(fields) != 3:
                 raise GitCommandError(
-                    f"git cat-file returned an unexpected header for object {object_id}"
+                    "Git returned a malformed object header; details are redacted"
                 )
-            size = int(fields[2])
-            if _contains_private_path(process.stdout, size):
-                violations.add(object_id)
+            object_id_bytes_text, object_type_bytes, size_bytes = fields
+            object_id = object_id_bytes_text.decode("ascii")
+            object_type = object_type_bytes.decode("ascii")
+            size = int(size_bytes)
+            capture = object_type in ("commit", "tree")
+            matched, payload = _read_and_scan_payload(
+                process.stdout, size, capture=capture
+            )
             if process.stdout.read(1) != b"\n":
-                raise GitCommandError("git cat-file returned a malformed blob boundary")
-    finally:
-        process.stdin.close()
-        return_code = process.wait()
-        error_output = process.stderr.read()
+                raise GitCommandError(
+                    "Git returned a malformed object boundary; details are redacted"
+                )
 
+            if matched and object_type in ("blob", "commit", "tag"):
+                content_violations[object_id] = object_type
+            if object_type == "tree":
+                assert payload is not None
+                trees[object_id] = _parse_tree(payload, object_id_bytes)
+            elif object_type == "commit":
+                assert payload is not None
+                root_tree = _commit_tree(payload, object_id_bytes * 2)
+                if root_tree is not None:
+                    commit_trees.add(root_tree)
+    except BaseException:
+        process.kill()
+        process.wait()
+        process.stderr.read()
+        raise
+
+    return_code = process.wait()
+    process.stderr.read()
     if return_code != 0:
-        detail = error_output.decode("utf-8", errors="replace").strip()
-        raise GitCommandError(detail or "git cat-file failed")
-    return violations
+        raise GitCommandError("Git object streaming failed; details are redacted")
+    return content_violations, trees, commit_trees
 
 
-def _scan_objects(
-    repository: Path, object_ids: Iterable[str], expected_type: str
+def _scan_tree_paths(
+    trees: dict[str, tuple[_TreeEntry, ...]], commit_trees: set[str]
 ) -> set[str]:
-    requested = sorted(set(object_ids))
-    if not requested:
-        return set()
-
-    process = subprocess.Popen(
-        ["git", "-C", str(repository), "cat-file", "--batch"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if process.stdin is None or process.stdout is None or process.stderr is None:
-        process.kill()
-        raise GitCommandError("failed to open git cat-file pipes")
-
+    child_trees = {
+        entry.child_tree
+        for entries in trees.values()
+        for entry in entries
+        if entry.child_tree in trees
+    }
+    roots = (set(trees) - child_trees) | (commit_trees & set(trees))
     violations: set[str] = set()
-    return_code = -1
-    error_output = b""
-    try:
-        for object_id in requested:
-            process.stdin.write(object_id.encode("ascii") + b"\n")
-            process.stdin.flush()
-            header = process.stdout.readline()
-            if not header:
-                raise GitCommandError(
-                    "git cat-file ended before returning an object header"
-                )
-            fields = header.rstrip(b"\n").split(b" ")
-            if len(fields) != 3 or fields[1].decode("ascii") != expected_type:
-                raise GitCommandError(
-                    f"git cat-file returned an unexpected header for object {object_id}"
-                )
-            size = int(fields[2])
-            if _contains_private_path(process.stdout, size):
-                violations.add(object_id)
-            if process.stdout.read(1) != b"\n":
-                raise GitCommandError(
-                    "git cat-file returned a malformed object boundary"
-                )
-    finally:
-        process.stdin.close()
-        return_code = process.wait()
-        error_output = process.stderr.read()
+    stack = [(root, b"") for root in sorted(roots)]
 
-    if return_code != 0:
-        detail = error_output.decode("utf-8", errors="replace").strip()
-        raise GitCommandError(detail or "git cat-file failed")
+    while stack:
+        tree_id, prefix = stack.pop()
+        for entry in trees[tree_id]:
+            path = prefix + b"/" + entry.name if prefix else entry.name
+            if _matches_private_path(path):
+                violations.add(tree_id)
+            if entry.child_tree in trees:
+                stack.append((entry.child_tree, path))
     return violations
 
 
-def check_repository(repository: Path) -> list[tuple[str, tuple[str, ...]]]:
+def _pending_commit_violations(
+    repository: Path, commit_message: Path
+) -> list[Violation]:
+    try:
+        message = commit_message.read_bytes()
+    except OSError as exc:
+        raise GitCommandError(
+            "the pending commit message could not be read; details are redacted"
+        ) from exc
+
+    violations: list[Violation] = []
+    if _read_and_scan_payload_bytes(message):
+        violations.append(Violation("pending commit message"))
+
+    identities = b"\n".join(
+        (
+            _run_git(repository, "var", "GIT_AUTHOR_IDENT"),
+            _run_git(repository, "var", "GIT_COMMITTER_IDENT"),
+        )
+    )
+    if _read_and_scan_payload_bytes(identities):
+        violations.append(Violation("pending commit metadata"))
+    return violations
+
+
+def _read_and_scan_payload_bytes(payload: bytes) -> bool:
+    matched, _ = _read_and_scan_payload(
+        io.BytesIO(payload), len(payload), capture=False
+    )
+    return matched
+
+
+def check_repository(repository: Path) -> list[Violation]:
     repository = repository.resolve()
-    index = _index_blob_ids(repository)
-    reachable = _object_ids_by_type(repository, _reachable_object_ids(repository))
+    index_object_ids, index_path_violation = _index_state(repository)
+    content_violations, trees, commit_trees = _scan_stored_objects(repository)
 
     sources: dict[str, set[str]] = defaultdict(set)
-    for object_id in index:
-        sources[object_id].add("tracked index")
-    for object_id in reachable.get("blob", set()):
-        sources[object_id].add("reachable Git history")
+    for object_id, object_type in content_violations.items():
+        sources[object_id].add(f"stored Git {object_type} object")
+        if object_type == "blob" and object_id in index_object_ids:
+            sources[object_id].add("tracked index blob")
+    for object_id in _scan_tree_paths(trees, commit_trees):
+        sources[object_id].add("stored Git tree path")
 
-    violations = _scan_blobs(repository, sources)
-    for object_id in _scan_objects(
-        repository, reachable.get("commit", set()), "commit"
-    ):
-        sources[object_id].add("reachable commit object")
-        violations.add(object_id)
-    for object_id in _scan_objects(repository, reachable.get("tag", set()), "tag"):
-        sources[object_id].add("reachable annotated tag object")
-        violations.add(object_id)
-
-    return [
-        (object_id, tuple(sorted(sources[object_id])))
-        for object_id in sorted(violations)
+    violations = [
+        Violation(" and ".join(sorted(object_sources)), object_id)
+        for object_id, object_sources in sources.items()
     ]
+    if index_path_violation:
+        violations.append(Violation("tracked index path"))
+    return sorted(violations)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Reject private user-home absolute paths in the tracked Git index and "
-            "reachable Git history blobs, commits, and annotated tags."
+            "Reject private user-home absolute paths in the tracked Git index, "
+            "stored Git objects, reconstructed tree paths, and pending commits."
         )
     )
     parser.add_argument(
@@ -259,25 +367,40 @@ def main(argv: list[str] | None = None) -> int:
         default=Path.cwd(),
         help="repository to inspect (defaults to the current directory)",
     )
+    parser.add_argument(
+        "--commit-message",
+        type=Path,
+        help="also inspect a pending commit message and commit identities",
+    )
     args = parser.parse_args(argv)
 
     try:
         violations = check_repository(args.repository)
-    except (GitCommandError, OSError, ValueError) as exc:
-        print(f"private-path guard failed: {exc}", file=sys.stderr)
+        if args.commit_message is not None:
+            violations.extend(
+                _pending_commit_violations(args.repository.resolve(), args.commit_message)
+            )
+    except Exception:
+        print(
+            "private-path guard failed; all error details are redacted",
+            file=sys.stderr,
+        )
         return 2
 
     if not violations:
         print(
-            "Private-path guard passed: tracked index and reachable Git history are clean."
+            "Private-path guard passed: tracked index, stored Git objects, "
+            "tree paths, and pending inputs are clean."
         )
         return 0
 
-    for object_id, sources in violations:
-        source_list = " and ".join(sources)
+    for violation in sorted(violations):
+        object_detail = (
+            f" object {violation.object_id}" if violation.object_id is not None else ""
+        )
         print(
-            f"private-path guard: private absolute path detected in {source_list} "
-            f"object {object_id}; matched path text is redacted",
+            f"private-path guard: private absolute path detected in "
+            f"{violation.source}{object_detail}; matched path text is redacted",
             file=sys.stderr,
         )
     return 1

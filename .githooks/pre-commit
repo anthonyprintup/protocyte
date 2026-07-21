@@ -1,0 +1,20 @@
+#!/bin/sh
+
+repository=$(git rev-parse --show-toplevel 2>/dev/null) || {
+    echo "private-path guard failed; repository discovery details are redacted" >&2
+    exit 2
+}
+
+if command -v python >/dev/null 2>&1 &&
+    python -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1; then
+    exec python "$repository/.github/scripts/check_private_paths.py" \
+        --repository "$repository" >/dev/null
+fi
+if command -v python3 >/dev/null 2>&1 &&
+    python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 12))' >/dev/null 2>&1; then
+    exec python3 "$repository/.github/scripts/check_private_paths.py" \
+        --repository "$repository" >/dev/null
+fi
+
+echo "private-path guard requires Python 3.12 or newer on PATH" >&2
+exit 2

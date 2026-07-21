@@ -131,6 +131,37 @@ validation before production use.
 Responsibility for the contents of this repository and its releases remains
 with the human maintainers and contributors.
 
+## Contributing
+
+Enable the tracked privacy hooks once in each checkout before committing:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+The pre-commit hook scans raw staged names and content, every commit, tag, and
+blob in the local Git object database (including unreachable objects), and
+reconstructed stored tree paths. The commit-message hook repeats that scan and
+also checks the pending message plus author and committer identities before Git
+creates the commit object. Both hooks redact matched text and object contents.
+
+Run the same complete check directly at any time:
+
+```bash
+python .github/scripts/check_private_paths.py
+```
+
+If the guard finds a private path, remove every reference, reflog entry, staged
+name, and staged file that retains it, then prune the offending unreachable
+object according to the repository's recovery policy. The guard intentionally
+continues to reject content that was unstaged but still exists in the object
+database.
+
+Git hooks are a local safeguard, not an access-control boundary. Contributors
+can bypass them with `--no-verify`, replace or disable `core.hooksPath`, or use
+lower-level object-writing commands. CI therefore runs the complete guard again
+against every object available in its full-history checkout.
+
 ## What It Supports
 
 Protocyte currently targets protobuf message schemas, advertises
