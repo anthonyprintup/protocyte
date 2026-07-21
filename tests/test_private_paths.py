@@ -371,6 +371,53 @@ def test_guard_rejects_posix_profile_punctuation_in_blob_paths(
     _assert_redacted(result, account_name)
 
 
+def test_guard_accepts_placeholder_accounts_at_text_boundaries(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    windows_users = "/".join(("C:", "Users"))
+    posix_home = "/" + "home"
+    content = "\n".join(
+        (
+            '"' + windows_users + "/{account}" + '"',
+            windows_users + "/[account])",
+            '"' + posix_home + "/${USER}" + '"',
+            posix_home + "/<account>,",
+            posix_home + "/[account]`",
+            posix_home + "/$USER/project",
+            windows_users + "/$USERNAME/project",
+            windows_users + "/.../project",
+            posix_home + "/…/project",
+        )
+    )
+    (repository / "fixture.txt").write_text(content, encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_guard_does_not_treat_invalid_windows_components_as_posix_accounts(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    content = "\n".join(
+        (
+            "/".join(("C:", "Users", "a|b", "repo")),
+            "/".join(("C:", "Users", "*", "repo")),
+            "\\".join(("C:", "Users", "a|b", "repo")),
+            "\\".join(("C:", "Users", "*", "repo")),
+        )
+    )
+    (repository / "fixture.txt").write_text(content, encoding="utf-8")
+    _git(repository, "add", "fixture.txt")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_guard_rejects_private_paths_in_raw_index_names(tmp_path: Path) -> None:
     repository = _repository(tmp_path / "repository")
     blob = _store_blob(repository, b"portable content\n")
@@ -422,6 +469,51 @@ def test_guard_scans_binary_blobs_without_disclosing_the_match(tmp_path: Path) -
     (repository / "fixture.bin").write_bytes(
         b"\x00\xffbinary\x00" + private_path + b"\x00"
     )
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+@pytest.mark.parametrize("byte_phase", [0, 1])
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_guard_rejects_bomless_utf16_at_each_byte_phase(
+    tmp_path: Path, encoding: str, byte_phase: int
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    content = b"x" * byte_phase + _private_path("windows-forward").encode(
+        encoding
+    )
+    (repository / "fixture.bin").write_bytes(content)
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+@pytest.mark.parametrize("byte_phase", [0, 1])
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_guard_rejects_bomless_utf16_across_scan_chunk_boundaries(
+    tmp_path: Path, encoding: str, byte_phase: int
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    chunk_bytes = 1024 * 1024
+    path_start = chunk_bytes - 4 + byte_phase
+    padding_units = (path_start - byte_phase) // 2
+    padding = ("a" * (padding_units - 1) + " ").encode(encoding)
+    content = (
+        b"x" * byte_phase
+        + padding
+        + _private_path("windows-forward").encode(encoding)
+    )
+    assert len(b"x" * byte_phase + padding) == path_start
+    (repository / "fixture.bin").write_bytes(content)
     _git(repository, "add", "fixture.bin")
 
     result = _run_guard(repository)
@@ -529,6 +621,91 @@ def test_guard_ignores_unaligned_bom_like_bytes_inside_utf16_text(
         + unaligned_marker_text.encode(encoding)
         + _private_path("windows-forward").encode(encoding)
     )
+    (repository / "fixture.bin").write_bytes(content)
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+@pytest.mark.parametrize(
+    ("byte_order_mark", "encoding"),
+    [
+        (codecs.BOM_UTF16_LE, "utf-16-le"),
+        (codecs.BOM_UTF16_BE, "utf-16-be"),
+    ],
+)
+def test_guard_preserves_utf16_content_across_aligned_opposite_bom_bytes(
+    tmp_path: Path, byte_order_mark: bytes, encoding: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    content = (
+        byte_order_mark
+        + "\ufffe".encode(encoding)
+        + _private_path("windows-forward").encode(encoding)
+    )
+    (repository / "fixture.bin").write_bytes(content)
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+@pytest.mark.parametrize(
+    ("byte_order_mark", "encoding"),
+    [
+        (codecs.BOM_UTF16_LE, "utf-16-le"),
+        (codecs.BOM_UTF16_BE, "utf-16-be"),
+    ],
+)
+def test_guard_starts_same_endian_utf16_segments_at_the_opposite_byte_phase(
+    tmp_path: Path, byte_order_mark: bytes, encoding: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    content = (
+        byte_order_mark
+        + "portable".encode(encoding)
+        + b"x"
+        + byte_order_mark
+        + _private_path("windows-forward").encode(encoding)
+    )
+    (repository / "fixture.bin").write_bytes(content)
+    _git(repository, "add", "fixture.bin")
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 1
+    assert "tracked index blob" in result.stderr
+    _assert_redacted(result)
+
+
+@pytest.mark.parametrize(
+    ("byte_order_mark", "encoding"),
+    [
+        (codecs.BOM_UTF16_LE, "utf-16-le"),
+        (codecs.BOM_UTF16_BE, "utf-16-be"),
+    ],
+)
+def test_guard_finds_opposite_phase_utf16_boms_split_across_scan_chunks(
+    tmp_path: Path, byte_order_mark: bytes, encoding: str
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    chunk_bytes = 1024 * 1024
+    padding = "a" * ((chunk_bytes - 4) // 2)
+    content = (
+        byte_order_mark
+        + padding.encode(encoding)
+        + b"x"
+        + byte_order_mark
+        + _private_path("windows-forward").encode(encoding)
+    )
+    assert content[chunk_bytes - 1 : chunk_bytes + 1] == byte_order_mark
     (repository / "fixture.bin").write_bytes(content)
     _git(repository, "add", "fixture.bin")
 
@@ -674,6 +851,21 @@ def test_guard_rejects_posix_profile_punctuation_in_stored_tree_paths(
     assert result.returncode == 1
     assert "stored Git tree path" in result.stderr
     _assert_redacted(result, account_name)
+
+
+def test_guard_does_not_reinterpret_windows_drive_tails_in_stored_trees(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path / "repository")
+    blob = _store_blob(repository, b"portable content\n")
+    account = _store_tree(repository, [(b"100644", b"a|b", blob)])
+    users = _store_tree(repository, [(b"40000", b"Users", account)])
+    drive = _store_tree(repository, [(b"40000", b"c", users)])
+    _store_tree(repository, [(b"40000", b"C$", drive)])
+
+    result = _run_guard(repository)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_guard_scans_shared_tree_dags_in_polynomial_time(tmp_path: Path) -> None:

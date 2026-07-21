@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import codecs
 import io
 import re
 import subprocess
@@ -16,17 +15,23 @@ _EXPLICIT_HOME_PLACEHOLDER = (
     rb"(?:"
     rb"%[A-Za-z_][A-Za-z0-9_.-]*%|"
     rb"\$\{[^{}\\/]+\}|"
+    rb"\$[A-Za-z_][A-Za-z0-9_]*|"
     rb"\{[^{}\\/]+\}|"
     rb"<[^<>\\/]+>|"
-    rb"\[[^\[\]\\/]+\]"
+    rb"\[[^\[\]\\/]+\]|"
+    rb"\.{3}|"
+    rb"\xe2\x80\xa6"
     rb")"
 )
+_EXPLICIT_HOME_PLACEHOLDER_BOUNDARY = (
+    rb"(?=[\\/]|$|[\x00\r\n\t \"'`),;:!?}\]])"
+)
 _WINDOWS_HOME_ACCOUNT = (
-    rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + rb"(?=[\\/]|$))"
+    rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + _EXPLICIT_HOME_PLACEHOLDER_BOUNDARY + rb")"
     + rb"[^\x00-\x1f<>:\"/\\|?*]++"
 )
 _POSIX_HOME_ACCOUNT = (
-    rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + rb"(?=/|$))"
+    rb"(?!" + _EXPLICIT_HOME_PLACEHOLDER + _EXPLICIT_HOME_PLACEHOLDER_BOUNDARY + rb")"
     + rb"[^\x00/]++"
 )
 
@@ -51,7 +56,7 @@ _PRIVATE_PATH_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        rb"(?<![A-Za-z0-9._-])/(?:home|Users)/"
+        rb"(?<![:A-Za-z0-9._-])/(?:home|Users)/"
         + _POSIX_HOME_ACCOUNT
         + _HOME_PATH_BOUNDARY,
         re.IGNORECASE,
@@ -107,7 +112,7 @@ _TREE_WINDOWS_ACCOUNT_PREFIX_PATTERNS = (
     ),
 )
 _TREE_POSIX_ACCOUNT_PREFIX = re.compile(
-    rb"(?<![A-Za-z0-9._-])/(?:home|Users)$", re.IGNORECASE
+    rb"(?<![:A-Za-z0-9._-])/(?:home|Users)$", re.IGNORECASE
 )
 _TREE_UNC_ADMIN_PREFIX = re.compile(
     rb"(?<![:\\/A-Za-z0-9])[\\/]{2}(?:\?[\\/]UNC[\\/])?"
@@ -209,68 +214,50 @@ def _scan_window(tail: bytes, chunk: bytes) -> tuple[bytes, bool]:
     return window[-_SCAN_OVERLAP_BYTES:], _matches_private_path(window)
 
 
-class _Utf16SegmentScanner:
+class _Utf16Candidate:
     def __init__(self) -> None:
-        self._encoding: str | None = None
+        self._encoding = ""
+        self._leading_bytes = 0
         self._pending = b""
         self._decoded_tail = b""
 
-    def _scan_decoded(self, data: bytes) -> bool:
-        if self._encoding is None or not data:
+    @classmethod
+    def create(cls, encoding: str, byte_phase: int) -> _Utf16Candidate:
+        candidate = cls()
+        candidate._encoding = encoding
+        candidate._leading_bytes = byte_phase
+        return candidate
+
+    def feed(self, data: bytes, *, final: bool) -> bool:
+        if self._leading_bytes:
+            skipped = min(self._leading_bytes, len(data))
+            self._leading_bytes -= skipped
+            data = data[skipped:]
+        buffered = self._pending + data
+        process_bytes = len(buffered) if final else len(buffered) & ~1
+        decoded_bytes = buffered[:process_bytes]
+        self._pending = buffered[process_bytes:]
+        if not decoded_bytes:
             return False
-        decoded = data.decode(self._encoding, errors="replace").encode("utf-8")
+        decoded = decoded_bytes.decode(self._encoding, errors="replace").encode(
+            "utf-8"
+        )
         self._decoded_tail, matched = _scan_window(self._decoded_tail, decoded)
         return matched
 
-    def _next_byte_order_mark(
-        self, data: bytes, position: int
-    ) -> tuple[int, str] | None:
-        candidates: list[tuple[int, str]] = []
-        for marker, encoding in (
-            (codecs.BOM_UTF16_LE, "utf-16-le"),
-            (codecs.BOM_UTF16_BE, "utf-16-be"),
-        ):
-            marker_position = data.find(marker, position)
-            while (
-                marker_position >= 0
-                and self._encoding is not None
-                and (marker_position - position) % 2 != 0
-            ):
-                marker_position = data.find(marker, marker_position + 1)
-            if marker_position >= 0:
-                candidates.append((marker_position, encoding))
-        return min(candidates) if candidates else None
+
+class _Utf16ParallelScanner:
+    def __init__(self) -> None:
+        self._candidates = tuple(
+            _Utf16Candidate.create(encoding, byte_phase)
+            for encoding in ("utf-16-le", "utf-16-be")
+            for byte_phase in (0, 1)
+        )
 
     def feed(self, chunk: bytes, *, final: bool) -> bool:
-        data = self._pending + chunk
-        self._pending = b""
-        position = 0
         matched = False
-
-        while True:
-            next_marker = self._next_byte_order_mark(data, position)
-            if next_marker is None:
-                break
-            marker_position, encoding = next_marker
-            matched = self._scan_decoded(data[position:marker_position]) or matched
-            self._encoding = encoding
-            self._decoded_tail = b""
-            position = marker_position + 2
-
-        remaining = data[position:]
-        if final:
-            return self._scan_decoded(remaining) or matched
-
-        if self._encoding is None:
-            self._pending = remaining[-1:]
-            return matched
-
-        retained_bytes = 2 if len(remaining) % 2 == 0 else 1
-        if len(remaining) > retained_bytes:
-            matched = self._scan_decoded(remaining[:-retained_bytes]) or matched
-            self._pending = remaining[-retained_bytes:]
-        else:
-            self._pending = remaining
+        for candidate in self._candidates:
+            matched = candidate.feed(chunk, final=final) or matched
         return matched
 
 
@@ -279,7 +266,7 @@ def _read_and_scan_payload(
 ) -> tuple[bool, bytes | None]:
     found = False
     raw_tail = b""
-    utf16_scanner = _Utf16SegmentScanner()
+    utf16_scanner = _Utf16ParallelScanner()
     captured = bytearray() if capture else None
     remaining = size
 
