@@ -1,5 +1,12 @@
+from __future__ import annotations
+
+import json
 import importlib.util
 import sys
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +21,163 @@ assert SPEC.loader is not None
 publish_release = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = publish_release
 SPEC.loader.exec_module(publish_release)
+
+
+@dataclass(frozen=True)
+class _HTTPResponse:
+    status: int
+    headers: dict[str, str]
+    body: bytes
+
+
+@dataclass(frozen=True)
+class _RecordedRequest:
+    method: str
+    path: str
+    headers: dict[str, str]
+    body: bytes
+
+
+class _LocalHTTPServer:
+    def __init__(self, respond: Callable[[_RecordedRequest], _HTTPResponse]) -> None:
+        self._respond = respond
+        self.requests: list[_RecordedRequest] = []
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self._thread = threading.Thread(target=self._server.serve_forever)
+
+    @property
+    def url(self) -> str:
+        host, port = self._server.server_address
+        return f"http://{host}:{port}"
+
+    def __enter__(self) -> _LocalHTTPServer:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self._server.shutdown()
+        self._thread.join()
+        self._server.server_close()
+
+    def _handler(self) -> type[BaseHTTPRequestHandler]:
+        fixture = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _respond(self) -> None:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                request = _RecordedRequest(
+                    method=self.command,
+                    path=self.path,
+                    headers=dict(self.headers.items()),
+                    body=self.rfile.read(content_length),
+                )
+                fixture.requests.append(request)
+                response = fixture._respond(request)
+                self.send_response(response.status)
+                for name, value in response.headers.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(response.body)))
+                self.end_headers()
+                self.wfile.write(response.body)
+
+            do_GET = _respond
+            do_PATCH = _respond
+            do_POST = _respond
+
+            def log_message(self, format: str, *args: object) -> None:
+                del format, args
+
+        return Handler
+
+
+def _http_response(
+    status: int, *, headers: dict[str, str] | None = None, body: bytes = b""
+) -> _HTTPResponse:
+    return _HTTPResponse(status=status, headers=headers or {}, body=body)
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_authenticated_client_rejects_cross_origin_redirect_without_replay(
+    status: int,
+) -> None:
+    with _LocalHTTPServer(
+        lambda request: _http_response(
+            200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps({"unexpected": request.path}).encode(),
+        )
+    ) as redirected:
+        with _LocalHTTPServer(
+            lambda _request: _http_response(
+                status,
+                headers={"Location": f"{redirected.url}/stolen"},
+                body=b'{"message":"Bearer contents-token"}',
+            )
+        ) as source:
+            client = publish_release._GitHubClient("contents-token", source.url)
+
+            with pytest.raises(
+                publish_release.RedirectRejectedError,
+                match=rf"refused HTTP redirect \({status}\)",
+            ) as error:
+                client.request_json("POST", "mutate", payload={"draft": True})
+
+    assert "contents-token" not in str(error.value)
+    assert [(request.method, request.path) for request in source.requests] == [
+        ("POST", "/mutate")
+    ]
+    assert source.requests[0].headers["Authorization"] == "Bearer contents-token"
+    assert source.requests[0].body == b'{"draft":true}'
+    assert redirected.requests == []
+
+
+def test_authenticated_client_rejects_same_origin_redirect() -> None:
+    with _LocalHTTPServer(
+        lambda _request: _http_response(
+            307,
+            headers={"Location": f"{source.url}/follow-up"},
+            body=b"redirect",
+        )
+    ) as source:
+        client = publish_release._GitHubClient("contents-token", source.url)
+
+        with pytest.raises(
+            publish_release.RedirectRejectedError,
+            match=r"refused HTTP redirect \(307\)",
+        ):
+            client.request_json("PATCH", "same-origin", payload={"draft": False})
+
+    assert [(request.method, request.path) for request in source.requests] == [
+        ("PATCH", "/same-origin")
+    ]
+    assert source.requests[0].headers["Authorization"] == "Bearer contents-token"
+
+
+def test_authenticated_client_preserves_normal_and_error_handling() -> None:
+    def respond(request: _RecordedRequest) -> _HTTPResponse:
+        if request.path == "/ok":
+            return _http_response(
+                200,
+                headers={"Content-Type": "application/json"},
+                body=b'{"result":"ok"}',
+            )
+        return _http_response(404, body=b'{"message":"missing"}')
+
+    with _LocalHTTPServer(respond) as server:
+        client = publish_release._GitHubClient("contents-token", server.url)
+
+        assert client.request_json("GET", "ok") == {"result": "ok"}
+        with pytest.raises(publish_release.ApiError, match="returned 404: .*missing"):
+            client.request_json("GET", "missing")
+
+    assert [(request.method, request.path) for request in server.requests] == [
+        ("GET", "/ok"),
+        ("GET", "/missing"),
+    ]
+    assert all(
+        request.headers["Authorization"] == "Bearer contents-token"
+        for request in server.requests
+    )
 
 
 def _release(

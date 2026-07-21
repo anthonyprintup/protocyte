@@ -33,6 +33,49 @@ class ApiError(ReleaseError):
         self.status = status
 
 
+class RedirectRejectedError(ReleaseError):
+    """An authenticated GitHub request received an unsafe redirect."""
+
+    def __init__(self, method: str, url: str, status: int) -> None:
+        super().__init__(
+            f"GitHub API {method} {url} refused HTTP redirect ({status}); "
+            "authenticated requests never follow redirects"
+        )
+
+
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before urllib can replay an authenticated request."""
+
+    def _reject(
+        self,
+        request: urllib.request.Request,
+        response: object,
+        code: int,
+        message: str,
+        headers: object,
+    ) -> None:
+        del response, message, headers
+        raise RedirectRejectedError(request.get_method(), request.full_url, code)
+
+    http_error_301 = _reject
+    http_error_302 = _reject
+    http_error_303 = _reject
+    http_error_307 = _reject
+    http_error_308 = _reject
+
+    def http_error_default(
+        self,
+        request: urllib.request.Request,
+        response: object,
+        code: int,
+        message: str,
+        headers: object,
+    ) -> None:
+        if 300 <= code < 400:
+            self._reject(request, response, code, message, headers)
+        return None
+
+
 @dataclass(frozen=True)
 class ReleaseSpec:
     repository: str
@@ -86,6 +129,7 @@ class _GitHubClient:
     def __init__(self, token: str, api_url: str) -> None:
         self._token = token
         self.api_url = api_url.rstrip("/")
+        self._opener = urllib.request.build_opener(_RejectRedirects())
 
     def request_json(
         self,
@@ -113,7 +157,7 @@ class _GitHubClient:
 
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with self._opener.open(request, timeout=60) as response:
                 response_body = response.read()
         except urllib.error.HTTPError as error:
             response_body = error.read().decode("utf-8", errors="replace")
