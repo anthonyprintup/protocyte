@@ -926,7 +926,14 @@ def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> 
     ).read_text(encoding="utf-8")
 
     assert '"-DARGUMENT_FILE=${protocyte_response_file_relative}"' in generation_command
+    assert (
+        '"-DLOCK_DIRECTORY_IDENTITY_SHA256=${protocyte_lock_directory_identity_hash}"'
+        in generation_command
+    )
     assert '"@${ARGUMENT_FILE}"' in generation_script
+    assert generation_script.count(
+        "_protocyte_validate_generation_lock_namespace()"
+    ) == 2
     assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in generation_command
     assert (
         '"-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"'
@@ -6866,6 +6873,67 @@ def _build_tree_owner_hash(build_directory: Path) -> str:
     return _filesystem_identity_hash(build_directory)
 
 
+def _owner_transaction_record(
+    root_owner_record: Path, transaction_id: str, state: str
+) -> Path:
+    return root_owner_record.parent / (
+        f"{root_owner_record.name}.{transaction_id}.{state}"
+    )
+
+
+def _committed_owner_build_hash(owner_record: Path, root_owner_record: Path) -> str:
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in owner_record.read_text(encoding="utf-8").splitlines()
+    )
+    assert len(owner_fields["build-tree-sha256"]) == 64
+    if owner_fields["version"] == "1":
+        assert set(owner_fields) == {"version", "build-tree-sha256"}
+        return owner_fields["build-tree-sha256"]
+
+    assert owner_fields["version"] == "2"
+    assert set(owner_fields) == {
+        "version",
+        "build-tree-sha256",
+        "transaction-sha256",
+    }
+    transaction_id = owner_fields["transaction-sha256"]
+    assert len(transaction_id) == 64
+    committed = _owner_transaction_record(
+        root_owner_record, transaction_id, "committed"
+    )
+    committed_bytes = committed.read_bytes()
+    assert hashlib.sha256(committed_bytes).hexdigest() == transaction_id
+    manifest_lines = committed_bytes.decode("utf-8").splitlines()
+    manifest_fields = dict(line.split("=", maxsplit=1) for line in manifest_lines[:4])
+    assert list(manifest_fields) == [
+        "version",
+        "nonce",
+        "build-tree-sha256",
+        "claims-sha256",
+    ]
+    assert manifest_fields["version"] == "1"
+    assert len(manifest_fields["nonce"]) == 64
+    assert len(manifest_fields["claims-sha256"]) == 64
+    assert manifest_fields["build-tree-sha256"] == owner_fields["build-tree-sha256"]
+    claim_ids = [line.removeprefix("claim-sha256=") for line in manifest_lines[4:]]
+    assert claim_ids
+    assert all(
+        line == f"claim-sha256={claim_id}"
+        for line, claim_id in zip(manifest_lines[4:], claim_ids, strict=True)
+    )
+    assert claim_ids == sorted(set(claim_ids))
+    assert (
+        hashlib.sha256(";".join(claim_ids).encode()).hexdigest()
+        == manifest_fields["claims-sha256"]
+    )
+    owner_identity = owner_record.resolve().as_posix()
+    if os.name == "nt":
+        owner_identity = owner_identity.lower()
+    assert hashlib.sha256(owner_identity.encode()).hexdigest() in claim_ids
+    return owner_fields["build-tree-sha256"]
+
+
 def _output_owner_record_path(source_dir: Path, output_path: Path) -> Path:
     return source_dir.parent / "output-locks" / (
         f"{_filesystem_identity_hash(output_path)}.owner"
@@ -6898,6 +6966,7 @@ def _write_out_dir_owner_project(
     target_count: int = 1,
     proto_names: tuple[str, ...] | None = None,
     runtime_prefix: str | None = None,
+    output_lock_root: Path | None = None,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -6968,11 +7037,12 @@ def _write_out_dir_owner_project(
             encoding="utf-8",
         )
         fake_protoc.chmod(0o755)
+    resolved_output_lock_root = output_lock_root or source_dir.parent / "output-locks"
     lines = [
         "cmake_minimum_required(VERSION 3.24)",
         "project(out_dir_ownership LANGUAGES NONE)",
         f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
-        f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{(source_dir.parent / "output-locks").as_posix()}")',
+        f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{resolved_output_lock_root.as_posix()}")',
         "function(_protocyte_setup_codegen_internal fetch_missing_import_sources)",
         "endfunction()",
         'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")',
@@ -7040,6 +7110,149 @@ def _build_out_dir_owner_project(
     )
 
 
+def _make_fake_protoc_fail_in_build(
+    source_dir: Path,
+    build_dir: Path,
+    *,
+    ready_path: Path | None = None,
+    release_path: Path | None = None,
+) -> None:
+    fake_protoc_script = source_dir / "fake-protoc.py"
+    failure_lines = [
+        f"if Path.cwd().resolve() == Path({str(build_dir)!r}).resolve():",
+    ]
+    if ready_path is not None:
+        assert release_path is not None
+        failure_lines.extend(
+            [
+                f"    Path({str(ready_path)!r}).write_text('ready\\n', encoding='utf-8')",
+                "    deadline = time.monotonic() + 30.0",
+                f"    while not Path({str(release_path)!r}).exists():",
+                "        if time.monotonic() >= deadline:",
+                "            raise SystemExit(92)",
+                "        time.sleep(0.01)",
+            ]
+        )
+    else:
+        assert release_path is None
+    failure_lines.extend(
+        [
+            "    print('simulated protoc failure', file=sys.stderr)",
+            "    raise SystemExit(23)",
+            "",
+        ]
+    )
+    original = fake_protoc_script.read_text(encoding="utf-8")
+    instrumented = original.replace("import sys\n", "import sys\nimport time\n")
+    instrumented = instrumented.replace(
+        "for proto_name, paths in outputs.items():",
+        "\n".join(failure_lines) + "for proto_name, paths in outputs.items():",
+    )
+    fake_protoc_script.write_text(instrumented, encoding="utf-8")
+
+
+def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_dir.mkdir()
+    shutil.copy2(
+        repo_root / "cmake" / "ProtocyteOutputSafety.cmake",
+        script_dir / "ProtocyteOutputSafety.cmake",
+    )
+    generation_source = (repo_root / "cmake" / "ProtocyteGenerate.cmake").read_text(
+        encoding="utf-8"
+    )
+    staging_anchor = '        file(WRITE "${owner_staging}" "${transaction_owner}")\n'
+    staging_instrumentation = (
+        "        if(\n"
+        "            DEFINED PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
+        "            AND owner_stage_index EQUAL PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
+        "        )\n"
+        '            file(MAKE_DIRECTORY "${owner_staging}")\n'
+        "        endif()\n" + staging_anchor
+    )
+    assert generation_source.count(staging_anchor) == 1
+    generation_source = generation_source.replace(
+        staging_anchor, staging_instrumentation
+    )
+
+    publication_anchor = (
+        '        list(APPEND published_owner_markers "${owner_marker}")\n'
+    )
+    publication_instrumentation = (
+        publication_anchor
+        + '        math(EXPR published_owner_count "${owner_marker_index} + 1")\n'
+        + "        if(\n"
+        + "            DEFINED PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS\n"
+        + "            AND published_owner_count EQUAL PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS\n"
+        + "        )\n"
+        + '            message(FATAL_ERROR "injected ownership publication termination")\n'
+        + "        endif()\n"
+    )
+    assert generation_source.count(publication_anchor) == 1
+    generation_source = generation_source.replace(
+        publication_anchor, publication_instrumentation
+    )
+    instrumented_script = script_dir / "ProtocyteGenerate.cmake"
+    instrumented_script.write_text(generation_source, encoding="utf-8")
+    return instrumented_script
+
+
+def _run_direct_owner_generation(
+    source_dir: Path,
+    build_dir: Path,
+    output_directory: Path,
+    generation_script: Path,
+    *extra_arguments: str,
+) -> subprocess.CompletedProcess[str]:
+    build_dir.mkdir()
+    argument_file = build_dir / "arguments.rsp"
+    argument_file.write_text("", encoding="utf-8")
+    generated_outputs = (
+        output_directory / "demo_0.protocyte.hpp",
+        output_directory / "demo_0.protocyte.cpp",
+    )
+    output_keys = sorted(_filesystem_identity_hash(path) for path in generated_outputs)
+    lock_manifest = build_dir / "locks.list"
+    lock_manifest.write_text("\n".join(output_keys) + "\n", encoding="utf-8")
+    ownership_manifest = build_dir / "ownership-manifest"
+    ownership_manifest.mkdir()
+    (ownership_manifest / "output-root.path").write_text(
+        output_directory.as_posix(), encoding="utf-8"
+    )
+    for output_path in generated_outputs:
+        output_key = _filesystem_identity_hash(output_path)
+        (ownership_manifest / f"{output_key}.path").write_text(
+            output_path.as_posix(), encoding="utf-8"
+        )
+    owner_marker, owner_lock = _out_dir_owner_record_paths(output_directory)
+    fake_protoc = source_dir / ("fake-protoc.cmd" if os.name == "nt" else "fake-protoc")
+    return subprocess.run(
+        [
+            "cmake",
+            f"-DPROTOC_EXECUTABLE={fake_protoc}",
+            f"-DARGUMENT_FILE={argument_file}",
+            "-DGENERATION_TARGET=interrupted_codegen",
+            f"-DGENERATION_WORKING_DIRECTORY={build_dir}",
+            f"-DLOCK_DIRECTORY={source_dir.parent / 'output-locks'}",
+            "-DLOCK_DIRECTORY_IDENTITY_SHA256="
+            f"{_filesystem_identity_hash(source_dir.parent / 'output-locks')}",
+            f"-DLOCK_MANIFEST={lock_manifest}",
+            f"-DOUTPUT_DIRECTORY={output_directory}",
+            f"-DOUT_DIR_OWNER_MARKER={owner_marker}",
+            f"-DOUT_DIR_OWNER_LOCK={owner_lock}",
+            f"-DBUILD_OWNER_HASH={_build_tree_owner_hash(build_dir)}",
+            f"-DOWNERSHIP_MANIFEST_DIR={ownership_manifest}",
+            "-DSOURCE_DIRECTORY_HEX=00",
+            *extra_arguments,
+            "-P",
+            str(generation_script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _out_dir_snapshot(output_directory: Path) -> dict[str, bytes]:
     return {
         path.relative_to(output_directory).as_posix(): path.read_bytes()
@@ -7070,8 +7283,8 @@ def test_out_dir_owner_allows_same_build_tree_targets_and_configurations(
     for target in ("generated_0", "generated_1"):
         built = _build_out_dir_owner_project(build_dir, target)
         assert built.returncode == 0, built.stdout + built.stderr
-    assert marker.read_text(encoding="utf-8") == (
-        f"version=1\nbuild-tree-sha256={_build_tree_owner_hash(build_dir)}\n"
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(build_dir)
     )
     assert lock.is_file()
 
@@ -7107,6 +7320,197 @@ def test_second_build_tree_rejects_shared_out_dir_without_mutation(
     assert "No generated output was changed" in output
     assert marker.read_bytes() == marker_before
     assert _out_dir_snapshot(output_directory) == outputs_before
+
+
+def test_alternate_lock_root_after_cache_deletion_cannot_reclaim_out_dir_owner(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    first_build_dir = tmp_path / "build-first"
+    second_build_dir = tmp_path / "build-second"
+    output_directory = tmp_path / "generated"
+    first_lock_root = tmp_path / "output-locks-first"
+    second_lock_root = tmp_path / "output-locks-second"
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        output_lock_root=first_lock_root,
+    )
+
+    configured = _configure_out_dir_owner_project(source_dir, first_build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    built = _build_out_dir_owner_project(first_build_dir)
+    assert built.returncode == 0, built.stdout + built.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in marker.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        marker, owner_fields["transaction-sha256"], "committed"
+    )
+    marker_before = marker.read_bytes()
+    witness_before = witness.read_bytes()
+    outputs_before = _out_dir_snapshot(output_directory)
+    shutil.rmtree(first_lock_root)
+
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        output_lock_root=second_lock_root,
+    )
+    contender = _configure_out_dir_owner_project(source_dir, second_build_dir)
+
+    assert contender.returncode != 0
+    output = " ".join((contender.stdout + contender.stderr).split())
+    assert "owned by a different or deleted CMake build tree" in output
+    assert marker.read_bytes() == marker_before
+    assert witness.read_bytes() == witness_before
+    assert _out_dir_snapshot(output_directory) == outputs_before
+    assert not first_lock_root.exists()
+    assert not list(second_lock_root.glob("*.owner"))
+
+
+def test_missing_transaction_witness_is_not_treated_as_interrupted_publication(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    first_build_dir = tmp_path / "build-first"
+    contender_build_dir = tmp_path / "build-contender"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    _write_out_dir_owner_project(source_dir, output_directory)
+
+    configured = _configure_out_dir_owner_project(source_dir, first_build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    built = _build_out_dir_owner_project(first_build_dir)
+    assert built.returncode == 0, built.stdout + built.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in marker.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        marker, owner_fields["transaction-sha256"], "committed"
+    )
+    owner_records = [marker, *lock_root.glob("*.owner")]
+    owner_records_before = {path: path.read_bytes() for path in owner_records}
+    outputs_before = _out_dir_snapshot(output_directory)
+    witness.unlink()
+
+    contender = _configure_out_dir_owner_project(source_dir, contender_build_dir)
+
+    assert contender.returncode != 0
+    output = " ".join((contender.stdout + contender.stderr).split()).replace(
+        "\\", "/"
+    )
+    assert "missing or unverifiable transaction witness" in output
+    assert any(path.as_posix() in output for path in owner_records if path != marker)
+    assert witness.as_posix() in output
+    assert "Choose disjoint generated outputs" in output
+    assert "after confirming no build uses the output" in output
+    assert {path: path.read_bytes() for path in owner_records} == owner_records_before
+    assert _out_dir_snapshot(output_directory) == outputs_before
+
+
+def test_output_lock_root_rejects_symbolic_link_or_junction_alias(
+    tmp_path: Path,
+) -> None:
+    physical_lock_root = tmp_path / "physical-output-locks"
+    linked_lock_root = tmp_path / "linked-output-locks"
+    physical_lock_root.mkdir()
+    _create_generated_output_directory_link(linked_lock_root, physical_lock_root)
+    try:
+        result = _configure_cmake_snippet(
+            tmp_path,
+            "\n".join(
+                [
+                    f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{linked_lock_root.as_posix()}")',
+                    "_protocyte_shared_output_lock_directory(lock_directory)",
+                ]
+            ),
+        )
+
+        assert result.returncode != 0
+        output = " ".join((result.stdout + result.stderr).split())
+        assert "must not contain symbolic-link or junction components" in output
+    finally:
+        if linked_lock_root.exists():
+            linked_lock_root.unlink()
+
+
+def test_build_rejects_output_lock_root_replaced_by_junction_after_configure(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    displaced_lock_root = tmp_path / "configured-output-locks"
+    redirected_lock_root = tmp_path / "redirected-output-locks"
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        output_lock_root=lock_root,
+    )
+    configured = _configure_out_dir_owner_project(source_dir, build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+
+    lock_root.rename(displaced_lock_root)
+    redirected_lock_root.mkdir()
+    _create_generated_output_directory_link(lock_root, redirected_lock_root)
+    try:
+        built = _build_out_dir_owner_project(build_dir)
+
+        assert built.returncode != 0
+        output = " ".join((built.stdout + built.stderr).split()).replace("\\", "/")
+        assert "now contains a symbolic-link or junction component" in output
+        assert lock_root.as_posix() in output
+        assert "reconfigure before building" in output
+        marker, _ = _out_dir_owner_record_paths(output_directory)
+        assert not marker.exists()
+        assert not list(redirected_lock_root.iterdir())
+        assert not list(displaced_lock_root.glob("*.owner"))
+        assert not any(output_directory.rglob("*"))
+    finally:
+        if lock_root.exists():
+            lock_root.unlink()
+
+
+def test_nested_configure_graph_rejects_split_output_lock_namespaces(
+    tmp_path: Path,
+) -> None:
+    first_lock_root = tmp_path / "output-locks-first"
+    second_lock_root = tmp_path / "output-locks-second"
+    first_lock_root.mkdir()
+    second_lock_root.mkdir()
+
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{first_lock_root.as_posix()}")',
+                "_protocyte_shared_output_lock_directory(parent_lock_directory)",
+                "add_subdirectory(child)",
+            ]
+        ),
+        files={
+            "child/CMakeLists.txt": "\n".join(
+                [
+                    f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{second_lock_root.as_posix()}")',
+                    "_protocyte_shared_output_lock_directory(child_lock_directory)",
+                    "",
+                ]
+            )
+        },
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split()).replace("\\", "/")
+    assert "same canonical output-lock namespace" in output
+    assert first_lock_root.as_posix() in output
+    assert second_lock_root.as_posix() in output
+    assert "Set PROTOCYTE_OUTPUT_LOCK_ROOT once" in output
 
 
 def test_deleted_build_tree_does_not_release_out_dir_ownership(tmp_path: Path) -> None:
@@ -7157,8 +7561,8 @@ def test_manual_owner_cleanup_allows_deliberate_out_dir_transfer(
     assert second_build.returncode == 0, second_build.stdout + second_build.stderr
     second_owner = marker.read_text(encoding="utf-8")
     assert second_owner != first_owner
-    assert second_owner == (
-        f"version=1\nbuild-tree-sha256={_build_tree_owner_hash(second_build_dir)}\n"
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(second_build_dir)
     )
 
 
@@ -7231,12 +7635,18 @@ def test_out_dir_owner_record_contains_no_private_path(tmp_path: Path) -> None:
     assert len(owner_records) == 3
     for owner_record in owner_records:
         payload = owner_record.read_text(encoding="utf-8")
-        assert payload == (
-            f"version=1\nbuild-tree-sha256={_build_tree_owner_hash(build_dir)}\n"
+        assert _committed_owner_build_hash(owner_record, marker) == (
+            _build_tree_owner_hash(build_dir)
         )
         assert str(tmp_path).lower() not in payload.lower()
         assert build_dir.name not in payload
         assert output_directory.name not in payload
+    transaction_records = list(marker.parent.glob(f"{marker.name}.*.committed"))
+    assert len(transaction_records) == 1
+    transaction_payload = transaction_records[0].read_text(encoding="utf-8")
+    assert str(tmp_path).lower() not in transaction_payload.lower()
+    assert build_dir.name not in transaction_payload
+    assert output_directory.name not in transaction_payload
 
 
 def test_failed_validation_does_not_poison_out_dir_ownership(tmp_path: Path) -> None:
@@ -7260,6 +7670,116 @@ def test_failed_validation_does_not_poison_out_dir_ownership(tmp_path: Path) -> 
     _write_out_dir_owner_project(source_dir, output_directory)
     corrected = _configure_out_dir_owner_project(source_dir, tmp_path / "good-build")
     assert corrected.returncode == 0, corrected.stdout + corrected.stderr
+
+
+def test_failed_first_generation_does_not_block_fresh_out_dir_owner(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    failed_build_dir = tmp_path / "failed-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    for build_dir in (failed_build_dir, fresh_build_dir):
+        configured = _configure_out_dir_owner_project(source_dir, build_dir)
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+    _make_fake_protoc_fail_in_build(source_dir, failed_build_dir)
+
+    failed = _build_out_dir_owner_project(failed_build_dir)
+
+    assert failed.returncode != 0
+    assert "simulated protoc failure" in failed.stdout + failed.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+
+    recovered = _build_out_dir_owner_project(fresh_build_dir)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
+    assert (output_directory / "demo_0.protocyte.hpp").is_file()
+    assert (output_directory / "demo_0.protocyte.cpp").is_file()
+
+
+@pytest.mark.parametrize("published_owner_count", [1, 2, 3])
+def test_incomplete_owner_publication_is_recovered_after_each_step(
+    tmp_path: Path,
+    published_owner_count: int,
+) -> None:
+    source_dir = tmp_path / "project"
+    interrupted_build_dir = tmp_path / "interrupted-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        interrupted_build_dir,
+        output_directory,
+        instrumented_script,
+        f"-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS={published_owner_count}",
+    )
+
+    assert interrupted.returncode != 0
+    assert "injected ownership publication termination" in (
+        interrupted.stdout + interrupted.stderr
+    )
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert marker.is_file()
+    output_owners = list((tmp_path / "output-locks").glob("*.owner"))
+    assert len(output_owners) == published_owner_count - 1
+    assert not list(marker.parent.glob(f"{marker.name}.*.committed"))
+
+    configured = _configure_out_dir_owner_project(source_dir, fresh_build_dir)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    recovered = _build_out_dir_owner_project(fresh_build_dir)
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
+
+
+def test_later_owner_staging_write_failure_publishes_no_durable_claim(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    failed_build_dir = tmp_path / "failed-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    failed = _run_direct_owner_generation(
+        source_dir,
+        failed_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX=3",
+    )
+
+    assert failed.returncode != 0
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    assert not list(marker.parent.glob(f"{marker.name}.*.committed"))
+
+    configured = _configure_out_dir_owner_project(source_dir, fresh_build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    recovered = _build_out_dir_owner_project(fresh_build_dir)
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
 
 
 def test_nested_out_dirs_cannot_claim_the_same_generated_output(
@@ -7290,13 +7810,77 @@ def test_nested_out_dirs_cannot_claim_the_same_generated_output(
     first_build = _build_out_dir_owner_project(first_build_dir)
     assert first_build.returncode == 0, first_build.stdout + first_build.stderr
     before = _out_dir_snapshot(output_directory)
+    output_owner_records = list((tmp_path / "output-locks").glob("*.owner"))
+    assert len(output_owner_records) == 2
+    output_owner_payload = output_owner_records[0].read_text(encoding="utf-8")
+    output_owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in output_owner_payload.splitlines()
+    )
+    second_root_marker, _ = _out_dir_owner_record_paths(
+        output_directory / "nested"
+    )
+    expected_witness = _owner_transaction_record(
+        second_root_marker,
+        output_owner_fields["transaction-sha256"],
+        "committed",
+    )
 
     second_build = _build_out_dir_owner_project(second_build_dir)
 
     assert second_build.returncode != 0
-    output = " ".join((second_build.stdout + second_build.stderr).split())
-    assert "Generated-output ownership belongs to a different build tree" in output
+    output = " ".join((second_build.stdout + second_build.stderr).split()).replace(
+        "\\", "/"
+    )
+    assert "missing or unverifiable transaction witness" in output
+    assert any(owner.as_posix() in output for owner in output_owner_records)
+    assert expected_witness.as_posix() in output
+    assert "will not reclaim the output automatically" in output
+    assert "Choose disjoint generated outputs" in output
+    assert "after confirming no build uses the output" in output
     assert _out_dir_snapshot(output_directory) == before
+
+
+def test_build_time_missing_root_witness_diagnostic_is_actionable(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    configured = _configure_out_dir_owner_project(source_dir, build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    built = _build_out_dir_owner_project(build_dir)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    marker_before = marker.read_bytes()
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in marker.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        marker, owner_fields["transaction-sha256"], "committed"
+    )
+    witness.unlink()
+    for output_owner in lock_root.glob("*.owner"):
+        output_owner.unlink()
+    (output_directory / "demo_0.protocyte.hpp").unlink()
+    outputs_before = _out_dir_snapshot(output_directory)
+
+    failed = _build_out_dir_owner_project(build_dir)
+
+    assert failed.returncode != 0
+    output = " ".join((failed.stdout + failed.stderr).split()).replace("\\", "/")
+    assert "OUT_DIR ownership record" in output
+    assert marker.as_posix() in output
+    assert witness.as_posix() in output
+    assert "will not reclaim the OUT_DIR automatically" in output
+    assert "choose a different OUT_DIR" in output
+    assert "after confirming no build uses the OUT_DIR" in output
+    assert marker.read_bytes() == marker_before
+    assert _out_dir_snapshot(output_directory) == outputs_before
 
 
 def test_transferred_out_dir_revokes_an_already_configured_build(
@@ -7761,11 +8345,78 @@ def test_concurrent_build_trees_atomically_race_for_out_dir_ownership(
 
     marker, lock = _out_dir_owner_record_paths(output_directory)
     winner = return_codes.index(0)
-    assert marker.read_text(encoding="utf-8") == (
-        "version=1\n"
-        f"build-tree-sha256={_build_tree_owner_hash(build_directories[winner])}\n"
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(build_directories[winner])
     )
     assert lock.is_file()
+
+
+def test_failed_generation_releases_waiting_out_dir_owner_contender(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    failed_build_dir = tmp_path / "failed-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    for build_dir in (failed_build_dir, fresh_build_dir):
+        configured = _configure_out_dir_owner_project(source_dir, build_dir)
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+
+    ready = tmp_path / "failing-protoc-ready"
+    release = tmp_path / "release-failing-protoc"
+    _make_fake_protoc_fail_in_build(
+        source_dir,
+        failed_build_dir,
+        ready_path=ready,
+        release_path=release,
+    )
+    failed_process = subprocess.Popen(
+        ["cmake", "--build", str(failed_build_dir), "--target", "generated_0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    fresh_process: subprocess.Popen[str] | None = None
+    try:
+        deadline = time.monotonic() + 30.0
+        while not ready.is_file():
+            if failed_process.poll() is not None:
+                stdout, stderr = failed_process.communicate()
+                pytest.fail(
+                    "the failing generation exited before acquiring ownership locks:\n"
+                    + stdout
+                    + stderr
+                )
+            if time.monotonic() >= deadline:
+                pytest.fail("timed out waiting for the failing generation")
+            time.sleep(0.01)
+
+        fresh_process = subprocess.Popen(
+            ["cmake", "--build", str(fresh_build_dir), "--target", "generated_0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.1)
+        assert fresh_process.poll() is None
+        release.write_text("release\n", encoding="utf-8")
+
+        failed_stdout, failed_stderr = failed_process.communicate(timeout=120)
+        fresh_stdout, fresh_stderr = fresh_process.communicate(timeout=120)
+    finally:
+        for process in (failed_process, fresh_process):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert failed_process.returncode != 0
+    assert "simulated protoc failure" in failed_stdout + failed_stderr
+    assert fresh_process.returncode == 0, fresh_stdout + fresh_stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
 
 
 def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
@@ -7833,6 +8484,8 @@ def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
             "-DGENERATION_TARGET=failing_codegen",
             f"-DGENERATION_WORKING_DIRECTORY={tmp_path}",
             f"-DLOCK_DIRECTORY={lock_directory}",
+            "-DLOCK_DIRECTORY_IDENTITY_SHA256="
+            f"{_filesystem_identity_hash(lock_directory)}",
             f"-DLOCK_MANIFEST={lock_manifest}",
             f"-DOUTPUT_DIRECTORY={output_directory}",
             f"-DOUT_DIR_OWNER_MARKER={out_dir_owner_marker}",
