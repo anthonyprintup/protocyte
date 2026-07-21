@@ -7,6 +7,7 @@ using ReservedEnum = reserved_identifiers::Protocyte_escaped_5f5f46494c455f5f;
 using KeywordMessage = reserved_identifiers::Class_<>;
 using ConfigMessage = reserved_identifiers::Config<>;
 using ReaderMessage = reserved_identifiers::Reader<>;
+using MergeHelperNeighbors = reserved_identifiers::MergeHelperNeighbors<>;
 
 static_assert(reserved_identifiers::protocyte_escaped_5f5f444154455f5f == 7);
 static_assert(ReservedMessage::protocyte_escaped_5f5f54494d455f5f == 9);
@@ -35,4 +36,11 @@ void compile_internal_identifier_messages(::protocyte::DefaultConfig::Context &c
 
     const auto parsed = ReaderMessage::parse(ctx, ::protocyte::Span<const ::protocyte::u8> {});
     (void) parsed;
+}
+
+void compile_merge_helper_neighbors(::protocyte::DefaultConfig::Context &ctx) {
+    auto first = MergeHelperNeighbors::merge_field_from<>::create(ctx);
+    auto second = MergeHelperNeighbors::merge_fields_from_<>::create(ctx);
+    (void) first;
+    (void) second;
 }

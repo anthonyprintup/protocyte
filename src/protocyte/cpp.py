@@ -639,6 +639,8 @@ def _reserve_message_function_cpp_names(
         ("clone", "generated clone function"),
         ("parse", "generated parse function"),
         ("merge_from", "generated merge function"),
+        ("merge_field_from_", "generated merge field helper"),
+        ("merge_fields_from", "generated merge fields helper"),
         ("serialize", "generated serialize function"),
         ("encoded_size", "generated size function"),
         ("validate", "generated validate function"),

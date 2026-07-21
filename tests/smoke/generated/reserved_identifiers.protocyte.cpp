@@ -34,6 +34,16 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Reader_fields {{}};
 
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> MergeHelperNeighbors_fields {{}};
+
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_field_from_fields {{
+            {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
+        }};
+
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_fields_from_fields {{
+            {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
+        }};
+
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> LegacyPayload_fields {{}};
 
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> DeprecationCarrier_fields {{
