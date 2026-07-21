@@ -13,6 +13,7 @@ from protocyte.plugin import generate_response
 
 _PROGRAM_NAME = "protoc-gen-protocyte"
 _CMAKE_WORKING_DIRECTORY_ENV = "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX"
+_CMAKE_IMPORT_SCAN_COMMAND = "_cmake-import-scan-v1"
 
 
 def _enter_cmake_working_directory() -> tuple[str | None, str | None]:
@@ -74,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     if args == ["--version"]:
         print(__version__)
         return 0
+    if args[:1] == [_CMAKE_IMPORT_SCAN_COMMAND]:
+        from protocyte.import_scanner import main as import_scanner_main
+
+        return import_scanner_main(args[1:])
     if args[:1] == ["descriptor-set"]:
         from protocyte.descriptor_set import main as descriptor_set_main
 

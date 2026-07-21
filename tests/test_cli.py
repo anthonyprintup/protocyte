@@ -75,9 +75,10 @@ def test_no_argument_non_interactive_invocation_preserves_plugin_protocol(
         result = plugin_main([])
 
     assert result == 0
-    assert standard_output.buffer.getvalue() == generate_response(
-        request
-    ).SerializeToString()
+    assert (
+        standard_output.buffer.getvalue()
+        == generate_response(request).SerializeToString()
+    )
     assert capsys.readouterr().err == ""
 
 
@@ -95,6 +96,7 @@ def test_help_generation_example_uses_an_existing_output_and_explains_protocol(
         in captured.out
     )
     assert "it writes a binary CodeGeneratorRequest" not in captured.out
+    assert "_cmake-import-scan-v1" not in captured.out
 
 
 @pytest.mark.parametrize(

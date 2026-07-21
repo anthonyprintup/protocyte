@@ -343,63 +343,191 @@ function(
     set(${out_lock_directory} "${output_lock_directory}" PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_import_root_inventory out_var import_root)
-    if("${import_root}" STREQUAL "")
-        set(${out_var} "" PARENT_SCOPE)
-        return()
+function(
+    _protocyte_protoc_import_root_alias_status
+    out_status
+    out_target
+    alias_path
+    expected_target
+)
+    set(alias_status "missing")
+    set(alias_target "")
+    if(IS_SYMLINK "${alias_path}")
+        file(REAL_PATH "${alias_path}" alias_target)
+        file(REAL_PATH "${expected_target}" canonical_expected_target)
+        cmake_path(NORMAL_PATH alias_target)
+        cmake_path(NORMAL_PATH canonical_expected_target)
+        set(alias_target_identity "${alias_target}")
+        set(expected_target_identity "${canonical_expected_target}")
+        if(CMAKE_HOST_WIN32)
+            string(TOLOWER "${alias_target_identity}" alias_target_identity)
+            string(TOLOWER "${expected_target_identity}" expected_target_identity)
+        endif()
+        if(
+            IS_DIRECTORY "${alias_path}"
+            AND alias_target_identity STREQUAL expected_target_identity
+        )
+            set(alias_status "valid")
+        else()
+            set(alias_status "wrong-target")
+        endif()
+    elseif(EXISTS "${alias_path}")
+        set(alias_status "wrong-type")
     endif()
 
-    cmake_path(NORMAL_PATH import_root OUTPUT_VARIABLE normalized_import_root)
-    string(SHA256 import_root_key "${normalized_import_root}")
-    set(inventory_property "PROTOCYTE_INTERNAL_IMPORT_INVENTORY_${import_root_key}")
-    get_property(inventory_is_registered GLOBAL PROPERTY "${inventory_property}" SET)
-    if(inventory_is_registered)
-        get_property(inventory_file GLOBAL PROPERTY "${inventory_property}")
-        set(${out_var} "${inventory_file}" PARENT_SCOPE)
-        return()
-    endif()
+    set(${out_status} "${alias_status}" PARENT_SCOPE)
+    set(${out_target} "${alias_target}" PARENT_SCOPE)
+endfunction()
 
-    file(
-        GLOB_RECURSE import_root_entries
-        LIST_DIRECTORIES FALSE
-        RELATIVE "${normalized_import_root}"
-        CONFIGURE_DEPENDS
-        FOLLOW_SYMLINKS
-        "${normalized_import_root}/*.proto"
-    )
-    set(encoded_import_root_entries)
-    foreach(import_root_entry IN LISTS import_root_entries)
-        string(HEX "${import_root_entry}" encoded_import_root_entry)
-        list(APPEND encoded_import_root_entries "${encoded_import_root_entry}")
-    endforeach()
-    list(REMOVE_DUPLICATES encoded_import_root_entries)
-    list(SORT encoded_import_root_entries)
+function(_protocyte_protoc_safe_import_root out_var import_root)
+    set(protoc_import_root "${import_root}")
+    if(CMAKE_HOST_WIN32)
+        # Windows protoc treats ';' as an unescapable --proto_path list
+        # separator. Prefer a directory symlink and fall back to an unprivileged
+        # junction so protoc sees an equivalent semicolon-free root.
+        string(FIND "${import_root}" ";" semicolon_index)
+        if(NOT semicolon_index EQUAL -1)
+            cmake_path(NORMAL_PATH import_root OUTPUT_VARIABLE normalized_import_root)
+            string(SHA256 import_root_key "${normalized_import_root}")
+            set(proxy_property "PROTOCYTE_INTERNAL_PROTOC_IMPORT_ROOT_${import_root_key}")
+            set(
+                protoc_import_root
+                "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-protoc-import-roots/${import_root_key}"
+            )
+            get_property(proxy_is_registered GLOBAL PROPERTY "${proxy_property}" SET)
+            if(proxy_is_registered)
+                get_property(registered_protoc_import_root GLOBAL PROPERTY "${proxy_property}")
+                if(NOT registered_protoc_import_root STREQUAL protoc_import_root)
+                    message(FATAL_ERROR "Protocyte protoc-safe import-root alias identity collision")
+                endif()
+            endif()
 
-    string(HEX "${normalized_import_root}" encoded_import_root)
-    set(inventory_content "version=1\nroot=${encoded_import_root}\n")
-    foreach(encoded_import_root_entry IN LISTS encoded_import_root_entries)
-        string(APPEND inventory_content "file=${encoded_import_root_entry}\n")
-    endforeach()
+            cmake_path(GET protoc_import_root PARENT_PATH proxy_parent)
+            file(MAKE_DIRECTORY "${proxy_parent}")
+            file(
+                LOCK "${proxy_parent}/${import_root_key}.lock"
+                GUARD FUNCTION
+                TIMEOUT 600
+                RESULT_VARIABLE proxy_lock_result
+            )
+            if(NOT "${proxy_lock_result}" STREQUAL "0")
+                message(
+                    FATAL_ERROR
+                    "Protocyte could not lock protoc-safe alias '${protoc_import_root}': "
+                    "${proxy_lock_result}"
+                )
+            endif()
 
-    set(
-        inventory_file
-        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-import-inventories/${import_root_key}.list"
-    )
-    cmake_path(GET inventory_file PARENT_PATH inventory_directory)
-    file(MAKE_DIRECTORY "${inventory_directory}")
-    set(write_inventory TRUE)
-    if(EXISTS "${inventory_file}")
-        file(READ "${inventory_file}" existing_inventory_content)
-        if(existing_inventory_content STREQUAL inventory_content)
-            set(write_inventory FALSE)
+            _protocyte_protoc_import_root_alias_status(
+                alias_status
+                alias_target
+                "${protoc_import_root}"
+                "${normalized_import_root}"
+            )
+            if(alias_status STREQUAL "valid")
+                set_property(
+                    GLOBAL
+                    PROPERTY "${proxy_property}"
+                    "${protoc_import_root}"
+                )
+                set(${out_var} "${protoc_import_root}" PARENT_SCOPE)
+                return()
+            elseif(NOT alias_status STREQUAL "missing")
+                message(
+                    FATAL_ERROR
+                    "Protocyte refuses to reuse protoc-safe alias '${protoc_import_root}' for import root "
+                    "'${normalized_import_root}': the existing entry is not a directory symbolic link or "
+                    "junction with that canonical target (status: ${alias_status}, target: '${alias_target}'). "
+                    "Protocyte did not modify the existing entry."
+                )
+            endif()
+
+            file(
+                CREATE_LINK
+                "${normalized_import_root}"
+                "${protoc_import_root}"
+                SYMBOLIC
+                RESULT symbolic_link_result
+            )
+            _protocyte_protoc_import_root_alias_status(
+                alias_status
+                alias_target
+                "${protoc_import_root}"
+                "${normalized_import_root}"
+            )
+            if(NOT alias_status STREQUAL "valid" AND NOT alias_status STREQUAL "missing")
+                message(
+                    FATAL_ERROR
+                    "Protocyte refuses protoc-safe alias '${protoc_import_root}' for import root "
+                    "'${normalized_import_root}' after symbolic-link creation: the entry is not a directory "
+                    "symbolic link or junction with that canonical target (status: ${alias_status}, target: "
+                    "'${alias_target}'). Protocyte did not modify the entry."
+                )
+            endif()
+
+            if(alias_status STREQUAL "missing")
+                cmake_path(
+                    NATIVE_PATH normalized_import_root
+                    NORMALIZE native_import_root
+                )
+                cmake_path(
+                    NATIVE_PATH protoc_import_root
+                    NORMALIZE native_protoc_import_root
+                )
+                string(REPLACE "'" "''" native_protoc_import_root "${native_protoc_import_root}")
+                string(REPLACE "'" "''" native_import_root "${native_import_root}")
+                string(
+                    CONCAT
+                    junction_command
+                    "[void](New-Item -ItemType Junction "
+                    "-Path '${native_protoc_import_root}' "
+                    "-Target '${native_import_root}')"
+                )
+                execute_process(
+                    COMMAND
+                        powershell.exe
+                        -NoLogo
+                        -NoProfile
+                        -NonInteractive
+                        -Command
+                        "${junction_command}"
+                    RESULT_VARIABLE junction_result
+                    OUTPUT_VARIABLE junction_output
+                    ERROR_VARIABLE junction_error
+                )
+                _protocyte_protoc_import_root_alias_status(
+                    alias_status
+                    alias_target
+                    "${protoc_import_root}"
+                    "${normalized_import_root}"
+                )
+            else()
+                set(junction_result "not attempted")
+                set(junction_output "")
+                set(junction_error "")
+            endif()
+
+            if(NOT alias_status STREQUAL "valid")
+                string(STRIP "${junction_output}" junction_output)
+                string(STRIP "${junction_error}" junction_error)
+                message(
+                    FATAL_ERROR
+                    "Protocyte could not create a verified protoc-safe alias for import root "
+                    "'${normalized_import_root}'. Symbolic-link creation failed with "
+                    "'${symbolic_link_result}', and junction creation returned "
+                    "'${junction_result}': ${junction_output} ${junction_error}. Final alias status: "
+                    "${alias_status}, target: '${alias_target}'. Protocyte did not remove the entry."
+                )
+            endif()
+
+            set_property(
+                GLOBAL
+                PROPERTY "${proxy_property}"
+                "${protoc_import_root}"
+            )
         endif()
     endif()
-    if(write_inventory)
-        file(WRITE "${inventory_file}" "${inventory_content}")
-    endif()
-
-    set_property(GLOBAL PROPERTY "${inventory_property}" "${inventory_file}")
-    set(${out_var} "${inventory_file}" PARENT_SCOPE)
+    set(${out_var} "${protoc_import_root}" PARENT_SCOPE)
 endfunction()
 
 function(
@@ -510,6 +638,9 @@ function(
         if(write_source_argument)
             file(WRITE "${source_argument_file}" "${normalized_source_path}")
         endif()
+        file(SHA256 "${proxy_path}" proxy_expected_hash)
+        # The aggregate import guard refreshes this proxy before generation.
+        # Keep it unowned so IDE and Ninja no-op builds remain timestamp-clean.
         add_custom_target(
             "${check_target}"
             COMMAND
@@ -518,7 +649,6 @@ function(
                 "-DPROXY_FILE=${proxy_path}"
                 "-DLOCK_FILE=${proxy_lock_file}"
                 -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteSourceDependency.cmake"
-            BYPRODUCTS "${proxy_path}"
             VERBATIM
         )
         set_property(
@@ -535,6 +665,11 @@ function(
             GLOBAL PROPERTY
             "PROTOCYTE_INTERNAL_SOURCE_PROXY_PATH_${proxy_key}"
             "${proxy_path}"
+        )
+        set_property(
+            GLOBAL PROPERTY
+            "PROTOCYTE_INTERNAL_SOURCE_PROXY_EXPECTED_HASH_${proxy_key}"
+            "${proxy_expected_hash}"
         )
     endif()
 
@@ -619,6 +754,78 @@ function(_protocyte_validate_virtual_directory_prefix parameter_name value)
     endforeach()
 endfunction()
 
+function(_protocyte_source_path_requires_proxy out_var source_path)
+    set(requires_proxy FALSE)
+    if(CMAKE_HOST_WIN32 AND "${source_path}" MATCHES ";")
+        set(requires_proxy TRUE)
+    endif()
+
+    string(HEX "${source_path}" encoded_source_path)
+    string(LENGTH "${encoded_source_path}" encoded_source_path_length)
+    if(encoded_source_path_length GREATER 0)
+        math(EXPR encoded_source_path_last "${encoded_source_path_length} - 2")
+        foreach(offset RANGE 0 ${encoded_source_path_last} 2)
+            string(SUBSTRING "${encoded_source_path}" ${offset} 2 encoded_byte)
+            if(encoded_byte MATCHES "^(0[0-9a-f]|1[0-9a-f]|22|5c|7f)$")
+                set(requires_proxy TRUE)
+                break()
+            endif()
+        endforeach()
+    endif()
+    set(${out_var} "${requires_proxy}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_validate_namespace_prefix function_name value)
+    if("${value}" STREQUAL "")
+        return()
+    endif()
+
+    string(
+        REGEX MATCH
+        "^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$"
+        normalized_namespace_prefix
+        "${value}"
+    )
+    if(NOT normalized_namespace_prefix STREQUAL value)
+        message(
+            FATAL_ERROR
+            "${function_name} NAMESPACE_PREFIX must be a normalized '::'-separated namespace "
+            "of portable, non-reserved C++ identifiers (for example, vendor::wire): '${value}'"
+        )
+    endif()
+
+    set(
+        cpp_keywords
+        alignas alignof and and_eq asm atomic_cancel atomic_commit atomic_noexcept auto
+        bitand bitor bool break case catch char char8_t char16_t char32_t class compl
+        concept const const_cast consteval constexpr constinit continue co_await co_return
+        co_yield decltype default delete do double dynamic_cast else enum explicit export
+        extern false float for friend goto if inline int long mutable namespace new noexcept
+        not not_eq nullptr operator or or_eq private protected public reflexpr register
+        reinterpret_cast requires return short signed sizeof static static_assert static_cast
+        struct switch synchronized template this thread_local throw true try typedef typeid
+        typename union unsigned using virtual void volatile wchar_t while xor xor_eq
+    )
+    string(REPLACE "::" ";" namespace_components "${value}")
+    foreach(namespace_component IN LISTS namespace_components)
+        if(namespace_component MATCHES "^_" OR namespace_component MATCHES "__")
+            message(
+                FATAL_ERROR
+                "${function_name} NAMESPACE_PREFIX must be a normalized '::'-separated namespace "
+                "of portable, non-reserved C++ identifiers (for example, vendor::wire): '${value}'"
+            )
+        endif()
+        list(FIND cpp_keywords "${namespace_component}" keyword_index)
+        if(NOT keyword_index EQUAL -1)
+            message(
+                FATAL_ERROR
+                "${function_name} NAMESPACE_PREFIX must be a normalized '::'-separated namespace "
+                "of portable, non-reserved C++ identifiers (for example, vendor::wire): '${value}'"
+            )
+        endif()
+    endforeach()
+endfunction()
+
 function(_protocyte_validate_forwarded_generator_options function_name)
     foreach(generator_option IN LISTS ARGN)
         string(REPLACE "," ";" generator_option_parts "${generator_option}")
@@ -652,6 +859,12 @@ function(_protocyte_validate_forwarded_generator_options function_name)
                     FATAL_ERROR
                     "${function_name} OPTIONS must not set include_prefix; use INCLUDE_PREFIX so CMake can "
                     "model the generated-header include layout consistently"
+                )
+            elseif(generator_option_name STREQUAL "namespace_prefix")
+                message(
+                    FATAL_ERROR
+                    "${function_name} OPTIONS must not set namespace_prefix; use NAMESPACE_PREFIX so CMake can "
+                    "validate the generated C++ namespace during configuration"
                 )
             endif()
         endforeach()
@@ -2755,9 +2968,492 @@ function(_protocyte_fetch_protobuf_import_sources toolchain_identity)
     )
 endfunction()
 
+function(
+    _protocyte_decode_hex_string
+    out_var
+    encoded_value
+)
+    string(LENGTH "${encoded_value}" encoded_length)
+    set(decoded_value "")
+    if(encoded_length GREATER 0)
+        math(EXPR encoded_last "${encoded_length} - 2")
+        foreach(offset RANGE 0 ${encoded_last} 2)
+            string(SUBSTRING "${encoded_value}" ${offset} 2 encoded_byte)
+            math(EXPR byte_value "0x${encoded_byte}")
+            string(ASCII ${byte_value} decoded_character)
+            string(APPEND decoded_value "${decoded_character}")
+        endforeach()
+    endif()
+    set(${out_var} "${decoded_value}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_append_configure_dependency dependency_path)
+    string(REPLACE ";" "\\;" escaped_dependency_path "${dependency_path}")
+    set_property(
+        DIRECTORY
+        APPEND
+        PROPERTY CMAKE_CONFIGURE_DEPENDS "${escaped_dependency_path}"
+    )
+endfunction()
+
+function(_protocyte_write_if_different output_path output_content)
+    set(write_output TRUE)
+    if(EXISTS "${output_path}")
+        file(READ "${output_path}" existing_output_content)
+        if(existing_output_content STREQUAL output_content)
+            set(write_output FALSE)
+        endif()
+    endif()
+    if(write_output)
+        file(WRITE "${output_path}" "${output_content}")
+    endif()
+endfunction()
+
+function(
+    _protocyte_run_source_import_scan
+    out_requires_protobuf_imports
+    out_scan_key
+    out_scan_lines
+    out_has_unwatchable_source
+    source_files_var
+    encoded_import_roots_var
+)
+    # Scan the complete selected source closure in one bounded host process.
+    # Request paths stay hex-encoded so semicolons and non-ASCII paths never
+    # cross a CMake list or command-line boundary.
+    set(import_scan_request_content "version=1\n")
+    foreach(encoded_import_root IN LISTS ${encoded_import_roots_var})
+        string(APPEND import_scan_request_content "root ${encoded_import_root}\n")
+    endforeach()
+    foreach(source_file IN LISTS ${source_files_var})
+        string(HEX "${source_file}" encoded_source_file)
+        string(APPEND import_scan_request_content "source ${encoded_source_file}\n")
+    endforeach()
+
+    _protocyte_prepare_plugin()
+    _protocyte_get_internal(import_scan_plugin PLUGIN_EXECUTABLE)
+    _protocyte_get_internal(import_scan_plugin_is_managed PLUGIN_IS_MANAGED)
+    if("${import_scan_plugin_is_managed}" STREQUAL "")
+        set(import_scan_plugin_is_managed FALSE)
+    endif()
+    _protocyte_get_internal(import_scan_command IMPORT_SCAN_COMMAND)
+    if("${import_scan_command}" STREQUAL "")
+        set(import_scan_command "_cmake-import-scan-v1")
+    endif()
+    if("${import_scan_plugin}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte source import scanning requires a prepared plugin")
+    endif()
+    _protocyte_get_internal(import_scanner IMPORT_SCANNER)
+    if("${import_scanner}" STREQUAL "")
+        set(
+            import_scanner
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src/protocyte/import_scanner.py"
+        )
+    endif()
+    if(NOT EXISTS "${import_scanner}")
+        message(FATAL_ERROR "Protocyte import scanner source does not exist: ${import_scanner}")
+    endif()
+    cmake_path(GET import_scanner PARENT_PATH import_scan_package_dir)
+    set(import_scan_entrypoint "${import_scan_package_dir}/main.py")
+    if(NOT EXISTS "${import_scan_entrypoint}")
+        message(FATAL_ERROR "Protocyte plugin entry point does not exist: ${import_scan_entrypoint}")
+    endif()
+    _protocyte_append_configure_dependency("${import_scan_plugin}")
+    _protocyte_append_configure_dependency("${import_scanner}")
+    _protocyte_append_configure_dependency("${import_scan_entrypoint}")
+    set(import_scan_launcher "${import_scan_plugin}")
+    if(import_scan_plugin_is_managed)
+        set(
+            import_scan_launcher
+            "${CMAKE_COMMAND}"
+            -E
+            env
+            --unset=PYTHONHOME
+            --unset=PYTHONPATH
+            "${import_scan_plugin}"
+        )
+    endif()
+    string(SHA256 import_scan_key "${import_scan_request_content}")
+    set(
+        import_scan_request_dir
+        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-import-scans"
+    )
+    set(import_scan_request "${import_scan_request_dir}/${import_scan_key}.request")
+    file(MAKE_DIRECTORY "${import_scan_request_dir}")
+    set(write_import_scan_request TRUE)
+    if(EXISTS "${import_scan_request}")
+        file(READ "${import_scan_request}" existing_import_scan_request)
+        if(existing_import_scan_request STREQUAL import_scan_request_content)
+            set(write_import_scan_request FALSE)
+        endif()
+    endif()
+    if(write_import_scan_request)
+        file(WRITE "${import_scan_request}" "${import_scan_request_content}")
+    endif()
+
+    execute_process(
+        COMMAND
+            ${import_scan_launcher}
+            "${import_scan_command}"
+            "${import_scan_request}"
+        RESULT_VARIABLE import_scan_result
+        OUTPUT_VARIABLE import_scan_output
+        ERROR_VARIABLE import_scan_error
+        TIMEOUT 60
+    )
+    string(REPLACE "\r\n" "\n" import_scan_output "${import_scan_output}")
+    string(REPLACE "\r" "\n" import_scan_output "${import_scan_output}")
+    string(STRIP "${import_scan_output}" import_scan_output)
+    string(STRIP "${import_scan_error}" import_scan_error)
+    if(NOT import_scan_result EQUAL 0)
+        message(
+            FATAL_ERROR
+            "Protocyte source import scan through '${import_scan_plugin}' failed with exit code "
+            "${import_scan_result}: ${import_scan_error}\n"
+            "PROTOCYTE_PLUGIN_EXECUTABLE overrides must name the actual version-matched "
+            "Protocyte plugin with ${import_scan_command} support."
+        )
+    endif()
+    string(REPLACE "\n" ";" import_scan_lines "${import_scan_output}")
+    list(LENGTH import_scan_lines import_scan_line_count)
+    if(import_scan_line_count LESS 2)
+        message(
+            FATAL_ERROR
+            "Protocyte plugin '${import_scan_plugin}' returned an invalid ${import_scan_command} "
+            "result: '${import_scan_output}'. PROTOCYTE_PLUGIN_EXECUTABLE overrides must name "
+            "the actual version-matched Protocyte plugin."
+        )
+    endif()
+    list(POP_FRONT import_scan_lines import_scan_result_line)
+    if(import_scan_result_line STREQUAL "result TRUE")
+        set(requires_protobuf_import_sources TRUE)
+    elseif(import_scan_result_line STREQUAL "result FALSE")
+        set(requires_protobuf_import_sources FALSE)
+    else()
+        message(
+            FATAL_ERROR
+            "Protocyte plugin '${import_scan_plugin}' returned an invalid ${import_scan_command} "
+            "result: '${import_scan_output}'. PROTOCYTE_PLUGIN_EXECUTABLE overrides must name "
+            "the actual version-matched Protocyte plugin."
+        )
+    endif()
+
+    set(has_unwatchable_source FALSE)
+    foreach(import_scan_line IN LISTS import_scan_lines)
+        if(import_scan_line MATCHES "^source ([0-9a-f]+) (-|[0-9a-f]+)$")
+            if(CMAKE_MATCH_2 STREQUAL "-")
+                set(has_unwatchable_source TRUE)
+            endif()
+        elseif(import_scan_line MATCHES "^edge ([0-9a-f]+) (-|[0-9a-f]+)$")
+        elseif(
+            import_scan_line
+            MATCHES "^candidate ([0-9a-f]+) (-|[0-9a-f]+) (-|[0-9a-f]+)$"
+        )
+        elseif(
+            import_scan_line
+            MATCHES "^(watch|watch-source) ([0-9a-f]+) ([0-9a-f]+)$"
+        )
+        else()
+            message(
+                FATAL_ERROR
+                "Protocyte import scanner returned an invalid result: '${import_scan_output}'"
+            )
+        endif()
+    endforeach()
+    set(${out_requires_protobuf_imports} "${requires_protobuf_import_sources}" PARENT_SCOPE)
+    set(${out_scan_key} "${import_scan_key}" PARENT_SCOPE)
+    set(${out_scan_lines} "${import_scan_lines}" PARENT_SCOPE)
+    set(${out_has_unwatchable_source} "${has_unwatchable_source}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_register_source_import_scan
+    out_topology_dependencies
+    out_source_check_targets
+    import_scan_key
+    import_scan_lines_var
+)
+    set(topology_witness_content "version=1\n")
+    set(topology_runtime_witness_content "version=1\n")
+    set(source_check_targets)
+    set(registered_candidate_identities)
+    set(registered_watch_identities)
+    foreach(import_scan_line IN LISTS ${import_scan_lines_var})
+        if(import_scan_line MATCHES "^source ([0-9a-f]+) (-|[0-9a-f]+)$")
+            set(encoded_source "${CMAKE_MATCH_1}")
+            set(encoded_dependency "${CMAKE_MATCH_2}")
+            _protocyte_decode_hex_string(import_scan_source "${encoded_source}")
+            if(encoded_dependency STREQUAL "-")
+                _protocyte_get_source_dependency_proxy(
+                    import_scan_dependency
+                    import_scan_check_target
+                    "${import_scan_source}"
+                )
+                _protocyte_append_configure_dependency("${import_scan_dependency}")
+                list(APPEND source_check_targets "${import_scan_check_target}")
+            else()
+                _protocyte_decode_hex_string(
+                    import_scan_dependency
+                    "${encoded_dependency}"
+                )
+                _protocyte_append_configure_dependency("${import_scan_dependency}")
+            endif()
+        elseif(import_scan_line MATCHES "^edge ([0-9a-f]+) (-|[0-9a-f]+)$")
+            string(APPEND topology_witness_content "${import_scan_line}\n")
+        elseif(
+            import_scan_line
+            MATCHES "^candidate ([0-9a-f]+) (-|[0-9a-f]+) (-|[0-9a-f]+)$"
+        )
+            set(encoded_candidate "${CMAKE_MATCH_1}")
+            set(encoded_pattern "${CMAKE_MATCH_2}")
+            set(encoded_dependency "${CMAKE_MATCH_3}")
+            _protocyte_decode_hex_string(import_candidate "${encoded_candidate}")
+            set(candidate_identity "${import_candidate}")
+            if(CMAKE_HOST_WIN32)
+                string(TOLOWER "${candidate_identity}" candidate_identity)
+            endif()
+            string(SHA256 candidate_identity_hash "${candidate_identity}")
+            if("${candidate_identity_hash}" IN_LIST registered_candidate_identities)
+                continue()
+            endif()
+            list(APPEND registered_candidate_identities "${candidate_identity_hash}")
+
+            if(NOT encoded_pattern STREQUAL "-")
+                _protocyte_decode_hex_string(import_candidate_pattern "${encoded_pattern}")
+                # Keep a raw semicolon inside this one quoted scalar. Escaping it
+                # changes the glob expression; the result is intentionally
+                # discarded because CMake list rendering cannot preserve such a
+                # path even though CONFIGURE_DEPENDS can watch it correctly.
+                file(
+                    GLOB ignored_import_candidate
+                    LIST_DIRECTORIES FALSE
+                    CONFIGURE_DEPENDS
+                    "${import_candidate_pattern}"
+                )
+            endif()
+        elseif(
+            import_scan_line
+            MATCHES "^(watch|watch-source) ([0-9a-f]+) ([0-9a-f]+)$"
+        )
+            set(watch_kind "${CMAKE_MATCH_1}")
+            set(encoded_watch_path "${CMAKE_MATCH_2}")
+            set(encoded_watch_identity "${CMAKE_MATCH_3}")
+            _protocyte_decode_hex_string(watch_path "${encoded_watch_path}")
+            set(watch_path_identity "${watch_path}")
+            if(CMAKE_HOST_WIN32)
+                string(TOLOWER "${watch_path_identity}" watch_path_identity)
+            endif()
+            string(SHA256 watch_path_identity_hash "${watch_path_identity}")
+            if("${watch_path_identity_hash}" IN_LIST registered_watch_identities)
+                continue()
+            endif()
+            list(APPEND registered_watch_identities "${watch_path_identity_hash}")
+            string(APPEND topology_witness_content "${import_scan_line}\n")
+            string(
+                APPEND
+                topology_runtime_witness_content
+                "${watch_kind} ${encoded_watch_path} ${encoded_watch_identity}\n"
+            )
+        else()
+            message(FATAL_ERROR "Protocyte import scanner trace became invalid")
+        endif()
+    endforeach()
+
+    set(
+        topology_witness
+        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-import-topology/${import_scan_key}.list"
+    )
+    cmake_path(GET topology_witness PARENT_PATH topology_witness_directory)
+    file(MAKE_DIRECTORY "${topology_witness_directory}")
+    set(write_topology_witness TRUE)
+    if(EXISTS "${topology_witness}")
+        file(READ "${topology_witness}" existing_topology_witness_content)
+        if(existing_topology_witness_content STREQUAL topology_witness_content)
+            set(write_topology_witness FALSE)
+        endif()
+    endif()
+    if(write_topology_witness)
+        file(WRITE "${topology_witness}" "${topology_witness_content}")
+    endif()
+
+    set(topology_runtime_witness "${topology_witness_directory}/${import_scan_key}.watch.list")
+    _protocyte_write_if_different(
+        "${topology_runtime_witness}"
+        "${topology_runtime_witness_content}"
+    )
+    file(SHA256 "${topology_runtime_witness}" topology_expected_hash)
+    set_property(
+        GLOBAL PROPERTY
+        "PROTOCYTE_INTERNAL_TOPOLOGY_EXPECTED_HASH_${import_scan_key}"
+        "${topology_expected_hash}"
+    )
+
+    set(
+        topology_check_script
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteImportTopology.cmake"
+    )
+    if(NOT EXISTS "${topology_check_script}")
+        message(
+            FATAL_ERROR
+            "Protocyte import topology checker does not exist: ${topology_check_script}"
+        )
+    endif()
+    _protocyte_append_configure_dependency("${topology_check_script}")
+    _protocyte_append_configure_dependency("${topology_runtime_witness}")
+
+    set(topology_check_target "protocyte_import_topology_check_${import_scan_key}")
+    list(APPEND source_check_targets "${topology_check_target}")
+    list(REMOVE_DUPLICATES source_check_targets)
+    if(CMAKE_GENERATOR MATCHES "Makefiles")
+        # Makefile generators can refresh the runtime witness in the guard and
+        # use it to dirty code generation in the same build invocation. Do not
+        # also depend on the configure-time witness: updating that witness on
+        # the following CMake reconfigure would regenerate correct outputs a
+        # second time.
+        set(topology_dependencies "${topology_runtime_witness}")
+    else()
+        set(topology_dependencies "${topology_witness}")
+    endif()
+    set(${out_topology_dependencies} "${topology_dependencies}" PARENT_SCOPE)
+    set(${out_source_check_targets} "${source_check_targets}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_create_import_guard
+    out_guard_dependency
+    check_targets_var
+)
+    set(${out_guard_dependency} "" PARENT_SCOPE)
+    set(guard_manifest_content "version=1\n")
+    foreach(check_target IN LISTS ${check_targets_var})
+        if(check_target MATCHES "^protocyte_source_check_(.+)$")
+            set(source_proxy_key "${CMAKE_MATCH_1}")
+            get_property(
+                source_proxy
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_SOURCE_PROXY_PATH_${source_proxy_key}"
+            )
+            get_property(
+                source_proxy_expected_hash
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_SOURCE_PROXY_EXPECTED_HASH_${source_proxy_key}"
+            )
+            if(source_proxy STREQUAL "" OR source_proxy_expected_hash STREQUAL "")
+                message(FATAL_ERROR "Protocyte source dependency proxy metadata is missing")
+            endif()
+            cmake_path(GET source_proxy PARENT_PATH source_proxy_directory)
+            set(source_proxy_argument "${source_proxy_directory}/${source_proxy_key}.path")
+            set(source_proxy_lock "${source_proxy_directory}/${source_proxy_key}.lock")
+            set(
+                source_proxy_check_script
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteSourceDependency.cmake"
+            )
+            string(HEX "${source_proxy_argument}" encoded_source_proxy_argument)
+            string(HEX "${source_proxy}" encoded_source_proxy)
+            string(HEX "${source_proxy_lock}" encoded_source_proxy_lock)
+            string(HEX "${source_proxy_check_script}" encoded_source_proxy_check_script)
+            string(
+                APPEND
+                guard_manifest_content
+                "source ${encoded_source_proxy_argument} ${encoded_source_proxy} "
+                "${encoded_source_proxy_lock} ${source_proxy_expected_hash} "
+                "${encoded_source_proxy_check_script}\n"
+            )
+        elseif(check_target MATCHES "^protocyte_import_topology_check_(.+)$")
+            set(topology_key "${CMAKE_MATCH_1}")
+            set(
+                topology_directory
+                "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-import-topology"
+            )
+            set(
+                topology_request
+                "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-import-scans/${topology_key}.request"
+            )
+            set(topology_witness "${topology_directory}/${topology_key}.watch.list")
+            set(topology_lock "${topology_directory}/${topology_key}.watch.lock")
+            _protocyte_get_internal(topology_plugin PLUGIN_EXECUTABLE)
+            _protocyte_get_internal(topology_plugin_is_managed PLUGIN_IS_MANAGED)
+            if("${topology_plugin_is_managed}" STREQUAL "")
+                set(topology_plugin_is_managed FALSE)
+            endif()
+            _protocyte_get_internal(topology_import_scan_command IMPORT_SCAN_COMMAND)
+            if("${topology_import_scan_command}" STREQUAL "")
+                set(topology_import_scan_command "_cmake-import-scan-v1")
+            endif()
+            if("${topology_plugin}" STREQUAL "")
+                message(FATAL_ERROR "Protocyte topology guard requires a prepared plugin")
+            endif()
+            get_property(
+                topology_expected_hash
+                GLOBAL PROPERTY "PROTOCYTE_INTERNAL_TOPOLOGY_EXPECTED_HASH_${topology_key}"
+            )
+            if(topology_expected_hash STREQUAL "")
+                message(FATAL_ERROR "Protocyte topology witness metadata is missing")
+            endif()
+            set(
+                topology_check_script
+                "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteImportTopology.cmake"
+            )
+            string(HEX "${topology_plugin}" encoded_topology_plugin)
+            string(
+                HEX
+                "${topology_import_scan_command}"
+                encoded_topology_import_scan_command
+            )
+            string(HEX "${topology_request}" encoded_topology_request)
+            string(HEX "${topology_witness}" encoded_topology_witness)
+            string(HEX "${topology_lock}" encoded_topology_lock)
+            string(HEX "${topology_check_script}" encoded_topology_check_script)
+            string(
+                APPEND
+                guard_manifest_content
+                "topology ${encoded_topology_plugin} ${encoded_topology_import_scan_command} "
+                "${topology_plugin_is_managed} ${encoded_topology_request} ${encoded_topology_witness} "
+                "${encoded_topology_lock} ${topology_expected_hash} "
+                "${encoded_topology_check_script}\n"
+            )
+        endif()
+    endforeach()
+    if(guard_manifest_content STREQUAL "version=1\n")
+        return()
+    endif()
+
+    string(
+        SHA256
+        guard_key
+        "${CMAKE_CURRENT_BINARY_DIR}|${guard_manifest_content}"
+    )
+    set(guard_directory "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-prebuild")
+    set(guard_manifest "${guard_directory}/${guard_key}.list")
+    set(guard_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocytePreBuildGuard.cmake")
+    file(MAKE_DIRECTORY "${guard_directory}")
+    _protocyte_write_if_different("${guard_manifest}" "${guard_manifest_content}")
+    _protocyte_append_configure_dependency("${guard_script}")
+
+    set(guard_target "protocyte_import_guard_${guard_key}")
+    if(NOT TARGET "${guard_target}")
+        set(guard_fail_on_change TRUE)
+        if(CMAKE_GENERATOR MATCHES "Makefiles")
+            set(guard_fail_on_change FALSE)
+        endif()
+        add_custom_target(
+            "${guard_target}"
+            COMMAND
+                "${CMAKE_COMMAND}"
+                "-DMANIFEST_FILE=${guard_manifest}"
+                "-DFAIL_ON_CHANGE=${guard_fail_on_change}"
+                -P "${guard_script}"
+            VERBATIM
+        )
+    endif()
+    set(${out_guard_dependency} "${guard_target}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_prepare_plugin)
     _protocyte_get_internal(protocyte_prepared_plugin PLUGIN_EXECUTABLE)
     if(NOT "${protocyte_prepared_plugin}" STREQUAL "")
+        _protocyte_get_internal(protocyte_plugin_is_managed PLUGIN_IS_MANAGED)
+        if("${protocyte_plugin_is_managed}" STREQUAL "")
+            set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_IS_MANAGED FALSE)
+        endif()
         return()
     endif()
 
@@ -2773,14 +3469,21 @@ function(_protocyte_prepare_plugin)
             protocyte_plugin_executable
             "${PROTOCYTE_PLUGIN_EXECUTABLE}"
         )
+        set(protocyte_plugin_is_managed FALSE)
     else()
         _protocyte_ensure_python_environment(protocyte_python_executable protocyte_plugin_executable)
+        set(protocyte_plugin_is_managed TRUE)
     endif()
 
     set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${protocyte_plugin_executable}")
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_IS_MANAGED "${protocyte_plugin_is_managed}")
 endfunction()
 
 function(_protocyte_ensure_protobuf fetch_missing_import_sources)
+    set(require_protobuf_import_sources TRUE)
+    if(ARGC GREATER 1)
+        set(require_protobuf_import_sources "${ARGV1}")
+    endif()
     set(protoc_executable "")
     set(protoc_dependency "")
     set(protocyte_path_protoc "protocyte_path_protoc-NOTFOUND")
@@ -3020,23 +3723,41 @@ function(_protocyte_ensure_protobuf fetch_missing_import_sources)
             endforeach()
         endif()
     endif()
-    _protocyte_resolve_protobuf_import_dir(
-        protocyte_import_dir_is_explicit
-        "${protoc_toolchain_identity}"
-    )
+    set(resolve_protobuf_import_sources "${require_protobuf_import_sources}")
     if(
-        NOT DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR
-        AND NOT protocyte_import_dir_is_explicit
-        AND fetch_missing_import_sources
-        AND PROTOCYTE_FETCH_PROTOBUF
+        DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR
+        AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL ""
     )
-        _protocyte_fetch_protobuf_import_sources("${protoc_toolchain_identity}")
+        # An explicit root remains part of protoc's search order even when the
+        # selected source closure happens not to import protobuf definitions.
+        set(resolve_protobuf_import_sources TRUE)
+    endif()
+    if(resolve_protobuf_import_sources)
+        _protocyte_resolve_protobuf_import_dir(
+            protocyte_import_dir_is_explicit
+            "${protoc_toolchain_identity}"
+        )
+        if(
+            NOT DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR
+            AND NOT protocyte_import_dir_is_explicit
+            AND fetch_missing_import_sources
+            AND PROTOCYTE_FETCH_PROTOBUF
+        )
+            _protocyte_fetch_protobuf_import_sources("${protoc_toolchain_identity}")
+        endif()
     endif()
 endfunction()
 
 function(_protocyte_setup_codegen_internal fetch_missing_import_sources)
+    set(require_protobuf_import_sources TRUE)
+    if(ARGC GREATER 1)
+        set(require_protobuf_import_sources "${ARGV1}")
+    endif()
     _protocyte_prepare_plugin()
-    _protocyte_ensure_protobuf("${fetch_missing_import_sources}")
+    _protocyte_ensure_protobuf(
+        "${fetch_missing_import_sources}"
+        "${require_protobuf_import_sources}"
+    )
 endfunction()
 
 function(protocyte_setup_codegen)
@@ -3091,6 +3812,12 @@ function(protocyte_generate)
     endif()
     if(NOT protocyte_has_OUT_DIR)
         message(FATAL_ERROR "protocyte_generate requires OUT_DIR")
+    endif()
+    if(protocyte_has_NAMESPACE_PREFIX)
+        _protocyte_validate_namespace_prefix(
+            "protocyte_generate"
+            "${PROTOCYTE_NAMESPACE_PREFIX}"
+        )
     endif()
     if("${PROTOCYTE_OUT_DIR}" MATCHES "\\$<")
         message(FATAL_ERROR "protocyte_generate OUT_DIR must be a configure-time path, not a generator expression")
@@ -3168,12 +3895,13 @@ function(protocyte_generate)
         )
     endif()
 
-    set(protocyte_user_import_dirs)
-    set(protocyte_needs_fallback_import_sources FALSE)
+    set(encoded_protocyte_proto_root "")
+    set(encoded_protocyte_user_import_dirs)
     if(NOT protocyte_has_DESCRIPTOR_SET)
         if(NOT IS_DIRECTORY "${protocyte_proto_root}")
             message(FATAL_ERROR "protocyte_generate PROTO_ROOT must be an existing directory: ${protocyte_proto_root}")
         endif()
+        string(HEX "${protocyte_proto_root}" encoded_protocyte_proto_root)
         foreach(import_dir IN LISTS PROTOCYTE_IMPORT_DIRS)
             if(IS_ABSOLUTE "${import_dir}")
                 set(import_dir_abs "${import_dir}")
@@ -3188,21 +3916,15 @@ function(protocyte_generate)
             if(NOT IS_DIRECTORY "${import_dir_abs}")
                 message(FATAL_ERROR "protocyte_generate IMPORT_DIRS entry must be an existing directory: ${import_dir_abs}")
             endif()
-            list(APPEND protocyte_user_import_dirs "${import_dir_abs}")
+            string(HEX "${import_dir_abs}" encoded_import_dir)
+            list(APPEND encoded_protocyte_user_import_dirs "${encoded_import_dir}")
         endforeach()
-        list(REMOVE_DUPLICATES protocyte_user_import_dirs)
-        set(protocyte_needs_fallback_import_sources TRUE)
-        foreach(import_dir IN LISTS protocyte_proto_root protocyte_user_import_dirs)
-            if(EXISTS "${import_dir}/google/protobuf/descriptor.proto")
-                set(protocyte_needs_fallback_import_sources FALSE)
-                break()
-            endif()
-        endforeach()
+        list(REMOVE_DUPLICATES encoded_protocyte_user_import_dirs)
     endif()
 
     if(protocyte_has_DESCRIPTOR_SET AND PROTOCYTE_DISCOVER)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_descriptor_set}")
-        _protocyte_setup_codegen_internal(FALSE)
+        _protocyte_setup_codegen_internal(FALSE FALSE)
         _protocyte_discover_descriptor_set(protocyte_proto_files "${protocyte_descriptor_set}")
     elseif(PROTOCYTE_DISCOVER)
         file(GLOB_RECURSE protocyte_proto_files CONFIGURE_DEPENDS "${protocyte_proto_root}/*.proto")
@@ -3214,6 +3936,7 @@ function(protocyte_generate)
         message(FATAL_ERROR "protocyte_generate did not receive any .proto files")
     endif()
 
+    set(protocyte_requires_protobuf_import_sources FALSE)
     set(normalized_proto_files)
     set(normalized_proto_names)
     set(protocyte_source_check_targets "")
@@ -3260,26 +3983,9 @@ function(protocyte_generate)
             string(SHA256 proto_abs_key "${proto_abs}")
             set("protocyte_normalized_proto_file_${proto_abs_key}" "${proto_abs}")
             set("protocyte_normalized_proto_name_${proto_abs_key}" "${proto_rel}")
-            if(
-                CMAKE_GENERATOR MATCHES "^(Visual Studio|Ninja)"
-                AND "${proto_abs}" MATCHES ";"
-            )
-                _protocyte_get_source_dependency_proxy(
-                    protocyte_source_dependency
-                    protocyte_source_check_target
-                    "${proto_abs}"
-                )
-                # Visual Studio and Ninja cannot reliably represent a literal
-                # semicolon throughout their dependency metadata. One build-tree
-                # checker owns the safe proxy and is shared by every caller.
-                list(
-                    APPEND
-                    protocyte_source_check_targets
-                    "${protocyte_source_check_target}"
-                )
-            else()
-                set(protocyte_source_dependency "${proto_abs}")
-            endif()
+            # The final import scan supplies a generator-safe dependency alias
+            # (or requests a proxy) after the complete root order is known.
+            set(protocyte_source_dependency "${proto_abs}")
             set(
                 "protocyte_source_dependency_${proto_abs_key}"
                 "${protocyte_source_dependency}"
@@ -3299,14 +4005,211 @@ function(protocyte_generate)
         endforeach()
     endif()
 
-    if(NOT protocyte_has_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
-        if(protocyte_has_DESCRIPTOR_SET)
-            _protocyte_setup_codegen_internal(FALSE)
-        else()
-            _protocyte_setup_codegen_internal("${protocyte_needs_fallback_import_sources}")
+    _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
+    set(protocyte_import_topology_witness "")
+    set(protocyte_declared_protobuf_descriptor "")
+    set(protocyte_needs_resolved_protobuf_import_dir FALSE)
+    if(NOT protocyte_has_DESCRIPTOR_SET)
+        string(HEX "${protocyte_proto_dir}" encoded_protocyte_proto_dir)
+        set(
+            encoded_initial_import_dirs
+            "${encoded_protocyte_proto_root}"
+            ${encoded_protocyte_user_import_dirs}
+            "${encoded_protocyte_proto_dir}"
+        )
+        list(REMOVE_DUPLICATES encoded_initial_import_dirs)
+        foreach(encoded_import_dir IN LISTS encoded_initial_import_dirs)
+            _protocyte_decode_hex_string(import_dir "${encoded_import_dir}")
+            if(
+                protocyte_declared_protobuf_descriptor STREQUAL ""
+                AND EXISTS "${import_dir}/google/protobuf/descriptor.proto"
+                AND NOT IS_DIRECTORY "${import_dir}/google/protobuf/descriptor.proto"
+            )
+                set(
+                    protocyte_declared_protobuf_descriptor
+                    "${import_dir}/google/protobuf/descriptor.proto"
+                )
+            endif()
+        endforeach()
+        _protocyte_run_source_import_scan(
+            protocyte_requires_protobuf_import_sources
+            protocyte_first_import_scan_key
+            protocyte_first_import_scan_lines
+            protocyte_first_scan_has_unwatchable_source
+            normalized_proto_files
+            encoded_initial_import_dirs
+        )
+        set(
+            protocyte_needs_resolved_protobuf_import_dir
+            "${protocyte_requires_protobuf_import_sources}"
+        )
+        if(NOT protocyte_declared_protobuf_descriptor STREQUAL "")
+            # Caller-owned roots already satisfy the preflight requirement.
+            # Do not discover or fetch an additional automatic root merely
+            # because the closure imports a protobuf definition.
+            set(protocyte_needs_resolved_protobuf_import_dir FALSE)
+        elseif(
+            CMAKE_GENERATOR MATCHES "Makefiles"
+            AND protocyte_first_scan_has_unwatchable_source
+        )
+            # Makefile-family generators perform their top-level configure
+            # check before the always-run source proxy checker. Keep the
+            # protobuf root in the generated command line as a conservative
+            # superset so a false-to-true source edit is still correct in its
+            # first build; the refreshed proxy updates topology next time.
+            set(protocyte_needs_resolved_protobuf_import_dir TRUE)
         endif()
     endif()
-    _protocyte_get_internal(protocyte_proto_dir PROTO_DIR)
+
+    if(NOT protocyte_has_DESCRIPTOR_SET OR NOT PROTOCYTE_DISCOVER)
+        if(protocyte_has_DESCRIPTOR_SET)
+            _protocyte_setup_codegen_internal(FALSE FALSE)
+        else()
+            _protocyte_setup_codegen_internal(
+                "${protocyte_needs_resolved_protobuf_import_dir}"
+                "${protocyte_needs_resolved_protobuf_import_dir}"
+            )
+        endif()
+    endif()
+    set(protocyte_selected_protobuf_import_dir "")
+    if(NOT protocyte_has_DESCRIPTOR_SET)
+        set(
+            select_resolved_protobuf_import_dir
+            "${protocyte_needs_resolved_protobuf_import_dir}"
+        )
+        if(
+            DEFINED PROTOCYTE_PROTOBUF_IMPORT_DIR
+            AND NOT PROTOCYTE_PROTOBUF_IMPORT_DIR STREQUAL ""
+        )
+            # A caller-owned root is part of the declared import order even for
+            # an import-free closure. Automatic roots remain per-closure: keep
+            # their cache metadata for reuse without leaking them into later
+            # import-free targets or reconfigurations.
+            set(select_resolved_protobuf_import_dir TRUE)
+        endif()
+        if(
+            select_resolved_protobuf_import_dir
+            AND DEFINED PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR
+        )
+            set(
+                protocyte_selected_protobuf_import_dir
+                "${PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}"
+            )
+        endif()
+
+        set(encoded_final_import_dirs ${encoded_initial_import_dirs})
+        set(protocyte_root_validity_descriptor "")
+        if(NOT protocyte_selected_protobuf_import_dir STREQUAL "")
+            string(
+                HEX
+                "${protocyte_selected_protobuf_import_dir}"
+                encoded_protobuf_import_dir
+            )
+            list(APPEND encoded_final_import_dirs "${encoded_protobuf_import_dir}")
+            set(
+                protocyte_root_validity_descriptor
+                "${protocyte_selected_protobuf_import_dir}/google/protobuf/descriptor.proto"
+            )
+        elseif(
+            protocyte_requires_protobuf_import_sources
+            AND NOT protocyte_declared_protobuf_descriptor STREQUAL ""
+        )
+            set(
+                protocyte_root_validity_descriptor
+                "${protocyte_declared_protobuf_descriptor}"
+            )
+        endif()
+        list(REMOVE_DUPLICATES encoded_final_import_dirs)
+
+        set(protocyte_final_scan_source_files "${normalized_proto_files}")
+        if(NOT protocyte_root_validity_descriptor STREQUAL "")
+            string(
+                REPLACE ";" "\\;"
+                escaped_root_validity_descriptor
+                "${protocyte_root_validity_descriptor}"
+            )
+            list(APPEND protocyte_final_scan_source_files "${escaped_root_validity_descriptor}")
+        endif()
+        if(
+            encoded_final_import_dirs STREQUAL encoded_initial_import_dirs
+            AND protocyte_root_validity_descriptor STREQUAL ""
+        )
+            set(protocyte_final_import_scan_key "${protocyte_first_import_scan_key}")
+            set(protocyte_final_import_scan_lines "${protocyte_first_import_scan_lines}")
+        else()
+            _protocyte_run_source_import_scan(
+                protocyte_requires_protobuf_import_sources
+                protocyte_final_import_scan_key
+                protocyte_final_import_scan_lines
+                protocyte_final_scan_has_unwatchable_source
+                protocyte_final_scan_source_files
+                encoded_final_import_dirs
+            )
+        endif()
+        _protocyte_register_source_import_scan(
+            protocyte_import_topology_witness
+            protocyte_import_scan_check_targets
+            "${protocyte_final_import_scan_key}"
+            protocyte_final_import_scan_lines
+        )
+        foreach(import_scan_line IN LISTS protocyte_final_import_scan_lines)
+            if(NOT import_scan_line MATCHES "^source ([0-9a-f]+) (-|[0-9a-f]+)$")
+                continue()
+            endif()
+            set(encoded_source "${CMAKE_MATCH_1}")
+            set(encoded_dependency "${CMAKE_MATCH_2}")
+            _protocyte_decode_hex_string(import_scan_source "${encoded_source}")
+            string(SHA256 import_scan_source_key "${import_scan_source}")
+            set(
+                import_scan_dependency_variable
+                "protocyte_source_dependency_${import_scan_source_key}"
+            )
+            if(NOT DEFINED ${import_scan_dependency_variable})
+                continue()
+            endif()
+            _protocyte_source_path_requires_proxy(
+                import_scan_source_requires_proxy
+                "${import_scan_source}"
+            )
+            if(
+                encoded_dependency STREQUAL "-"
+                OR import_scan_source_requires_proxy
+            )
+                _protocyte_get_source_dependency_proxy(
+                    import_scan_dependency
+                    import_scan_check_target
+                    "${import_scan_source}"
+                )
+                list(
+                    APPEND
+                    protocyte_source_check_targets
+                    "${import_scan_check_target}"
+                )
+            else()
+                _protocyte_decode_hex_string(
+                    import_scan_dependency
+                    "${encoded_dependency}"
+                )
+            endif()
+            set(
+                "${import_scan_dependency_variable}"
+                "${import_scan_dependency}"
+            )
+        endforeach()
+        list(
+            APPEND
+            protocyte_source_check_targets
+            ${protocyte_import_scan_check_targets}
+        )
+    endif()
+    set(protocyte_import_guard_target "")
+    if(NOT protocyte_has_DESCRIPTOR_SET)
+        list(REMOVE_DUPLICATES protocyte_source_check_targets)
+        _protocyte_create_import_guard(
+            protocyte_import_guard_target
+            protocyte_source_check_targets
+        )
+    endif()
     _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
     _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
     _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
@@ -3383,29 +4286,53 @@ function(protocyte_generate)
 
     set(protocyte_outputs "${protocyte_generated_headers}" "${protocyte_generated_sources}")
 
-    set(protoc_proto_paths)
     set(protoc_descriptor_argument)
     set(protocyte_input_depends)
     if(NOT protocyte_has_DESCRIPTOR_SET)
         # The dependency-scan outputs below already track each direct source
         # and its complete import closure.
-        set(
-            protocyte_import_dirs
-            "${protocyte_proto_root}"
-            ${protocyte_user_import_dirs}
-            "${protocyte_proto_dir}"
-            "${PROTOCYTE_INTERNAL_RESOLVED_PROTOBUF_IMPORT_DIR}"
-        )
-        list(REMOVE_DUPLICATES protocyte_import_dirs)
-        set(protocyte_import_inventory_depends)
-        foreach(import_dir IN LISTS protocyte_import_dirs)
-            _protocyte_import_root_inventory(import_inventory "${import_dir}")
-            list(APPEND protocyte_import_inventory_depends "${import_inventory}")
+        # Keep roots encoded across every list mutation: escaped semicolons are
+        # not stable under CMake's duplicate-removal and append operations.
+        set(encoded_protocyte_import_dirs ${encoded_final_import_dirs})
+        set(protocyte_import_inventory_depends ${protocyte_import_topology_witness})
+        set(encoded_protoc_import_dirs)
+        set(protocyte_protoc_proto_root "${protocyte_proto_root}")
+        foreach(encoded_import_dir IN LISTS encoded_protocyte_import_dirs)
+            _protocyte_decode_hex_string(import_dir "${encoded_import_dir}")
+            _protocyte_protoc_safe_import_root(protoc_import_dir "${import_dir}")
+            string(HEX "${protoc_import_dir}" encoded_protoc_import_dir)
+            list(APPEND encoded_protoc_import_dirs "${encoded_protoc_import_dir}")
+            if(encoded_import_dir STREQUAL encoded_protocyte_proto_root)
+                set(protocyte_protoc_proto_root "${protoc_import_dir}")
+            endif()
         endforeach()
-        list(REMOVE_DUPLICATES protocyte_import_inventory_depends)
+        list(REMOVE_DUPLICATES encoded_protoc_import_dirs)
+
+        foreach(proto_file IN LISTS normalized_proto_files)
+            string(SHA256 proto_file_key "${proto_file}")
+            if(protocyte_protoc_proto_root STREQUAL protocyte_proto_root)
+                set(protocyte_protoc_input "${proto_file}")
+            else()
+                file(
+                    RELATIVE_PATH
+                    protoc_proto_name
+                    "${protocyte_proto_root}"
+                    "${proto_file}"
+                )
+                set(
+                    protocyte_protoc_input
+                    "${protocyte_protoc_proto_root}/${protoc_proto_name}"
+                )
+            endif()
+            set(
+                "protocyte_protoc_input_${proto_file_key}"
+                "${protocyte_protoc_input}"
+            )
+        endforeach()
 
         set(has_protobuf_descriptor_proto FALSE)
-        foreach(import_dir IN LISTS protocyte_import_dirs)
+        foreach(encoded_import_dir IN LISTS encoded_protocyte_import_dirs)
+            _protocyte_decode_hex_string(import_dir "${encoded_import_dir}")
             if(
                 EXISTS "${import_dir}/google/protobuf/descriptor.proto"
                 AND NOT IS_DIRECTORY "${import_dir}/google/protobuf/descriptor.proto"
@@ -3415,7 +4342,7 @@ function(protocyte_generate)
             endif()
         endforeach()
 
-        if(NOT has_protobuf_descriptor_proto)
+        if(protocyte_requires_protobuf_import_sources AND NOT has_protobuf_descriptor_proto)
             if(DEFINED PROTOCYTE_INTERNAL_STALE_PROTOBUF_IMPORT_DIR)
                 message(
                     FATAL_ERROR
@@ -3432,12 +4359,6 @@ function(protocyte_generate)
                 )
             endif()
         endif()
-
-        foreach(import_dir IN LISTS protocyte_import_dirs)
-            set(protoc_proto_path "--proto_path=${import_dir}")
-            string(REPLACE ";" "\\;" protoc_proto_path_list_element "${protoc_proto_path}")
-            list(APPEND protoc_proto_paths "${protoc_proto_path_list_element}")
-        endforeach()
 
         set(protocyte_dependency_dir "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/protocyte-dependencies")
         set(protocyte_lock_dir "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-locks")
@@ -3463,10 +4384,11 @@ function(protocyte_generate)
             _protocyte_output_lock_key(dependency_lock_key "${dependency_descriptor}")
             set(dependency_lock_file "${protocyte_lock_dir}/${dependency_lock_key}.lock")
             set(dependency_response_content "")
-            foreach(protoc_proto_path IN LISTS protoc_proto_paths)
+            foreach(encoded_import_dir IN LISTS encoded_protoc_import_dirs)
+                _protocyte_decode_hex_string(import_dir "${encoded_import_dir}")
                 _protocyte_append_protoc_response_argument(
                     dependency_response_content
-                    "${protoc_proto_path}"
+                    "--proto_path=${import_dir}"
                 )
             endforeach()
             _protocyte_append_protoc_response_argument(
@@ -3479,7 +4401,7 @@ function(protocyte_generate)
             )
             _protocyte_append_protoc_response_argument(
                 dependency_response_content
-                "${proto_file}"
+                "${protocyte_protoc_input_${proto_file_key}}"
             )
             _protocyte_write_protoc_response_file(
                 dependency_response_file
@@ -3561,7 +4483,12 @@ function(protocyte_generate)
             endif()
             list(APPEND protocyte_dependency_outputs "${dependency_descriptor}")
         endforeach()
-        list(APPEND protocyte_input_depends ${protocyte_dependency_outputs})
+        list(
+            APPEND
+            protocyte_input_depends
+            ${protocyte_dependency_outputs}
+            ${protocyte_import_topology_witness}
+        )
     else()
         set(protoc_descriptor_argument "--descriptor_set_in=${protocyte_descriptor_set}")
         list(APPEND protocyte_input_depends "${protocyte_descriptor_set}")
@@ -3594,10 +4521,11 @@ function(protocyte_generate)
             "${protoc_descriptor_argument}"
         )
     endif()
-    foreach(protoc_proto_path IN LISTS protoc_proto_paths)
+    foreach(encoded_import_dir IN LISTS encoded_protoc_import_dirs)
+        _protocyte_decode_hex_string(import_dir "${encoded_import_dir}")
         _protocyte_append_protoc_response_argument(
             protocyte_response_content
-            "${protoc_proto_path}"
+            "--proto_path=${import_dir}"
         )
     endforeach()
     _protocyte_append_protoc_response_argument(
@@ -3609,9 +4537,18 @@ function(protocyte_generate)
         "${protocyte_out_arg}"
     )
     foreach(proto_file IN LISTS normalized_proto_files)
+        if(protocyte_has_DESCRIPTOR_SET)
+            set(protocyte_protoc_input "${proto_file}")
+        else()
+            string(SHA256 proto_file_key "${proto_file}")
+            set(
+                protocyte_protoc_input
+                "${protocyte_protoc_input_${proto_file_key}}"
+            )
+        endif()
         _protocyte_append_protoc_response_argument(
             protocyte_response_content
-            "${proto_file}"
+            "${protocyte_protoc_input}"
         )
     endforeach()
     _protocyte_write_protoc_response_file(
@@ -3672,9 +4609,9 @@ function(protocyte_generate)
     )
 
     add_custom_target("${PROTOCYTE_TARGET}" DEPENDS ${protocyte_command_outputs})
-    foreach(protocyte_source_check_target IN LISTS protocyte_source_check_targets)
-        add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_source_check_target}")
-    endforeach()
+    if(NOT protocyte_import_guard_target STREQUAL "")
+        add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_import_guard_target}")
+    endif()
 
     if(protocyte_has_GENERATED_HEADERS_VAR)
         set(${PROTOCYTE_GENERATED_HEADERS_VAR} "${protocyte_generated_headers}" PARENT_SCOPE)

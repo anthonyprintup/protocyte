@@ -169,6 +169,8 @@ if(PROTOCYTE_INSTALL)
     install(
         FILES
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteDependencyScan.cmake"
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteImportTopology.cmake"
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocytePreBuildGuard.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteSourceDependency.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteGenerate.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"

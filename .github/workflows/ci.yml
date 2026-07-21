@@ -405,6 +405,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
       - name: Install prebuilt protoc
         id: visual-studio-protoc
         run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
@@ -418,6 +421,9 @@ jobs:
         run: >
           uv run pytest -q
           tests/test_cmake.py::test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import
+          "tests/test_cmake.py::test_source_codegen_tracks_import_shadow_addition_and_removal[visual-studio]"
+          "tests/test_cmake.py::test_source_codegen_tracks_import_directory_identity_changes[visual-studio]"
+          "tests/test_cmake.py::test_source_codegen_tracks_import_directory_identity_changes[nmake]"
 
   smoke-host-linux:
     name: Smoke Host Linux
