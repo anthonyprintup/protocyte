@@ -4,6 +4,7 @@ import ast
 import math
 import struct
 import warnings
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
@@ -1840,18 +1841,28 @@ def _validate_enum_descriptor(
             raise ProtocyteError(
                 f"{owner_full_name}: invalid reserved enum range [{start}, {end}]"
             )
-        for previous_start, previous_end in ranges:
-            if start <= previous_end and previous_start <= end:
-                raise ProtocyteError(
-                    f"{owner_full_name}: reserved enum ranges "
-                    f"[{previous_start}, {previous_end}] and [{start}, {end}] overlap"
-                )
-        for number, name in value_numbers.items():
-            if start <= number <= end:
-                raise ProtocyteError(
-                    f"{owner_full_name}.{name}: enum number {number} is reserved"
-                )
         ranges.append((start, end))
+
+    ranges, overlap = _sort_ranges_and_find_overlap(ranges, end_inclusive=True)
+    if overlap is not None:
+        (previous_start, previous_end), (start, end) = overlap
+        raise ProtocyteError(
+            f"{owner_full_name}: reserved enum ranges "
+            f"[{previous_start}, {previous_end}] and [{start}, {end}] overlap"
+        )
+
+    range_starts = [start for start, _ in ranges]
+    for number, name in value_numbers.items():
+        containing_range = _find_containing_range(
+            ranges,
+            range_starts,
+            number,
+            end_inclusive=True,
+        )
+        if containing_range is not None:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: enum number {number} is reserved"
+            )
 
 
 def _validate_message_descriptor(
@@ -2006,18 +2017,69 @@ def _validate_reserved_fields(
             raise ProtocyteError(
                 f"{owner_full_name}: invalid reserved field range [{start}, {end})"
             )
-        for previous_start, previous_end in ranges:
-            if start < previous_end and previous_start < end:
-                raise ProtocyteError(
-                    f"{owner_full_name}: reserved field ranges [{previous_start}, {previous_end}) "
-                    f"and [{start}, {end}) overlap"
-                )
-        for number, name in field_numbers.items():
-            if start <= number < end:
-                raise ProtocyteError(
-                    f"{owner_full_name}.{name}: field number {number} is reserved"
-                )
         ranges.append((start, end))
+
+    ranges, overlap = _sort_ranges_and_find_overlap(ranges, end_inclusive=False)
+    if overlap is not None:
+        (previous_start, previous_end), (start, end) = overlap
+        raise ProtocyteError(
+            f"{owner_full_name}: reserved field ranges [{previous_start}, {previous_end}) "
+            f"and [{start}, {end}) overlap"
+        )
+
+    range_starts = [start for start, _ in ranges]
+    for number, name in field_numbers.items():
+        containing_range = _find_containing_range(
+            ranges,
+            range_starts,
+            number,
+            end_inclusive=False,
+        )
+        if containing_range is not None:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: field number {number} is reserved"
+            )
+
+
+def _sort_ranges_and_find_overlap(
+    ranges: list[tuple[int, int]],
+    *,
+    end_inclusive: bool,
+) -> tuple[
+    list[tuple[int, int]],
+    tuple[tuple[int, int], tuple[int, int]] | None,
+]:
+    ordered = sorted(ranges)
+    if not ordered:
+        return ordered, None
+
+    previous = ordered[0]
+    for current in ordered[1:]:
+        overlaps = (
+            current[0] <= previous[1]
+            if end_inclusive
+            else current[0] < previous[1]
+        )
+        if overlaps:
+            return ordered, (previous, current)
+        previous = current
+    return ordered, None
+
+
+def _find_containing_range(
+    ranges: list[tuple[int, int]],
+    range_starts: list[int],
+    value: int,
+    *,
+    end_inclusive: bool,
+) -> tuple[int, int] | None:
+    range_index = bisect_right(range_starts, value) - 1
+    if range_index < 0:
+        return None
+    start, end = ranges[range_index]
+    if value < end or (end_inclusive and value == end):
+        return start, end
+    return None
 
 
 def _validate_map_entry_descriptor(
