@@ -318,6 +318,12 @@ def _write_descriptor_set(path: Path, *files: descriptor_pb2.FileDescriptorProto
     path.write_bytes(descriptor_set.SerializeToString())
 
 
+def _wire_length_delimited(field_number: int, payload: bytes) -> bytes:
+    assert field_number < 16
+    assert len(payload) < 128
+    return bytes([(field_number << 3) | 2, len(payload)]) + payload
+
+
 def test_plugin_entrypoint_reports_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert plugin_main(["--version"]) == 0
     assert capsys.readouterr().out.strip() == __version__
@@ -431,6 +437,24 @@ def test_load_descriptor_set_reports_invalid_bytes(tmp_path: Path) -> None:
         load_descriptor_set(path)
 
 
+def test_descriptor_set_cli_rejects_malformed_descriptor_utf8(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    malformed_file = _wire_length_delimited(1, b"api/invalid-\xff.proto")
+    path.write_bytes(_wire_length_delimited(1, malformed_file))
+
+    with pytest.raises(SystemExit) as exc_info:
+        descriptor_set_main(["list", str(path)])
+
+    assert exc_info.value.code == 1
+    assert capsys.readouterr().err.strip() == (
+        "protocyte: invalid UTF-8 in descriptor string field "
+        "FileDescriptorSet.file[0].name: b'api/invalid-\\xff.proto'"
+    )
+
+
 def test_validate_descriptor_set_rejects_duplicate_file_names(tmp_path: Path) -> None:
     path = tmp_path / "descriptor_set.pb"
     _write_descriptor_set(path, _file("demo.proto"), _file("demo.proto"))
@@ -453,6 +477,23 @@ def test_validate_descriptor_set_rejects_missing_import(tmp_path: Path) -> None:
 
     with pytest.raises(ProtocyteError, match="user.proto imports missing descriptor missing.proto"):
         validate_descriptor_set(load_descriptor_set(path), ["user.proto"])
+
+
+def test_descriptor_diagnostics_escape_control_character_file_names(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    source_name = "api/source\x1b[2J.proto"
+    missing_name = "api/missing\n.proto"
+    _write_descriptor_set(path, _file(source_name, missing_name))
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        validate_descriptor_set(load_descriptor_set(path), [source_name])
+
+    error = str(exc_info.value)
+    assert error == (
+        "api/source\\u001b[2J.proto imports missing descriptor api/missing\\u000a.proto"
+    )
+    assert "\x1b" not in error
+    assert "\n" not in error
 
 
 @pytest.mark.parametrize(

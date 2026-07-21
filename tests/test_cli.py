@@ -46,6 +46,12 @@ def _request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+def _wire_length_delimited(field_number: int, payload: bytes) -> bytes:
+    assert field_number < 16
+    assert len(payload) < 128
+    return bytes([(field_number << 3) | 2, len(payload)]) + payload
+
+
 def test_no_argument_interactive_invocation_exits_with_help_hint(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -78,6 +84,34 @@ def test_no_argument_non_interactive_invocation_preserves_plugin_protocol(
     assert standard_output.buffer.getvalue() == generate_response(
         request
     ).SerializeToString()
+    assert capsys.readouterr().err == ""
+
+
+def test_plugin_protocol_rejects_malformed_descriptor_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    malformed_file = _wire_length_delimited(1, b"api/invalid-\xff.proto")
+    payload = _wire_length_delimited(1, b"api/input.proto") + _wire_length_delimited(
+        15, malformed_file
+    )
+    standard_input = _BinaryInput(payload, interactive=False)
+    standard_output = _BinaryOutput()
+
+    with monkeypatch.context() as context:
+        context.setattr(sys, "stdin", standard_input)
+        context.setattr(sys, "stdout", standard_output)
+        result = plugin_main([])
+
+    response = plugin_pb2.CodeGeneratorResponse.FromString(
+        standard_output.buffer.getvalue()
+    )
+    assert result == 0
+    assert response.error == (
+        "invalid UTF-8 in descriptor string field "
+        "CodeGeneratorRequest.proto_file[0].name: b'api/invalid-\\xff.proto'"
+    )
+    assert not response.file
     assert capsys.readouterr().err == ""
 
 

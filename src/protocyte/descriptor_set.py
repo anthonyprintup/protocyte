@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
 from google.protobuf import descriptor_pb2
-from google.protobuf.message import DecodeError
+from google.protobuf.message import DecodeError, Message
 
 from protocyte.errors import ProtocyteError
 from protocyte.extensions import is_custom_option_extension
@@ -28,10 +28,67 @@ def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
     try:
         descriptor_set.ParseFromString(Path(path).read_bytes())
     except OSError as exc:
-        raise ProtocyteError(f"failed to read descriptor set {path}: {exc}") from exc
+        raise ProtocyteError(
+            "failed to read descriptor set "
+            f"{render_diagnostic_context(str(path))}: "
+            f"{render_diagnostic_context(str(exc))}"
+        ) from exc
     except DecodeError as exc:
-        raise ProtocyteError(f"failed to parse FileDescriptorSet {path}: {exc}") from exc
+        raise ProtocyteError(
+            "failed to parse FileDescriptorSet "
+            f"{render_diagnostic_context(str(path))}: "
+            f"{render_diagnostic_context(str(exc))}"
+        ) from exc
+    validate_descriptor_string_fields(descriptor_set, root="FileDescriptorSet")
     return descriptor_set
+
+
+def render_diagnostic_context(value: str) -> str:
+    """Make descriptor-controlled text safe to include in a terminal diagnostic."""
+    return "".join(
+        char
+        if char.isprintable()
+        else (f"\\u{ord(char):04x}" if ord(char) <= 0xFFFF else f"\\U{ord(char):08x}")
+        for char in value
+    )
+
+
+def validate_descriptor_string_fields(message: Message, *, root: str) -> None:
+    """Reject malformed UTF-8 returned as bytes for protobuf string fields."""
+
+    def validate_value(value: object, path: str) -> None:
+        if isinstance(value, str):
+            return
+        if isinstance(value, bytes):
+            raise ProtocyteError(
+                f"invalid UTF-8 in descriptor string field {path}: {ascii(value)}"
+            )
+        raise ProtocyteError(
+            f"descriptor string field {path} has invalid runtime type "
+            f"{type(value).__name__}"
+        )
+
+    stack = [(message, root)]
+    while stack:
+        current, path = stack.pop()
+        nested_messages: list[tuple[Message, str]] = []
+        for field, value in current.ListFields():
+            field_path = f"{path}.{field.name}"
+            if field.type == descriptor_pb2.FieldDescriptorProto.TYPE_STRING:
+                if field.is_repeated:
+                    for index, item in enumerate(value):
+                        validate_value(item, f"{field_path}[{index}]")
+                else:
+                    validate_value(value, field_path)
+                continue
+            if field.type != descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE:
+                continue
+            if field.is_repeated:
+                for index, item in enumerate(value):
+                    nested_messages.append((item, f"{field_path}[{index}]"))
+            else:
+                nested_messages.append((value, field_path))
+        stack.extend(reversed(nested_messages))
 
 
 def validate_virtual_file_name(name: str) -> None:
@@ -40,18 +97,30 @@ def validate_virtual_file_name(name: str) -> None:
     if name.startswith("-"):
         raise ProtocyteError(
             "descriptor file name must not begin with '-' because protoc "
-            f"interprets it as an option: {name}"
+            f"interprets it as an option: {render_diagnostic_context(name)}"
         )
     if "\0" in name:
-        raise ProtocyteError(f"descriptor file name contains a null character: {name!r}")
+        raise ProtocyteError(
+            "descriptor file name contains a null character: "
+            f"{render_diagnostic_context(name)}"
+        )
     if "\\" in name:
-        raise ProtocyteError(f"descriptor file name must use '/' separators: {name}")
+        raise ProtocyteError(
+            "descriptor file name must use '/' separators: "
+            f"{render_diagnostic_context(name)}"
+        )
 
     windows = PureWindowsPath(name)
     if name.startswith("/") or windows.root:
-        raise ProtocyteError(f"descriptor file name must be relative: {name}")
+        raise ProtocyteError(
+            "descriptor file name must be relative: "
+            f"{render_diagnostic_context(name)}"
+        )
     if any(part in {"", ".", ".."} for part in name.split("/")):
-        raise ProtocyteError(f"descriptor file name contains an unsafe path segment: {name}")
+        raise ProtocyteError(
+            "descriptor file name contains an unsafe path segment: "
+            f"{render_diagnostic_context(name)}"
+        )
 
 
 def index_files(
@@ -61,7 +130,10 @@ def index_files(
     for file in descriptor_set.file:
         validate_virtual_file_name(file.name)
         if file.name in files:
-            raise ProtocyteError(f"duplicate descriptor file name: {file.name}")
+            raise ProtocyteError(
+                "duplicate descriptor file name: "
+                f"{render_diagnostic_context(file.name)}"
+            )
         files[file.name] = file
     return files
 
@@ -75,7 +147,10 @@ def validate_descriptor_set(
     for name in selected:
         validate_virtual_file_name(name)
         if name not in files:
-            raise ProtocyteError(f"selected descriptor file is not present: {name}")
+            raise ProtocyteError(
+                "selected descriptor file is not present: "
+                f"{render_diagnostic_context(name)}"
+            )
 
     _validate_import_graph(files, selected)
     return selected
@@ -99,8 +174,11 @@ def discover_files(descriptor_set: descriptor_pb2.FileDescriptorSet) -> list[str
             blocker = _referenced_type_generation_blocker(files[referenced])
             if blocker is not None:
                 raise ProtocyteError(
-                    f"{file.name}: field {reference.field_path} references type {reference.type_name} "
-                    f"from {referenced}, but {referenced} cannot be generated because {blocker}"
+                    f"{render_diagnostic_context(file.name)}: field "
+                    f"{render_diagnostic_context(reference.field_path)} references type "
+                    f"{render_diagnostic_context(reference.type_name)} from "
+                    f"{render_diagnostic_context(referenced)}, but "
+                    f"{render_diagnostic_context(referenced)} cannot be generated because {blocker}"
                 )
             selected.add(referenced)
             stack.append(referenced)
@@ -127,7 +205,10 @@ def _referenced_type_generation_blocker(file: descriptor_pb2.FileDescriptorProto
     for extension, scope in _extension_declarations(file):
         if scope is not None and not is_custom_option_extension(extension):
             return (
-                f"message {scope.removeprefix('.')} declares unsupported extension {extension.name}"
+                "message "
+                f"{render_diagnostic_context(scope.removeprefix('.'))} "
+                "declares unsupported extension "
+                f"{render_diagnostic_context(extension.name)}"
             )
     return None
 
@@ -347,7 +428,10 @@ def _validate_import_graph(
         for dependency in file.dependency:
             validate_virtual_file_name(dependency)
             if dependency not in files:
-                raise ProtocyteError(f"{name} imports missing descriptor {dependency}")
+                raise ProtocyteError(
+                    f"{render_diagnostic_context(name)} imports missing descriptor "
+                    f"{render_diagnostic_context(dependency)}"
+                )
             stack.append(dependency)
 
 

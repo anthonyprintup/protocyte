@@ -541,6 +541,22 @@ def test_duplicate_field_numbers_return_descriptor_errors() -> None:
     assert not response.file
 
 
+def test_duplicate_control_character_field_names_are_safe_in_public_errors() -> None:
+    request = _basic_request(parameter="format=off")
+    control_name = "duplicate\n\x1b[2J\x85"
+    message = request.proto_file[0].message_type[0]
+    message.field[0].name = control_name
+    message.field[1].name = control_name
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample.duplicate\\u000a\\u001b[2J\\u0085: duplicate field name"
+    )
+    assert all(char.isprintable() for char in response.error)
+    assert not response.file
+
+
 def test_overlapping_reserved_field_ranges_return_sorted_diagnostic() -> None:
     request = _basic_request(parameter="format=off")
     message = request.proto_file[0].message_type[0]
@@ -951,7 +967,7 @@ def test_unexpected_generator_exception_returns_diagnostic_response(
 ) -> None:
     def fail_build_model(request: object) -> None:
         del request
-        raise RuntimeError("descriptor registry exploded")
+        raise RuntimeError("descriptor registry\n\x1b[2J exploded")
 
     monkeypatch.setattr(protocyte_plugin, "build_model", fail_build_model)
 
@@ -959,8 +975,9 @@ def test_unexpected_generator_exception_returns_diagnostic_response(
 
     assert response.error == (
         "internal Protocyte error while building the descriptor model (RuntimeError): "
-        "descriptor registry exploded"
+        "descriptor registry\\u000a\\u001b[2J exploded"
     )
+    assert all(char.isprintable() for char in response.error)
     assert not response.file
 
 
@@ -1567,6 +1584,50 @@ def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages()
         "  }};"
         in source
     )
+
+
+def test_reflection_escapes_untrusted_field_names_as_complete_cpp_literals() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection_untrusted.proto", package="demo", syntax="proto3"
+    )
+    message = file.message_type.add(name="Message")
+    message.field.add(
+        name='payload"\n#define P2_INJECTED 1\r\\\x1b\x7f\x85',
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    source = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection_untrusted.protocyte.cpp"
+    )
+    assert "\n#define P2_INJECTED" not in source
+    assert "\r#define P2_INJECTED" not in source
+    assert "\x1b" not in source
+    assert "\x7f" not in source
+    assert "\x85" not in source
+    assert r'payload\"\n#define P2_INJECTED 1\r\\' in source
+    assert r'"\x1b""\x7f""\xc2""\x85"' in source
+
+
+def test_reflection_rejects_embedded_null_field_names() -> None:
+    request = _basic_request(parameter="format=off")
+    request.proto_file[0].message_type[0].field[0].name = "visible\0hidden"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample: field at index 0 name contains a null character"
+    )
+    assert not response.file
 
 
 def test_reflection_symbols_distinguish_trailing_underscores_across_files_and_packages() -> None:
@@ -3178,6 +3239,15 @@ def test_generator_policy_rejects_non_integer_limits(
     field_name: str, invalid_value: object
 ) -> None:
     with pytest.raises(TypeError, match=rf"{field_name} must be an integer or None"):
+        GeneratorPolicy(**{field_name: invalid_value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field_name", ["allow_formatter_parameters", "format_outputs"])
+@pytest.mark.parametrize("invalid_value", [0, 1, "false", None, []])
+def test_generator_policy_rejects_non_boolean_flags(
+    field_name: str, invalid_value: object
+) -> None:
+    with pytest.raises(TypeError, match=rf"{field_name} must be a boolean"):
         GeneratorPolicy(**{field_name: invalid_value})  # type: ignore[arg-type]
 
 

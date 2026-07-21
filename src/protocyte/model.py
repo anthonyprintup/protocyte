@@ -1894,6 +1894,10 @@ def _validate_message_descriptor(
             raise ProtocyteError(
                 f"{owner_full_name}: field at index {index} has no name"
             )
+        if "\0" in field_proto.name:
+            raise ProtocyteError(
+                f"{owner_full_name}: field at index {index} name contains a null character"
+            )
         label = f"{owner_full_name}.{field_proto.name}"
         if field_proto.name in field_names:
             raise ProtocyteError(f"{label}: duplicate field name")

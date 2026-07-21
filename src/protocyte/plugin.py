@@ -7,6 +7,10 @@ from google.protobuf import descriptor_pb2
 from google.protobuf.compiler import plugin_pb2
 
 from protocyte.cpp import generate_outputs
+from protocyte.descriptor_set import (
+    render_diagnostic_context,
+    validate_descriptor_string_fields,
+)
 from protocyte.errors import ProtocyteError
 from protocyte.model import build_model
 from protocyte.parameters import parse_parameter
@@ -27,6 +31,12 @@ class GeneratorPolicy:
     max_generated_bytes: int | None = None
 
     def __post_init__(self) -> None:
+        for item in fields(self):
+            if type(item.default) is not bool:
+                continue
+            if type(getattr(self, item.name)) is not bool:
+                raise TypeError(f"{item.name} must be a boolean")
+
         for item in fields(self):
             if not item.name.startswith("max_"):
                 continue
@@ -67,6 +77,7 @@ def generate_response(
 
     try:
         _validate_request_policy(request, active_policy)
+        validate_descriptor_string_fields(request, root="CodeGeneratorRequest")
         phase = "parsing generator parameters"
         options = parse_parameter(request.parameter)
         if not active_policy.allow_formatter_parameters and (
@@ -93,11 +104,11 @@ def generate_response(
             file.content = content
     except ProtocyteError as exc:
         response.ClearField("file")
-        response.error = str(exc)
+        response.error = render_diagnostic_context(str(exc))
         return response
     except Exception as exc:
         response.ClearField("file")
-        detail = str(exc).strip()
+        detail = render_diagnostic_context(str(exc).strip())
         response.error = f"internal Protocyte error while {phase} ({type(exc).__name__})"
         if detail:
             response.error += f": {detail}"
