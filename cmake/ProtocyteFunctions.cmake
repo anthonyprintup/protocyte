@@ -1251,6 +1251,15 @@ function(
 
     file(SHA256 "${output_path}" current_output_hash)
     if(current_output_hash STREQUAL trusted_hash)
+        _protocyte_generated_output_path_is_safe(
+            output_path_is_still_safe
+            "${output_path}"
+            "${output_root}"
+        )
+        if(NOT output_path_is_still_safe)
+            set(${out_var} "unsafe" PARENT_SCOPE)
+            return()
+        endif()
         file(REMOVE "${output_path}")
         if(
             output_owner_status STREQUAL "current"
@@ -1294,14 +1303,14 @@ function(_protocyte_finalize_owned_outputs)
             cmake_path(GET previous_marker STEM previous_output_key)
             file(READ "${previous_marker}" previous_output)
             _protocyte_owned_output_key(recorded_output_key "${previous_output}")
-            _protocyte_generated_output_path_is_safe(
-                previous_output_is_safe
+            _protocyte_generated_output_path_is_lexically_owned(
+                previous_output_is_owned
                 "${previous_output}"
                 "${previous_output_root}"
             )
             set(previous_hash_file "${manifest_dir}/${previous_output_key}.sha256")
             if(
-                previous_output_is_safe
+                previous_output_is_owned
                 AND recorded_output_key STREQUAL previous_output_key
             )
                 _protocyte_read_owned_output_hash(

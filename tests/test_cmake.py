@@ -7441,6 +7441,181 @@ def test_retirement_rejects_nested_output_directory_links(tmp_path: Path) -> Non
         linked_directory.unlink()
 
 
+def test_retirement_rechecks_containment_immediately_before_removal(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "generated" / "demo.protocyte.hpp"
+    output_path.parent.mkdir()
+    output_path.write_text("generated\n", encoding="utf-8")
+    output_key = _filesystem_identity_hash(output_path)
+    output_hash = hashlib.sha256(output_path.read_bytes()).hexdigest()
+    lock_directory = tmp_path / "output-locks"
+    lock_directory.mkdir()
+    owner_marker = lock_directory / f"{output_key}.owner"
+    owner_payload = (
+        "version=1\n"
+        f"build-tree-sha256={_build_tree_owner_hash(tmp_path / 'build')}\n"
+    )
+    owner_marker.write_text(owner_payload, encoding="utf-8")
+    outside_directory = tmp_path / "outside"
+    outside_directory.mkdir()
+    outside_output = outside_directory / output_path.name
+    outside_output.write_text("outside\n", encoding="utf-8")
+    displaced_directory = tmp_path / "displaced-generated"
+    swap_script = tmp_path / "swap-output-directory.py"
+    swap_script.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "import os",
+                "import subprocess",
+                "import sys",
+                "from pathlib import Path",
+                "",
+                "generated, displaced, outside = map(Path, sys.argv[1:])",
+                "generated.rename(displaced)",
+                'if os.name == "nt":',
+                "    subprocess.run(",
+                '        ["cmd.exe", "/d", "/c", "mklink", "/J", str(generated), str(outside)],',
+                "        check=True,",
+                "        capture_output=True,",
+                "    )",
+                "else:",
+                "    generated.symlink_to(outside, target_is_directory=True)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{lock_directory.as_posix()}")',
+                "function(_protocyte_generated_output_path_is_safe out_var output_path output_root)",
+                "    get_property(safety_call_count GLOBAL PROPERTY PROTOCYTE_TEST_SAFETY_CALL_COUNT)",
+                "    if(safety_call_count STREQUAL \"\")",
+                "        set(safety_call_count 0)",
+                "    endif()",
+                "    if(safety_call_count EQUAL 1)",
+                "        execute_process(",
+                f'            COMMAND "{Path(sys.executable).as_posix()}" "{swap_script.as_posix()}"',
+                f'                "{output_path.parent.as_posix()}"',
+                f'                "{displaced_directory.as_posix()}"',
+                f'                "{outside_directory.as_posix()}"',
+                "            COMMAND_ERROR_IS_FATAL ANY",
+                "        )",
+                "    endif()",
+                "    math(EXPR safety_call_count \"${safety_call_count} + 1\")",
+                "    set_property(GLOBAL PROPERTY PROTOCYTE_TEST_SAFETY_CALL_COUNT ${safety_call_count})",
+                "    _protocyte_generated_output_path_is_canonically_safe(",
+                "        canonical_result",
+                "        \"${output_path}\"",
+                "        \"${output_root}\"",
+                "    )",
+                "    set(${out_var} \"${canonical_result}\" PARENT_SCOPE)",
+                "endfunction()",
+                "_protocyte_retire_owned_output(",
+                "    retire_result",
+                f'    "{output_path.as_posix()}"',
+                f"    {output_key}",
+                f"    {output_hash}",
+                f'    "{output_path.parent.as_posix()}"',
+                ")",
+                'file(WRITE "${CMAKE_BINARY_DIR}/retire-result.txt" "${retire_result}")',
+            ]
+        ),
+    )
+
+    try:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (tmp_path / "build" / "retire-result.txt").read_text(
+            encoding="utf-8"
+        ) == "unsafe"
+        assert outside_output.read_text(encoding="utf-8") == "outside\n"
+        assert (displaced_directory / output_path.name).read_text(
+            encoding="utf-8"
+        ) == "generated\n"
+        assert owner_marker.read_text(encoding="utf-8") == owner_payload
+    finally:
+        if displaced_directory.exists():
+            output_path.parent.unlink()
+
+
+def test_unsafe_current_output_reconfigure_preserves_cleanup_fingerprints(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        proto_names=("api/demo.proto",),
+        runtime_prefix="api",
+    )
+    configured = _configure_out_dir_owner_project(source_dir, build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    initial_build = _build_out_dir_owner_project(build_dir)
+    assert initial_build.returncode == 0, initial_build.stdout + initial_build.stderr
+
+    linked_directory = output_directory / "api"
+    generated_contents = {
+        path.name: path.read_bytes()
+        for path in linked_directory.iterdir()
+        if path.is_file()
+    }
+    shutil.rmtree(linked_directory)
+    outside_directory = tmp_path / "outside"
+    outside_directory.mkdir()
+    for name, content in generated_contents.items():
+        (outside_directory / name).write_bytes(content)
+    _create_generated_output_directory_link(linked_directory, outside_directory)
+    try:
+        reconfigured = _configure_out_dir_owner_project(source_dir, build_dir)
+        assert reconfigured.returncode == 0, reconfigured.stdout + reconfigured.stderr
+        current_manifests = list(
+            (build_dir / "CMakeFiles/protocyte-owned-outputs").iterdir()
+        )
+        assert len(current_manifests) == 1
+        assert len(list(current_manifests[0].glob("*.sha256"))) == len(
+            generated_contents
+        )
+    finally:
+        linked_directory.unlink()
+
+    linked_directory.mkdir()
+    for name, content in generated_contents.items():
+        (linked_directory / name).write_bytes(content)
+    repo_root = Path(__file__).resolve().parents[1]
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(retired_output_recovery LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{(tmp_path / "output-locks").as_posix()}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    retired = _configure_out_dir_owner_project(source_dir, build_dir)
+
+    assert retired.returncode == 0, retired.stdout + retired.stderr
+    assert not any(linked_directory.iterdir())
+    for name, content in generated_contents.items():
+        assert (outside_directory / name).read_bytes() == content
+    pending_manifests = [
+        path
+        for path in (build_dir / "CMakeFiles/protocyte-owned-outputs").iterdir()
+        if list(path.glob("*.pending"))
+    ]
+    assert not pending_manifests
+
+
 def test_retired_output_cleanup_releases_matching_owner_record(tmp_path: Path) -> None:
     output_path = tmp_path / "generated" / "demo.protocyte.hpp"
     output_path.parent.mkdir()

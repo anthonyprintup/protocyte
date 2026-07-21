@@ -8,6 +8,29 @@ function(_protocyte_normalized_path_identity out_var path)
     set(${out_var} "${path_identity}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_path_has_linked_existing_component out_var input_path)
+    set(${out_var} FALSE PARENT_SCOPE)
+    if(NOT IS_ABSOLUTE "${input_path}")
+        return()
+    endif()
+
+    cmake_path(NORMAL_PATH input_path OUTPUT_VARIABLE current_component)
+    while(NOT current_component STREQUAL "")
+        # CMake 3.24 does not resolve Windows junctions through REAL_PATH, but
+        # IS_SYMLINK identifies both junctions and symbolic links. Inspect each
+        # component explicitly before canonicalizing any existing prefix.
+        if(IS_SYMLINK "${current_component}")
+            set(${out_var} TRUE PARENT_SCOPE)
+            return()
+        endif()
+        cmake_path(GET current_component PARENT_PATH parent_component)
+        if(parent_component STREQUAL current_component)
+            return()
+        endif()
+        set(current_component "${parent_component}")
+    endwhile()
+endfunction()
+
 function(
     _protocyte_project_path_through_existing_components
     out_path
@@ -18,6 +41,11 @@ function(
     set(${out_path} "" PARENT_SCOPE)
     set(${out_valid} FALSE PARENT_SCOPE)
     if(NOT IS_ABSOLUTE "${input_path}")
+        return()
+    endif()
+
+    _protocyte_path_has_linked_existing_component(path_has_link "${input_path}")
+    if(path_has_link)
         return()
     endif()
 
@@ -43,8 +71,8 @@ function(
         return()
     endif()
 
-    # REAL_PATH resolves every existing component, including POSIX symlinks
-    # and Windows junctions. Append only the suffix that does not exist yet so
+    # Linked components were rejected explicitly above for compatibility with
+    # the CMake 3.24 floor. Append only the suffix that does not exist yet so
     # fresh generated directories remain valid without trusting lexical paths.
     file(REAL_PATH "${existing_component}" canonical_existing_component)
     if(canonical_existing_component STREQUAL "")
@@ -112,7 +140,7 @@ function(_protocyte_generated_output_path_is_lexically_owned out_var output_path
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_generated_output_path_is_safe out_var output_path output_root)
+function(_protocyte_generated_output_path_is_canonically_safe out_var output_path output_root)
     set(${out_var} FALSE PARENT_SCOPE)
     _protocyte_generated_output_path_is_lexically_owned(
         output_is_lexically_owned
@@ -167,4 +195,13 @@ function(_protocyte_generated_output_path_is_safe out_var output_path output_roo
     )
         set(${out_var} TRUE PARENT_SCOPE)
     endif()
+endfunction()
+
+function(_protocyte_generated_output_path_is_safe out_var output_path output_root)
+    _protocyte_generated_output_path_is_canonically_safe(
+        output_path_is_safe
+        "${output_path}"
+        "${output_root}"
+    )
+    set(${out_var} "${output_path_is_safe}" PARENT_SCOPE)
 endfunction()
