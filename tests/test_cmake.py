@@ -8548,6 +8548,134 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
 
 
 @pytest.mark.parametrize(
+    ("capability", "expected_error"),
+    [
+        (
+            "group",
+            'field "google.protobuf.Unsupported.Payload" uses unsupported groups',
+        ),
+        ("edition", "protobuf Editions are not supported in v1"),
+        (
+            "proto3-extension",
+            'extension "google.protobuf.marker" extends unsupported proto3 target '
+            '".google.protobuf.Unsupported"',
+        ),
+        (
+            "internal-header",
+            '"protocyte/options.proto" cannot have a generated header because it '
+            "is reserved for Protocyte generator internals",
+        ),
+    ],
+)
+def test_descriptor_set_discover_reports_non_generatable_headers_at_configure_time(
+    tmp_path: Path,
+    capability: str,
+    expected_error: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+
+    if capability != "internal-header":
+        dependency = file_set.file.add()
+        dependency.name = "google/protobuf/unsupported.proto"
+        dependency.package = "google.protobuf"
+        dependency.syntax = "proto3"
+        unsupported = dependency.message_type.add()
+        unsupported.name = "Unsupported"
+        if capability == "group":
+            dependency.syntax = "proto2"
+            group = unsupported.field.add()
+            group.name = "Payload"
+            group.number = 1
+            group.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+            group.type = descriptor_pb2.FieldDescriptorProto.TYPE_GROUP
+        elif capability == "edition":
+            dependency.syntax = "editions"
+            dependency.edition = descriptor_pb2.EDITION_2023
+        else:
+            extension = dependency.extension.add()
+            extension.name = "marker"
+            extension.number = 1000
+            extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+            extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+            extension.extendee = ".google.protobuf.Unsupported"
+        bridge = file_set.file.add()
+        bridge.name = "google/protobuf/bridge.proto"
+        bridge.package = "google.protobuf"
+        bridge.syntax = "proto3"
+        bridge.dependency.append(dependency.name)
+        bridge.message_type.add().name = "Bridge"
+        root = file_set.file.add()
+        root.name = "api/request.proto"
+        root.package = "api"
+        root.syntax = "proto3"
+        root.dependency.append(bridge.name)
+        root.message_type.add().name = "Request"
+    else:
+        options = file_set.file.add()
+        options.name = "protocyte/options.proto"
+        options.package = "protocyte"
+        options.syntax = "proto3"
+        options.message_type.add().name = "ArrayOptions"
+        consumer = file_set.file.add()
+        consumer.name = "consumer.proto"
+        consumer.package = "demo"
+        consumer.syntax = "proto3"
+        consumer.dependency.append(options.name)
+        message = consumer.message_type.add()
+        message.name = "Consumer"
+        field = message.field.add()
+        field.name = "options"
+        field.number = 1
+        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+        field.type_name = ".protocyte.ArrayOptions"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    protoc = source_dir / "tools" / "protoc"
+    plugin = _installed_protocyte_plugin()
+    protoc.parent.mkdir(parents=True, exist_ok=True)
+    protoc.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_capability_preflight LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    normalized_output = " ".join(output.split())
+    assert result.returncode != 0
+    assert "Failed to inspect descriptor set" in normalized_output
+    assert expected_error in normalized_output
+
+
+@pytest.mark.parametrize(
     ("descriptor_name", "generated_stem"),
     [
         ("api/demo;legacy.proto", "api/demo~3Blegacy.protocyte"),

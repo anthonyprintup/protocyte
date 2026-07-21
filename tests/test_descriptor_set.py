@@ -265,6 +265,85 @@ def _file_with_type_reference(
     return file
 
 
+def _file_with_group_field() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "legacy_group.proto"
+    file.package = "legacy"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "Legacy"
+    group = message.field.add()
+    group.name = "Payload"
+    group.number = 1
+    group.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    group.type = descriptor_pb2.FieldDescriptorProto.TYPE_GROUP
+    return file
+
+
+def _edition_file() -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "edition.proto"
+    file.package = "demo"
+    file.syntax = "editions"
+    file.edition = descriptor_pb2.EDITION_2023
+    file.message_type.add().name = "EditionMessage"
+    return file
+
+
+def _unsupported_runtime_file(capability: str) -> descriptor_pb2.FileDescriptorProto:
+    file = descriptor_pb2.FileDescriptorProto()
+    file.name = "google/protobuf/unsupported.proto"
+    file.package = "google.protobuf"
+    if capability == "edition":
+        file.syntax = "editions"
+        file.edition = descriptor_pb2.EDITION_2023
+        file.message_type.add().name = "Unsupported"
+        return file
+
+    file.syntax = "proto2" if capability == "group" else "proto3"
+    message = file.message_type.add()
+    message.name = "Unsupported"
+    if capability == "group":
+        group = message.field.add()
+        group.name = "Payload"
+        group.number = 1
+        group.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        group.type = descriptor_pb2.FieldDescriptorProto.TYPE_GROUP
+    else:
+        extension = file.extension.add()
+        extension.name = "marker"
+        extension.number = 50000
+        extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+        extension.extendee = ".google.protobuf.Unsupported"
+    return file
+
+
+def _cross_file_cycle() -> tuple[
+    descriptor_pb2.FileDescriptorProto,
+    descriptor_pb2.FileDescriptorProto,
+]:
+    first = _file_with_type_reference(
+        "a.proto",
+        "b.proto",
+        field_name="b",
+        field_type=descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
+        type_name=".cycle.B",
+    )
+    first.package = "cycle"
+    first.message_type[0].name = "A"
+    second = _file_with_type_reference(
+        "b.proto",
+        "a.proto",
+        field_name="a",
+        field_type=descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
+        type_name=".cycle.A",
+    )
+    second.package = "cycle"
+    second.message_type[0].name = "B"
+    return first, second
+
+
 def _file_with_top_level_extension() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = "legacy.proto"
@@ -422,10 +501,10 @@ def test_plugin_entrypoint_reports_blocked_discovered_type_dependency(
 
     assert exc_info.value.code == 1
     assert capsys.readouterr().err.strip() == (
-        "protocyte: api/request.proto: field api.Sample.payload references type "
-        ".custom.PublicPayload from custom/nested_options.proto, but "
-        "custom/nested_options.proto cannot be generated because message custom.Owner "
-        "declares unsupported extension legacy_marker"
+        'protocyte: descriptor "api/request.proto": field "api.Sample.payload" '
+        'references type ".custom.PublicPayload" from "custom/nested_options.proto", '
+        'but "custom/nested_options.proto" cannot have a generated header because '
+        'message "custom.Owner": extension declarations are not supported'
     )
 
 
@@ -703,7 +782,7 @@ def test_discover_files_includes_user_files_with_top_level_extension_declaration
     assert discover_files(load_descriptor_set(path)) == ["legacy.proto"]
 
 
-def test_discover_files_includes_non_option_google_protobuf_extension_descriptors(
+def test_discover_files_rejects_non_option_google_protobuf_extension_descriptors(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "descriptor_set.pb"
@@ -713,7 +792,159 @@ def test_discover_files_includes_non_option_google_protobuf_extension_descriptor
         _proto3_file_with_google_protobuf_non_option_extension(),
     )
 
-    assert discover_files(load_descriptor_set(path)) == ["custom/timestamp_extension.proto"]
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    assert str(exc_info.value) == (
+        'target file "custom/timestamp_extension.proto": extension '
+        '"custom.timestamp_marker" extends unsupported proto3 target '
+        '".google.protobuf.Timestamp"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("file", "expected_error"),
+    [
+        (
+            _file_with_group_field(),
+            'target file "legacy_group.proto": field "legacy.Legacy.Payload" '
+            "uses unsupported groups",
+        ),
+        (
+            _edition_file(),
+            'target file "edition.proto": protobuf Editions are not supported in v1',
+        ),
+    ],
+)
+def test_discover_files_rejects_descriptors_that_cannot_generate_headers(
+    tmp_path: Path,
+    file: descriptor_pb2.FileDescriptorProto,
+    expected_error: str,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(path, file)
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    assert str(exc_info.value) == expected_error
+
+
+@pytest.mark.parametrize(
+    ("capability", "expected_blocker"),
+    [
+        (
+            "group",
+            'field "google.protobuf.Unsupported.Payload" uses unsupported groups',
+        ),
+        ("edition", "protobuf Editions are not supported in v1"),
+        (
+            "proto3-extension",
+            'extension "google.protobuf.marker" extends unsupported proto3 target '
+            '".google.protobuf.Unsupported"',
+        ),
+    ],
+)
+def test_discover_files_validates_unsupported_import_only_runtime_descriptors(
+    tmp_path: Path,
+    capability: str,
+    expected_blocker: str,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    runtime = _unsupported_runtime_file(capability)
+    bridge = _file("google/protobuf/bridge.proto", runtime.name)
+    root = _file("api/request.proto", bridge.name)
+    _write_descriptor_set(path, runtime, bridge, root)
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    assert str(exc_info.value) == (
+        'target file "api/request.proto" imports unsupported descriptor '
+        '"google/protobuf/unsupported.proto" through "api/request.proto" -> '
+        '"google/protobuf/bridge.proto" -> '
+        f'"google/protobuf/unsupported.proto": {expected_blocker}'
+    )
+
+
+def test_discover_files_rejects_cross_file_generated_header_cycles(tmp_path: Path) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    _write_descriptor_set(path, *_cross_file_cycle())
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    assert str(exc_info.value) == (
+        'generated header dependency cycle: "a.proto" field "cycle.A.b" '
+        'references type ".cycle.B" from "b.proto"; "b.proto" field '
+        '"cycle.B.a" references type ".cycle.A" from "a.proto"'
+    )
+
+
+def test_generation_preflight_escapes_descriptor_control_characters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    dependency = descriptor_pb2.FileDescriptorProto()
+    dependency.name = "google/protobuf/dependency\n\x85.proto"
+    dependency.package = "unsafe"
+    dependency.syntax = "proto2"
+    dependency.message_type.add().name = "Dependency\x1b"
+    unsupported = dependency.message_type.add()
+    unsupported.name = "Unsupported"
+    group = unsupported.field.add()
+    group.name = "Payload\r"
+    group.number = 1
+    group.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    group.type = descriptor_pb2.FieldDescriptorProto.TYPE_GROUP
+    consumer = _file_with_type_reference(
+        "api/consumer\n.proto",
+        dependency.name,
+        field_name="value\r",
+        field_type=descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE,
+        type_name=".unsafe.Dependency\x1b",
+    )
+    consumer.message_type[0].name = "Consumer\x85"
+    _write_descriptor_set(path, dependency, consumer)
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    error = str(exc_info.value)
+    assert not any(control in error for control in ("\n", "\r", "\x1b", "\x85"))
+    assert '"api/consumer\\u000a.proto"' in error
+    assert '"api.Consumer\\u0085.value\\u000d"' in error
+    assert '".unsafe.Dependency\\u001b"' in error
+    assert '"google/protobuf/dependency\\u000a\\u0085.proto"' in error
+    assert 'field "unsafe.Unsupported.Payload\\u000d"' in error
+
+
+def test_extension_preflight_escapes_extension_and_extendee_controls(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "descriptor_set.pb"
+    dependency = descriptor_pb2.FileDescriptorProto()
+    dependency.name = "google/protobuf/extensions.proto"
+    dependency.package = "unsafe"
+    dependency.syntax = "proto3"
+    dependency.message_type.add().name = "Target"
+    extension = dependency.extension.add()
+    extension.name = "marker\n"
+    extension.number = 50000
+    extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+    extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+    extension.extendee = ".unsafe.Target\x1b"
+    root = _file("api/request.proto", dependency.name)
+    _write_descriptor_set(path, dependency, root)
+
+    with pytest.raises(ProtocyteError) as exc_info:
+        discover_files(load_descriptor_set(path))
+
+    error = str(exc_info.value)
+    assert "\n" not in error
+    assert "\x1b" not in error
+    assert 'extension "unsafe.marker\\u000a"' in error
+    assert 'target ".unsafe.Target\\u001b"' in error
 
 
 def test_discover_files_includes_extension_descriptors_referenced_by_message_fields(tmp_path: Path) -> None:
@@ -805,9 +1036,10 @@ def test_discover_files_rejects_referenced_types_from_message_scoped_extension_d
         discover_files(load_descriptor_set(path))
 
     assert str(exc_info.value) == (
-        f"api/request.proto: field api.Sample.{field_name} references type {type_name} "
-        "from custom/nested_options.proto, but custom/nested_options.proto cannot be generated "
-        "because message custom.Owner declares unsupported extension legacy_marker"
+        f'descriptor "api/request.proto": field "api.Sample.{field_name}" references '
+        f'type "{type_name}" from "custom/nested_options.proto", but '
+        '"custom/nested_options.proto" cannot have a generated header because '
+        'message "custom.Owner": extension declarations are not supported'
     )
 
 
@@ -831,7 +1063,8 @@ def test_discover_files_rejects_referenced_types_from_internal_descriptors(tmp_p
         discover_files(load_descriptor_set(path))
 
     assert str(exc_info.value) == (
-        "api/request.proto: field api.Sample.options references type .protocyte.Sample "
-        "from protocyte/options.proto, but protocyte/options.proto cannot be generated because "
-        "it is reserved for Protocyte generator internals"
+        'descriptor "api/request.proto": field "api.Sample.options" references '
+        'type ".protocyte.Sample" from "protocyte/options.proto", but '
+        '"protocyte/options.proto" cannot have a generated header because it is '
+        "reserved for Protocyte generator internals"
     )

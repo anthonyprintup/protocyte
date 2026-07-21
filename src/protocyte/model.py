@@ -22,7 +22,10 @@ from protocyte._deterministic_math import (
     evaluate_pow as evaluate_deterministic_pow,
     evaluate_unary,
 )
-from protocyte.descriptor_set import validate_virtual_file_name
+from protocyte.descriptor_set import (
+    validate_generation_capabilities,
+    validate_virtual_file_name,
+)
 from protocyte.errors import ProtocyteError
 from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_extension
 
@@ -1337,6 +1340,7 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         file = files_by_name[name]
         _reject_unsupported_file_features(file, f"target file {name}")
 
+    validate_generation_capabilities(files_by_name, file_to_generate)
     _validate_descriptor_invariants(files_by_name.values())
     custom_options = _custom_options(request.proto_file)
 
