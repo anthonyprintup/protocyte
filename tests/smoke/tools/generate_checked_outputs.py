@@ -75,6 +75,7 @@ GENERATION_SPECS = (
     GenerationSpec("example.proto", ("runtime=emit",)),
     GenerationSpec("compat.proto", ("namespace_prefix=protocyte_smoke",)),
     GenerationSpec("cross_package.proto"),
+    GenerationSpec("open_enum.proto"),
     GenerationSpec("proto2_required.proto"),
     GenerationSpec("reserved_identifiers.proto"),
 )

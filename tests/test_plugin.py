@@ -2486,6 +2486,33 @@ def test_generates_closed_enum_validation_for_proto2_enums() -> None:
     assert "entry_is_unknown = false;" in header
 
 
+def test_cross_syntax_enum_openness_follows_the_declaring_file() -> None:
+    request = _cross_syntax_enum_request()
+
+    model = build_model(request)
+    consumer = model.files["legacy_consumer.proto"].messages[0]
+    fields = {field.name: field for field in consumer.fields}
+    assert not fields["imported_open_enum"].enum_closed
+    assert not fields["imported_open_unpacked"].enum_closed
+    assert not fields["imported_open_packed"].enum_closed
+    assert not fields["imported_open_oneof"].enum_closed
+    assert fields["imported_open_by_name"].map_value is not None
+    assert not fields["imported_open_by_name"].map_value.enum_closed
+    assert fields["local_closed_enum"].enum_closed
+
+    response = generate_response(request)
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["legacy_consumer.protocyte.hpp"]
+    assert '#include "open_enum.protocyte.hpp"' in header
+    assert "set_imported_open_enum_raw(const ::protocyte::i32 value) noexcept {\n    imported_open_enum_ = value;" in header
+    assert "set_imported_open_oneof_raw(const ::protocyte::i32 value) noexcept {\n    clear_imported_open_choice();" in header
+    assert "packed_imported_open_packed_unknown_fields" not in header
+    assert "staged_imported_open_by_name_entry" not in header
+    assert "if (value != 0 && value != 1) {" in header
+
+
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("uses_legacy.proto")
@@ -8110,6 +8137,91 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     field.type_name = ".defaults.Defaults.ChoicesByNameEntry"
 
     return file
+
+
+def _cross_syntax_enum_request() -> plugin_pb2.CodeGeneratorRequest:
+    open_enum = descriptor_pb2.FileDescriptorProto()
+    open_enum.name = "open_enum.proto"
+    open_enum.package = "open"
+    open_enum.syntax = "proto3"
+    enum = open_enum.enum_type.add()
+    enum.name = "Mode"
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    enum.value.add(name="MODE_READY", number=1)
+
+    consumer = descriptor_pb2.FileDescriptorProto()
+    consumer.name = "legacy_consumer.proto"
+    consumer.package = "legacy"
+    consumer.syntax = "proto2"
+    consumer.dependency.append(open_enum.name)
+
+    local_enum = consumer.enum_type.add()
+    local_enum.name = "ClosedMode"
+    local_enum.value.add(name="CLOSED_MODE_UNSPECIFIED", number=0)
+    local_enum.value.add(name="CLOSED_MODE_READY", number=1)
+
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    message.oneof_decl.add(name="imported_open_choice")
+
+    def add_open_enum_field(
+        name: str,
+        number: int,
+        *,
+        label: int = F.LABEL_OPTIONAL,
+        packed: bool | None = None,
+        oneof_index: int | None = None,
+    ) -> None:
+        field = message.field.add()
+        field.name = name
+        field.number = number
+        field.label = label
+        field.type = F.TYPE_ENUM
+        field.type_name = ".open.Mode"
+        if packed is not None:
+            field.options.packed = packed
+        if oneof_index is not None:
+            field.oneof_index = oneof_index
+
+    add_open_enum_field("imported_open_enum", 1)
+    add_open_enum_field("imported_open_unpacked", 2, label=F.LABEL_REPEATED, packed=False)
+    add_open_enum_field("imported_open_packed", 3, label=F.LABEL_REPEATED, packed=True)
+    add_open_enum_field("imported_open_oneof", 4, oneof_index=0)
+
+    entry = message.nested_type.add()
+    entry.name = "ImportedOpenByNameEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_ENUM
+    value.type_name = ".open.Mode"
+
+    map_field = message.field.add()
+    map_field.name = "imported_open_by_name"
+    map_field.number = 5
+    map_field.label = F.LABEL_REPEATED
+    map_field.type = F.TYPE_MESSAGE
+    map_field.type_name = ".legacy.Consumer.ImportedOpenByNameEntry"
+
+    closed_field = message.field.add()
+    closed_field.name = "local_closed_enum"
+    closed_field.number = 6
+    closed_field.label = F.LABEL_OPTIONAL
+    closed_field.type = F.TYPE_ENUM
+    closed_field.type_name = ".legacy.ClosedMode"
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.parameter = "format=off"
+    request.file_to_generate.append(consumer.name)
+    request.proto_file.extend([open_enum, consumer])
+    return request
 
 
 def _proto2_dependency_file() -> descriptor_pb2.FileDescriptorProto:

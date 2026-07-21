@@ -694,6 +694,7 @@ class EnumModel:
     file_name: str
     package: str
     values: list[EnumValueModel]
+    closed: bool = False
     deprecated: bool = False
     parent: "MessageModel | None" = None
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
@@ -2156,6 +2157,9 @@ def _build_enum(
         file_name=file.name,
         package=file.package,
         values=values,
+        # Protobuf enum openness follows the syntax of the file declaring the
+        # enum, not the syntax of a message that imports and consumes it.
+        closed=_file_syntax(file) == "proto2",
         deprecated=enum.options.deprecated,
         parent=parent,
         documentation=documentation.get(descriptor_path),
@@ -2668,7 +2672,7 @@ def _build_field(
         required=required,
         default_cpp=default_cpp,
         default_byte_size=default_byte_size,
-        enum_closed=kind == "enum" and file_model.syntax == "proto2",
+        enum_closed=kind == "enum" and enum_type is not None and enum_type.closed,
         documentation=documentation or SourceDocumentation(),
     )
 
