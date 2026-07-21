@@ -77,6 +77,8 @@ GENERATION_SPECS = (
     GenerationSpec("cross_package.proto"),
     GenerationSpec("proto2_required.proto"),
     GenerationSpec("reserved_identifiers.proto"),
+    GenerationSpec("reflection_symbols.proto"),
+    GenerationSpec("reflection_symbols_other.proto"),
 )
 
 

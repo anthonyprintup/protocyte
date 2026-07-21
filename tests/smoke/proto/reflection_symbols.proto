@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package test.reflection_symbols;
+
+message Foo {}
+
+message Foo_fields {}

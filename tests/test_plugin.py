@@ -1429,6 +1429,116 @@ def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages()
     )
 
 
+def test_reflection_symbols_distinguish_trailing_underscores_across_files_and_packages() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, package, message_names in (
+        ("reflection_symbols.proto", "demo.reflection", ("Foo", "Foo_fields")),
+        (
+            "reflection_symbols_other.proto",
+            "demo.reflection",
+            ("Foo_", "Foo_fields_"),
+        ),
+        ("reflection_symbols_package.proto", "demo.reflection_", ("Foo", "Foo_")),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(name=file_name, package=package, syntax="proto3")
+        for message_name in message_names:
+            file.message_type.add(name=message_name)
+
+    response = generate_response(request)
+
+    assert not response.error
+    sources = {file.name: file.content for file in response.file if file.name.endswith(".cpp")}
+    assert "Foo_fields {{" in sources["reflection_symbols.protocyte.cpp"]
+    assert "Foo_fields_fields {{" in sources["reflection_symbols.protocyte.cpp"]
+    assert "Foo_fields_ {{" in sources["reflection_symbols_other.protocyte.cpp"]
+    assert "Foo_fields_fields_ {{" in sources["reflection_symbols_other.protocyte.cpp"]
+    assert "namespace demo::reflection_ {" in sources[
+        "reflection_symbols_package.protocyte.cpp"
+    ]
+    assert "Foo_fields {{" in sources["reflection_symbols_package.protocyte.cpp"]
+    assert "Foo_fields_ {{" in sources["reflection_symbols_package.protocyte.cpp"]
+
+
+def test_reflection_symbol_validation_rejects_colliding_table_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, message_name in (
+        ("first_reflection.proto", "First"),
+        ("second_reflection.proto", "Second"),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(
+            name=file_name, package="demo.reflection", syntax="proto3"
+        )
+        file.message_type.add(name=message_name)
+
+    monkeypatch.setattr(protocyte_cpp, "_reflection_name", lambda message: "Fields")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "demo.reflection.Second" in response.error
+    assert "generated reflection symbol 'Fields' collides with 'demo.reflection.First'" in response.error
+
+
+def test_reflection_symbol_validation_rejects_type_in_reflection_package() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(
+        ["reflection_namespace.proto", "reflection_namespace_type.proto"]
+    )
+    reflection_file = request.proto_file.add(
+        name="reflection_namespace.proto", package="demo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Foo")
+    type_file = request.proto_file.add(
+        name="reflection_namespace_type.proto",
+        package="demo.protocyte_reflection",
+        syntax="proto3",
+    )
+    type_file.message_type.add(name="Foo_fields")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "demo.Foo: generated reflection symbol 'Foo_fields' collides with generated "
+        "type 'demo.protocyte_reflection.Foo_fields'"
+        in response.error
+    )
+
+
+def test_reflection_symbol_validation_rejects_package_constant_in_reflection_package() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(
+        ["reflection_constant.proto", "reflection_package_constant.proto"]
+    )
+    reflection_file = request.proto_file.add(
+        name="reflection_constant.proto", package="demo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Foo")
+    constant_file = request.proto_file.add(
+        name="reflection_package_constant.proto",
+        package="demo.protocyte_reflection",
+        syntax="proto3",
+    )
+    constant_file.dependency.append("protocyte/options.proto")
+    constant_file.options.ParseFromString(
+        _package_constant_options_bytes([("Foo_fields", "i32", 1)])
+    )
+    request.proto_file.append(_options_file())
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "demo.Foo: generated reflection symbol 'Foo_fields' collides with generated "
+        "package constant 'demo.protocyte_reflection.Foo_fields'"
+        in response.error
+    )
+
+
 def test_reflection_tables_use_opt_in_windows_shared_library_api_macro() -> None:
     macro = f"PROTOCYTE_REFLECTION_API_{'A1' * 32}"
     file = descriptor_pb2.FileDescriptorProto(
