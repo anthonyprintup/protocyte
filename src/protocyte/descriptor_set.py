@@ -15,6 +15,10 @@ from protocyte.extensions import is_custom_option_extension
 
 _RUNTIME_PREFIX = "google/protobuf/"
 _INTERNAL_DESCRIPTOR_FILES = {"protocyte/options.proto"}
+_MAX_DIAGNOSTIC_CONTEXT_CODEPOINTS = 4_096
+_MAX_DIAGNOSTIC_NAME_CODEPOINTS = 512
+_MAX_DIAGNOSTIC_BYTES = 512
+_MAX_DIAGNOSTIC_CHAIN_ENTRIES = 32
 
 
 @dataclass(frozen=True)
@@ -52,12 +56,25 @@ def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
 
 def render_diagnostic_context(value: str) -> str:
     """Make descriptor-controlled text safe to include in a terminal diagnostic."""
-    return "".join(
+    truncated = len(value) - _MAX_DIAGNOSTIC_CONTEXT_CODEPOINTS
+    preview = value[:_MAX_DIAGNOSTIC_CONTEXT_CODEPOINTS]
+    rendered = "".join(
         char
         if char.isprintable()
         else (f"\\u{ord(char):04x}" if ord(char) <= 0xFFFF else f"\\U{ord(char):08x}")
-        for char in value
+        for char in preview
     )
+    if truncated > 0:
+        rendered += f"... [truncated {truncated} characters]"
+    return rendered
+
+
+def _render_descriptor_bytes(value: bytes) -> str:
+    truncated = len(value) - _MAX_DIAGNOSTIC_BYTES
+    rendered = ascii(value[:_MAX_DIAGNOSTIC_BYTES])
+    if truncated > 0:
+        rendered += f"... [truncated {truncated} bytes]"
+    return rendered
 
 
 def validate_descriptor_string_fields(message: Message, *, root: str) -> None:
@@ -68,7 +85,8 @@ def validate_descriptor_string_fields(message: Message, *, root: str) -> None:
             return
         if isinstance(value, bytes):
             raise ProtocyteError(
-                f"invalid UTF-8 in descriptor string field {path}: {ascii(value)}"
+                "invalid UTF-8 in descriptor string field "
+                f"{path}: {_render_descriptor_bytes(value)}"
             )
         raise ProtocyteError(
             f"descriptor string field {path} has invalid runtime type "
@@ -179,7 +197,7 @@ def validate_generation_capabilities(
     selected_list = list(selected_files)
     selected = set(selected_list)
     type_files = _index_declared_types(files.values())
-    import_paths = _import_closure_paths(files, selected_list)
+    import_predecessors = _import_closure_predecessors(files, selected_list)
 
     for name in selected_list:
         blocker = _descriptor_capability_blocker(
@@ -209,7 +227,7 @@ def validate_generation_capabilities(
                     file.name, reference, referenced, blocker
                 )
 
-    for name, import_path in import_paths.items():
+    for name in import_predecessors:
         if name in selected:
             continue
         blocker = _descriptor_capability_blocker(
@@ -217,9 +235,10 @@ def validate_generation_capabilities(
         )
         if blocker is None:
             continue
-        formatted_path = " -> ".join(_diagnostic_name(item) for item in import_path)
+        formatted_path = _format_import_path(name, import_predecessors)
         raise ProtocyteError(
-            f"target file {_diagnostic_name(import_path[0])} imports unsupported "
+            f"target file {_diagnostic_name(_import_root(name, import_predecessors))} "
+            "imports unsupported "
             f"descriptor {_diagnostic_name(name)} through {formatted_path}: {blocker}"
         )
 
@@ -345,8 +364,9 @@ def _message_group_field_generation_blocker(
 
 
 def _diagnostic_name(value: str) -> str:
+    truncated = len(value) - _MAX_DIAGNOSTIC_NAME_CODEPOINTS
     escaped: list[str] = []
-    for char in value:
+    for char in value[:_MAX_DIAGNOSTIC_NAME_CODEPOINTS]:
         if char == "\\":
             escaped.append("\\\\")
         elif char == '"':
@@ -358,6 +378,8 @@ def _diagnostic_name(value: str) -> str:
             width = 4 if codepoint <= 0xFFFF else 8
             prefix = "u" if width == 4 else "U"
             escaped.append(f"\\{prefix}{codepoint:0{width}x}")
+    if truncated > 0:
+        escaped.append(f"... [truncated {truncated} characters]")
     return f'"{"".join(escaped)}"'
 
 
@@ -376,22 +398,56 @@ def _non_generatable_reference_error(
     )
 
 
-def _import_closure_paths(
+def _import_closure_predecessors(
     files: dict[str, descriptor_pb2.FileDescriptorProto],
     roots: Iterable[str],
-) -> dict[str, tuple[str, ...]]:
-    paths = {name: (name,) for name in roots}
-    queue = list(paths)
+) -> dict[str, str | None]:
+    """Return one breadth-first predecessor per reachable import.
+
+    Keep a single link for each file while scanning the closure.  Constructing
+    and retaining a full path tuple for every dependency makes a linear import
+    chain consume quadratic memory before a useful diagnostic is needed.
+    """
+    predecessors = {name: None for name in roots}
+    queue = list(predecessors)
     index = 0
     while index < len(queue):
         name = queue[index]
         index += 1
         for dependency in files[name].dependency:
-            if dependency not in files or dependency in paths:
+            if dependency not in files or dependency in predecessors:
                 continue
-            paths[dependency] = (*paths[name], dependency)
+            predecessors[dependency] = name
             queue.append(dependency)
-    return paths
+    return predecessors
+
+
+def _import_root(name: str, predecessors: dict[str, str | None]) -> str:
+    current: str | None = name
+    while current is not None:
+        parent = predecessors[current]
+        if parent is None:
+            return current
+        current = parent
+    raise AssertionError("reachable import has no root")
+
+
+def _format_import_path(name: str, predecessors: dict[str, str | None]) -> str:
+    """Format a bounded suffix of an import chain only on a failing path."""
+    suffix: list[str] = []
+    current: str | None = name
+    omitted = 0
+    while current is not None:
+        if len(suffix) < _MAX_DIAGNOSTIC_CHAIN_ENTRIES:
+            suffix.append(current)
+        else:
+            omitted += 1
+        current = predecessors[current]
+    suffix.reverse()
+    rendered = [_diagnostic_name(item) for item in suffix]
+    if omitted:
+        rendered.insert(0, f"... [{omitted} imports omitted]")
+    return " -> ".join(rendered)
 
 
 def _file_type_dependencies(
@@ -449,7 +505,7 @@ def _validate_no_cross_file_type_cycles(
             stack[-1] = (name, edge_index + 1)
             cycle_start = active_indices.get(edge.target_file)
             if cycle_start is not None:
-                _raise_cross_file_type_cycle((*path_edges[cycle_start:], edge))
+                _raise_cross_file_type_cycle(path_edges, cycle_start, edge)
             if edge.target_file in visited:
                 continue
 
@@ -459,16 +515,28 @@ def _validate_no_cross_file_type_cycles(
 
 
 def _raise_cross_file_type_cycle(
-    edges: tuple[_FileTypeDependency, ...],
+    path_edges: list[_FileTypeDependency],
+    cycle_start: int,
+    closing_edge: _FileTypeDependency,
 ) -> None:
-    details = "; ".join(
+    cycle_edge_count = len(path_edges) - cycle_start + 1
+    visible_path_count = min(cycle_edge_count - 1, _MAX_DIAGNOSTIC_CHAIN_ENTRIES - 1)
+    edges = [
+        *path_edges[cycle_start : cycle_start + visible_path_count],
+        closing_edge,
+    ]
+    details = [
         f"{_diagnostic_name(edge.source_file)} field "
         f"{_diagnostic_name(edge.reference.field_path)} references type "
         f"{_diagnostic_name(edge.reference.type_name)} from "
         f"{_diagnostic_name(edge.target_file)}"
         for edge in edges
-    )
-    raise ProtocyteError(f"generated header dependency cycle: {details}")
+    ]
+    if cycle_edge_count > len(edges):
+        details.append(
+            f"... [{cycle_edge_count - len(edges)} dependency edges omitted]"
+        )
+    raise ProtocyteError(f"generated header dependency cycle: {'; '.join(details)}")
 
 
 def _is_pure_custom_option_definition(file: descriptor_pb2.FileDescriptorProto) -> bool:
@@ -771,7 +839,7 @@ def main(
             )
             return 0
     except ProtocyteError as exc:
-        parser.exit(1, f"protocyte: {exc}\n")
+        parser.exit(1, f"protocyte: {render_diagnostic_context(str(exc))}\n")
     raise AssertionError(f"unhandled command: {args.command}")
 
 
