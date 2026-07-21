@@ -101,6 +101,72 @@ function(_protocyte_output_lock_key out_var output_path)
     set(${out_var} "${output_lock_key}" PARENT_SCOPE)
 endfunction()
 
+function(_protocyte_canonical_output_lock_directory out_var candidate)
+    _protocyte_path_has_linked_existing_component(
+        lock_directory_has_linked_component
+        "${candidate}"
+    )
+    if(lock_directory_has_linked_component)
+        message(
+            FATAL_ERROR
+            "PROTOCYTE_OUTPUT_LOCK_ROOT must not contain symbolic-link or junction components because "
+            "every build tree must use the same physical output-lock namespace: ${candidate}"
+        )
+    endif()
+
+    _protocyte_project_path_through_existing_components(
+        canonical_lock_directory
+        lock_directory_is_projectable
+        "${candidate}"
+        FALSE
+    )
+    if(NOT lock_directory_is_projectable)
+        message(
+            FATAL_ERROR
+            "Protocyte could not canonicalize the output-lock directory safely: ${candidate}"
+        )
+    endif()
+    set(${out_var} "${canonical_lock_directory}" PARENT_SCOPE)
+endfunction()
+
+function(_protocyte_pin_output_lock_namespace output_lock_directory)
+    _protocyte_normalized_path_identity(
+        output_lock_identity
+        "${output_lock_directory}"
+    )
+    get_property(
+        output_lock_namespace_is_pinned
+        GLOBAL
+        PROPERTY PROTOCYTE_INTERNAL_OUTPUT_LOCK_DIRECTORY
+        SET
+    )
+    if(output_lock_namespace_is_pinned)
+        get_property(
+            pinned_output_lock_directory
+            GLOBAL
+            PROPERTY PROTOCYTE_INTERNAL_OUTPUT_LOCK_DIRECTORY
+        )
+        _protocyte_normalized_path_identity(
+            pinned_output_lock_identity
+            "${pinned_output_lock_directory}"
+        )
+        if(NOT output_lock_identity STREQUAL pinned_output_lock_identity)
+            message(
+                FATAL_ERROR
+                "Every Protocyte target in one CMake configure graph must use the same canonical output-lock "
+                "namespace. The graph already uses '${pinned_output_lock_directory}', but another target "
+                "selected '${output_lock_directory}'. Set PROTOCYTE_OUTPUT_LOCK_ROOT once before adding "
+                "Protocyte targets and reconfigure."
+            )
+        endif()
+        return()
+    endif()
+    set_property(
+        GLOBAL
+        PROPERTY PROTOCYTE_INTERNAL_OUTPUT_LOCK_DIRECTORY "${output_lock_directory}"
+    )
+endfunction()
+
 function(_protocyte_shared_output_lock_directory out_var)
     if(
         DEFINED PROTOCYTE_OUTPUT_LOCK_ROOT
@@ -119,10 +185,11 @@ function(_protocyte_shared_output_lock_directory out_var)
                 "${PROTOCYTE_OUTPUT_LOCK_ROOT}"
             )
         endif()
-        cmake_path(
-            NORMAL_PATH PROTOCYTE_OUTPUT_LOCK_ROOT
-            OUTPUT_VARIABLE output_lock_directory
+        _protocyte_canonical_output_lock_directory(
+            output_lock_directory
+            "${PROTOCYTE_OUTPUT_LOCK_ROOT}"
         )
+        _protocyte_pin_output_lock_namespace("${output_lock_directory}")
         set(${out_var} "${output_lock_directory}" PARENT_SCOPE)
         return()
     endif()
@@ -158,7 +225,11 @@ function(_protocyte_shared_output_lock_directory out_var)
         )
     endif()
     set(output_lock_directory "${output_lock_base}/protocyte/output-locks-v1")
-    cmake_path(NORMAL_PATH output_lock_directory)
+    _protocyte_canonical_output_lock_directory(
+        output_lock_directory
+        "${output_lock_directory}"
+    )
+    _protocyte_pin_output_lock_namespace("${output_lock_directory}")
     set(${out_var} "${output_lock_directory}" PARENT_SCOPE)
 endfunction()
 
@@ -236,34 +307,6 @@ function(_protocyte_build_tree_owner_hash out_var)
     set(${out_var} "${build_tree_hash}" PARENT_SCOPE)
 endfunction()
 
-function(_protocyte_owner_record_status out_var owner_marker expected_owner)
-    set(owner_status "missing")
-    if(EXISTS "${owner_marker}" OR IS_SYMLINK "${owner_marker}")
-        if(IS_DIRECTORY "${owner_marker}" OR IS_SYMLINK "${owner_marker}")
-            set(owner_status "malformed")
-        else()
-            file(READ "${owner_marker}" observed_owner LIMIT 256)
-            if(observed_owner STREQUAL expected_owner)
-                set(owner_status "current")
-            else()
-                string(
-                    REGEX MATCH
-                    "^version=1\nbuild-tree-sha256=([0-9a-f]+)\n$"
-                    valid_owner
-                    "${observed_owner}"
-                )
-                string(LENGTH "${CMAKE_MATCH_1}" observed_hash_length)
-                if(valid_owner STREQUAL observed_owner AND observed_hash_length EQUAL 64)
-                    set(owner_status "different")
-                else()
-                    set(owner_status "malformed")
-                endif()
-            endif()
-        endif()
-    endif()
-    set(${out_var} "${owner_status}" PARENT_SCOPE)
-endfunction()
-
 function(
     _protocyte_preflight_output_ownership
     out_marker
@@ -279,7 +322,6 @@ function(
         "${output_directory}"
     )
     _protocyte_build_tree_owner_hash(build_tree_hash)
-    set(expected_owner "version=1\nbuild-tree-sha256=${build_tree_hash}\n")
     _protocyte_shared_output_lock_directory(output_lock_directory)
 
     set(output_keys)
@@ -290,13 +332,66 @@ function(
     endforeach()
     list(REMOVE_DUPLICATES output_keys)
     list(SORT output_keys)
+    file(MAKE_DIRECTORY "${output_lock_directory}")
+    foreach(output_key IN LISTS output_keys)
+        file(
+            LOCK "${output_lock_directory}/${output_key}.lock"
+            GUARD FUNCTION
+            TIMEOUT 600
+            RESULT_VARIABLE output_lock_result
+        )
+        if(NOT "${output_lock_result}" STREQUAL "0")
+            message(
+                FATAL_ERROR
+                "Protocyte could not lock generated output '${protocyte_claim_output_${output_key}}' "
+                "while checking ownership: ${output_lock_result}"
+            )
+        endif()
+    endforeach()
+    cmake_path(GET owner_lock PARENT_PATH owner_lock_parent)
+    file(MAKE_DIRECTORY "${owner_lock_parent}")
+    file(
+        LOCK "${owner_lock}"
+        GUARD FUNCTION
+        TIMEOUT 600
+        RESULT_VARIABLE owner_lock_result
+    )
+    if(NOT "${owner_lock_result}" STREQUAL "0")
+        message(
+            FATAL_ERROR
+            "Protocyte could not lock OUT_DIR '${output_directory}' while checking ownership: "
+            "${owner_lock_result}"
+        )
+    endif()
+
     foreach(output_key IN LISTS output_keys)
         set(output_owner_marker "${output_lock_directory}/${output_key}.owner")
         _protocyte_owner_record_status(
             output_owner_status
+            output_owner_transaction_id
             "${output_owner_marker}"
-            "${expected_owner}"
+            "${build_tree_hash}"
+            "${owner_marker}"
         )
+        if(output_owner_status STREQUAL "incomplete")
+            _protocyte_recover_incomplete_owner_record(
+                recovered_incomplete_owner
+                "${output_owner_marker}"
+                "${output_owner_transaction_id}"
+                "${owner_marker}"
+            )
+            if(recovered_incomplete_owner)
+                set(output_owner_status "missing")
+            else()
+                _protocyte_owner_record_status(
+                    output_owner_status
+                    unused_output_transaction_id
+                    "${output_owner_marker}"
+                    "${build_tree_hash}"
+                    "${owner_marker}"
+                )
+            endif()
+        endif()
         if(output_owner_status STREQUAL "different")
             message(
                 FATAL_ERROR
@@ -312,14 +407,56 @@ function(
                 "'${output_owner_marker}' is malformed. Protocyte will not reclaim it automatically. "
                 "After confirming no build uses the output, remove the record manually and reconfigure."
             )
+        elseif(output_owner_status STREQUAL "incomplete")
+            message(
+                FATAL_ERROR
+                "Protocyte cannot generate '${protocyte_claim_output_${output_key}}' because an incomplete "
+                "ownership transaction could not be recovered safely. No generated output was changed."
+            )
+        elseif(output_owner_status STREQUAL "unverifiable")
+            _protocyte_owner_transaction_paths(
+                unused_output_prepared_witness
+                output_committed_witness
+                "${owner_marker}"
+                "${output_owner_transaction_id}"
+            )
+            message(
+                FATAL_ERROR
+                "Protocyte cannot generate '${protocyte_claim_output_${output_key}}' because ownership record "
+                "'${output_owner_marker}' references missing or unverifiable transaction witness "
+                "'${output_committed_witness}'. Protocyte will not reclaim the output automatically. Choose "
+                "disjoint generated outputs, restore the witness, or, after confirming no build uses the output, "
+                "remove '${output_owner_marker}' manually and reconfigure."
+            )
         endif()
     endforeach()
 
     _protocyte_owner_record_status(
         root_owner_status
+        root_owner_transaction_id
         "${owner_marker}"
-        "${expected_owner}"
+        "${build_tree_hash}"
+        "${owner_marker}"
     )
+    if(root_owner_status STREQUAL "incomplete")
+        _protocyte_recover_incomplete_owner_record(
+            recovered_incomplete_root_owner
+            "${owner_marker}"
+            "${root_owner_transaction_id}"
+            "${owner_marker}"
+        )
+        if(recovered_incomplete_root_owner)
+            set(root_owner_status "missing")
+        else()
+            _protocyte_owner_record_status(
+                root_owner_status
+                unused_root_transaction_id
+                "${owner_marker}"
+                "${build_tree_hash}"
+                "${owner_marker}"
+            )
+        endif()
+    endif()
     if(root_owner_status STREQUAL "different")
         message(
             FATAL_ERROR
@@ -334,6 +471,27 @@ function(
             "Protocyte cannot use OUT_DIR '${output_directory}' because its ownership record '${owner_marker}' "
             "is malformed. Protocyte will not reclaim it automatically. After confirming that no build is using "
             "this OUT_DIR, remove the ownership record manually and reconfigure."
+        )
+    elseif(root_owner_status STREQUAL "incomplete")
+        message(
+            FATAL_ERROR
+            "Protocyte cannot use OUT_DIR '${output_directory}' because an incomplete ownership transaction "
+            "could not be recovered safely. No generated output was changed."
+        )
+    elseif(root_owner_status STREQUAL "unverifiable")
+        _protocyte_owner_transaction_paths(
+            unused_root_prepared_witness
+            root_committed_witness
+            "${owner_marker}"
+            "${root_owner_transaction_id}"
+        )
+        message(
+            FATAL_ERROR
+            "Protocyte cannot use OUT_DIR '${output_directory}' because ownership record '${owner_marker}' "
+            "references missing or unverifiable transaction witness '${root_committed_witness}'. Protocyte will "
+            "not reclaim the directory automatically. Reuse the owning build tree, choose a different OUT_DIR, "
+            "restore the witness, or, after confirming no build uses the OUT_DIR, remove '${owner_marker}' "
+            "manually and reconfigure."
         )
     endif()
 
@@ -1222,17 +1380,38 @@ function(
     endif()
 
     _protocyte_build_tree_owner_hash(build_tree_hash)
-    set(expected_owner "version=1\nbuild-tree-sha256=${build_tree_hash}\n")
     set(output_owner_marker "${output_lock_directory}/${output_key}.owner")
+    _protocyte_output_directory_owner_paths(
+        root_owner_marker
+        unused_root_owner_lock
+        "${output_root}"
+    )
     _protocyte_owner_record_status(
         output_owner_status
+        output_owner_transaction_id
         "${output_owner_marker}"
-        "${expected_owner}"
+        "${build_tree_hash}"
+        "${root_owner_marker}"
     )
+    if(output_owner_status STREQUAL "incomplete")
+        _protocyte_recover_incomplete_owner_record(
+            recovered_incomplete_owner
+            "${output_owner_marker}"
+            "${output_owner_transaction_id}"
+            "${root_owner_marker}"
+        )
+        if(recovered_incomplete_owner)
+            set(output_owner_status "missing")
+        endif()
+    endif()
     if(output_owner_status STREQUAL "different")
         set(${out_var} "transferred" PARENT_SCOPE)
         return()
-    elseif(output_owner_status STREQUAL "malformed")
+    elseif(
+        output_owner_status STREQUAL "malformed"
+        OR output_owner_status STREQUAL "incomplete"
+        OR output_owner_status STREQUAL "unverifiable"
+    )
         set(${out_var} "pending" PARENT_SCOPE)
         return()
     endif()
@@ -3633,6 +3812,15 @@ function(protocyte_generate)
         protocyte_output_safety_script
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteOutputSafety.cmake"
     )
+    _protocyte_normalized_path_identity(
+        protocyte_lock_directory_identity
+        "${protocyte_lock_dir}"
+    )
+    string(
+        SHA256
+        protocyte_lock_directory_identity_hash
+        "${protocyte_lock_directory_identity}"
+    )
     string(HEX "${CMAKE_CURRENT_SOURCE_DIR}" protocyte_source_directory_hex)
 
     add_custom_command(
@@ -3644,6 +3832,7 @@ function(protocyte_generate)
             "-DGENERATION_TARGET=${PROTOCYTE_TARGET}"
             "-DGENERATION_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
             "-DLOCK_DIRECTORY=${protocyte_lock_dir}"
+            "-DLOCK_DIRECTORY_IDENTITY_SHA256=${protocyte_lock_directory_identity_hash}"
             "-DLOCK_MANIFEST=${protocyte_generation_lock_manifest}"
             "-DOUTPUT_DIRECTORY=${PROTOCYTE_OUT_DIR}"
             "-DOUT_DIR_OWNER_MARKER=${protocyte_out_dir_owner_marker}"
