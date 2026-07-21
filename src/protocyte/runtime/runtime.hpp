@@ -3877,14 +3877,56 @@ namespace protocyte {
             return {};
         }
 
-        Status insert_or_assign(const K &key, const V &value) noexcept { return insert_or_assign_impl(key, value); }
+        Status insert_or_assign(const K &key, const V &value) noexcept {
+            if constexpr (requires { K {key}; }) {
+                if constexpr (requires { V {value}; }) {
+                    return insert_or_assign_impl(key, value);
+                } else {
+                    auto copied_value = protocyte::copy_value(ctx_, value);
+                    if (!copied_value) {
+                        return copied_value.status();
+                    }
+                    return insert_or_assign_impl(key, protocyte::move(*copied_value));
+                }
+            } else {
+                auto copied_key = protocyte::copy_value(ctx_, key);
+                if (!copied_key) {
+                    return copied_key.status();
+                }
+                if constexpr (requires { V {value}; }) {
+                    return insert_or_assign_impl(protocyte::move(*copied_key), value);
+                } else {
+                    auto copied_value = protocyte::copy_value(ctx_, value);
+                    if (!copied_value) {
+                        return copied_value.status();
+                    }
+                    return insert_or_assign_impl(protocyte::move(*copied_key), protocyte::move(*copied_value));
+                }
+            }
+        }
 
         Status insert_or_assign(const K &key, V &&value) noexcept {
-            return insert_or_assign_impl(key, protocyte::move(value));
+            if constexpr (requires { K {key}; }) {
+                return insert_or_assign_impl(key, protocyte::move(value));
+            } else {
+                auto copied_key = protocyte::copy_value(ctx_, key);
+                if (!copied_key) {
+                    return copied_key.status();
+                }
+                return insert_or_assign_impl(protocyte::move(*copied_key), protocyte::move(value));
+            }
         }
 
         Status insert_or_assign(K &&key, const V &value) noexcept {
-            return insert_or_assign_impl(protocyte::move(key), value);
+            if constexpr (requires { V {value}; }) {
+                return insert_or_assign_impl(protocyte::move(key), value);
+            } else {
+                auto copied_value = protocyte::copy_value(ctx_, value);
+                if (!copied_value) {
+                    return copied_value.status();
+                }
+                return insert_or_assign_impl(protocyte::move(key), protocyte::move(*copied_value));
+            }
         }
 
         Status insert_or_assign(K &&key, V &&value) noexcept {
