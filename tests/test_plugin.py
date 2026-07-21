@@ -6222,6 +6222,8 @@ def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
     assert class_scope.owner("unknown_fields_") == "generated unknown field storage"
     assert class_scope.owner("serialize") == "generated serialize function"
     assert class_scope.owner("serialize_to") is None
+    assert class_scope.owner("merge_field_from_") == "generated merge field helper"
+    assert class_scope.owner("merge_fields_from") == "generated merge fields helper"
     assert class_scope.owner("choice_") == "oneof choice storage"
     assert class_scope.owner("choice_case_") == "oneof choice case storage"
     assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
@@ -6315,6 +6317,29 @@ def test_allows_serialize_to_field_after_span_overload_rename() -> None:
     assert not response.error
     header = next(file.content for file in response.file if file.name.endswith(".hpp"))
     assert "serialize_to() const noexcept" in header
+
+
+@pytest.mark.parametrize("nested_name", ["merge_field_from_", "merge_fields_from"])
+def test_rejects_nested_messages_that_collide_with_generated_merge_helpers(
+    nested_name: str,
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="merge_helper_collision.proto", package="demo", syntax="proto3"
+    )
+    parent = file.message_type.add(name="Container")
+    nested = parent.nested_type.add(name=nested_name)
+    nested.field.add(
+        name="value", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert response.error == (
+        f"demo.Container.{nested_name}: nested type alias collides with generated API"
+    )
 
 
 def test_cpp_function_registry_rejects_parameters_that_shadow_visible_storage() -> None:
