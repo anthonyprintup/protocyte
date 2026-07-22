@@ -836,11 +836,19 @@ This is the lower-level primitive. It creates the custom target named by
   overlapping or nested `OUT_DIR` values from silently naming the same file.
   Configuration performs a read-only conflict preflight. If multiple trees
   configure while the outputs are still unclaimed, the first build to acquire
-  the locks publishes both claims; the other build fails without changing any
-  generated output. Claims are validated and published before Protocyte creates
-  `OUT_DIR` or runs `protoc`, and revalidated on later builds, so a previously
-  configured tree loses write access immediately after a deliberate ownership
-  transfer. A later unrelated CMake configuration failure cannot leave a claim.
+  the locks may proceed to stage its output. The build revalidates the claims,
+  runs `protoc` into a private staging directory, and validates every expected
+  staged file before it publishes an ownership transaction or replaces a
+  declared generated output. A `protoc` failure, timeout, or invalid staging
+  result discards staging and publishes no new ownership claim; it can create an
+  empty `OUT_DIR` or staging directory, but does not change a declared generated
+  file. After staging succeeds, Protocyte durably records and atomically commits
+  the ownership transaction before publishing generated files, so an interrupted
+  publication is reconciled by a later build before it proceeds, instead of
+  silently handing the outputs to another tree. Configuration itself never
+  publishes a claim, and a later configuration failure cannot leave one. A
+  previously configured tree loses write access at its next build after a
+  deliberate ownership transfer.
 - `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.
@@ -925,13 +933,16 @@ cannot overwrite the same generated files. The owner identity is path-based, so
 recreating the build directory at the same canonical path is treated as the same
 owner. Malformed records are rejected rather than repaired automatically. To
 transfer an `OUT_DIR`, first stop every build that could use it and preserve any
-files you need. Then remove the matching sibling
-`.protocyte-out-dir-<sha256>.owner` record and each conflicting generated-output
-`.owner` record reported from the output-lock namespace before configuring the
-new tree. The `.lock` files may remain; they carry no ownership state. When a
-target retires an unchanged generated file, Protocyte removes that file and its
-matching owner record together while holding the output lock. Edited, malformed,
-or otherwise unverified stale claims remain for explicit manual resolution.
+files you need. The build-time collision diagnostic prints the exact `OUT_DIR`
+owner-record path and every conflicting generated-output owner-record path;
+remove only those listed records, then reconfigure the new tree. For a collision
+that names only generated-output records, transfer only those output claims after
+stopping every build that declares them. Do not delete the whole output-lock
+namespace or cache. The `.lock` files may remain; they carry no ownership state.
+When a target retires an unchanged generated file, Protocyte removes that file
+and its matching owner record together while holding the output lock. Edited,
+malformed, or otherwise unverified stale claims remain for explicit manual
+resolution.
 
 Both `RUNTIME_PREFIX` and the lower-level `INCLUDE_PREFIX` value describe
 virtual include directories rather than host filesystem paths. They must be

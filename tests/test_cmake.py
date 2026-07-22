@@ -10830,8 +10830,16 @@ def test_second_build_tree_rejects_shared_out_dir_without_mutation(
     second_build = _build_out_dir_owner_project(second_build_dir)
 
     assert second_build.returncode != 0
-    output = " ".join((second_build.stdout + second_build.stderr).split())
+    output = " ".join((second_build.stdout + second_build.stderr).split()).replace(
+        "\\", "/"
+    )
     assert "ownership belongs to a different build tree" in output
+    assert marker.as_posix() in output
+    output_owner_records = sorted((tmp_path / "output-locks").glob("*.owner"))
+    assert output_owner_records
+    assert all(owner.as_posix() in output for owner in output_owner_records)
+    assert "remove exactly the owner records listed above" in output
+    assert "Do not delete the whole output-lock namespace or cache" in output
     assert "No generated output was changed" in output
     assert marker.read_bytes() == marker_before
     assert _out_dir_snapshot(output_directory) == outputs_before

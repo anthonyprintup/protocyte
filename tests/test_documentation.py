@@ -384,6 +384,30 @@ def test_readme_documents_managed_tool_path_contracts() -> None:
     assert "provide a wrapper from a\nsemicolon-free location" in readme
 
 
+def test_readme_documents_build_time_ownership_staging_and_safe_transfer() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    ownership = readme.split("- `OUT_DIR` is required", maxsplit=1)[1].split(
+        "- `PROTO_ROOT` selects source mode", maxsplit=1
+    )[0]
+
+    assert "Configuration performs a read-only conflict preflight" in ownership
+    assert "runs `protoc` into a private staging directory" in ownership
+    assert "before it publishes an ownership transaction" in ownership
+    assert "A `protoc` failure, timeout, or invalid staging\n  result" in ownership
+    assert "publishes no new ownership claim" in ownership
+    assert "does not change a declared generated\n  file" in ownership
+    assert "Configuration itself never\n  publishes a claim" in ownership
+    assert "before Protocyte creates\n  `OUT_DIR` or runs `protoc`" not in ownership
+
+    transfer = readme.split("Deleting a build directory", maxsplit=1)[1].split(
+        "Both `RUNTIME_PREFIX`", maxsplit=1
+    )[0]
+    assert "prints the exact `OUT_DIR`\nowner-record path" in transfer
+    assert "every conflicting generated-output owner-record path" in transfer
+    assert "remove only those listed records" in transfer
+    assert "Do not delete the whole output-lock\nnamespace or cache" in transfer
+
+
 def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     cmake = (ROOT / "cmake" / "ProtocyteFunctions.cmake").read_text(encoding="utf-8")
