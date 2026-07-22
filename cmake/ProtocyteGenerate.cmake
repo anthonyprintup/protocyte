@@ -414,13 +414,9 @@ function(
     set(${out_all_recovered} "${all_recovered}" PARENT_SCOPE)
 endfunction()
 
-function(
-    _protocyte_commit_generation_ownership
-    out_transaction_id
-    out_published_owner_markers
-)
+function(_protocyte_prepare_generation_ownership out_transaction_id out_transaction_manifest)
     set(${out_transaction_id} "" PARENT_SCOPE)
-    set(${out_published_owner_markers} "" PARENT_SCOPE)
+    set(${out_transaction_manifest} "" PARENT_SCOPE)
     set(owner_markers_to_publish)
     if(root_owner_is_missing)
         list(APPEND owner_markers_to_publish "${OUT_DIR_OWNER_MARKER}")
@@ -452,7 +448,49 @@ function(
     foreach(owner_claim_id IN LISTS owner_claim_ids)
         string(APPEND transaction_manifest "claim-sha256=${owner_claim_id}\n")
     endforeach()
-    set(transaction_staging "${OUT_DIR_OWNER_MARKER}.${transaction_nonce}.tmp")
+    # CMake writes text files with CRLF line endings on Windows, while
+    # `string(SHA256)` hashes its input literally.  Hash the durable bytes so
+    # the journal-bound transaction ID matches the prepared witness exactly.
+    if(CMAKE_HOST_WIN32)
+        string(
+            REPLACE "\n" "\r\n"
+            transaction_manifest_bytes
+            "${transaction_manifest}"
+        )
+    else()
+        set(transaction_manifest_bytes "${transaction_manifest}")
+    endif()
+    string(SHA256 transaction_id "${transaction_manifest_bytes}")
+    set(${out_transaction_id} "${transaction_id}" PARENT_SCOPE)
+    set(${out_transaction_manifest} "${transaction_manifest}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_commit_generation_ownership
+    out_published_owner_markers
+    owner_markers
+    transaction_id
+    transaction_manifest
+)
+    set(${out_published_owner_markers} "" PARENT_SCOPE)
+    if("${transaction_id}" STREQUAL "" OR "${transaction_manifest}" STREQUAL "")
+        message(FATAL_ERROR "Protocyte cannot publish an unplanned ownership transaction.")
+    endif()
+    set(owner_markers_to_publish ${owner_markers})
+    if(CMAKE_HOST_WIN32)
+        string(
+            REPLACE "\n" "\r\n"
+            planned_transaction_manifest_bytes
+            "${transaction_manifest}"
+        )
+    else()
+        set(planned_transaction_manifest_bytes "${transaction_manifest}")
+    endif()
+    string(SHA256 planned_transaction_id "${planned_transaction_manifest_bytes}")
+    if(NOT planned_transaction_id STREQUAL transaction_id)
+        message(FATAL_ERROR "Protocyte ownership transaction identity did not match its planned manifest.")
+    endif()
+    set(transaction_staging "${OUT_DIR_OWNER_MARKER}.${transaction_id}.manifest.tmp")
 
     # Stage and read back the complete transaction before any durable owner
     # record is published. A staging failure can therefore leave only inert
@@ -466,7 +504,11 @@ function(
             "'${GENERATION_TARGET}'. No durable ownership was published."
         )
     endif()
-    file(SHA256 "${transaction_staging}" transaction_id)
+    file(SHA256 "${transaction_staging}" observed_transaction_id)
+    if(NOT observed_transaction_id STREQUAL transaction_id)
+        file(REMOVE "${transaction_staging}")
+        message(FATAL_ERROR "Protocyte staged ownership transaction bytes changed unexpectedly.")
+    endif()
     _protocyte_owner_transaction_paths(
         transaction_prepared
         transaction_committed
@@ -560,7 +602,6 @@ function(
             "'${GENERATION_TARGET}': ${transaction_publish_result}"
         )
     endif()
-    set(${out_transaction_id} "${transaction_id}" PARENT_SCOPE)
     set(${out_published_owner_markers} "${owner_markers_to_publish}" PARENT_SCOPE)
 endfunction()
 
@@ -847,8 +888,20 @@ foreach(output_lock_key IN LISTS missing_output_owner_keys)
 endforeach()
 set(generation_ownership_state "commit-pending")
 set(generation_owner_transaction_id "")
+set(generation_owner_transaction_manifest "")
 if(generation_transaction_owner_markers)
-    set(generation_owner_witness_state "retained")
+    _protocyte_prepare_generation_ownership(
+        generation_owner_transaction_id
+        generation_owner_transaction_manifest
+    )
+    if(
+        "${generation_owner_transaction_id}" STREQUAL ""
+        OR "${generation_owner_transaction_manifest}" STREQUAL ""
+    )
+        _protocyte_discard_generation_staging()
+        message(FATAL_ERROR "Protocyte could not prepare ownership claims for target '${GENERATION_TARGET}'.")
+    endif()
+    set(generation_owner_witness_state "planned")
 else()
     set(generation_owner_witness_state "removed")
 endif()
@@ -873,10 +926,14 @@ if(NOT generation_transaction_written)
         "No generated output was changed."
     )
 endif()
-_protocyte_commit_generation_ownership(
-    generation_owner_transaction_id
-    generation_published_owner_markers
-)
+if(generation_transaction_owner_markers)
+    _protocyte_commit_generation_ownership(
+        generation_published_owner_markers
+        "${generation_transaction_owner_markers}"
+        "${generation_owner_transaction_id}"
+        "${generation_owner_transaction_manifest}"
+    )
+endif()
 set(generation_ownership_state "committed")
 if(generation_transaction_owner_markers)
     if("${generation_owner_transaction_id}" STREQUAL "")

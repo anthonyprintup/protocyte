@@ -10407,7 +10407,7 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     staging_instrumentation = (
         "        if(\n"
         "            DEFINED PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
-        "            AND owner_stage_index EQUAL PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
+        '            AND "${owner_stage_index}" EQUAL "${PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX}"\n'
         "        )\n"
         '            file(MAKE_DIRECTORY "${owner_staging}")\n'
         "        endif()\n" + staging_anchor
@@ -10415,6 +10415,23 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     assert generation_source.count(staging_anchor) == 1
     generation_source = generation_source.replace(
         staging_anchor, staging_instrumentation
+    )
+
+    staged_owner_abort_anchor = (
+        '        list(APPEND staged_owner_markers "${owner_staging}")\n'
+    )
+    staged_owner_abort_instrumentation = (
+        staged_owner_abort_anchor
+        + "        if(\n"
+        + "            DEFINED PROTOCYTE_TEST_ABORT_AFTER_OWNER_STAGING_INDEX\n"
+        + '            AND "${owner_stage_index}" EQUAL "${PROTOCYTE_TEST_ABORT_AFTER_OWNER_STAGING_INDEX}"\n'
+        + "        )\n"
+        + '            message(FATAL_ERROR "injected generation transaction abort after owner staging")\n'
+        + "        endif()\n"
+    )
+    assert generation_source.count(staged_owner_abort_anchor) == 1
+    generation_source = generation_source.replace(
+        staged_owner_abort_anchor, staged_owner_abort_instrumentation
     )
 
     publication_anchor = (
@@ -10425,7 +10442,7 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         + '        math(EXPR published_owner_count "${owner_marker_index} + 1")\n'
         + "        if(\n"
         + "            DEFINED PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS\n"
-        + "            AND published_owner_count EQUAL PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS\n"
+        + '            AND "${published_owner_count}" EQUAL "${PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS}"\n'
         + "        )\n"
         + '            message(FATAL_ERROR "injected ownership publication termination")\n'
         + "        endif()\n"
@@ -10457,9 +10474,11 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
 
     ownership_commit_anchor = (
         "_protocyte_commit_generation_ownership(\n"
-        "    generation_owner_transaction_id\n"
-        "    generation_published_owner_markers\n"
-        ")\n"
+        "        generation_published_owner_markers\n"
+        '        "${generation_transaction_owner_markers}"\n'
+        '        "${generation_owner_transaction_id}"\n'
+        '        "${generation_owner_transaction_manifest}"\n'
+        "    )\n"
     )
     ownership_commit_instrumentation = (
         ownership_commit_anchor
@@ -10470,6 +10489,20 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     assert generation_source.count(ownership_commit_anchor) == 1
     generation_source = generation_source.replace(
         ownership_commit_anchor, ownership_commit_instrumentation
+    )
+
+    prepared_abort_anchor = "    endif()\n    set(\n        transaction_owner\n"
+    prepared_abort_instrumentation = (
+        "    endif()\n"
+        "    if(DEFINED PROTOCYTE_TEST_ABORT_AFTER_PREPARED_WITNESS)\n"
+        '        message(FATAL_ERROR "injected generation transaction abort after prepared witness")\n'
+        "    endif()\n"
+        "    set(\n"
+        "        transaction_owner\n"
+    )
+    assert generation_source.count(prepared_abort_anchor) == 1
+    generation_source = generation_source.replace(
+        prepared_abort_anchor, prepared_abort_instrumentation
     )
 
     backup_abort_anchor = (
@@ -11874,6 +11907,166 @@ def test_generation_transaction_journal_contains_relative_plan_and_hashes_only(
     assert "output-hex=" not in transaction_content
     assert "output-directory-sha256=" in transaction_content
     assert "staging-directory-sha256=" in transaction_content
+
+
+@pytest.mark.parametrize("tamper", ["bytes", "directory", "symlink"])
+def test_generation_transaction_rejects_tampered_remove_pending_witness(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT=TRUE",
+    )
+    assert interrupted.returncode != 0
+    transaction = next(
+        (tmp_path / "output-locks").glob(".protocyte-generation-*.active")
+    )
+    transaction_lines = transaction.read_text(encoding="utf-8").splitlines()
+    transaction_id = next(
+        line.removeprefix("owner-transaction-sha256=")
+        for line in transaction_lines
+        if line.startswith("owner-transaction-sha256=")
+    )
+    transaction_lines = [
+        "owner-witness-state=remove-pending"
+        if line == "owner-witness-state=retained"
+        else "owner-recovery=released"
+        if line.startswith("owner-recovery=")
+        else line
+        for line in transaction_lines
+    ]
+    transaction.write_text("\n".join(transaction_lines) + "\n", encoding="utf-8")
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    for owner_record in [root_owner, *(tmp_path / "output-locks").glob("*.owner")]:
+        owner_record.unlink()
+    witness = _owner_transaction_record(root_owner, transaction_id, "committed")
+    assert witness.is_file()
+    if tamper == "bytes":
+        witness.write_bytes(b"foreign witness bytes\n")
+    elif tamper == "directory":
+        witness.unlink()
+        witness.mkdir()
+    else:
+        witness.unlink()
+        target = tmp_path / "foreign-witness-target"
+        target.mkdir()
+        _create_generated_output_directory_link(witness, target)
+    before_retry = {
+        "outputs": _path_tree_snapshot(output_directory),
+        "staging": _path_tree_snapshot(
+            output_directory.parent / ".protocyte-generation-staging-direct-owner"
+        ),
+        "locks": _path_tree_snapshot(tmp_path / "output-locks"),
+        "owner-root": _path_tree_snapshot(root_owner.parent),
+    }
+
+    retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert retry.returncode != 0
+    assert "could not safely recover an interrupted generation transaction" in (
+        retry.stdout + retry.stderr
+    )
+    assert _path_tree_snapshot(output_directory) == before_retry["outputs"]
+    assert (
+        _path_tree_snapshot(
+            output_directory.parent / ".protocyte-generation-staging-direct-owner"
+        )
+        == before_retry["staging"]
+    )
+    assert _path_tree_snapshot(tmp_path / "output-locks") == before_retry["locks"]
+    assert _path_tree_snapshot(root_owner.parent) == before_retry["owner-root"]
+
+
+@pytest.mark.parametrize(
+    "fault_argument",
+    [
+        "-DPROTOCYTE_TEST_ABORT_AFTER_PREPARED_WITNESS=TRUE",
+        "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_STAGING_INDEX=1",
+        "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS=1",
+    ],
+)
+def test_generation_transaction_cleans_journal_bound_preparation_artifacts(
+    tmp_path: Path,
+    fault_argument: str,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        fault_argument,
+    )
+    assert interrupted.returncode != 0
+    transaction = next(
+        (tmp_path / "output-locks").glob(".protocyte-generation-*.active")
+    )
+    transaction_id = next(
+        line.removeprefix("owner-transaction-sha256=")
+        for line in transaction.read_text(encoding="utf-8").splitlines()
+        if line.startswith("owner-transaction-sha256=")
+    )
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    prepared_witness = _owner_transaction_record(root_owner, transaction_id, "prepared")
+    manifest_staging = root_owner.with_name(
+        f"{root_owner.name}.{transaction_id}.manifest.tmp"
+    )
+    owner_staging = root_owner.with_name(f"{root_owner.name}.{transaction_id}.tmp")
+    assert manifest_staging != owner_staging
+    assert prepared_witness.exists()
+    assert hashlib.sha256(prepared_witness.read_bytes()).hexdigest() == transaction_id
+    if "OWNER_STAGING_INDEX" in fault_argument:
+        expected_owner = (
+            f"version=2\nbuild-tree-sha256={_build_tree_owner_hash(owner_build_dir)}\n"
+            f"transaction-sha256={transaction_id}\n"
+        )
+        expected_owner_bytes = expected_owner.encode("utf-8")
+        if os.name == "nt":
+            expected_owner_bytes = expected_owner_bytes.replace(b"\n", b"\r\n")
+        assert (
+            hashlib.sha256(owner_staging.read_bytes()).hexdigest()
+            == hashlib.sha256(expected_owner_bytes).hexdigest()
+        )
+    _make_fake_protoc_fail_in_build(source_dir, owner_build_dir)
+
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode != 0
+    assert "simulated protoc failure" in recovered.stdout + recovered.stderr
+    assert not prepared_witness.exists()
+    assert not manifest_staging.exists()
+    assert not list(root_owner.parent.glob(f"*.{transaction_id}.tmp"))
+    assert not list((tmp_path / "output-locks").glob(f"*.{transaction_id}.tmp"))
+    assert not root_owner.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*.active"))
 
 
 def test_generation_transaction_accepts_legacy_v1_retained_owners(

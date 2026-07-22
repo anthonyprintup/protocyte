@@ -88,6 +88,7 @@ function(
     if(
         NOT (
             owner_witness_state STREQUAL "retained"
+            OR owner_witness_state STREQUAL "planned"
             OR owner_witness_state STREQUAL "remove-pending"
             OR owner_witness_state STREQUAL "removed"
         )
@@ -312,7 +313,7 @@ function(
         OR NOT transaction_lock_directory_hash_line STREQUAL "lock-directory-sha256=${transaction_lock_directory_hash}"
         OR NOT transaction_ownership_state_line MATCHES "^ownership-state=(commit-pending|committed)$"
         OR NOT transaction_owner_id_line MATCHES "^owner-transaction-sha256=([0-9a-f]*)$"
-        OR NOT transaction_owner_witness_line MATCHES "^owner-witness-state=(retained|remove-pending|removed)$"
+        OR NOT transaction_owner_witness_line MATCHES "^owner-witness-state=(planned|retained|remove-pending|removed)$"
         OR NOT transaction_owner_count_line MATCHES "^owner-count=([0-9]+)$"
     )
         return()
@@ -543,6 +544,45 @@ function(_protocyte_generation_transaction_file_hash_matches out_matches path ex
 endfunction()
 
 function(
+    _protocyte_generation_transaction_owner_record_hash_matches
+    out_matches
+    path
+    transaction_id
+)
+    set(${out_matches} FALSE PARENT_SCOPE)
+    if(
+        NOT EXISTS "${path}"
+        OR IS_DIRECTORY "${path}"
+        OR IS_SYMLINK "${path}"
+        OR NOT transaction_id MATCHES "^[0-9a-f]+$"
+    )
+        return()
+    endif()
+    string(LENGTH "${transaction_id}" transaction_id_length)
+    if(NOT transaction_id_length EQUAL 64)
+        return()
+    endif()
+    set(
+        expected_owner_record
+        "version=2\nbuild-tree-sha256=${BUILD_OWNER_HASH}\ntransaction-sha256=${transaction_id}\n"
+    )
+    if(CMAKE_HOST_WIN32)
+        string(REPLACE "\n" "\r\n" expected_owner_record_bytes "${expected_owner_record}")
+    else()
+        set(expected_owner_record_bytes "${expected_owner_record}")
+    endif()
+    string(SHA256 expected_owner_record_hash "${expected_owner_record_bytes}")
+    _protocyte_generation_transaction_file_hash_matches(
+        owner_record_hash_matches
+        "${path}"
+        "${expected_owner_record_hash}"
+    )
+    if(owner_record_hash_matches)
+        set(${out_matches} TRUE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(
     _protocyte_generation_transaction_claims_match
     out_matches
     owner_markers_var
@@ -553,24 +593,35 @@ function(
     if(NOT transaction_id_length EQUAL 64 OR NOT transaction_id MATCHES "^[0-9a-f]+$")
         return()
     endif()
+    set(transaction_witness_state "committed")
+    if(ARGC EQUAL 4)
+        set(transaction_witness_state "${ARGV3}")
+    endif()
     _protocyte_owner_transaction_paths(
-        unused_transaction_prepared
+        transaction_prepared
         transaction_committed
         "${OUT_DIR_OWNER_MARKER}"
         "${transaction_id}"
     )
+    if(transaction_witness_state STREQUAL "prepared")
+        set(transaction_witness "${transaction_prepared}")
+    elseif(transaction_witness_state STREQUAL "committed")
+        set(transaction_witness "${transaction_committed}")
+    else()
+        return()
+    endif()
     if(
-        NOT EXISTS "${transaction_committed}"
-        OR IS_DIRECTORY "${transaction_committed}"
-        OR IS_SYMLINK "${transaction_committed}"
+        NOT EXISTS "${transaction_witness}"
+        OR IS_DIRECTORY "${transaction_witness}"
+        OR IS_SYMLINK "${transaction_witness}"
     )
         return()
     endif()
-    file(SHA256 "${transaction_committed}" observed_transaction_id)
+    file(SHA256 "${transaction_witness}" observed_transaction_id)
     if(NOT observed_transaction_id STREQUAL transaction_id)
         return()
     endif()
-    file(STRINGS "${transaction_committed}" transaction_manifest_lines)
+    file(STRINGS "${transaction_witness}" transaction_manifest_lines)
     list(LENGTH transaction_manifest_lines transaction_manifest_line_count)
     if(transaction_manifest_line_count LESS 5)
         return()
@@ -815,16 +866,18 @@ function(_protocyte_recover_generation_transaction out_recovered)
     endforeach()
 
     if(transaction_ownership_state STREQUAL "commit-pending")
-        if(
+        if(transaction_created_owner_count GREATER 0)
+            string(LENGTH "${transaction_owner_transaction_id}" pending_transaction_id_length)
+            if(
+                NOT pending_transaction_id_length EQUAL 64
+                OR NOT transaction_owner_transaction_id MATCHES "^[0-9a-f]+$"
+                OR NOT transaction_owner_witness_state STREQUAL "planned"
+            )
+                return()
+            endif()
+        elseif(
             NOT transaction_owner_transaction_id STREQUAL ""
-            OR (
-                transaction_created_owner_count GREATER 0
-                AND NOT transaction_owner_witness_state STREQUAL "retained"
-            )
-            OR (
-                transaction_created_owner_count EQUAL 0
-                AND NOT transaction_owner_witness_state STREQUAL "removed"
-            )
+            OR NOT transaction_owner_witness_state STREQUAL "removed"
         )
             return()
         endif()
@@ -845,7 +898,10 @@ function(_protocyte_recover_generation_transaction out_recovered)
                 if(NOT pending_owner_transaction_id_count EQUAL 1)
                     return()
                 endif()
-                list(GET pending_created_owner_transaction_ids 0 transaction_owner_transaction_id)
+                list(GET pending_created_owner_transaction_ids 0 pending_owner_transaction_id)
+                if(NOT pending_owner_transaction_id STREQUAL transaction_owner_transaction_id)
+                    return()
+                endif()
                 _protocyte_generation_transaction_claims_match(
                     transaction_claims_match transaction_created_owner_markers
                     "${transaction_owner_transaction_id}"
@@ -928,9 +984,75 @@ function(_protocyte_recover_generation_transaction out_recovered)
             if(NOT all_transaction_created_owners_released)
                 return()
             endif()
+            _protocyte_owner_transaction_paths(
+                unused_transaction_prepared_witness
+                transaction_committed_witness
+                "${OUT_DIR_OWNER_MARKER}"
+                "${transaction_owner_transaction_id}"
+            )
+            if(transaction_owner_witness_state STREQUAL "remove-pending")
+                if(EXISTS "${transaction_committed_witness}" OR IS_SYMLINK "${transaction_committed_witness}")
+                    _protocyte_generation_transaction_claims_match(
+                        remove_pending_claims_match
+                        transaction_created_owner_markers
+                        "${transaction_owner_transaction_id}"
+                    )
+                    if(NOT remove_pending_claims_match)
+                        return()
+                    endif()
+                endif()
+            elseif(EXISTS "${transaction_committed_witness}" OR IS_SYMLINK "${transaction_committed_witness}")
+                return()
+            endif()
         else()
             return()
         endif()
+    endif()
+    if(transaction_discard_pending_ownership AND transaction_created_owner_count GREATER 0)
+        _protocyte_owner_transaction_paths(
+            transaction_prepared_witness
+            transaction_committed_witness
+            "${OUT_DIR_OWNER_MARKER}"
+            "${transaction_owner_transaction_id}"
+        )
+        if(EXISTS "${transaction_committed_witness}" OR IS_SYMLINK "${transaction_committed_witness}")
+            return()
+        endif()
+        if(EXISTS "${transaction_prepared_witness}" OR IS_SYMLINK "${transaction_prepared_witness}")
+            _protocyte_generation_transaction_claims_match(
+                prepared_claims_match
+                transaction_created_owner_markers
+                "${transaction_owner_transaction_id}"
+                "prepared"
+            )
+            if(NOT prepared_claims_match)
+                return()
+            endif()
+        endif()
+        set(transaction_manifest_staging "${OUT_DIR_OWNER_MARKER}.${transaction_owner_transaction_id}.manifest.tmp")
+        if(EXISTS "${transaction_manifest_staging}" OR IS_SYMLINK "${transaction_manifest_staging}")
+            _protocyte_generation_transaction_file_hash_matches(
+                manifest_staging_hash_matches
+                "${transaction_manifest_staging}"
+                "${transaction_owner_transaction_id}"
+            )
+            if(NOT manifest_staging_hash_matches)
+                return()
+            endif()
+        endif()
+        foreach(transaction_owner_marker IN LISTS transaction_created_owner_markers)
+            set(transaction_owner_staging "${transaction_owner_marker}.${transaction_owner_transaction_id}.tmp")
+            if(EXISTS "${transaction_owner_staging}" OR IS_SYMLINK "${transaction_owner_staging}")
+                _protocyte_generation_transaction_owner_record_hash_matches(
+                    owner_staging_hash_matches
+                    "${transaction_owner_staging}"
+                    "${transaction_owner_transaction_id}"
+                )
+                if(NOT owner_staging_hash_matches)
+                    return()
+                endif()
+            endif()
+        endforeach()
     endif()
     # Validate every output and derive the complete rollback plan before the
     # first output or owner record is changed.  A malformed late journal entry
@@ -1192,6 +1314,30 @@ function(_protocyte_recover_generation_transaction out_recovered)
                 return()
             endif()
         endforeach()
+        if(transaction_created_owner_count GREATER 0)
+            foreach(transaction_owner_marker IN LISTS transaction_created_owner_markers)
+                set(transaction_owner_staging "${transaction_owner_marker}.${transaction_owner_transaction_id}.tmp")
+                file(REMOVE "${transaction_owner_staging}")
+                if(EXISTS "${transaction_owner_staging}" OR IS_SYMLINK "${transaction_owner_staging}")
+                    return()
+                endif()
+            endforeach()
+            set(transaction_manifest_staging "${OUT_DIR_OWNER_MARKER}.${transaction_owner_transaction_id}.manifest.tmp")
+            file(REMOVE "${transaction_manifest_staging}")
+            if(EXISTS "${transaction_manifest_staging}" OR IS_SYMLINK "${transaction_manifest_staging}")
+                return()
+            endif()
+            _protocyte_owner_transaction_paths(
+                transaction_prepared_witness
+                unused_transaction_committed_witness
+                "${OUT_DIR_OWNER_MARKER}"
+                "${transaction_owner_transaction_id}"
+            )
+            file(REMOVE "${transaction_prepared_witness}")
+            if(EXISTS "${transaction_prepared_witness}" OR IS_SYMLINK "${transaction_prepared_witness}")
+                return()
+            endif()
+        endif()
         file(REMOVE "${transaction_active}")
         if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
             return()
@@ -1393,7 +1539,17 @@ function(_protocyte_recover_generation_transaction out_recovered)
                 unused_transaction_prepared transaction_owner_witness
                 "${OUT_DIR_OWNER_MARKER}" "${transaction_owner_transaction_id}"
             )
-            file(REMOVE "${transaction_owner_witness}")
+            if(EXISTS "${transaction_owner_witness}" OR IS_SYMLINK "${transaction_owner_witness}")
+                _protocyte_generation_transaction_claims_match(
+                    witness_hash_matches
+                    transaction_created_owner_markers
+                    "${transaction_owner_transaction_id}"
+                )
+                if(NOT witness_hash_matches)
+                    return()
+                endif()
+                file(REMOVE "${transaction_owner_witness}")
+            endif()
             if(EXISTS "${transaction_owner_witness}" OR IS_SYMLINK "${transaction_owner_witness}")
                 return()
             endif()
