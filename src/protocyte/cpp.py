@@ -32,8 +32,6 @@ from protocyte.model import (
     SourceDocumentation,
     _cpp_string_literal,
     cpp_identifier,
-    cpp_derivable_identifier,
-    cpp_pascal_identifier,
 )
 from protocyte.names import (
     CppNameKind,
@@ -41,7 +39,6 @@ from protocyte.names import (
     EmittedNameMember,
     EmittedNameRequest,
     PROTOCYTE_RUNTIME_CPP_SYMBOLS,
-    cpp_emitted_derivable_identifier,
 )
 from protocyte.parameters import GeneratorOptions
 from protocyte.paths import generated_file_base
@@ -1559,7 +1556,7 @@ def _emit_message(
         for enum in message.nested_enums:
             _emit_documentation(w, enum.documentation, options)
             alias_deprecated = " [[deprecated]]" if enum.deprecated else ""
-            alias_name = enum.emitted_names.get("alias", cpp_identifier(enum.name))
+            alias_name = enum.emitted_names["alias"]
             w.line(f"using {alias_name}{alias_deprecated} = {enum.cpp_name};")
             compatibility_alias = enum.emitted_names.get("compatibility_alias")
             if compatibility_alias is not None:
@@ -1569,9 +1566,7 @@ def _emit_message(
         for nested in message.nested_messages:
             if not nested.is_map_entry:
                 _emit_documentation(w, nested.documentation, options)
-                alias_name = nested.emitted_names.get(
-                    "alias", cpp_identifier(nested.name)
-                )
+                alias_name = nested.emitted_names["alias"]
                 nested_config_name = nested.emitted_names["alias_config"]
                 w.line(f"template <typename {nested_config_name} = {config_cpp_name}>")
                 alias_deprecated = " [[deprecated]]" if nested.deprecated else ""
@@ -1611,7 +1606,7 @@ def _emit_message(
         w.line()
         if message.oneofs:
             generic_cpp_name = message.generic_cpp_name
-            destroy_name = _message_emitted(message, "destroy_at_", "destroy_at_")
+            destroy_name = _message_emitted(message, "destroy_at_")
             w.line(f"template <typename {generic_cpp_name}>")
             w.line(
                 f"static void {destroy_name}({generic_cpp_name}* value) noexcept {{ value->~{generic_cpp_name}(); }}"
@@ -1642,20 +1637,10 @@ def _emit_message(
         w.line("}")
         w.line()
         for oneof in message.oneofs:
-            case_type = _oneof_emitted(oneof, "case_type", f"{oneof.cpp_name}Case")
-            case_accessor = _oneof_emitted(
-                oneof,
-                "case_accessor",
-                f"{cpp_derivable_identifier(oneof.name)}_case",
-            )
-            clear_name = _oneof_emitted(
-                oneof, "clear", f"clear_{cpp_derivable_identifier(oneof.name)}"
-            )
-            case_storage = _oneof_emitted(
-                oneof,
-                "case_storage",
-                f"{cpp_derivable_identifier(oneof.name)}_case_",
-            )
+            case_type = _oneof_emitted(oneof, "case_type")
+            case_accessor = _oneof_emitted(oneof, "case_accessor")
+            clear_name = _oneof_emitted(oneof, "clear")
+            case_storage = _oneof_emitted(oneof, "case_storage")
             _emit_documentation(w, oneof.documentation, options)
             w.line(
                 f"constexpr {case_type} {case_accessor}() const noexcept {{ return {case_storage}; }}"
@@ -1667,7 +1652,7 @@ def _emit_message(
                 with w.indent():
                     for item in oneof.fields:
                         w.line(
-                            f"case {case_type}::{_field_emitted(item, 'oneof_case', item.cpp_name)}: {{"
+                            f"case {case_type}::{_field_emitted(item, 'oneof_case')}: {{"
                         )
                         with w.indent():
                             _emit_destroy_oneof_member(w, item)
@@ -1744,9 +1729,7 @@ def _emit_oneof_case_enums(
             w.line("none = 0u,")
             for item in oneof.fields:
                 _emit_documentation(w, item.documentation, options)
-                w.line(
-                    f"{_field_emitted(item, 'oneof_case', item.cpp_name)} = {item.number}u,"
-                )
+                w.line(f"{_field_emitted(item, 'oneof_case')} = {item.number}u,")
         w.line("};")
         w.line()
 
@@ -1817,9 +1800,7 @@ def _emit_special_members(
     with w.indent():
         w.line("if (this == &other) { return *this; }")
         for oneof in message.oneofs:
-            w.line(
-                f"{_oneof_emitted(oneof, 'clear', f'clear_{cpp_derivable_identifier(oneof.name)}')}();"
-            )
+            w.line(f"{_oneof_emitted(oneof, 'clear')}();")
         context_storage = _message_context_storage(message)
         unknown_storage = _message_unknown_storage(message)
         w.line(f"{context_storage} = other.{context_storage};")
@@ -1835,9 +1816,7 @@ def _emit_special_members(
     w.line(f"~{message.cpp_name}() noexcept {{")
     with w.indent():
         for oneof in message.oneofs:
-            w.line(
-                f"{_oneof_emitted(oneof, 'clear', f'clear_{cpp_derivable_identifier(oneof.name)}')}();"
-            )
+            w.line(f"{_oneof_emitted(oneof, 'clear')}();")
     w.line("}")
 
 
@@ -1895,9 +1874,7 @@ def _emit_move_oneof_from_other(
 ) -> None:
     case_type = _oneof_case_type(oneof)
     case_member = _oneof_case_member(oneof)
-    clear_name = _oneof_emitted(
-        oneof, "clear", f"clear_{cpp_derivable_identifier(oneof.name)}"
-    )
+    clear_name = _oneof_emitted(oneof, "clear")
     w.line(f"switch ({source}.{case_member}) {{")
     with w.indent():
         for item in oneof.fields:
@@ -1907,7 +1884,7 @@ def _emit_move_oneof_from_other(
                 if item.kind in {"string", "bytes", "message"}
                 else f"{source}.{_member(item)}"
             )
-            case_value = _field_emitted(item, "oneof_case", item.cpp_name)
+            case_value = _field_emitted(item, "oneof_case")
             w.line(f"case {case_type}::{case_value}: {{")
             with w.indent():
                 w.line(f"new (&{_member(item)}) {storage_type} {{{value}}};")
@@ -1928,10 +1905,8 @@ def _emit_clone_api(
 ) -> None:
     context_storage = _message_context_storage(message)
     unknown_storage = _message_unknown_storage(message)
-    reset_name = _message_emitted(message, "reset_for_reuse_", "reset_for_reuse_")
-    copy_in_place_name = _message_emitted(
-        message, "copy_from_in_place_", "copy_from_in_place_"
-    )
+    reset_name = _message_emitted(message, "reset_for_reuse_")
+    copy_in_place_name = _message_emitted(message, "copy_from_in_place_")
     non_oneof_fields = [item for item in message.fields if item.oneof_name is None]
     map_only = bool(non_oneof_fields) and all(
         item.kind == "map" for item in non_oneof_fields
@@ -2110,7 +2085,7 @@ def _emit_copy_map_field(
 def _emit_copy_message_from_pointer(
     w: CppWriter, item: FieldModel, source_ptr: str
 ) -> None:
-    result_name = _field_implementation_name(item, "ensured", "ensured_{name}")
+    result_name = _field_implementation_name(item, "ensured")
     w.line(f"const auto {result_name} = {_field_ensure(item)}();")
     w.line(
         f"if (!{result_name}) {{ return ::protocyte::with_field({result_name}.status(), {_field_number_u32(item)}); }}"
@@ -2130,7 +2105,7 @@ def _emit_copy_oneof_from_other(
     w.line(f"switch ({source}.{case_member}) {{")
     w.push()
     for item in oneof.fields:
-        case_value = _field_emitted(item, "oneof_case", item.cpp_name)
+        case_value = _field_emitted(item, "oneof_case")
         w.line(f"case {case_type}::{case_value}: {{")
         w.push()
         if item.kind in {"string", "bytes"}:
@@ -2151,9 +2126,7 @@ def _emit_copy_oneof_from_other(
     w.line(f"case {case_type}::none:")
     w.line("default: {")
     w.push()
-    clear_name = _oneof_emitted(
-        oneof, "clear", f"clear_{cpp_derivable_identifier(oneof.name)}"
-    )
+    clear_name = _oneof_emitted(oneof, "clear")
     w.line(f"{clear_name}();")
     w.line("break;")
     w.pop()
@@ -2576,7 +2549,7 @@ def _emit_oneof_accessors(
     assert item.oneof_name is not None
     case_type = _field_oneof_case_type(item)
     case_member = _field_oneof_case_storage(item)
-    case_value = _field_emitted(item, "oneof_case", item.cpp_name)
+    case_value = _field_emitted(item, "oneof_case")
     clear_name = _field_oneof_clear(item)
     context_storage = _owner_context_storage(item)
     typ = _field_type(item, options)
@@ -2639,7 +2612,7 @@ def _emit_oneof_accessors(
             w.line(f"auto ensured = {_member(item)}.ensure();")
             w.line("if (!ensured) {")
             w.push()
-            destroy_name = _field_emitted(item, "destroy_at_", "destroy_at_")
+            destroy_name = _field_emitted(item, "destroy_at_")
             w.line(f"{destroy_name}(&{_member(item)});")
             w.line(
                 f"return ::protocyte::with_field(ensured, {_field_number_u32(item)});"
@@ -2730,10 +2703,8 @@ def _emit_wire_api(
     config_cpp_name = message.config_cpp_name
     context_storage = _message_context_storage(message)
     unknown_storage = _message_unknown_storage(message)
-    reset_name = _message_emitted(message, "reset_for_reuse_", "reset_for_reuse_")
-    merge_field_name = _message_emitted(
-        message, "merge_field_from_", "merge_field_from_"
-    )
+    reset_name = _message_emitted(message, "reset_for_reuse_")
+    merge_field_name = _message_emitted(message, "merge_field_from_")
     w.line(f"template <::protocyte::ReaderLike {reader_cpp_name}>")
     w.line(
         f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, {reader_cpp_name}& reader) noexcept {{"
@@ -2895,9 +2866,7 @@ def _emit_unknown_field_handling(
 def _emit_merge_fields_body(
     w: CppWriter, message: MessageModel, options: GeneratorOptions
 ) -> None:
-    merge_field_name = _message_emitted(
-        message, "merge_field_from_", "merge_field_from_"
-    )
+    merge_field_name = _message_emitted(message, "merge_field_from_")
     w.line("while (!reader.eof()) {")
     with w.indent():
         w.line("const auto tag = ::protocyte::read_tag(reader);")
@@ -2984,7 +2953,7 @@ def _emit_closed_enum_validation(
     for item in sorted(message.fields, key=lambda f: f.number):
         if item.kind == "map":
             assert item.map_key is not None and item.map_value is not None
-            entry_name = _field_implementation_name(item, "entry", "{name}_entry")
+            entry_name = _field_implementation_name(item, "entry")
             for map_item, value_expr in (
                 (item.map_key, f"{entry_name}.key"),
                 (item.map_value, f"{entry_name}.value"),
@@ -3002,7 +2971,7 @@ def _emit_closed_enum_validation(
         if condition is None:
             continue
         if item.repeated:
-            value_name = _field_implementation_name(item, "value", "{name}_value")
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto {value_name} : {_member(item)}) {{")
             with w.indent():
                 _emit_closed_enum_reject(
@@ -3013,7 +2982,7 @@ def _emit_closed_enum_validation(
         if item.oneof_name is not None:
             case_member = _field_oneof_case_storage(item)
             case_type = _field_oneof_case_type(item)
-            case_value = _field_emitted(item, "oneof_case", item.cpp_name)
+            case_value = _field_emitted(item, "oneof_case")
             w.line(f"if ({case_member} == {case_type}::{case_value}) {{")
             with w.indent():
                 _emit_closed_enum_reject(w, item, condition)
@@ -3051,7 +3020,7 @@ def _emit_string_validation(w: CppWriter, message: MessageModel) -> None:
             ]
             if not string_members:
                 continue
-            entry_name = _field_implementation_name(item, "entry", "{name}_entry")
+            entry_name = _field_implementation_name(item, "entry")
             w.line(f"for (const auto &{entry_name} : {_member(item)}) {{")
             with w.indent():
                 for member in string_members:
@@ -3064,7 +3033,7 @@ def _emit_string_validation(w: CppWriter, message: MessageModel) -> None:
         if item.kind != "string":
             continue
         if item.repeated:
-            value_name = _field_implementation_name(item, "value", "{name}_value")
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
                 _emit_string_validation_reject(w, item, value_name)
@@ -3073,7 +3042,7 @@ def _emit_string_validation(w: CppWriter, message: MessageModel) -> None:
         if item.oneof_name is not None:
             case_member = _field_oneof_case_storage(item)
             case_type = _field_oneof_case_type(item)
-            case_value = _field_emitted(item, "oneof_case", item.cpp_name)
+            case_value = _field_emitted(item, "oneof_case")
             w.line(f"if ({case_member} == {case_type}::{case_value}) {{")
             with w.indent():
                 _emit_string_validation_reject(w, item, _member(item))
@@ -3088,7 +3057,7 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
             assert item.map_value is not None
             if item.map_value.kind != "message":
                 continue
-            value_name = _field_implementation_name(item, "value", "{name}_value")
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
                 w.line(
@@ -3099,7 +3068,7 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
         if item.kind != "message":
             continue
         if item.repeated:
-            value_name = _field_implementation_name(item, "value", "{name}_value")
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
                 w.line(
@@ -3111,7 +3080,7 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
             condition = (
                 f"{_field_oneof_case_storage(item)} == "
                 f"{_field_oneof_case_type(item)}::"
-                f"{_field_emitted(item, 'oneof_case', item.cpp_name)}"
+                f"{_field_emitted(item, 'oneof_case')}"
             )
             w.line(f"if ({condition} && {_member(item)}.has_value()) {{")
         else:
@@ -3163,9 +3132,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
             with w.indent():
                 w.line("auto len = ::protocyte::read_length_delimited_size(reader);")
                 w.line("if (!len) { return len.status(); }")
-                packed_values_name = _field_implementation_name(
-                    item, "packed_values", "packed_{name}_values"
-                )
+                packed_values_name = _field_implementation_name(item, "packed_values")
                 width = _packed_fixed_width_size(item)
                 bulk_width = _packed_bulk_fixed_width_size(item)
                 if not item.repeated_array and bulk_width is not None:
@@ -3191,16 +3158,14 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                     packed_unknown_name = None
                     if item.enum_closed:
                         packed_unknown_name = _field_implementation_name(
-                            item,
-                            "packed_unknown_fields",
-                            "packed_{name}_unknown_fields",
+                            item, "packed_unknown_fields"
                         )
                         w.line(
                             f"::protocyte::UnknownFieldStorage<{item.config_cpp_name}> {packed_unknown_name}{{{_owner_context_storage(item)}}};"
                         )
                     if not item.repeated_array and width is not None:
                         reserve_name = _field_implementation_name(
-                            item, "packed_reserve", "packed_reserve_{name}"
+                            item, "packed_reserve"
                         )
                         w.line(f"const auto {reserve_name} = *len / {width};")
                         w.line(
@@ -3226,9 +3191,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                             w, item, packed_values_name
                         )
                         merged_unknown_name = _field_implementation_name(
-                            item,
-                            "merged_unknown_fields",
-                            "merged_{name}_unknown_fields",
+                            item, "merged_unknown_fields"
                         )
                         w.line(
                             f"::protocyte::UnknownFieldStorage<{item.config_cpp_name}> {merged_unknown_name}{{{_owner_context_storage(item)}}};"
@@ -3420,7 +3383,7 @@ def _emit_read_bounded_bytes(
             f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
     w.line(f"if (const auto st = {reader}.can_read(*len); !st) {{ return st; }}")
-    value_name = _field_implementation_name(item, "value", "{name}_value")
+    value_name = _field_implementation_name(item, "value")
     w.line(f"{_storage_type(item, options)} {value_name}{{}};")
     w.line(
         f"if (const auto st = {value_name}.resize_for_overwrite(*len); !st) {{ return st; }}"
@@ -3436,7 +3399,7 @@ def _emit_read_bounded_bytes(
         )
         w.line(
             f"{_field_oneof_case_storage(item)} = {_field_oneof_case_type(item)}::"
-            f"{_field_emitted(item, 'oneof_case', item.cpp_name)};"
+            f"{_field_emitted(item, 'oneof_case')};"
         )
         return
     w.line(f"{_member(item)} = ::protocyte::move({value_name});")
@@ -3447,7 +3410,7 @@ def _emit_read_bounded_bytes(
 def _emit_read_staged_message(
     w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions
 ) -> None:
-    value_name = _field_implementation_name(item, "value", "{name}_value")
+    value_name = _field_implementation_name(item, "value")
     typ = _field_type(item, options)
     w.line(f"{typ} {value_name}{{*{_owner_context_storage(item)}}};")
     if item.oneof_name:
@@ -3486,11 +3449,9 @@ def _emit_commit_oneof_value(
     clear_name = _field_oneof_clear(item)
     case_type = _field_oneof_case_type(item)
     case_member = _field_oneof_case_storage(item)
-    case_value = _field_emitted(item, "oneof_case", item.cpp_name)
+    case_value = _field_emitted(item, "oneof_case")
     if item.kind == "message":
-        committed_name = _field_implementation_name(
-            item, "committed", "{name}_committed"
-        )
+        committed_name = _field_implementation_name(item, "committed")
         if item.recursive_box:
             w.line(
                 f"{_storage_type(item, options)} {committed_name}{{{_owner_context_storage(item)}}};"
@@ -3519,7 +3480,7 @@ def _emit_read_single_value(
             _emit_read_bounded_bytes(w, item, reader, options)
         else:
             typ = _field_type(item, options)
-            value_name = _field_implementation_name(item, "value", "{name}_value")
+            value_name = _field_implementation_name(item, "value")
             w.line(f"{typ} {value_name}{{{_owner_context_storage(item)}}};")
             helper = _length_delimited_read_helper(item, checked=True)
             w.line(
@@ -3542,7 +3503,7 @@ def _emit_read_single_value(
         _emit_read_staged_message(w, item, reader, options)
         return
     if item.oneof_name:
-        value_name = _field_implementation_name(item, "value", "{name}_value")
+        value_name = _field_implementation_name(item, "value")
         w.line(f"{_field_type(item, options)} {value_name}{{}};")
         accepted = _emit_read_scalar(w, item, reader, value_name, options, checked=True)
         if accepted is not None:
@@ -3569,7 +3530,7 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
     _emit_temp_decl(w, key, "key", options)
     _emit_temp_decl(w, value, "value", options)
     w.line("bool entry_is_unknown{};")
-    parse_name = _field_implementation_name(item, "parse_entry", "parse_{name}_entry")
+    parse_name = _field_implementation_name(item, "parse_entry")
     w.line(
         f"const auto {parse_name} = [&](auto& entry_reader) noexcept -> ::protocyte::Status {{"
     )
@@ -3651,9 +3612,7 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             f"if constexpr (::protocyte::preserve_unknown_fields_v<{item.config_cpp_name}>) {{"
         )
         with w.indent():
-            staged_name = _field_implementation_name(
-                item, "staged_entry", "staged_{name}_entry"
-            )
+            staged_name = _field_implementation_name(item, "staged_entry")
             w.line(
                 "const auto entry_size = ::protocyte::read_length_delimited_size(reader);"
             )
@@ -3789,10 +3748,10 @@ def _emit_read_scalar(
     args = f"{reader}, wire_type, field_number" if checked else reader
     error_field_number = "field_number" if checked else field_number_expr
     if item.enum_closed and field_number_expr is None:
-        raw_name = _field_implementation_name(item, "decoded_raw", "decoded_{name}_raw")
-        result_name = _field_implementation_name(item, "decoded", "decoded_{name}")
-        value_name = _field_implementation_name(item, "value", "{name}_value")
-        accepted_name = _field_implementation_name(item, "accepted", "{name}_accepted")
+        raw_name = _field_implementation_name(item, "decoded_raw")
+        result_name = _field_implementation_name(item, "decoded")
+        value_name = _field_implementation_name(item, "value")
+        accepted_name = _field_implementation_name(item, "accepted")
         w.line(f"const auto {raw_name} = ::protocyte::read_varint({reader});")
         w.line(f"if (!{raw_name}) {{ return {raw_name}.status(); }}")
         w.line(f"const auto {value_name} = static_cast<::protocyte::i32>(*{raw_name});")
@@ -3822,8 +3781,8 @@ def _emit_read_scalar(
         w.line("}")
         return accepted_name
     if item.enum_closed:
-        result_name = _field_implementation_name(item, "decoded", "decoded_{name}")
-        value_name = _field_implementation_name(item, "value", "{name}_value")
+        result_name = _field_implementation_name(item, "decoded")
+        value_name = _field_implementation_name(item, "value")
         w.line(f"const auto {result_name} = ::protocyte::{helper}({args});")
         w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
         w.line(f"const auto {value_name} = *{result_name};")
@@ -3835,7 +3794,7 @@ def _emit_read_scalar(
         )
         w.line(f"{target} = {value_name};")
         return None
-    result_name = _field_implementation_name(item, "decoded", "decoded_{name}")
+    result_name = _field_implementation_name(item, "decoded")
     with w.local_decl(result_name):
         w.line(f"const auto {result_name} = ::protocyte::{helper}({args});")
         w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
@@ -3851,10 +3810,10 @@ def _emit_serialize_statement(
         condition = (
             f"{_field_oneof_case_storage(item)} == "
             f"{_field_oneof_case_type(item)}::"
-            f"{_field_emitted(item, 'oneof_case', item.cpp_name)}"
+            f"{_field_emitted(item, 'oneof_case')}"
         )
     if item.repeated and item.kind != "map":
-        value_name = _field_implementation_name(item, "value", "{name}_value")
+        value_name = _field_implementation_name(item, "value")
         if item.packed:
             w.line(f"if (!{_member(item)}.empty()) {{")
             w.push()
@@ -3975,7 +3934,7 @@ def _emit_write_packed_field(
 ) -> None:
     del options
     error_field_number = _field_number_u32(item, enum_type)
-    packed_name = _field_implementation_name(item, "packed_size", "packed_size_{name}")
+    packed_name = _field_implementation_name(item, "packed_size")
     w.line(f"::protocyte::usize {packed_name} {{}};")
     width = _fixed_scalar_width(item)
     if width is not None:
@@ -3987,9 +3946,7 @@ def _emit_write_packed_field(
         )
         w.line(f"{packed_name} = *{packed_name}_result;")
     else:
-        packed_value = _field_implementation_name(
-            item, "packed_value", "packed_value_{name}"
-        )
+        packed_value = _field_implementation_name(item, "packed_value")
         w.line(f"for (const auto &{packed_value} : {value}) {{")
         with w.indent(), w.cpp_scope():
             _emit_add_packed_size(
@@ -4012,9 +3969,7 @@ def _emit_write_packed_field(
             f"if (const auto st = ::protocyte::write_fixed_width_packed_values(writer, {value}.data(), {value}.size()); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
         return
-    packed_value = _field_implementation_name(
-        item, "packed_value", "packed_value_{name}"
-    )
+    packed_value = _field_implementation_name(item, "packed_value")
     w.line(f"for (const auto &{packed_value} : {value}) {{")
     with w.indent(), w.cpp_scope():
         _emit_write_scalar(w, item, packed_value, error_field_number)
@@ -4038,14 +3993,12 @@ def _emit_size_statement(
         condition = (
             f"{_field_oneof_case_storage(item)} == "
             f"{_field_oneof_case_type(item)}::"
-            f"{_field_emitted(item, 'oneof_case', item.cpp_name)}"
+            f"{_field_emitted(item, 'oneof_case')}"
         )
     if item.repeated and item.kind != "map":
-        value_name = _field_implementation_name(item, "value", "{name}_value")
+        value_name = _field_implementation_name(item, "value")
         if item.packed:
-            packed_name = _field_implementation_name(
-                item, "packed_size", "packed_size_{name}"
-            )
+            packed_name = _field_implementation_name(item, "packed_size")
             w.line(f"if (!{_member(item)}.empty()) {{")
             with w.indent(), w.cpp_scope():
                 w.line(f"::protocyte::usize {packed_name} {{}};")
@@ -4075,9 +4028,7 @@ def _emit_size_statement(
                     "total",
                     f"::protocyte::length_delimited_field_size({_field_number_u32(item)}, {packed_name})",
                     result=True,
-                    size_name=_field_implementation_name(
-                        item, "field_size", "field_size_{name}"
-                    ),
+                    size_name=_field_implementation_name(item, "field_size"),
                     error_field_number=_field_number_u32(item),
                 )
             w.line("}")
@@ -4129,9 +4080,7 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             "total",
             f"::protocyte::length_delimited_field_size({_field_number_u32(item)}, entry_payload)",
             result=True,
-            size_name=_field_implementation_name(
-                item, "field_size", "field_size_{name}"
-            ),
+            size_name=_field_implementation_name(item, "field_size"),
             error_field_number=error_field_number,
         )
     w.line("}")
@@ -4200,9 +4149,7 @@ def _emit_add_size(
             "total",
             f"::protocyte::length_delimited_field_size({_field_number_u32(item, enum_type)}, {value}.size())",
             result=True,
-            size_name=_field_implementation_name(
-                item, "field_size", "field_size_{name}"
-            ),
+            size_name=_field_implementation_name(item, "field_size"),
             error_field_number=error_field_number,
         )
         return
@@ -4213,9 +4160,7 @@ def _emit_add_size(
             "total",
             f"::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {expr})",
             result=True,
-            size_name=_field_implementation_name(
-                item, "field_size", "field_size_{name}"
-            ),
+            size_name=_field_implementation_name(item, "field_size"),
             error_field_number=error_field_number,
         )
         return
@@ -4249,9 +4194,7 @@ def _emit_add_size_status(
             total_name,
             f"::protocyte::length_delimited_field_size({_field_number_u32(item, enum_type)}, {value}.size())",
             result=result,
-            size_name=_field_implementation_name(
-                item, "field_size", "field_size_{name}"
-            ),
+            size_name=_field_implementation_name(item, "field_size"),
             force_scope=force_scope,
             error_field_number=error_field_number,
         )
@@ -4262,9 +4205,7 @@ def _emit_add_size_status(
             total_name,
             f"::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {value})",
             result=result,
-            size_name=_field_implementation_name(
-                item, "field_size", "field_size_{name}"
-            ),
+            size_name=_field_implementation_name(item, "field_size"),
             force_scope=force_scope,
             error_field_number=error_field_number,
         )
@@ -4344,7 +4285,7 @@ def _emit_oneof_member(
 
 def _emit_destroy_oneof_member(w: CppWriter, item: FieldModel) -> None:
     if item.kind in {"string", "bytes", "message"}:
-        destroy_name = _field_emitted(item, "destroy_at_", "destroy_at_")
+        destroy_name = _field_emitted(item, "destroy_at_")
         w.line(f"{destroy_name}(&{_member(item)});")
 
 
@@ -4420,6 +4361,7 @@ def _field_with_number(item: FieldModel, number: int) -> FieldModel:
         writer_cpp_name=item.writer_cpp_name,
         value_cpp_name=item.value_cpp_name,
         generic_cpp_name=item.generic_cpp_name,
+        emitted_names=item.emitted_names.copy(),
     )
 
 
@@ -4483,7 +4425,7 @@ def _emit_closed_enum_reject(
 
 
 def _field_number_name(item: FieldModel) -> str:
-    return _field_emitted(item, "number", item.cpp_name)
+    return _field_emitted(item, "number")
 
 
 def _field_number_u32(item: FieldModel, enum_type: str | None = "FieldNumber") -> str:
@@ -4494,157 +4436,128 @@ def _field_number_u32(item: FieldModel, enum_type: str | None = "FieldNumber") -
 
 def _member(item: FieldModel) -> str:
     if item.oneof_name is not None:
-        storage = _field_emitted(
-            item,
-            "oneof_container",
-            f"{cpp_derivable_identifier(item.oneof_name)}_",
-        )
+        storage = _field_emitted(item, "oneof_container")
         return f"{storage}.{_oneof_member_name(item)}"
-    return _field_emitted(item, "storage", f"{item.cpp_name}_")
+    return _field_emitted(item, "storage")
 
 
-def _message_emitted(message: MessageModel, key: str, fallback: str) -> str:
-    return message.emitted_names.get(key, fallback)
+def _message_emitted(message: MessageModel, key: str) -> str:
+    return message.emitted_names[key]
 
 
-def _field_emitted(item: FieldModel, key: str, fallback: str) -> str:
-    return item.emitted_names.get(key, fallback)
+def _field_emitted(item: FieldModel, key: str) -> str:
+    return item.emitted_names[key]
 
 
-def _field_implementation_name(item: FieldModel, key: str, template: str) -> str:
-    stem = cpp_emitted_derivable_identifier(item.cpp_name)
-    return _field_emitted(
-        item,
-        f"implementation:{key}",
-        template.format(name=stem),
-    )
+def _field_implementation_name(item: FieldModel, key: str) -> str:
+    return _field_emitted(item, f"implementation:{key}")
 
 
 def _presence_storage(item: FieldModel) -> str:
-    return _field_emitted(item, "presence_storage", f"has_{item.cpp_name}_")
+    return _field_emitted(item, "presence_storage")
 
 
 def _field_clear(item: FieldModel) -> str:
-    return _field_emitted(item, "clear", f"clear_{item.cpp_name}")
+    return _field_emitted(item, "clear")
 
 
 def _field_setter(item: FieldModel) -> str:
-    return _field_emitted(item, "setter", f"set_{item.cpp_name}")
+    return _field_emitted(item, "setter")
 
 
 def _field_has(item: FieldModel) -> str:
-    return _field_emitted(item, "has", f"has_{item.cpp_name}")
+    return _field_emitted(item, "has")
 
 
 def _field_mutable(item: FieldModel) -> str:
-    return _field_emitted(item, "mutable", f"mutable_{item.cpp_name}")
+    return _field_emitted(item, "mutable")
 
 
 def _field_ensure(item: FieldModel) -> str:
-    return _field_emitted(item, "ensure", f"ensure_{item.cpp_name}")
+    return _field_emitted(item, "ensure")
 
 
 def _field_raw_accessor(item: FieldModel) -> str:
-    return _field_emitted(item, "raw_accessor", f"{item.cpp_name}_raw")
+    return _field_emitted(item, "raw_accessor")
 
 
 def _field_raw_setter(item: FieldModel) -> str:
-    return _field_emitted(item, "raw_setter", f"set_{item.cpp_name}_raw")
+    return _field_emitted(item, "raw_setter")
 
 
 def _field_size(item: FieldModel) -> str:
-    return _field_emitted(item, "size", f"{item.cpp_name}_size")
+    return _field_emitted(item, "size")
 
 
 def _field_max_size(item: FieldModel) -> str:
-    return _field_emitted(item, "max_size", f"{item.cpp_name}_max_size")
+    return _field_emitted(item, "max_size")
 
 
 def _field_resize(item: FieldModel) -> str:
-    return _field_emitted(item, "resize", f"resize_{item.cpp_name}")
+    return _field_emitted(item, "resize")
 
 
 def _field_resize_overwrite(item: FieldModel) -> str:
-    return _field_emitted(
-        item,
-        "resize_overwrite",
-        f"resize_{item.cpp_name}_for_overwrite",
-    )
+    return _field_emitted(item, "resize_overwrite")
 
 
 def _message_context_storage(message: MessageModel) -> str:
-    return _message_emitted(message, "context_storage", "ctx_")
+    return _message_emitted(message, "context_storage")
 
 
 def _message_unknown_storage(message: MessageModel) -> str:
-    return _message_emitted(message, "unknown_storage", "unknown_fields_")
+    return _message_emitted(message, "unknown_storage")
 
 
 def _owner_context_storage(owner: MessageModel | FieldModel) -> str:
     if isinstance(owner, MessageModel):
         return _message_context_storage(owner)
-    return _field_emitted(owner, "context_storage", "ctx_")
+    return _field_emitted(owner, "context_storage")
 
 
 def _owner_unknown_storage(owner: MessageModel | FieldModel) -> str:
     if isinstance(owner, MessageModel):
         return _message_unknown_storage(owner)
-    return _field_emitted(owner, "unknown_storage", "unknown_fields_")
+    return _field_emitted(owner, "unknown_storage")
 
 
-def _oneof_emitted(oneof: OneofModel, key: str, fallback: str) -> str:
-    return oneof.emitted_names.get(key, fallback)
+def _oneof_emitted(oneof: OneofModel, key: str) -> str:
+    return oneof.emitted_names[key]
 
 
 def _oneof_case_type(oneof: OneofModel) -> str:
-    return _oneof_emitted(oneof, "case_type", f"{oneof.cpp_name}Case")
+    return _oneof_emitted(oneof, "case_type")
 
 
 def _oneof_case_member(oneof: OneofModel) -> str:
-    return _oneof_emitted(
-        oneof,
-        "case_storage",
-        f"{cpp_derivable_identifier(oneof.name)}_case_",
-    )
+    return _oneof_emitted(oneof, "case_storage")
 
 
 def _oneof_storage_type(oneof: OneofModel) -> str:
-    return _oneof_emitted(oneof, "storage_type", f"{oneof.cpp_name}Storage")
+    return _oneof_emitted(oneof, "storage_type")
 
 
 def _oneof_storage_member(oneof: OneofModel) -> str:
-    return _oneof_emitted(oneof, "storage", f"{cpp_derivable_identifier(oneof.name)}_")
+    return _oneof_emitted(oneof, "storage")
 
 
 def _oneof_member_name(item: FieldModel) -> str:
-    return _field_emitted(item, "oneof_storage", f"{item.cpp_name}_")
+    return _field_emitted(item, "oneof_storage")
 
 
 def _field_oneof_case_type(item: FieldModel) -> str:
     assert item.oneof_name is not None
-    return _field_emitted(
-        item,
-        "oneof_case_type",
-        f"{cpp_pascal_identifier(item.oneof_name)}Case",
-    )
+    return _field_emitted(item, "oneof_case_type")
 
 
 def _field_oneof_case_storage(item: FieldModel) -> str:
     assert item.oneof_name is not None
-    return _field_emitted(
-        item,
-        "oneof_case_storage",
-        f"{cpp_derivable_identifier(item.oneof_name)}_case_",
-    )
+    return _field_emitted(item, "oneof_case_storage")
 
 
 def _field_oneof_clear(item: FieldModel) -> str:
     assert item.oneof_name is not None
-    return _field_emitted(
-        item,
-        "oneof_clear",
-        f"clear_{cpp_derivable_identifier(item.oneof_name)}",
-    )
+    return _field_emitted(item, "oneof_clear")
 
 
 def _array_max_literal(item: FieldModel) -> str:

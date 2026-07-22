@@ -2387,6 +2387,7 @@ def _allocate_message_class_names(
     _allocate_message_private_names(scope, message)
     _allocate_message_implementation_names(allocator, message)
     _allocate_message_template_names(scope, message)
+    _validate_message_cpp_name_allocations(message)
 
 
 def _field_public_name_members(
@@ -2459,6 +2460,102 @@ def _field_public_name_members(
         if item.proto3_optional:
             function("has", "has_{name}", "fn/0/const")
     return tuple(members)
+
+
+def _validate_message_cpp_name_allocations(message: MessageModel) -> None:
+    message_names = {
+        "context_alias",
+        "context_storage",
+        "unknown_storage",
+        *(name for name, _ in _MESSAGE_PUBLIC_FUNCTIONS),
+        *(
+            name
+            for name in _MESSAGE_PRIVATE_FUNCTIONS
+            if name != "destroy_at_" or message.oneofs
+        ),
+    }
+    if message.fields:
+        message_names.add("field_number_type")
+    _require_emitted_names(message.full_name, message.emitted_names, message_names)
+
+    for enum in message.nested_enums:
+        _require_emitted_names(enum.full_name, enum.emitted_names, {"alias"})
+    for nested in message.nested_messages:
+        if nested.is_map_entry:
+            continue
+        nested_names = {"alias", "alias_config"}
+        if "compatibility_alias" in nested.emitted_names:
+            nested_names.add("compatibility_alias_config")
+        _require_emitted_names(nested.full_name, nested.emitted_names, nested_names)
+
+    private_names = {
+        "context_storage",
+        "unknown_storage",
+        *(
+            name
+            for name in _MESSAGE_PRIVATE_FUNCTIONS
+            if name != "destroy_at_" or message.oneofs
+        ),
+    }
+    implementation_names = {
+        f"implementation:{key}" for key, _ in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+    }
+    for item in message.fields:
+        field_names = {
+            "number",
+            *(key for key, _ in _field_public_name_members(item)),
+            *private_names,
+            *implementation_names,
+        }
+        if item.oneof_name is not None:
+            field_names.update(
+                {
+                    "oneof_case",
+                    "oneof_storage",
+                    "oneof_case_type",
+                    "oneof_case_storage",
+                    "oneof_container",
+                    "oneof_clear",
+                }
+            )
+        else:
+            field_names.add("storage")
+            if item.has_explicit_presence and item.kind != "message":
+                field_names.add("presence_storage")
+        _require_emitted_names(
+            f"{message.full_name}.{item.name}", item.emitted_names, field_names
+        )
+        for map_member in (item.map_key, item.map_value):
+            if map_member is not None:
+                _require_emitted_names(
+                    f"{message.full_name}.{item.name}.{map_member.name}",
+                    map_member.emitted_names,
+                    private_names | implementation_names | {"storage"},
+                )
+
+    for oneof in message.oneofs:
+        _require_emitted_names(
+            f"{message.full_name}.{oneof.name}",
+            oneof.emitted_names,
+            {
+                "case_type",
+                "case_accessor",
+                "clear",
+                "case_storage",
+                "storage_type",
+                "storage",
+            },
+        )
+
+
+def _require_emitted_names(
+    owner: str, emitted_names: dict[str, str], required: set[str]
+) -> None:
+    missing = sorted(required - emitted_names.keys())
+    if missing:
+        raise AssertionError(
+            f"{owner}: missing allocated C++ names: {', '.join(missing)}"
+        )
 
 
 def _allocate_message_oneof_names(
@@ -2662,9 +2759,10 @@ def _allocate_message_implementation_names(
     scope = allocator.scope(f"implementation:{message.full_name}")
     requests: list[EmittedNameRequest] = []
     for item in message.fields:
+        owner = f"implementation:{message.full_name}.{item.name}"
         requests.append(
             EmittedNameRequest(
-                owner=f"implementation:{message.full_name}.{item.name}",
+                owner=owner,
                 preferred=cpp_emitted_derivable_identifier(item.cpp_name),
                 members=tuple(
                     EmittedNameMember(
@@ -2676,13 +2774,53 @@ def _allocate_message_implementation_names(
         )
     allocated = scope.allocate(requests)
     for item in message.fields:
-        stem = allocated[f"implementation:{message.full_name}.{item.name}"]
+        owner = f"implementation:{message.full_name}.{item.name}"
+        stem = allocated[owner]
         item.emitted_names.update(
             {
                 f"implementation:{key}": template.format(name=stem)
                 for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
             }
         )
+        for map_member in (item.map_key, item.map_value):
+            if map_member is not None:
+                _allocate_map_member_implementation_names(
+                    allocator,
+                    message=message,
+                    map_field=item,
+                    map_member=map_member,
+                )
+
+
+def _allocate_map_member_implementation_names(
+    allocator: EmittedNameAllocator,
+    *,
+    message: MessageModel,
+    map_field: FieldModel,
+    map_member: FieldModel,
+) -> None:
+    owner = f"implementation:{message.full_name}.{map_field.name}.{map_member.name}"
+    scope = allocator.scope(owner)
+    members = tuple(
+        EmittedNameMember(template=template, kind=CppNameKind.IMPLEMENTATION)
+        for _, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+    ) + (EmittedNameMember(template="{name}_", kind=CppNameKind.IMPLEMENTATION),)
+    stem = scope.allocate(
+        (
+            EmittedNameRequest(
+                owner=owner,
+                preferred=cpp_emitted_derivable_identifier(map_member.cpp_name),
+                members=members,
+            ),
+        )
+    )[owner]
+    map_member.emitted_names.update(
+        {
+            f"implementation:{key}": template.format(name=stem)
+            for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+        }
+    )
+    map_member.emitted_names["storage"] = f"{stem}_"
 
 
 def _allocate_message_template_names(
@@ -2718,7 +2856,7 @@ def _allocate_nested_compatibility_aliases(
     for nested, alias in sorted(
         zip(nested_types, aliases, strict=True), key=lambda item: item[0].full_name
     ):
-        canonical = nested.emitted_names.get("alias", cpp_identifier(nested.name))
+        canonical = nested.emitted_names["alias"]
         if alias == canonical or counts[alias] != 1 or alias in scope.uses:
             continue
         scope.reserve(

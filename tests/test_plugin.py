@@ -42,6 +42,7 @@ from protocyte.model import (
     _coerce_literal,
     _is_packed,
     _parse_protobuf_floating_default,
+    _validate_message_cpp_name_allocations,
     build_model,
     cpp_derivable_identifier,
     cpp_identifier,
@@ -8368,6 +8369,32 @@ def test_model_stores_allocated_names_by_emitted_scope() -> None:
     }
     assert text.emitted_names["oneof_case"] == "text"
     assert text.emitted_names["oneof_storage"] == "text_"
+
+
+def test_model_rejects_missing_allocated_cpp_name() -> None:
+    model = build_model(_oneof_request())
+    message = model.messages["demo.Carrier"]
+    text = message.oneofs[0].fields[0]
+    del text.emitted_names["setter"]
+
+    with pytest.raises(
+        AssertionError,
+        match=r"demo\.Carrier\.text: missing allocated C\+\+ names: setter",
+    ):
+        _validate_message_cpp_name_allocations(message)
+
+
+def test_model_allocates_names_for_synthetic_map_fields() -> None:
+    model = build_model(_basic_request(parameter="format=off"))
+    message = model.messages["demo.Sample"]
+    items = next(item for item in message.fields if item.name == "items")
+    assert items.map_key is not None
+    assert items.map_value is not None
+
+    assert items.map_key.emitted_names["implementation:decoded"] == "decoded_key"
+    assert items.map_key.emitted_names["storage"] == "key_"
+    assert items.map_value.emitted_names["implementation:decoded"] == "decoded_value"
+    assert items.map_value.emitted_names["storage"] == "value_"
 
 
 def test_generated_internal_template_names_do_not_shadow_legal_message_names() -> None:
