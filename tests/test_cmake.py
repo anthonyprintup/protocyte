@@ -10875,11 +10875,72 @@ def test_second_build_tree_rejects_shared_out_dir_without_mutation(
     second_build = _build_out_dir_owner_project(second_build_dir)
 
     assert second_build.returncode != 0
-    output = " ".join((second_build.stdout + second_build.stderr).split())
+    output = " ".join((second_build.stdout + second_build.stderr).split()).replace(
+        "\\", "/"
+    )
     assert "ownership belongs to a different build tree" in output
+    assert marker.as_posix() in output
+    output_owner_records = sorted((tmp_path / "output-locks").glob("*.owner"))
+    assert output_owner_records
+    assert all(owner.as_posix() in output for owner in output_owner_records)
+    assert "remove exactly the owner records listed above" in output
+    assert "Do not delete the whole output-lock namespace or cache" in output
     assert "No generated output was changed" in output
     assert marker.read_bytes() == marker_before
     assert _out_dir_snapshot(output_directory) == outputs_before
+
+
+def test_fresh_tree_configure_lists_only_complete_transfer_owner_set(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    first_build_dir = tmp_path / "build-first"
+    second_build_dir = tmp_path / "build-second"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        runtime_prefix="protocyte/runtime",
+    )
+
+    first = _configure_out_dir_owner_project(source_dir, first_build_dir)
+    assert first.returncode == 0, first.stdout + first.stderr
+    first_build = _build_out_dir_owner_project(first_build_dir)
+    assert first_build.returncode == 0, first_build.stdout + first_build.stderr
+
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    output_owners = sorted(lock_root.glob("*.owner"))
+    assert len(output_owners) == 3
+    transfer_owners = sorted((root_owner, *output_owners))
+    unrelated_owner = lock_root / f"{'0' * 64}.owner"
+    assert unrelated_owner not in transfer_owners
+    unrelated_owner.write_text("unrelated cache entry\n", encoding="utf-8")
+
+    rejected = _configure_out_dir_owner_project(source_dir, second_build_dir)
+
+    assert rejected.returncode != 0
+    output = " ".join((rejected.stdout + rejected.stderr).split()).replace("\\", "/")
+    assert "The exact conflicting owner records are" in output
+    assert all(output.count(owner.as_posix()) == 1 for owner in transfer_owners)
+    assert unrelated_owner.as_posix() not in output
+    assert "remove exactly the owner records listed above" in output
+    assert "Do not delete the whole output-lock namespace or cache" in output
+
+    for owner in transfer_owners:
+        owner.unlink()
+    reconfigured = _configure_out_dir_owner_project(source_dir, second_build_dir)
+    assert reconfigured.returncode == 0, reconfigured.stdout + reconfigured.stderr
+    descriptor_set = source_dir / "descriptor_set.pb"
+    future_time = time.time() + 2.0
+    os.utime(descriptor_set, (future_time, future_time))
+    transferred = _build_out_dir_owner_project(second_build_dir)
+
+    assert transferred.returncode == 0, transferred.stdout + transferred.stderr
+    assert _committed_owner_build_hash(root_owner, root_owner) == (
+        _build_tree_owner_hash(second_build_dir)
+    )
+    assert unrelated_owner.read_text(encoding="utf-8") == "unrelated cache entry\n"
 
 
 def test_alternate_lock_root_after_cache_deletion_cannot_reclaim_out_dir_owner(
@@ -12992,6 +13053,77 @@ def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
     assert "Exit code: 23" in output
     assert "captured generation output" in output
     assert "captured generation error" in output
+
+
+def test_failed_generation_warns_when_unsafe_staging_cleanup_is_refused(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    retained_staging = tmp_path / "retained-staging"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    output_directory.mkdir()
+    sentinel = output_directory / "consumer-owned.txt"
+    sentinel.write_text("preserve\n", encoding="utf-8")
+
+    fake_protoc_script = source_dir / "fake-protoc.py"
+    original = fake_protoc_script.read_text(encoding="utf-8")
+    instrumented = original.replace(
+        "import sys\n",
+        "import os\nimport shutil\nimport subprocess\nimport sys\n",
+    )
+    instrumented += "\n" + "\n".join(
+        [
+            "staging_root = protoc_output_directory.parent",
+            f"retained_staging = Path({str(retained_staging)!r})",
+            "shutil.rmtree(staging_root)",
+            "retained_staging.mkdir()",
+            "(retained_staging / 'inert.txt').write_text('retained\\n', encoding='utf-8')",
+            "if os.name == 'nt':",
+            "    linked = subprocess.run(",
+            "        ['cmd.exe', '/d', '/c', 'mklink', '/J', str(staging_root), str(retained_staging)],",
+            "        check=False, capture_output=True, text=True,",
+            "    )",
+            "    if linked.returncode != 0:",
+            "        print('junction creation unavailable: ' + linked.stderr, file=sys.stderr)",
+            "        raise SystemExit(77)",
+            "else:",
+            "    staging_root.symlink_to(retained_staging, target_is_directory=True)",
+            "print('simulated protoc failure after staging replacement', file=sys.stderr)",
+            "raise SystemExit(23)",
+            "",
+        ]
+    )
+    fake_protoc_script.write_text(instrumented, encoding="utf-8")
+
+    failed = _run_direct_owner_generation(
+        source_dir,
+        build_dir,
+        output_directory,
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake",
+    )
+    output = failed.stdout + failed.stderr
+    staging_directory = (
+        output_directory.parent / ".protocyte-generation-staging-direct-owner"
+    )
+    if "junction creation unavailable" in output:
+        pytest.skip("Windows junction creation is unavailable")
+    try:
+        assert failed.returncode != 0
+        assert "simulated protoc failure after staging replacement" in output
+        assert "Protocyte left unsafe staging data" in output
+        assert "contains no declared generated output" in output
+        assert (staging_directory / "inert.txt").read_text(encoding="utf-8") == (
+            "retained\n"
+        )
+        assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+        root_owner, _ = _out_dir_owner_record_paths(output_directory)
+        assert not root_owner.exists()
+        assert not list((tmp_path / "output-locks").glob("*.owner"))
+    finally:
+        if staging_directory.exists() or staging_directory.is_symlink():
+            _remove_generated_output_directory_link(staging_directory)
 
 
 def test_generation_timeout_kills_wrapper_descendants_without_publishing_outputs(

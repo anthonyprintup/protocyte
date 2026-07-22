@@ -340,6 +340,7 @@ function(
     list(REMOVE_DUPLICATES output_keys)
     list(SORT output_keys)
     file(MAKE_DIRECTORY "${output_lock_directory}")
+    set(conflicting_owner_markers)
     foreach(output_key IN LISTS output_keys)
         file(
             LOCK "${output_lock_directory}/${output_key}.lock"
@@ -400,13 +401,7 @@ function(
             endif()
         endif()
         if(output_owner_status STREQUAL "different")
-            message(
-                FATAL_ERROR
-                "Protocyte cannot generate '${protocyte_claim_output_${output_key}}' because that output is owned "
-                "by a different or deleted CMake build tree. Protocyte will not reclaim it automatically. "
-                "Choose disjoint generated outputs or, after confirming no build uses the output, remove "
-                "'${output_owner_marker}' manually and reconfigure."
-            )
+            list(APPEND conflicting_owner_markers "${output_owner_marker}")
         elseif(output_owner_status STREQUAL "malformed")
             message(
                 FATAL_ERROR
@@ -465,13 +460,7 @@ function(
         endif()
     endif()
     if(root_owner_status STREQUAL "different")
-        message(
-            FATAL_ERROR
-            "Protocyte cannot use OUT_DIR '${output_directory}' because it is owned by a different or deleted "
-            "CMake build tree. Protocyte will not reclaim the directory automatically. Reuse the owning build "
-            "tree, choose a different OUT_DIR, or, after confirming that no build is using this OUT_DIR, "
-            "remove '${owner_marker}' manually and reconfigure."
-        )
+        list(APPEND conflicting_owner_markers "${owner_marker}")
     elseif(root_owner_status STREQUAL "malformed")
         message(
             FATAL_ERROR
@@ -499,6 +488,25 @@ function(
             "not reclaim the directory automatically. Reuse the owning build tree, choose a different OUT_DIR, "
             "restore the witness, or, after confirming no build uses the OUT_DIR, remove '${owner_marker}' "
             "manually and reconfigure."
+        )
+    endif()
+
+    if(conflicting_owner_markers)
+        list(REMOVE_DUPLICATES conflicting_owner_markers)
+        list(SORT conflicting_owner_markers)
+        string(
+            REPLACE ";" "\n  "
+            conflicting_owner_marker_locations
+            "${conflicting_owner_markers}"
+        )
+        message(
+            FATAL_ERROR
+            "Protocyte cannot use OUT_DIR '${output_directory}' because it is owned by a different or deleted "
+            "CMake build tree. The exact conflicting owner records are:\n  "
+            "${conflicting_owner_marker_locations}\n"
+            "To transfer this OUT_DIR and its declared generated outputs, first stop every build that could use "
+            "them and preserve any files you need. Then remove exactly the owner records listed above manually and "
+            "reconfigure. Do not delete the whole output-lock namespace or cache. No generated output was changed."
         )
     endif()
 

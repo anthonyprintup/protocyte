@@ -384,6 +384,41 @@ def test_readme_documents_managed_tool_path_contracts() -> None:
     assert "provide a wrapper from a\nsemicolon-free location" in readme
 
 
+def test_readme_documents_build_time_ownership_staging_and_safe_transfer() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    ownership = readme.split("- `OUT_DIR` is required", maxsplit=1)[1].split(
+        "- `PROTO_ROOT` selects source mode", maxsplit=1
+    )[0]
+
+    assert "Configuration performs a read-only conflict preflight" in ownership
+    assert "runs `protoc` into a private staging directory" in ownership
+    assert "before it publishes an ownership transaction" in ownership
+    assert "A `protoc` failure, timeout, or invalid staging\n  result" in ownership
+    assert "attempts to discard staging" in ownership
+    assert "publishes no new ownership claim" in ownership
+    assert "cleanup refuses an unsafe staging path" in ownership
+    assert "inert staging data outside `OUT_DIR` may remain" in ownership
+    assert "ownership claims and declared generated files stay unchanged" in ownership
+    assert "Configuration itself never publishes a claim" in ownership
+    assert "before Protocyte creates\n  `OUT_DIR` or runs `protoc`" not in ownership
+
+    transfer = readme.split("Deleting a build directory", maxsplit=1)[1].split(
+        "Both `RUNTIME_PREFIX`", maxsplit=1
+    )[0]
+    assert (
+        "Configure-time preflight reports the exact `OUT_DIR` owner-record\npath"
+        in transfer
+    )
+    assert "every conflicting generated-output owner-record path" in transfer
+    assert (
+        "Build-time revalidation also reports the exact conflicting record set"
+        in transfer
+    )
+    assert "Remove only the listed records" in transfer
+    assert "The build-time collision diagnostic prints" not in transfer
+    assert "Do not delete the whole output-lock namespace or cache" in transfer
+
+
 def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     cmake = (ROOT / "cmake" / "ProtocyteFunctions.cmake").read_text(encoding="utf-8")

@@ -606,6 +606,7 @@ function(
 endfunction()
 
 set(missing_output_owner_keys)
+set(different_output_owner_markers)
 foreach(output_lock_key IN LISTS output_lock_keys)
     set(output_owner_marker "${LOCK_DIRECTORY}/${output_lock_key}.owner")
     _protocyte_owner_record_status(
@@ -637,11 +638,7 @@ foreach(output_lock_key IN LISTS output_lock_keys)
     if(output_owner_status STREQUAL "missing")
         list(APPEND missing_output_owner_keys "${output_lock_key}")
     elseif(output_owner_status STREQUAL "different")
-        message(
-            FATAL_ERROR
-            "Generated-output ownership belongs to a different build tree for target "
-            "'${GENERATION_TARGET}'. No generated output was changed."
-        )
+        list(APPEND different_output_owner_markers "${output_owner_marker}")
     elseif(output_owner_status STREQUAL "unverifiable")
         _protocyte_owner_transaction_paths(
             unused_output_prepared_witness
@@ -696,10 +693,16 @@ endif()
 if(root_owner_status STREQUAL "missing")
     set(root_owner_is_missing TRUE)
 elseif(root_owner_status STREQUAL "different")
+    string(REPLACE ";" "\n  " different_output_owner_marker_locations "${different_output_owner_markers}")
     message(
         FATAL_ERROR
         "OUT_DIR ownership belongs to a different build tree for target "
-        "'${GENERATION_TARGET}'. No generated output was changed."
+        "'${GENERATION_TARGET}'. The OUT_DIR owner record is '${OUT_DIR_OWNER_MARKER}'. "
+        "The conflicting generated-output owner record(s) are:\n  "
+        "${different_output_owner_marker_locations}\n"
+        "To transfer this OUT_DIR, first stop every build that could use it and preserve any files "
+        "you need. Then remove exactly the owner records listed above and reconfigure. Do not delete "
+        "the whole output-lock namespace or cache. No generated output was changed."
     )
 elseif(root_owner_status STREQUAL "unverifiable")
     _protocyte_owner_transaction_paths(
@@ -721,6 +724,19 @@ elseif(NOT root_owner_status STREQUAL "current")
         FATAL_ERROR
         "OUT_DIR ownership is malformed or could not be recovered for target "
         "'${GENERATION_TARGET}'. No generated output was changed."
+    )
+endif()
+
+if(different_output_owner_markers)
+    string(REPLACE ";" "\n  " different_output_owner_marker_locations "${different_output_owner_markers}")
+    message(
+        FATAL_ERROR
+        "Generated-output ownership belongs to a different build tree for target "
+        "'${GENERATION_TARGET}'. The conflicting generated-output owner record(s) are:\n  "
+        "${different_output_owner_marker_locations}\n"
+        "To transfer these generated-output claim(s), first stop every build that declares them and "
+        "preserve any files you need. Then remove exactly the owner records listed above and reconfigure. "
+        "Do not delete the whole output-lock namespace or cache. No generated output was changed."
     )
 endif()
 
