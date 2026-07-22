@@ -785,6 +785,31 @@ class DescriptorModel:
         for name in self.file_to_generate:
             yield self.files[name]
 
+    def generated_header_files(self) -> Iterable[FileModel]:
+        """Yield generated files and every generated header they include.
+
+        A CodeGeneratorRequest can carry descriptors used only to decode custom
+        options.  Such descriptors do not contribute C++ declarations unless a
+        generated field type makes its header part of the include closure.
+        """
+        included: set[str] = set()
+        pending = list(self.file_to_generate)
+        while pending:
+            file_name = pending.pop()
+            if file_name in included:
+                continue
+            included.add(file_name)
+            file_model = self.files[file_name]
+            for message in _walk_messages(file_model.messages):
+                for field_model in message.fields:
+                    for dependency in _field_dependencies(field_model):
+                        if dependency != file_name:
+                            pending.append(dependency)
+
+        for file_name, file_model in self.files.items():
+            if file_name in included:
+                yield file_model
+
 
 @dataclass(slots=True)
 class _TypedValue:
@@ -1327,10 +1352,6 @@ def build_model(
         file_model.constants = _build_file_constants(file_model, custom_options)
         _validate_package_constant_collisions(file_model)
 
-    _allocate_namespace_cpp_names(
-        files, enums.values(), namespace_prefix=namespace_prefix
-    )
-
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
             _fill_message_details(
@@ -1342,6 +1363,24 @@ def build_model(
                 source_documentation[message.file_name],
             )
 
+    model = DescriptorModel(
+        files=files,
+        file_to_generate=file_to_generate,
+        messages=messages,
+        enums=enums,
+    )
+    generated_header_files = {
+        file_model.name: file_model for file_model in model.generated_header_files()
+    }
+    generated_header_enums = (
+        enum for enum in enums.values() if enum.file_name in generated_header_files
+    )
+    _allocate_namespace_cpp_names(
+        generated_header_files,
+        generated_header_enums,
+        namespace_prefix=namespace_prefix,
+    )
+
     _allocate_message_cpp_names(files)
 
     _validate_package_constant_namespace(files)
@@ -1349,12 +1388,7 @@ def build_model(
     _compute_file_dependencies(file_to_generate, files)
     _mark_recursive_boxes(messages)
 
-    return DescriptorModel(
-        files=files,
-        file_to_generate=file_to_generate,
-        messages=messages,
-        enums=enums,
-    )
+    return model
 
 
 def _index_request_files(

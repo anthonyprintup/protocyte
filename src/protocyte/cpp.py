@@ -1014,7 +1014,7 @@ class _NamespaceAllocationNode:
 
 def _allocate_cpp_namespaces(model: DescriptorModel, options: GeneratorOptions) -> None:
     root = _NamespaceAllocationNode(())
-    for file_model in model.files.values():
+    for file_model in model.generated_header_files():
         raw_parts: list[str] = []
         if options.namespace_prefix:
             raw_parts.extend(options.namespace_prefix.split("::"))
@@ -1214,51 +1214,8 @@ def _file_generated_cpp_symbols(file_model: FileModel) -> Iterator[tuple[str, st
 
 
 def _generated_cpp_scope_files(model: DescriptorModel) -> list[FileModel]:
-    """Return generated headers and every generated header they include.
-
-    A CodeGeneratorRequest carries descriptors for imports used only to decode
-    custom options.  Those descriptors do not become C++ declarations unless a
-    generated header actually includes them, so namespace validation must not
-    treat the whole request as one translation unit.
-    """
-
-    included: set[str] = set()
-    pending = list(model.file_to_generate)
-    while pending:
-        file_name = pending.pop()
-        if file_name in included:
-            continue
-        included.add(file_name)
-        file_model = model.files[file_name]
-        for dependency in _generated_header_dependencies(file_model):
-            if dependency != file_name:
-                pending.append(dependency)
-
-    return [
-        file_model
-        for file_name, file_model in model.files.items()
-        if file_name in included
-    ]
-
-
-def _generated_header_dependencies(file_model: FileModel) -> Iterator[str]:
-    for message in _walk_generated_messages(file_model.messages):
-        for field_model in message.fields:
-            yield from _field_generated_header_dependencies(field_model)
-
-
-def _field_generated_header_dependencies(field_model: FieldModel) -> Iterator[str]:
-    if (
-        field_model.message_type is not None
-        and not field_model.message_type.is_map_entry
-    ):
-        yield field_model.message_type.file_name
-    if field_model.enum_type is not None:
-        yield field_model.enum_type.file_name
-    if field_model.map_key is not None:
-        yield from _field_generated_header_dependencies(field_model.map_key)
-    if field_model.map_value is not None:
-        yield from _field_generated_header_dependencies(field_model.map_value)
+    """Return the complete C++ declaration scope for generated headers."""
+    return list(model.generated_header_files())
 
 
 def _validate_generated_reflection_symbols(

@@ -5953,6 +5953,89 @@ def test_namespace_scope_validation_ignores_unused_and_custom_option_imports() -
     assert '"custom_options.protocyte.hpp"' not in header
 
 
+def test_unused_import_cannot_change_generated_type_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("selected.proto")
+    selected = request.proto_file.add(
+        name="selected.proto", package="p", syntax="proto3"
+    )
+    selected.message_type.add(name="A_B")
+
+    baseline = generate_response(request)
+
+    selected.dependency.append("unused.proto")
+    unused = request.proto_file.add(
+        name="unused.proto", package="p", syntax="proto3"
+    )
+    outer = unused.message_type.add(name="A")
+    outer.nested_type.add(name="B")
+
+    with_unused_import = generate_response(request)
+
+    assert not baseline.error
+    assert not with_unused_import.error
+    assert [(file.name, file.content) for file in with_unused_import.file] == [
+        (file.name, file.content) for file in baseline.file
+    ]
+
+
+def test_referenced_import_still_participates_in_generated_type_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("selected.proto")
+    selected = request.proto_file.add(
+        name="selected.proto", package="p", syntax="proto3"
+    )
+    selected.dependency.append("dependency.proto")
+    selected.message_type.add(name="A_B")
+    consumer = selected.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".p.A.B",
+    )
+
+    dependency = request.proto_file.add(
+        name="dependency.proto", package="p", syntax="proto3"
+    )
+    outer = dependency.message_type.add(name="A")
+    outer.nested_type.add(name="B")
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert '#include "dependency.protocyte.hpp"' in header
+    assert "struct A_B_protocyte_" in header
+    assert "::p::A_B<Config>" in header
+
+
+def test_unused_import_cannot_change_generated_namespace_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("child.proto")
+    child = request.proto_file.add(
+        name="child.proto", package="a.B", syntax="proto3"
+    )
+    child.message_type.add(name="C")
+
+    baseline = generate_response(request)
+
+    child.dependency.append("unused.proto")
+    unused = request.proto_file.add(
+        name="unused.proto", package="a", syntax="proto3"
+    )
+    unused.message_type.add(name="B")
+
+    with_unused_import = generate_response(request)
+
+    assert not baseline.error
+    assert not with_unused_import.error
+    assert [(file.name, file.content) for file in with_unused_import.file] == [
+        (file.name, file.content) for file in baseline.file
+    ]
+
+
 def test_namespace_scope_validation_allows_distinct_symbols_and_packages() -> None:
     request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
     request.file_to_generate.extend(["symbol.proto", "child_package.proto"])
