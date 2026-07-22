@@ -205,8 +205,9 @@ smaller while preserving protobuf wire behavior.
 
 Protocyte is pre-1.0. Generated C++ APIs, runtime config requirements, plugin
 parameters, and CMake interfaces may change between releases without
-compatibility aliases or migration shims. Pin the intended Protocyte version
-and regenerate checked outputs when updating.
+general migration shims beyond the identifier compatibility aliases documented
+below. Pin the intended Protocyte version and regenerate checked outputs when
+updating.
 
 ## Usage
 
@@ -1163,22 +1164,49 @@ and must not be supplied through CMake `OPTIONS`.
 components are portable, non-reserved C++ identifiers. Empty components, C++
 keywords, leading underscores, extra colons, surrounding component whitespace,
 control characters, and non-ASCII identifier characters are rejected.
-The final generated namespace must not begin with `protocyte`, because
-`::protocyte` is owned by the runtime. For a schema package named `protocyte`,
-set an application-owned prefix such as `namespace_prefix=my_project::wire`.
+`std` and `protocyte` are valid prefix components. Likewise, schema packages
+such as `std`, `protocyte`, and `protocyte.user` are accepted. When generated
+code extends `::protocyte`, runtime references remain explicitly qualified and
+only a concrete collision with a runtime declaration is remapped. For example,
+a schema `message Span` in `package protocyte` receives a deterministic safe
+spelling because the runtime already declares `::protocyte::Span`; an unrelated
+`message Payload` keeps `::protocyte::Payload`.
 
-Generated schema identifiers are escaped when their normalized spelling starts
-with an underscore or contains a double underscore, including predefined macro
-names such as `__LINE__`. The stable escaped form is
-`protocyte_escaped_<lowercase-ascii-hex>`. Direct uses of C++ keywords retain
-the historical trailing underscore (`class` becomes `class_`). Fields and
-oneofs use a `protocyte`-suffixed stem only when that trailing underscore would
-otherwise combine with generated storage or API suffixes into a reserved
-double-underscore identifier. Consequently, only schemas whose old output
-contained implementation-reserved identifiers receive source-level API name
-changes; ordinary generated names and safely emitted keyword names are
-unchanged. Generation rejects collisions between an escaped name and an
-existing schema name with both owners in the diagnostic.
+### Generated C++ identifier mapping
+
+Protocyte allocates emitted names by C++ scope and symbol kind. The allocation
+is deterministic, independent of descriptor declaration order, and shared by
+the model and emitter. Message and enum type names preserve descriptor case, so
+`message foo` and `message Foo` become distinct C++ types `foo` and `Foo`.
+Flattened nested types keep the existing `Parent_Child` form; a real collision
+receives a stable suffix derived from its full protobuf name.
+
+C++ keywords retain the familiar trailing underscore for direct symbols
+(`message class` becomes `class_`). Field and oneof accessor stems keep the
+existing `protocyte` suffix when a trailing underscore would combine with their
+derived APIs or storage into a reserved identifier (`class` becomes
+`class_protocyte()` as a field). Leading underscores, double underscores,
+predefined-macro-style names such as `__LINE__`, raw names beginning with
+`protocyte_escaped_`, and raw names that could impersonate a keyword escape are
+encoded as `protocyte_escaped_<utf8-hex>`. Invalid custom-option constant
+spellings are encoded by their UTF-8 bytes as well: `cap-value` and `cap_value`
+can therefore coexist without a diagnostic.
+
+Generated helper collisions are resolved by symbol kind. A nullary field
+accessor can overload a helper with parameters, so fields named `serialize`,
+`parse`, and `copy_from` keep those spellings. A field that conflicts with a
+nullary helper is escaped as a group: `context` exposes `context_()`,
+`set_context_(...)`, and the matching derived APIs. Nested types and constants
+cannot overload functions and receive deterministic escaped spellings instead.
+Generator-owned storage, oneof state, temporaries, and template parameters move
+around schema-owned names and are never emitted as reserved C++ identifiers.
+
+For a lone lowercase type, Protocyte also emits the previous Pascalized name as
+a compatibility alias when that alias is unambiguous. For example,
+`message payload` defines canonical `payload` plus alias `Payload`; if an actual
+`message Payload` exists, the alias is omitted. Automatic remapping is quiet;
+diagnostics are reserved for descriptor-invalid duplicates or constructs that
+cannot be represented in C++.
 
 Formatting uses `format=auto` by default. If `clang-format` is on `PATH`,
 protocyte uses it for generated C++ output. If it is unavailable and no
@@ -1629,9 +1657,9 @@ reserved schema identifier. If a legal message or generated class-scope name
 would collide with `Config` (or with another internal template parameter such
 as `Reader`), Protocyte automatically chooses a collision-free internal name;
 the generated message type and its public protobuf-derived names stay unchanged.
-Generation reports schema fields or nested types that would collide with the
-enclosing C++ class's injected name, because C++ cannot represent those members
-without changing their protobuf-derived API name.
+Fields or nested aliases that collide with the enclosing C++ class's injected
+name receive a deterministic escaped spelling while the enclosing message name
+stays unchanged.
 
 The default config uses a caller-supplied allocator context. Construction is
 non-allocating, so `create(ctx)` returns the message directly. Primitive scalar
