@@ -50,12 +50,8 @@ def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     fallback = (
         REPO_ROOT / ".github" / "workflows" / "protobuf-fallback.yml"
     ).read_text(encoding="utf-8")
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
 
@@ -68,18 +64,19 @@ def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
 
 
 def test_ci_generates_with_the_public_protobuf_dependency_floor() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     floor = _job_named(ci, "protobuf-floor")
     floor_steps = _steps_by_name(floor)
     install = floor_steps["Install the public protobuf floor outside the lockfile"]
 
     assert "runs-on: ubuntu-latest" in floor
     assert "uv venv build/protobuf-floor-venv --python 3.12" in install
-    assert "uv pip install --python build/protobuf-floor-venv/bin/python --no-deps ." in install
+    assert (
+        "uv pip install --python build/protobuf-floor-venv/bin/python --no-deps ."
+        in install
+    )
     assert '"protobuf==6.30.0"' in install
-    assert "google.protobuf.__version__ == \"6.30.0\"" in install
+    assert 'google.protobuf.__version__ == "6.30.0"' in install
     upb = floor_steps["Generate with the protobuf floor (upb)"]
     assert "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: upb" in upb
     assert 'PROTOCYTE_EXPECTED_PROTOBUF_VERSION: "6.30.0"' in upb
@@ -91,9 +88,7 @@ def test_ci_generates_with_the_public_protobuf_dependency_floor() -> None:
 
 
 def test_ci_private_path_guard_scans_the_complete_checkout_object_database() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     guard = _job_named(ci, "private-path-guard")
 
     assert "fetch-depth: 0" in guard
@@ -115,9 +110,7 @@ def test_protobuf_fallback_gates_linux_and_windows_source_builds() -> None:
 
 
 def test_generated_library_relocation_is_required_on_linux_and_windows() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     test_node = (
         "tests/test_cmake.py::"
         "test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix"
@@ -140,9 +133,7 @@ def test_generated_library_relocation_is_required_on_linux_and_windows() -> None
 
 
 def test_ci_requires_real_protoc_integrations_without_tripling_the_matrix() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     plugin_job = ci.split("  plugin:\n", maxsplit=1)[1].split(
         "  quickstart-linux:\n", maxsplit=1
     )[0]
@@ -151,16 +142,13 @@ def test_ci_requires_real_protoc_integrations_without_tripling_the_matrix() -> N
     assert "if: matrix.python-version == '3.12'" in plugin_job
     assert "id: integration-protoc" in plugin_job
     assert (
-        "PROTOCYTE_CI_PROTOC_EXECUTABLE: "
-        "${{ steps.integration-protoc.outputs.protoc }}"
+        "PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.integration-protoc.outputs.protoc }}"
     ) in plugin_job
     assert "PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS:" in plugin_job
 
 
 def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     pinned_actions = (
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
         "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
@@ -206,9 +194,7 @@ def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
 
 
 def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     smoke_job = ci.split("  smoke-host:\n", maxsplit=1)[1].split(
         "  smoke-host-msvc:\n", maxsplit=1
     )[0]
@@ -223,16 +209,14 @@ def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
 
 
 def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
-    visual_studio_job = ci.split(
-        "  visual-studio-incremental:\n", maxsplit=1
-    )[1].split("  smoke-host-linux:\n", maxsplit=1)[0]
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    visual_studio_job = ci.split("  visual-studio-incremental:\n", maxsplit=1)[1].split(
+        "  smoke-host-linux:\n", maxsplit=1
+    )[0]
 
     assert "runs-on: windows-latest" in visual_studio_job
-    assert "PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS: \"1\"" in visual_studio_job
-    assert "PROTOCYTE_CI_REQUIRE_VISUAL_STUDIO_TEST: \"1\"" in visual_studio_job
+    assert 'PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS: "1"' in visual_studio_job
+    assert 'PROTOCYTE_CI_REQUIRE_VISUAL_STUDIO_TEST: "1"' in visual_studio_job
     assert "PROTOCYTE_CI_VISUAL_STUDIO_TEST_ROOT:" in visual_studio_job
     assert (
         "test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import"
@@ -241,9 +225,7 @@ def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
 
 
 def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
@@ -265,7 +247,10 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     assert cmake_build.count("cmp \\") == 1
     assert 'uv build "$source_dir" \\' in plugin_build
     assert '--out-dir "$output_dir"' in plugin_build
-    assert '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"' in plugin_build
+    assert (
+        '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"'
+        in plugin_build
+    )
     assert "--no-build-isolation" in plugin_build
     assert "--no-index" in plugin_build
     assert "--offline" in plugin_build
@@ -277,9 +262,7 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
 
 
 def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
@@ -299,7 +282,7 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
         artifact = f"${{{{ needs.validate-tag.outputs.{output} }}}}"
         assert artifact in build_steps[test_step_name]
         assert f"staging/release-handoff/{artifact}" in upload
-        assert f'$RUNNER_TEMP/release-handoff/{artifact}' in publication
+        assert f"$RUNNER_TEMP/release-handoff/{artifact}" in publication
         assert build.index(test_step_name) < build.index(
             "Stage exact publication handoff"
         )
@@ -314,9 +297,9 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     assert "python -m tarfile -e" in build
     assert "Install prebuilt protoc for release artifact tests" in build
     assert "id: release-protoc" in build
-    assert build.index("Install prebuilt protoc for release artifact tests") < build.index(
-        "Test exact wheel artifact"
-    )
+    assert build.index(
+        "Install prebuilt protoc for release artifact tests"
+    ) < build.index("Test exact wheel artifact")
     for artifact, test_root in (
         ("wheel_name", "wheel"),
         ("sdist_name", "sdist"),
@@ -334,10 +317,16 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
 
     cmake_prefix_test = build_steps["Test exact CMake prefix artifact"]
     assert "-S tests/find_package" in cmake_prefix_test
-    assert "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}" in cmake_prefix_test
+    assert (
+        "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}"
+        in cmake_prefix_test
+    )
     assert "--build staging/release-tests/cmake-build" in cmake_prefix_test
     assert '"$RELEASE_CTEST" \\' in cmake_prefix_test
-    assert "--test-dir staging/release-tests/cmake-build --output-on-failure" in cmake_prefix_test
+    assert (
+        "--test-dir staging/release-tests/cmake-build --output-on-failure"
+        in cmake_prefix_test
+    )
     assert "PROTOCYTE_PLUGIN_EXECUTABLE" not in cmake_prefix_test
 
     find_package_consumer = (
@@ -345,7 +334,10 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     ).read_text(encoding="utf-8")
     assert "protocyte_add_proto_library(" in find_package_consumer
     assert "PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE" in find_package_consumer
-    assert "add_test(NAME find_package_demo COMMAND find_package_demo)" in find_package_consumer
+    assert (
+        "add_test(NAME find_package_demo COMMAND find_package_demo)"
+        in find_package_consumer
+    )
 
     plugin_artifact_test = (
         REPO_ROOT / ".github" / "scripts" / "test_release_plugin_artifact.py"
@@ -358,9 +350,9 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
 
 
 def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(encoding="utf-8")
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
+        encoding="utf-8"
+    )
     build = _job_named(release, "build-release")
     steps = _steps_by_name(build)
     prepare_name = "Prepare hash-locked release smoke tools and environments"
@@ -382,8 +374,8 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert prepare.count("--only-binary=:all:") == 5
     assert prepare.count("pip --isolated download") == 2
     assert "--no-deps" in prepare
-    assert "--dest \"$wheelhouse\"" in prepare
-    assert "--dest \"$tool_wheelhouse\"" in prepare
+    assert '--dest "$wheelhouse"' in prepare
+    assert '--dest "$tool_wheelhouse"' in prepare
     assert '--find-links "$tool_wheelhouse"' in prepare
     assert '--requirement "$cmake_constraints"' in prepare
     assert "for artifact_kind in wheel sdist; do" in prepare
@@ -410,7 +402,10 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
 
     plugin_build = steps["Build and normalize plugin packages twice"]
     assert 'uv build "$source_dir" \\' in plugin_build
-    assert '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"' in plugin_build
+    assert (
+        '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"'
+        in plugin_build
+    )
     assert "--no-build-isolation" in plugin_build
     assert "--no-index" in plugin_build
     assert "--offline" in plugin_build
@@ -425,7 +420,10 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert "--no-build-isolation" in release_build
     assert "--no-index" in release_build
     assert "--offline" in release_build
-    assert '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"' in release_build
+    assert (
+        '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"'
+        in release_build
+    )
     artifact_build_boundary = build.index("Build and normalize plugin packages twice")
     post_bootstrap_build = build[artifact_build_boundary:]
     assert "uv pip install" not in post_bootstrap_build
@@ -433,9 +431,9 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert "uv run" not in post_bootstrap_build
     assert post_bootstrap_build.count('"$PWD/.venv/bin/python"') == 3
 
-    cmake_lock = (
-        REPO_ROOT / ".github" / "release-cmake-constraints.txt"
-    ).read_text(encoding="utf-8")
+    cmake_lock = (REPO_ROOT / ".github" / "release-cmake-constraints.txt").read_text(
+        encoding="utf-8"
+    )
     assert "cmake==4.3.2 \\" in cmake_lock
     cmake_hashes = [
         line.strip()
@@ -449,9 +447,9 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert build.index("Build and normalize CMake prefix twice") < build.index(
         "Freeze exact release artifacts for isolated smoke tests"
     )
-    assert build.index("Freeze exact release artifacts for isolated smoke tests") < build.index(
-        "Test exact wheel artifact"
-    )
+    assert build.index(
+        "Freeze exact release artifacts for isolated smoke tests"
+    ) < build.index("Test exact wheel artifact")
     assert freeze.count("cmp \\") == 3
     assert "sha256sum --check --strict SHA256SUMS" in freeze
     assert "chmod a-w" in freeze
@@ -466,7 +464,7 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert "uvx" not in cmake_test
 
     assert handoff.index("sha256sum --check --strict SHA256SUMS") < handoff.index(
-        "mkdir -p \"$handoff\""
+        'mkdir -p "$handoff"'
     )
     assert handoff.count("cmp \\") == 3
     assert 'artifacts="staging/release-tests/publication-artifacts"' in handoff
@@ -492,9 +490,7 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
 
 
 def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     validate_tag = _job_named(release, "validate-tag")
@@ -505,12 +501,11 @@ def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() 
     assert "permissions:\n  contents: none" in release
     assert "permissions:\n      contents: read" in build
     assert "permissions:\n      actions: read\n      contents: write" in publish
-    assert "persist-credentials: false" in _steps_by_name(validate_tag)[
-        "Check out repository"
-    ]
-    assert "persist-credentials: false" in _steps_by_name(build)[
-        "Check out repository"
-    ]
+    assert (
+        "persist-credentials: false"
+        in _steps_by_name(validate_tag)["Check out repository"]
+    )
+    assert "persist-credentials: false" in _steps_by_name(build)["Check out repository"]
     trusted_checkout = publish_steps["Check out trusted publication code"]
     assert "clean: true" in trusted_checkout
     assert "persist-credentials: false" in trusted_checkout
@@ -530,9 +525,7 @@ def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() 
 
 
 def test_release_policy_preflight_uses_trusted_code_and_gates_expensive_work() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     policy = _job_named(release, "release-policy")
@@ -564,18 +557,14 @@ def test_release_policy_preflight_uses_trusted_code_and_gates_expensive_work() -
 
 
 def test_release_publication_uses_isolated_least_privilege_credentials() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     policy = _job_named(release, "release-policy")
     build = _job_named(release, "build-release")
     publish = _job_named(release, "publish")
     publish_steps = _steps_by_name(publish)
-    publication = publish_steps[
-        "Create, verify, and publish immutable GitHub release"
-    ]
+    publication = publish_steps["Create, verify, and publish immutable GitHub release"]
 
     assert "environment: release" in policy
     assert "environment: release" in publish
@@ -611,9 +600,7 @@ def test_release_publication_uses_isolated_least_privilege_credentials() -> None
 
 
 def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
@@ -627,15 +614,11 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
 
     assert "artifact_id: ${{ steps.release-handoff.outputs.artifact-id }}" in build
     assert (
-        "artifact_digest: ${{ steps.release-handoff.outputs.artifact-digest }}"
-        in build
+        "artifact_digest: ${{ steps.release-handoff.outputs.artifact-digest }}" in build
     )
     assert "sha256sum \\" in stage
     assert "sha256sum --check --strict SHA256SUMS" in stage
-    assert (
-        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-        in upload
-    )
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in upload
     assert "name: protocyte-release-${{ github.run_id }}-${{ github.sha }}" in upload
     assert "compression-level: 0" in upload
     assert "retention-days: 1" in upload
@@ -670,9 +653,7 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
 
 
 def test_authenticated_release_http_requests_reject_redirects() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     policy = _job_named(release, "release-policy")
@@ -691,7 +672,7 @@ def test_authenticated_release_http_requests_reject_redirects() -> None:
     artifact_probe = artifact_probe.split(
         'redirect_url="$(python -I .github/scripts/parse_release_redirect.py', 1
     )[0]
-    assert artifact_probe.count('Authorization: Bearer $GH_TOKEN') == 1
+    assert artifact_probe.count("Authorization: Bearer $GH_TOKEN") == 1
     assert "_GitHubClient(contents_token, api_url)" in policy_script
     assert "_GitHubClient(policy_token, api_url)" in policy_script
     assert "Authenticated GitHub API requests must not follow redirects." in binding
@@ -708,9 +689,9 @@ def test_authenticated_release_http_requests_reject_redirects() -> None:
 
 
 def test_release_transaction_is_create_only_id_bound_and_immutable() -> None:
-    transaction = (
-        REPO_ROOT / ".github" / "scripts" / "publish_release.py"
-    ).read_text(encoding="utf-8")
+    transaction = (REPO_ROOT / ".github" / "scripts" / "publish_release.py").read_text(
+        encoding="utf-8"
+    )
 
     assert '"POST",\n            f"{self._repository_path}/releases"' in transaction
     assert 'payload={"draft": False}' in transaction
@@ -727,9 +708,7 @@ def test_release_transaction_is_create_only_id_bound_and_immutable() -> None:
 
 
 def test_release_transaction_order_is_build_test_then_serialized_publication() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     gate = _job_named(release, "release-gate")
@@ -808,14 +787,10 @@ def test_release_publication_is_the_repository_single_writer() -> None:
 
 
 def test_release_gate_tests_the_requested_tag_with_trusted_workflow_code() -> None:
-    release = (
-        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
-    ).read_text(
+    release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     fallback = (
         REPO_ROOT / ".github" / "workflows" / "protobuf-fallback.yml"
     ).read_text(encoding="utf-8")
@@ -825,9 +800,7 @@ def test_release_gate_tests_the_requested_tag_with_trusted_workflow_code() -> No
     assert "checkout_ref: ${{ needs.validate-tag.outputs.target }}" in gate
     assert "workflow_call:" in ci
     assert "checkout_ref:" in ci
-    checkout_action = (
-        "uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
-    )
+    checkout_action = "uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
     exact_ref = "\n          ref: ${{ inputs.checkout_ref || github.sha }}"
     assert ci.count(checkout_action) == ci.count(exact_ref)
     assert fallback.count(checkout_action) == fallback.count(exact_ref)
