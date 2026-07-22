@@ -2101,16 +2101,36 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
         )
     endif()
 
-    execute_process(
+    _protocyte_resolve_tool_timeout(descriptor_discovery_timeout)
+    _protocyte_execute_bounded(
+        discover_result
+        discovered
+        discover_error
+        discover_timed_out
         COMMAND
             ${descriptor_discovery_launcher}
             descriptor-set list "${descriptor_set}"
-        OUTPUT_VARIABLE discovered
-        ERROR_VARIABLE discover_error
-        RESULT_VARIABLE discover_result
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        TIMEOUT 30
+        TIMEOUT_SECONDS "${descriptor_discovery_timeout}"
     )
+    if(discover_timed_out)
+        string(STRIP "${discovered}" discovered_output)
+        string(STRIP "${discover_error}" discover_error)
+        if(discovered_output STREQUAL "")
+            set(discovered_output "<no standard output>")
+        endif()
+        if(discover_error STREQUAL "")
+            set(discover_error "<no standard error>")
+        endif()
+        message(
+            FATAL_ERROR
+            "Protocyte descriptor discovery through '${protocyte_plugin_executable}' timed out after "
+            "${descriptor_discovery_timeout} seconds. Set PROTOCYTE_TOOL_TIMEOUT_SECONDS to a larger "
+            "value or 0 to disable this timeout.\n\n"
+            "Command:\n  \"${protocyte_plugin_executable}\" descriptor-set list \"${descriptor_set}\"\n\n"
+            "Standard output:\n${discovered_output}\n\n"
+            "Standard error:\n${discover_error}"
+        )
+    endif()
     if(NOT "${discover_result}" STREQUAL "0")
         string(STRIP "${discovered}" discovered_output)
         string(STRIP "${discover_error}" discover_error)
