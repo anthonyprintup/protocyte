@@ -405,10 +405,18 @@ def test_readme_documents_build_time_ownership_staging_and_safe_transfer() -> No
     transfer = readme.split("Deleting a build directory", maxsplit=1)[1].split(
         "Both `RUNTIME_PREFIX`", maxsplit=1
     )[0]
-    assert "prints the exact `OUT_DIR`\nowner-record path" in transfer
+    assert (
+        "Configure-time preflight reports the exact `OUT_DIR` owner-record\npath"
+        in transfer
+    )
     assert "every conflicting generated-output owner-record path" in transfer
-    assert "remove only those listed records" in transfer
-    assert "Do not delete the whole output-lock\nnamespace or cache" in transfer
+    assert (
+        "Build-time revalidation also reports the exact conflicting record set"
+        in transfer
+    )
+    assert "Remove only the listed records" in transfer
+    assert "The build-time collision diagnostic prints" not in transfer
+    assert "Do not delete the whole output-lock namespace or cache" in transfer
 
 
 def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
