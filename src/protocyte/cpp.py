@@ -35,6 +35,7 @@ from protocyte.model import (
     cpp_derivable_identifier,
     cpp_pascal_identifier,
 )
+from protocyte.names import CppNameKind, EmittedNameScope
 from protocyte.parameters import GeneratorOptions
 from protocyte.paths import generated_file_base
 from protocyte.runtime import runtime_files
@@ -825,6 +826,10 @@ def _emit_field_api_annotations(
 class _CppNameScope:
     label: str
     names: dict[str, str] = field(default_factory=dict)
+    emitted: EmittedNameScope = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.emitted = EmittedNameScope(self.label)
 
     def owner(self, name: str) -> str | None:
         return self.names.get(name)
@@ -836,6 +841,14 @@ class _CppNameScope:
                 error
                 or f"{self.label}: generated C++ name {name!r} from {owner} collides with {existing}"
             )
+        try:
+            self.emitted.reserve(
+                name,
+                owner=owner,
+                kind=CppNameKind.IMPLEMENTATION,
+            )
+        except ValueError as exc:
+            raise ProtocyteError(error or str(exc)) from exc
         self.names[name] = owner
 
 

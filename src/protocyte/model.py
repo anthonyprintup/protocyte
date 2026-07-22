@@ -31,6 +31,12 @@ from protocyte.descriptor_set import (
 )
 from protocyte.errors import ProtocyteError
 from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_extension
+from protocyte.names import (
+    cpp_derivable_identifier,
+    cpp_identifier,
+    cpp_pascal_identifier,
+    normalized_cpp_identifier,
+)
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
 
@@ -86,111 +92,9 @@ _MAP_KEY_TYPES = frozenset(
 )
 
 
-CPP_KEYWORDS = {
-    "alignas",
-    "alignof",
-    "and",
-    "and_eq",
-    "asm",
-    "atomic_cancel",
-    "atomic_commit",
-    "atomic_noexcept",
-    "auto",
-    "bitand",
-    "bitor",
-    "bool",
-    "break",
-    "case",
-    "catch",
-    "char",
-    "char8_t",
-    "char16_t",
-    "char32_t",
-    "class",
-    "compl",
-    "concept",
-    "const",
-    "consteval",
-    "constexpr",
-    "constinit",
-    "const_cast",
-    "continue",
-    "co_await",
-    "co_return",
-    "co_yield",
-    "decltype",
-    "default",
-    "delete",
-    "do",
-    "double",
-    "dynamic_cast",
-    "else",
-    "enum",
-    "explicit",
-    "export",
-    "extern",
-    "false",
-    "float",
-    "for",
-    "friend",
-    "goto",
-    "if",
-    "inline",
-    "int",
-    "long",
-    "mutable",
-    "namespace",
-    "new",
-    "noexcept",
-    "not",
-    "not_eq",
-    "nullptr",
-    "operator",
-    "or",
-    "or_eq",
-    "private",
-    "protected",
-    "public",
-    "reflexpr",
-    "register",
-    "reinterpret_cast",
-    "requires",
-    "return",
-    "short",
-    "signed",
-    "sizeof",
-    "static",
-    "static_assert",
-    "static_cast",
-    "struct",
-    "switch",
-    "synchronized",
-    "template",
-    "this",
-    "thread_local",
-    "throw",
-    "true",
-    "try",
-    "typedef",
-    "typeid",
-    "typename",
-    "union",
-    "unsigned",
-    "using",
-    "virtual",
-    "void",
-    "volatile",
-    "wchar_t",
-    "while",
-    "xor",
-    "xor_eq",
-}
-
 _CPP_NAME_COLLISION_CONTEXT = (
     "after C++ identifier normalization and reserved-name escaping"
 )
-_CPP_RESERVED_IDENTIFIER_PREFIX = "protocyte_escaped_"
-_CPP_DERIVABLE_IDENTIFIER_SUFFIX = "protocyte"
 
 
 SCALAR_CPP_TYPES = {
@@ -1656,49 +1560,6 @@ def _find_extension(pool: descriptor_pool.DescriptorPool, name: str) -> object |
         return None
 
 
-def _normalized_cpp_identifier(name: str) -> str:
-    if not name:
-        return "_"
-    out = []
-    for index, char in enumerate(name):
-        valid = char == "_" or char.isalpha() or (char.isdigit() and index > 0)
-        out.append(char if valid and ord(char) < 128 else "_")
-    return "".join(out)
-
-
-def cpp_identifier(name: str) -> str:
-    """Return a portable, non-reserved C++ identifier for an emitted name.
-
-    Protobuf identifiers may use spellings that C++ reserves to the
-    implementation, including leading underscores and double underscores, or
-    that collide with predefined macros such as ``__LINE__``.  Generated
-    storage names are formed from a separate derivable stem so direct uses can
-    retain the historical trailing-underscore spelling for C++ keywords.
-    """
-    ident = _normalized_cpp_identifier(name)
-    if ident in CPP_KEYWORDS:
-        return f"{ident}_"
-    if ident.startswith("_") or "__" in ident:
-        encoded = ident.encode("ascii").hex()
-        return f"{_CPP_RESERVED_IDENTIFIER_PREFIX}{encoded}"
-    return ident
-
-
-def cpp_derivable_identifier(name: str) -> str:
-    """Return an identifier safe for generated suffixes and storage names."""
-    ident = cpp_identifier(name)
-    if ident.endswith("_"):
-        return f"{ident}{_CPP_DERIVABLE_IDENTIFIER_SUFFIX}"
-    return ident
-
-
-def cpp_pascal_identifier(name: str) -> str:
-    ident = cpp_identifier(name)
-    if not ident:
-        return "_"
-    return ident[0].upper() + ident[1:]
-
-
 def _join_cpp_type_identifiers(parent: str, child: str) -> str:
     separator = "" if parent.endswith("_") else "_"
     return f"{parent}{separator}{child}"
@@ -2395,7 +2256,7 @@ def _build_raw_constants(
     for raw in raw_constants:
         if not raw.name:
             raise ProtocyteError(f"{owner}: constant name must not be empty")
-        if _normalized_cpp_identifier(raw.name) == "_" and raw.name != "_":
+        if normalized_cpp_identifier(raw.name) == "_" and raw.name != "_":
             raise ProtocyteError(
                 f"{owner}.{raw.name}: constant name is not a valid C++ identifier"
             )
