@@ -1018,6 +1018,7 @@ def _validate_generated_cpp_names(
     model: DescriptorModel, options: GeneratorOptions
 ) -> None:
     _validate_generated_reflection_symbols(model, options)
+    _validate_generated_namespace_scopes(model, options)
     for file_model in model.generated_files():
         namespace_parts = _namespace_parts(file_model, options)
         if namespace_parts[:1] == ["protocyte"]:
@@ -1033,6 +1034,168 @@ def _validate_generated_cpp_names(
                 _build_message_cpp_name_registry(message, options)
 
 
+@dataclass(slots=True)
+class _GeneratedCppSymbol:
+    kind: str
+    owner: str
+
+
+@dataclass(slots=True)
+class _GeneratedCppNamespace:
+    parts: tuple[str, ...]
+    owner: str | None = None
+    children: dict[str, "_GeneratedCppNamespace"] = field(default_factory=dict)
+    symbols: dict[str, _GeneratedCppSymbol] = field(default_factory=dict)
+
+    def namespace(self, parts: list[str], *, owner: str) -> "_GeneratedCppNamespace":
+        current = self
+        for part in parts:
+            symbol = current.symbols.get(part)
+            if symbol is not None:
+                full_name = (*current.parts, part)
+                raise ProtocyteError(
+                    f"{owner}: generated namespace {_cpp_namespace_name(full_name)} "
+                    f"collides with generated {symbol.kind} {symbol.owner!r} "
+                    f"in namespace {_cpp_namespace_name(current.parts)}"
+                )
+            child = current.children.get(part)
+            if child is None:
+                child = _GeneratedCppNamespace((*current.parts, part), owner)
+                current.children[part] = child
+            current = child
+        return current
+
+    def symbol(self, name: str, *, kind: str, owner: str) -> None:
+        namespace = self.children.get(name)
+        if namespace is not None:
+            raise ProtocyteError(
+                f"{owner}: generated {kind} {name!r} collides with generated "
+                f"namespace {_cpp_namespace_name(namespace.parts)} introduced by "
+                f"{namespace.owner}"
+            )
+        existing = self.symbols.get(name)
+        if existing is not None:
+            raise ProtocyteError(
+                f"{owner}: generated {kind} {name!r} collides with generated "
+                f"{existing.kind} {existing.owner!r} in namespace "
+                f"{_cpp_namespace_name(self.parts)}"
+            )
+        self.symbols[name] = _GeneratedCppSymbol(kind, owner)
+
+
+def _cpp_namespace_name(parts: tuple[str, ...]) -> str:
+    return "::" + "::".join(parts) if parts else "::"
+
+
+def _generated_namespace_owner(file_model: FileModel) -> str:
+    return f"descriptor file {file_model.name!r} package {file_model.package!r}"
+
+
+def _validate_generated_namespace_scopes(
+    model: DescriptorModel, options: GeneratorOptions
+) -> None:
+    namespaces = _GeneratedCppNamespace(())
+    scope_files = _generated_cpp_scope_files(model)
+
+    for file_model in scope_files:
+        namespaces.namespace(
+            _namespace_parts(file_model, options),
+            owner=_generated_namespace_owner(file_model),
+        )
+
+    for file_model in scope_files:
+        namespace = namespaces.namespace(
+            _namespace_parts(file_model, options),
+            owner=_generated_namespace_owner(file_model),
+        )
+        for full_name, cpp_name in _file_generated_cpp_symbols(file_model):
+            namespace.symbol(cpp_name, kind="type", owner=full_name)
+        for constant in file_model.constants:
+            namespace.symbol(
+                constant.cpp_name,
+                kind="package constant",
+                owner=constant.full_name,
+            )
+
+    for file_model in scope_files:
+        messages = [
+            message
+            for message in _walk_generated_messages(file_model.messages)
+            if not message.is_map_entry
+        ]
+        if not messages:
+            continue
+        reflection_namespace = namespaces.namespace(
+            [*_namespace_parts(file_model, options), "protocyte_reflection"],
+            owner=f"descriptor file {file_model.name!r} generated reflection API",
+        )
+        for message in messages:
+            reflection_namespace.symbol(
+                _reflection_name(message),
+                kind="reflection symbol",
+                owner=message.full_name,
+            )
+
+
+def _file_generated_cpp_symbols(file_model: FileModel) -> Iterator[tuple[str, str]]:
+    for enum in file_model.enums:
+        yield enum.full_name, enum.cpp_name
+    for message in _walk_generated_messages(file_model.messages):
+        if message.is_map_entry:
+            continue
+        yield message.full_name, message.cpp_name
+        for enum in message.nested_enums:
+            yield enum.full_name, enum.cpp_name
+
+
+def _generated_cpp_scope_files(model: DescriptorModel) -> list[FileModel]:
+    """Return generated headers and every generated header they include.
+
+    A CodeGeneratorRequest carries descriptors for imports used only to decode
+    custom options.  Those descriptors do not become C++ declarations unless a
+    generated header actually includes them, so namespace validation must not
+    treat the whole request as one translation unit.
+    """
+
+    included: set[str] = set()
+    pending = list(model.file_to_generate)
+    while pending:
+        file_name = pending.pop()
+        if file_name in included:
+            continue
+        included.add(file_name)
+        file_model = model.files[file_name]
+        for dependency in _generated_header_dependencies(file_model):
+            if dependency != file_name:
+                pending.append(dependency)
+
+    return [
+        file_model
+        for file_name, file_model in model.files.items()
+        if file_name in included
+    ]
+
+
+def _generated_header_dependencies(file_model: FileModel) -> Iterator[str]:
+    for message in _walk_generated_messages(file_model.messages):
+        for field_model in message.fields:
+            yield from _field_generated_header_dependencies(field_model)
+
+
+def _field_generated_header_dependencies(field_model: FieldModel) -> Iterator[str]:
+    if (
+        field_model.message_type is not None
+        and not field_model.message_type.is_map_entry
+    ):
+        yield field_model.message_type.file_name
+    if field_model.enum_type is not None:
+        yield field_model.enum_type.file_name
+    if field_model.map_key is not None:
+        yield from _field_generated_header_dependencies(field_model.map_key)
+    if field_model.map_value is not None:
+        yield from _field_generated_header_dependencies(field_model.map_value)
+
+
 def _validate_generated_reflection_symbols(
     model: DescriptorModel, options: GeneratorOptions
 ) -> None:
@@ -1040,7 +1203,8 @@ def _validate_generated_reflection_symbols(
     type_owners: dict[tuple[str, ...], dict[str, str]] = {}
     constant_owners: dict[tuple[str, ...], dict[str, str]] = {}
 
-    for file_model in model.files.values():
+    scope_files = _generated_cpp_scope_files(model)
+    for file_model in scope_files:
         namespace = tuple(_namespace_parts(file_model, options))
         owners = type_owners.setdefault(namespace, {})
         constants = constant_owners.setdefault(namespace, {})
@@ -1052,7 +1216,7 @@ def _validate_generated_reflection_symbols(
             if not message.is_map_entry:
                 owners[message.cpp_name] = message.full_name
 
-    for file_model in model.generated_files():
+    for file_model in scope_files:
         messages = [
             message
             for message in _walk_generated_messages(file_model.messages)

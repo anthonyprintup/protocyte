@@ -5089,6 +5089,184 @@ def test_rejects_cpp_namespace_type_collisions() -> None:
 
 
 @pytest.mark.parametrize(
+    ("symbol_kind", "expected_kind"),
+    [
+        ("message", "type"),
+        ("enum", "type"),
+        ("package_constant", "package constant"),
+    ],
+)
+def test_rejects_generated_symbol_collisions_with_child_package_namespace(
+    symbol_kind: str, expected_kind: str
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("symbol.proto")
+
+    symbol_file = request.proto_file.add(
+        name="symbol.proto", package="foo", syntax="proto3"
+    )
+    symbol_file.dependency.append("child_package.proto")
+    if symbol_kind == "message":
+        symbol_file.message_type.add(name="Bar")
+    elif symbol_kind == "enum":
+        enum = symbol_file.enum_type.add(name="Bar")
+        enum.value.add(name="BAR_UNSPECIFIED", number=0)
+    else:
+        symbol_file.dependency.append("protocyte/options.proto")
+        symbol_file.options.ParseFromString(
+            _package_constant_options_bytes([("Bar", "i32", 1)])
+        )
+        request.proto_file.append(_options_file())
+
+    consumer = symbol_file.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".foo.Bar.Payload",
+    )
+
+    child_file = request.proto_file.add(
+        name="child_package.proto", package="foo.Bar", syntax="proto3"
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert f"foo.Bar: generated {expected_kind} 'Bar'" in response.error
+    assert "collides with generated namespace ::foo::Bar" in response.error
+    assert "child_package.proto" in response.error
+
+
+def test_namespace_scope_validation_uses_normalized_names_with_prefixes() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(
+        parameter="format=off,namespace_prefix=project::wire"
+    )
+    request.file_to_generate.append("symbol.proto")
+
+    symbol_file = request.proto_file.add(
+        name="symbol.proto", package="foo", syntax="proto3"
+    )
+    symbol_file.message_type.add(name="class")
+    symbol_file.dependency.append("child_package.proto")
+    consumer = symbol_file.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".foo.Class_.Payload",
+    )
+    child_file = request.proto_file.add(
+        name="child_package.proto", package="foo.Class_", syntax="proto3"
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "foo.class" in response.error
+    assert "generated type 'Class_'" in response.error
+    assert "::project::wire::foo::Class_" in response.error
+
+
+def test_rejects_reflection_symbol_collision_with_child_package_namespace() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("reflection.proto")
+
+    reflection_file = request.proto_file.add(
+        name="reflection.proto", package="foo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Bar")
+    reflection_file.dependency.append("child_package.proto")
+    consumer = reflection_file.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".foo.protocyte_reflection.Bar_fields.Payload",
+    )
+    child_file = request.proto_file.add(
+        name="child_package.proto",
+        package="foo.protocyte_reflection.Bar_fields",
+        syntax="proto3",
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "foo.Bar: generated reflection symbol 'Bar_fields'" in response.error
+    assert (
+        "collides with generated namespace "
+        "::foo::protocyte_reflection::Bar_fields" in response.error
+    )
+
+
+def test_namespace_scope_validation_ignores_unused_and_custom_option_imports() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("target.proto")
+    target = request.proto_file.add(
+        name="target.proto", package="foo", syntax="proto3"
+    )
+    target.dependency.extend(["unused.proto", "custom_options.proto"])
+    target.message_type.add(name="Bar")
+
+    request.proto_file.add(
+        name="unused.proto", package="foo.Bar", syntax="proto3"
+    )
+    custom_options = request.proto_file.add(
+        name="custom_options.proto", package="foo.Bar", syntax="proto2"
+    )
+    custom_options.dependency.append("google/protobuf/descriptor.proto")
+    custom_options.extension.add(
+        name="note",
+        number=50000,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_STRING,
+        extendee=".google.protobuf.FileOptions",
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {file.name for file in response.file} == {
+        "target.protocyte.cpp",
+        "target.protocyte.hpp",
+    }
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert '"unused.protocyte.hpp"' not in header
+    assert '"custom_options.protocyte.hpp"' not in header
+
+
+def test_namespace_scope_validation_allows_distinct_symbols_and_packages() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(["symbol.proto", "child_package.proto"])
+
+    symbol_file = request.proto_file.add(
+        name="symbol.proto", package="foo", syntax="proto3"
+    )
+    symbol_file.message_type.add(name="Bar")
+    child_file = request.proto_file.add(
+        name="child_package.proto", package="foo.Baz", syntax="proto3"
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {file.name for file in response.file} == {
+        "child_package.protocyte.cpp",
+        "child_package.protocyte.hpp",
+        "symbol.protocyte.cpp",
+        "symbol.protocyte.hpp",
+    }
+
+
+@pytest.mark.parametrize(
     ("name", "expected"),
     [
         ("class", "class_"),
