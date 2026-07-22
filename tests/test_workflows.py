@@ -243,10 +243,14 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     assert "for build in first second; do" in build
     assert 'git archive HEAD | tar -x -C "$source_dir"' in build
     assert build.count("reproducible_archive.py") == 3
-    assert build.count("cmp \\") == 3
-    assert 'uv build "$source_dir" --out-dir "$output_dir"' in build
-    assert '-S "$source_dir" -B "${build_root}/cmake-build"' in build
-    assert 'uvx --from "cmake==$CMAKE_VERSION" cmake \\' in build
+    build_steps = _steps_by_name(build)
+    plugin_build = build_steps["Build and normalize plugin packages twice"]
+    cmake_build = build_steps["Build and normalize CMake prefix twice"]
+    assert plugin_build.count("cmp \\") == 2
+    assert cmake_build.count("cmp \\") == 1
+    assert 'uv build "$source_dir" --out-dir "$output_dir"' in plugin_build
+    assert '-S "$source_dir" -B "${build_root}/cmake-build"' in cmake_build
+    assert '"$RELEASE_CMAKE" \\' in cmake_build
 
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires = ["setuptools==80.9.0"]' in pyproject
@@ -299,15 +303,21 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     ):
         test_step = build_steps[test_step_names[artifact]]
         assert "test_release_plugin_artifact.py" in test_step
-        assert f'"dist/${{{{ needs.validate-tag.outputs.{artifact} }}}}"' in test_step
+        assert (
+            f'"staging/release-tests/publication-artifacts/'
+            f'${{{{ needs.validate-tag.outputs.{artifact} }}}}"'
+        ) in test_step
         assert f"staging/release-tests/{test_root}" in test_step
         assert "steps.release-protoc.outputs.protoc" in test_step
+        assert '"$RELEASE_CMAKE"' in test_step
+        assert '"$RELEASE_CTEST"' in test_step
 
     cmake_prefix_test = build_steps["Test exact CMake prefix artifact"]
     assert "-S tests/find_package" in cmake_prefix_test
     assert "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}" in cmake_prefix_test
     assert "--build staging/release-tests/cmake-build" in cmake_prefix_test
-    assert "ctest --test-dir staging/release-tests/cmake-build --output-on-failure" in cmake_prefix_test
+    assert '"$RELEASE_CTEST" \\' in cmake_prefix_test
+    assert "--test-dir staging/release-tests/cmake-build --output-on-failure" in cmake_prefix_test
     assert "PROTOCYTE_PLUGIN_EXECUTABLE" not in cmake_prefix_test
 
     find_package_consumer = (
@@ -320,12 +330,85 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     plugin_artifact_test = (
         REPO_ROOT / ".github" / "scripts" / "test_release_plugin_artifact.py"
     ).read_text(encoding="utf-8")
-    assert '"examples/quickstart"' in plugin_artifact_test
-    assert '"--build", str(quickstart_build)' in plugin_artifact_test
-    assert '"ctest", "--test-dir", str(quickstart_build), "--output-on-failure"' in plugin_artifact_test
-    assert '"uv", "pip", "install", "--python", str(python), str(artifact)' in plugin_artifact_test
+    assert 'repository_root / "examples" / "quickstart"' in plugin_artifact_test
+    assert '"--build",\n        str(quickstart_build)' in plugin_artifact_test
+    assert 'str(ctest),\n        "--test-dir"' in plugin_artifact_test
     assert '"-DPROTOC_EXECUTABLE={protoc}"' in plugin_artifact_test
     assert '"-DPROTOCYTE_PLUGIN_EXECUTABLE={plugin}"' in plugin_artifact_test
+
+
+def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> None:
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(encoding="utf-8")
+    build = _job_named(release, "build-release")
+    steps = _steps_by_name(build)
+    prepare_name = "Prepare hash-locked release smoke tools and environments"
+    prepare = steps[prepare_name]
+    freeze = steps["Freeze exact release artifacts for isolated smoke tests"]
+    wheel_test = steps["Test exact wheel artifact"]
+    source_test = steps["Test exact source artifact"]
+    cmake_test = steps["Test exact CMake prefix artifact"]
+    handoff = steps["Stage exact publication handoff"]
+
+    assert build.index(prepare_name) < build.index(
+        "Build and normalize plugin packages twice"
+    )
+    assert '"cmake==$CMAKE_VERSION"' in prepare
+    assert "protocyte-cmake-constraints.txt" in prepare
+    assert "--require-hashes" in prepare
+    assert "--only-binary=:all:" in prepare
+    assert "pip --isolated download" in prepare
+    assert "--no-deps" in prepare
+    assert "--dest \"$wheelhouse\"" in prepare
+    assert "for artifact_kind in wheel sdist; do" in prepare
+    assert "--no-index" in prepare
+    assert '--find-links "$wheelhouse"' in prepare
+    assert "chmod -R a-w \"$wheelhouse\"" in prepare
+
+    assert build.index("Build and normalize CMake prefix twice") < build.index(
+        "Freeze exact release artifacts for isolated smoke tests"
+    )
+    assert build.index("Freeze exact release artifacts for isolated smoke tests") < build.index(
+        "Test exact wheel artifact"
+    )
+    assert freeze.count("cmp \\") == 3
+    assert "sha256sum --check --strict SHA256SUMS" in freeze
+    assert "chmod a-w" in freeze
+    assert "publication-artifacts" in wheel_test
+    assert "publication-artifacts" in source_test
+
+    assert "PIP_CONFIG_FILE: /dev/null" in cmake_test
+    assert "PIP_FIND_LINKS:" in cmake_test
+    assert 'PIP_NO_INDEX: "1"' in cmake_test
+    assert 'UV_NO_INDEX: "1"' in cmake_test
+    assert 'UV_OFFLINE: "1"' in cmake_test
+    assert "uvx" not in cmake_test
+
+    assert handoff.index("sha256sum --check --strict SHA256SUMS") < handoff.index(
+        "mkdir -p \"$handoff\""
+    )
+    assert handoff.count("cmp \\") == 3
+    assert 'artifacts="staging/release-tests/publication-artifacts"' in handoff
+    assert '"$artifacts/${{ needs.validate-tag.outputs.wheel_name }}"' in handoff
+    assert '"$artifacts/${{ needs.validate-tag.outputs.sdist_name }}"' in handoff
+    assert '"$artifacts/${{ needs.validate-tag.outputs.archive_name }}"' in handoff
+
+    helper = (
+        REPO_ROOT / ".github" / "scripts" / "test_release_plugin_artifact.py"
+    ).read_text(encoding="utf-8")
+    assert 'if not key.startswith(("PIP_", "UV_"))' in helper
+    assert '"PIP_CONFIG_FILE": os.devnull' in helper
+    assert '"PIP_NO_INDEX": "1"' in helper
+    assert '"UV_NO_INDEX": "1"' in helper
+    assert '"UV_OFFLINE": "1"' in helper
+    assert '"--isolated"' in helper
+    assert '"--no-cache-dir"' in helper
+    assert '"--no-index"' in helper
+    assert '"--no-deps"' in helper
+    assert '"--no-build-isolation"' in helper
+    assert '"uv", "pip"' not in helper
+    assert "cwd=test_root" in helper
 
 
 def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() -> None:

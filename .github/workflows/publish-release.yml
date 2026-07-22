@@ -207,6 +207,53 @@ jobs:
         id: release-protoc
         run: python .github/scripts/install_protoc.py --dest "$RUNNER_TEMP/protoc"
 
+      - name: Prepare hash-locked release smoke tools and environments
+        shell: bash
+        run: |
+          tools_root="$PWD/staging/release-tools"
+          smoke_root="$PWD/staging/release-tests"
+          constraints="$PWD/protocyte-cmake-constraints.txt"
+          wheelhouse="$smoke_root/wheelhouse"
+
+          uv venv "$tools_root/cmake-venv" --python 3.12
+          uv pip install \
+            --python "$tools_root/cmake-venv/bin/python" \
+            --no-deps \
+            "cmake==$CMAKE_VERSION"
+          echo "RELEASE_CMAKE=$tools_root/cmake-venv/bin/cmake" >> "$GITHUB_ENV"
+          echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
+
+          bootstrap_python="$tools_root/bootstrap-venv/bin/python"
+          uv venv "$tools_root/bootstrap-venv" --python 3.12
+          uv pip install \
+            --python "$bootstrap_python" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints" \
+            --dest "$wheelhouse"
+
+          for artifact_kind in wheel sdist; do
+            artifact_python="$smoke_root/$artifact_kind/venv/bin/python"
+            uv venv "$smoke_root/$artifact_kind/venv" --python 3.12
+            uv pip install \
+              --python "$artifact_python" \
+              --no-index \
+              --find-links "$wheelhouse" \
+              --no-deps \
+              --only-binary=:all: \
+              --require-hashes \
+              --requirement "$constraints"
+          done
+          chmod -R a-w "$wheelhouse"
+
       - name: Build and normalize plugin packages twice
         shell: bash
         run: |
@@ -248,9 +295,9 @@ jobs:
             build_root="staging/reproducibility/${build}"
             source_dir="${build_root}/source"
             prefix_dir="${build_root}/${prefix_name}"
-            uvx --from "cmake==$CMAKE_VERSION" cmake \
+            "$RELEASE_CMAKE" \
               -S "$source_dir" -B "${build_root}/cmake-build"
-            uvx --from "cmake==$CMAKE_VERSION" cmake \
+            "$RELEASE_CMAKE" \
               --install "${build_root}/cmake-build" --prefix "$prefix_dir"
             uv run python .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" pack-tar-gz "$prefix_dir" \
@@ -264,12 +311,55 @@ jobs:
             "staging/reproducibility/first/${{ needs.validate-tag.outputs.archive_name }}" \
             "staging/${{ needs.validate-tag.outputs.archive_name }}"
 
+      - name: Freeze exact release artifacts for isolated smoke tests
+        shell: bash
+        run: |
+          artifacts="staging/release-tests/publication-artifacts"
+          mkdir -p "$artifacts"
+          cp \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.wheel_name }}"
+          cp \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.sdist_name }}"
+          cp \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.archive_name }}"
+          cmp \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.wheel_name }}"
+          cmp \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.sdist_name }}"
+          cmp \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.archive_name }}"
+          (
+            cd "$artifacts"
+            sha256sum \
+              "${{ needs.validate-tag.outputs.wheel_name }}" \
+              "${{ needs.validate-tag.outputs.sdist_name }}" \
+              "${{ needs.validate-tag.outputs.archive_name }}" \
+              > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+            chmod a-w \
+              "${{ needs.validate-tag.outputs.wheel_name }}" \
+              "${{ needs.validate-tag.outputs.sdist_name }}" \
+              "${{ needs.validate-tag.outputs.archive_name }}" \
+              SHA256SUMS
+          )
+          chmod a-w \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}"
+
       - name: Test exact wheel artifact
         shell: bash
         run: |
           python .github/scripts/test_release_plugin_artifact.py \
-            --artifact "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
-            --cmake-version "$CMAKE_VERSION" \
+            --artifact "staging/release-tests/publication-artifacts/${{ needs.validate-tag.outputs.wheel_name }}" \
+            --cmake "$RELEASE_CMAKE" \
+            --ctest "$RELEASE_CTEST" \
             --protoc "${{ steps.release-protoc.outputs.protoc }}" \
             --test-root staging/release-tests/wheel
 
@@ -277,40 +367,62 @@ jobs:
         shell: bash
         run: |
           python .github/scripts/test_release_plugin_artifact.py \
-            --artifact "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
-            --cmake-version "$CMAKE_VERSION" \
+            --artifact "staging/release-tests/publication-artifacts/${{ needs.validate-tag.outputs.sdist_name }}" \
+            --cmake "$RELEASE_CMAKE" \
+            --ctest "$RELEASE_CTEST" \
             --protoc "${{ steps.release-protoc.outputs.protoc }}" \
             --test-root staging/release-tests/sdist
 
       - name: Test exact CMake prefix artifact
         shell: bash
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_FIND_LINKS: ${{ github.workspace }}/staging/release-tests/wheelhouse
+          PIP_NO_INDEX: "1"
+          UV_NO_INDEX: "1"
+          UV_OFFLINE: "1"
         run: |
           mkdir -p staging/release-tests/cmake-prefix
           python -m tarfile -e \
-            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            "staging/release-tests/publication-artifacts/${{ needs.validate-tag.outputs.archive_name }}" \
             staging/release-tests/cmake-prefix
-          uvx --from "cmake==$CMAKE_VERSION" cmake \
+          "$RELEASE_CMAKE" \
             -S tests/find_package \
             -B staging/release-tests/cmake-build \
             -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix" \
             "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}"
-          uvx --from "cmake==$CMAKE_VERSION" cmake \
+          "$RELEASE_CMAKE" \
             --build staging/release-tests/cmake-build
-          ctest --test-dir staging/release-tests/cmake-build --output-on-failure
+          "$RELEASE_CTEST" \
+            --test-dir staging/release-tests/cmake-build --output-on-failure
 
       - name: Stage exact publication handoff
         shell: bash
         run: |
           handoff="staging/release-handoff"
+          artifacts="staging/release-tests/publication-artifacts"
+          (
+            cd "$artifacts"
+            sha256sum --check --strict SHA256SUMS
+          )
+          cmp \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.wheel_name }}"
+          cmp \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.sdist_name }}"
+          cmp \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.archive_name }}"
           mkdir -p "$handoff"
           cp \
-            "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.wheel_name }}" \
             "$handoff/${{ needs.validate-tag.outputs.wheel_name }}"
           cp \
-            "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.sdist_name }}" \
             "$handoff/${{ needs.validate-tag.outputs.sdist_name }}"
           cp \
-            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            "$artifacts/${{ needs.validate-tag.outputs.archive_name }}" \
             "$handoff/${{ needs.validate-tag.outputs.archive_name }}"
 
           (

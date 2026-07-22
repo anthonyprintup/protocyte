@@ -3,49 +3,125 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 from pathlib import Path
 
 
-def _run(*command: str) -> None:
-    subprocess.run(command, check=True)
+def _run(*command: str, cwd: Path, env: dict[str, str]) -> None:
+    subprocess.run(command, check=True, cwd=cwd, env=env)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--artifact", type=Path, required=True)
-    parser.add_argument("--cmake-version", required=True)
+    parser.add_argument("--cmake", type=Path, required=True)
+    parser.add_argument("--ctest", type=Path, required=True)
     parser.add_argument("--protoc", type=Path, required=True)
     parser.add_argument("--test-root", type=Path, required=True)
     arguments = parser.parse_args()
 
+    repository_root = Path.cwd().resolve()
     artifact = arguments.artifact.resolve()
+    cmake = arguments.cmake.resolve()
+    ctest = arguments.ctest.resolve()
     protoc = arguments.protoc.resolve()
     test_root = arguments.test_root.resolve()
     python = test_root / "venv" / "bin" / "python"
     plugin = test_root / "venv" / "bin" / "protoc-gen-protocyte"
     quickstart_build = test_root / "quickstart-build"
-    cmake = ("uvx", "--from", f"cmake=={arguments.cmake_version}", "cmake")
+    quickstart_source = repository_root / "examples" / "quickstart"
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("PIP_", "UV_"))
+        and key not in {"PYTHONHOME", "PYTHONPATH"}
+    }
+    environment.update(
+        {
+            "PIP_CONFIG_FILE": os.devnull,
+            "PIP_NO_INDEX": "1",
+            "UV_NO_INDEX": "1",
+            "UV_OFFLINE": "1",
+        }
+    )
 
-    _run("uv", "venv", str(test_root / "venv"), "--python", "3.12")
-    # Installing a direct source-distribution path makes uv build its wheel before
-    # the same quickstart exercise used for a published wheel.
-    _run("uv", "pip", "install", "--python", str(python), str(artifact))
-    _run(str(python), "-m", "protocyte", "--help")
-    _run(str(python), "-m", "protocyte", "--version")
-    _run(str(plugin), "--help")
-    _run(str(plugin), "--version")
+    # The workflow creates and hash-locks this environment before release
+    # artifacts exist. A direct sdist is therefore built only by those locked
+    # tools, while a wheel is installed without dependency resolution.
     _run(
-        *cmake,
+        str(python),
+        "-I",
+        "-m",
+        "pip",
+        "--isolated",
+        "install",
+        "--disable-pip-version-check",
+        "--no-input",
+        "--no-cache-dir",
+        "--no-index",
+        "--no-deps",
+        "--no-build-isolation",
+        str(artifact),
+        cwd=test_root,
+        env=environment,
+    )
+    _run(
+        str(python),
+        "-I",
+        "-m",
+        "pip",
+        "--isolated",
+        "check",
+        cwd=test_root,
+        env=environment,
+    )
+    _run(
+        str(python),
+        "-I",
+        "-m",
+        "protocyte",
+        "--help",
+        cwd=test_root,
+        env=environment,
+    )
+    _run(
+        str(python),
+        "-I",
+        "-m",
+        "protocyte",
+        "--version",
+        cwd=test_root,
+        env=environment,
+    )
+    _run(str(plugin), "--help", cwd=test_root, env=environment)
+    _run(str(plugin), "--version", cwd=test_root, env=environment)
+    _run(
+        str(cmake),
         "-S",
-        "examples/quickstart",
+        str(quickstart_source),
         "-B",
         str(quickstart_build),
         f"-DPROTOC_EXECUTABLE={protoc}",
         f"-DPROTOCYTE_PLUGIN_EXECUTABLE={plugin}",
+        cwd=test_root,
+        env=environment,
     )
-    _run(*cmake, "--build", str(quickstart_build))
-    _run("ctest", "--test-dir", str(quickstart_build), "--output-on-failure")
+    _run(
+        str(cmake),
+        "--build",
+        str(quickstart_build),
+        cwd=test_root,
+        env=environment,
+    )
+    _run(
+        str(ctest),
+        "--test-dir",
+        str(quickstart_build),
+        "--output-on-failure",
+        cwd=test_root,
+        env=environment,
+    )
 
 
 if __name__ == "__main__":
