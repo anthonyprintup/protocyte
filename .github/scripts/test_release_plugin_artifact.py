@@ -8,12 +8,22 @@ import subprocess
 from pathlib import Path
 
 
-_GITHUB_COMMAND_ENVIRONMENT = {
-    "GITHUB_ENV",
-    "GITHUB_OUTPUT",
-    "GITHUB_PATH",
-    "GITHUB_STATE",
-    "GITHUB_STEP_SUMMARY",
+_ALLOWED_ENVIRONMENT = {
+    "COMSPEC",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+    "USER",
+    "USERPROFILE",
+    "WINDIR",
 }
 
 
@@ -43,9 +53,7 @@ def main() -> None:
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("PIP_", "UV_"))
-        and key not in {"PYTHONHOME", "PYTHONPATH"}
-        and key not in _GITHUB_COMMAND_ENVIRONMENT
+        if key.upper() in _ALLOWED_ENVIRONMENT or key.upper().startswith("LC_")
     }
     environment.update(
         {

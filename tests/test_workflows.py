@@ -507,41 +507,29 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
         (python_smoke, python_steps, "Test exact Python artifact"),
         (cmake_smoke, cmake_steps, "Test exact CMake prefix artifact"),
     ):
-        binding = smoke_steps["Verify immutable release handoff binding"]
-        download = smoke_steps["Download exact immutable release handoff"]
-        integrity = smoke_steps["Verify exact release handoff contents"]
-        assert "ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}" in binding
+        download = smoke_steps["Download and verify exact immutable release handoff"]
+        assert "ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}" in download
         assert (
             "EXPECTED_ARTIFACT_DIGEST: "
-            "${{ needs.build-release.outputs.artifact_digest }}" in binding
+            "${{ needs.build-release.outputs.artifact_digest }}" in download
         )
-        assert ".workflow_run.id" in binding
-        assert ".workflow_run.head_sha" in binding
-        assert ".digest" in binding
-        assert '"$GITHUB_RUN_ID"' in binding
-        assert '"$GITHUB_SHA"' in binding
-        assert (
-            "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
-            in download
-        )
-        assert (
-            "artifact-ids: ${{ needs.build-release.outputs.artifact_id }}" in download
-        )
-        assert "run-id: ${{ github.run_id }}" in download
-        assert "path: ${{ runner.temp }}/release-handoff" in download
-        assert "merge-multiple: true" in download
-        assert "unexpected file set" in integrity
-        assert 'cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"' in integrity
-        assert "sha256sum --check --strict SHA256SUMS" in integrity
-        assert smoke.index("Verify immutable release handoff binding") < smoke.index(
-            "Download exact immutable release handoff"
-        )
-        assert smoke.index("Download exact immutable release handoff") < smoke.index(
-            "Verify exact release handoff contents"
-        )
-        assert smoke.index("Verify exact release handoff contents") < smoke.index(
-            test_name
-        )
+        assert "python -I .github/scripts/download_release_handoff.py" in download
+        for argument in (
+            "--artifact-id",
+            "--artifact-name",
+            "--artifact-digest",
+            "--run-id",
+            "--head-sha",
+            "--destination",
+            "--wheel",
+            "--sdist",
+            "--archive",
+        ):
+            assert argument in download
+        assert "actions/download-artifact@" not in smoke
+        assert smoke.index(
+            "Download and verify exact immutable release handoff"
+        ) < smoke.index(test_name)
 
     cmake_test = cmake_steps["Test exact CMake prefix artifact"]
     assert "PIP_CONFIG_FILE: /dev/null" in cmake_test
@@ -550,24 +538,22 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert 'UV_NO_INDEX: "1"' in cmake_test
     assert 'UV_OFFLINE: "1"' in cmake_test
     assert "uvx" not in cmake_test
-    for command_environment in (
-        "GITHUB_ENV",
-        "GITHUB_OUTPUT",
-        "GITHUB_PATH",
-        "GITHUB_STATE",
-        "GITHUB_STEP_SUMMARY",
-    ):
-        assert command_environment in cmake_test
+    assert "clean_environment=(" in cmake_test
+    assert "env -i" in cmake_test
+    assert cmake_test.count('"${clean_environment[@]}"') == 3
+    assert "GITHUB_" not in cmake_test
+    assert "ACTIONS_" not in cmake_test
 
     helper = (
         REPO_ROOT / ".github" / "scripts" / "test_release_plugin_artifact.py"
     ).read_text(encoding="utf-8")
-    assert 'if not key.startswith(("PIP_", "UV_"))' in helper
+    assert "_ALLOWED_ENVIRONMENT" in helper
+    assert "if key.upper() in _ALLOWED_ENVIRONMENT" in helper
     assert '"PIP_CONFIG_FILE": os.devnull' in helper
     assert '"PIP_NO_INDEX": "1"' in helper
     assert '"UV_NO_INDEX": "1"' in helper
     assert '"UV_OFFLINE": "1"' in helper
-    assert "_GITHUB_COMMAND_ENVIRONMENT" in helper
+    assert "os.environ.items()" in helper
     assert '"--isolated"' in helper
     assert '"--no-cache-dir"' in helper
     assert '"--no-index"' in helper
@@ -677,11 +663,11 @@ def test_release_publication_uses_isolated_least_privilege_credentials() -> None
     assert "--trusted-branch main" in publication
     assert '--trusted-target "$GITHUB_SHA"' in publication
     assert publish.index("Check out trusted publication code") < publish.index(
-        "Bind and download immutable release handoff"
+        "Download and verify exact immutable release handoff"
     )
-    assert publish.index("Extract and verify exact release handoff") < publish.index(
-        "Create, verify, and publish immutable GitHub release"
-    )
+    assert publish.index(
+        "Download and verify exact immutable release handoff"
+    ) < publish.index("Create, verify, and publish immutable GitHub release")
     assert "softprops/action-gh-release@" not in publish
     assert "gh release upload" not in publish
     assert "gh release edit" not in publish
@@ -697,8 +683,10 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
     publish_steps = _steps_by_name(publish)
     stage = build_steps["Stage exact publication handoff"]
     upload = build_steps["Upload exact publication handoff"]
-    binding = publish_steps["Bind and download immutable release handoff"]
-    extraction = publish_steps["Extract and verify exact release handoff"]
+    binding = publish_steps["Download and verify exact immutable release handoff"]
+    downloader = (
+        REPO_ROOT / ".github" / "scripts" / "download_release_handoff.py"
+    ).read_text(encoding="utf-8")
 
     assert "artifact_id: ${{ steps.release-handoff.outputs.artifact-id }}" in build
     assert (
@@ -719,26 +707,28 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
         "${{ needs.build-release.outputs.artifact_digest }}" in binding
     )
     for fragment in (
-        '"$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"',
-        ".workflow_run.id",
-        ".workflow_run.head_sha",
-        ".digest",
-        '"$GITHUB_RUN_ID"',
-        '"$GITHUB_SHA"',
-        "/actions/artifacts/$ARTIFACT_ID/zip",
-        'sha256sum "$archive"',
-        '"$downloaded_digest" != "$expected_digest"',
+        "--api-url",
+        "--repository",
+        "--artifact-id",
+        "--artifact-name",
+        "--artifact-digest",
+        "--run-id",
+        "--head-sha",
+        "--destination",
     ):
         assert fragment in binding
 
-    assert "$RUNNER_TEMP/release-handoff" in extraction
-    assert "python -I -" in extraction
-    assert "release handoff contains an unexpected file set" in extraction
-    assert "stat.S_ISLNK(mode)" in extraction
-    assert 'cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"' in extraction
-    assert "sha256sum --check --strict SHA256SUMS" in extraction
+    assert 'workflow_run.get("id")' in downloader
+    assert 'workflow_run.get("head_sha")' in downloader
+    assert 'metadata.get("digest")' in downloader
+    assert downloader.index("actual_digest = _sha256(archive)") < downloader.index(
+        "with zipfile.ZipFile(archive) as handoff"
+    )
+    assert "release handoff contains an unexpected file set" in downloader
+    assert "stat.S_ISLNK(mode)" in downloader
+    assert "checksum manifest does not match its files" in downloader
     assert ".github/scripts" not in upload
-    assert "$GITHUB_WORKSPACE" not in extraction
+    assert "$GITHUB_WORKSPACE" not in binding
 
 
 def test_authenticated_release_http_requests_reject_redirects() -> None:
@@ -747,34 +737,28 @@ def test_authenticated_release_http_requests_reject_redirects() -> None:
     )
     policy = _job_named(release, "release-policy")
     publish = _job_named(release, "publish")
-    binding = _steps_by_name(publish)["Bind and download immutable release handoff"]
+    binding = _steps_by_name(publish)[
+        "Download and verify exact immutable release handoff"
+    ]
 
     assert "gh api" not in policy
     assert "gh api" not in binding
-    assert "curl --disable --silent --show-error --max-redirs 0" in binding
-    assert '-H "Authorization: Bearer $GH_TOKEN"' in binding
     policy_script = (
         REPO_ROOT / ".github" / "scripts" / "check_release_policy.py"
     ).read_text(encoding="utf-8")
+    downloader = (
+        REPO_ROOT / ".github" / "scripts" / "download_release_handoff.py"
+    ).read_text(encoding="utf-8")
     assert "_GitHubClient" in policy_script
-    artifact_probe = binding.split('archive="$RUNNER_TEMP/release-handoff.zip"', 1)[1]
-    artifact_probe = artifact_probe.split(
-        'redirect_url="$(python -I .github/scripts/parse_release_redirect.py', 1
-    )[0]
-    assert artifact_probe.count("Authorization: Bearer $GH_TOKEN") == 1
     assert "_GitHubClient(contents_token, api_url)" in policy_script
     assert "_GitHubClient(policy_token, api_url)" in policy_script
-    assert "Authenticated GitHub API requests must not follow redirects." in binding
-    assert '--dump-header "$redirect_headers"' in binding
-    assert '[[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]' in binding
-    assert "python -I .github/scripts/parse_release_redirect.py" in binding
-    assert "--location --max-redirs 3" in binding
-    assert "--proto '=https' --proto-redir '=https'" in binding
-    signed_download = binding.split(
-        'redirect_url="$(python -I .github/scripts/parse_release_redirect.py',
-        maxsplit=1,
-    )[1]
-    assert "Authorization: Bearer $GH_TOKEN" not in signed_download
+    assert "class _NoRedirect" in downloader
+    assert "authenticated GitHub metadata requests must not redirect" in downloader
+    assert '"Authorization": f"Bearer {token}"' in downloader
+    signed_download = downloader.split("def _download_signed", maxsplit=1)[1]
+    signed_download = signed_download.split("def validate_metadata", maxsplit=1)[0]
+    assert "Authorization" not in signed_download
+    assert "_safe_https_url" in signed_download
 
 
 def test_release_transaction_is_create_only_id_bound_and_immutable() -> None:
@@ -812,14 +796,14 @@ def test_release_transaction_order_is_build_test_then_serialized_publication() -
     assert build.rstrip().endswith("retention-days: 1")
     assert "- build-release" in python_smoke
     assert "- build-release" in cmake_smoke
-    assert "Verify exact release handoff contents" in python_smoke
-    assert "Verify exact release handoff contents" in cmake_smoke
+    assert "Download and verify exact immutable release handoff" in python_smoke
+    assert "Download and verify exact immutable release handoff" in cmake_smoke
     assert "- build-release" in publish
     assert "- smoke-python-artifacts" in publish
     assert "- smoke-cmake-prefix" in publish
-    assert publish.index("Bind and download immutable release handoff") < publish.index(
-        publication_name
-    )
+    assert publish.index(
+        "Download and verify exact immutable release handoff"
+    ) < publish.index(publication_name)
     assert publish.rstrip().endswith(
         '"$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.archive_name }}"'
     )

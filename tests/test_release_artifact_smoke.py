@@ -48,11 +48,19 @@ def test_release_plugin_artifact_runner_enforces_offline_install(
     monkeypatch.setenv("UV_INDEX", "https://mutable.invalid/simple")
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "injected-python"))
     for name in (
+        "ACTIONS_CACHE_URL",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "ACTIONS_RESULTS_URL",
+        "ACTIONS_RUNTIME_TOKEN",
+        "ACTIONS_RUNTIME_URL",
+        "GH_TOKEN",
         "GITHUB_ENV",
         "GITHUB_OUTPUT",
         "GITHUB_PATH",
         "GITHUB_STATE",
         "GITHUB_STEP_SUMMARY",
+        "GITHUB_TOKEN",
     ):
         monkeypatch.setenv(name, str(tmp_path / name))
     monkeypatch.setattr(test_release_plugin_artifact.subprocess, "run", record_run)
@@ -102,11 +110,19 @@ def test_release_plugin_artifact_runner_enforces_offline_install(
     assert "UV_INDEX" not in install_env
     assert "PYTHONPATH" not in install_env
     for name in (
+        "ACTIONS_CACHE_URL",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_URL",
+        "ACTIONS_RESULTS_URL",
+        "ACTIONS_RUNTIME_TOKEN",
+        "ACTIONS_RUNTIME_URL",
+        "GH_TOKEN",
         "GITHUB_ENV",
         "GITHUB_OUTPUT",
         "GITHUB_PATH",
         "GITHUB_STATE",
         "GITHUB_STEP_SUMMARY",
+        "GITHUB_TOKEN",
     ):
         assert name not in install_env
     assert all(call_cwd == test_root for _, call_cwd, _ in calls)

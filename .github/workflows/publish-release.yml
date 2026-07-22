@@ -459,93 +459,29 @@ jobs:
             --requirement "$constraints"
           chmod -R a-w "$wheelhouse" "$tool_wheelhouse"
 
-      - name: Verify immutable release handoff binding
+      - name: Download and verify exact immutable release handoff
         shell: bash
         env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
           EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
           EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "The build job returned an invalid artifact ID." >&2
-            exit 1
-          fi
-
-          expected_digest="${EXPECTED_ARTIFACT_DIGEST#sha256:}"
-          if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "The build job returned an invalid artifact digest." >&2
-            exit 1
-          fi
-
-          metadata="$RUNNER_TEMP/release-artifact.json"
-          status="$(
-            curl --disable --silent --show-error --max-redirs 0 \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --output "$metadata" \
-              --write-out "%{http_code}" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
-          )"
-          if [[ "$status" =~ ^30[0-9]$ ]]; then
-            echo "Authenticated GitHub API requests must not follow redirects." >&2
-            exit 1
-          fi
-          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "GitHub artifact metadata request failed with HTTP status $status." >&2
-            exit 1
-          fi
-
-          actual_id="$(jq -r '.id // empty' "$metadata")"
-          actual_name="$(jq -r '.name // empty' "$metadata")"
-          actual_digest="$(jq -r '.digest // empty' "$metadata")"
-          actual_digest="${actual_digest#sha256:}"
-          workflow_run_id="$(jq -r '.workflow_run.id // empty' "$metadata")"
-          workflow_head_sha="$(jq -r '.workflow_run.head_sha // empty' "$metadata")"
-          expired="$(jq -r '.expired | tostring' "$metadata")"
-
-          if [[ "$actual_id" != "$ARTIFACT_ID" || \
-                "$actual_name" != "$EXPECTED_ARTIFACT_NAME" || \
-                "$actual_digest" != "$expected_digest" || \
-                "$workflow_run_id" != "$GITHUB_RUN_ID" || \
-                "$workflow_head_sha" != "$GITHUB_SHA" || \
-                "$expired" != "false" ]]; then
-            echo "The release artifact does not match this workflow run." >&2
-            exit 1
-          fi
-
-      - name: Download exact immutable release handoff
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          artifact-ids: ${{ needs.build-release.outputs.artifact_id }}
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-          path: ${{ runner.temp }}/release-handoff
-          merge-multiple: true
-
-      - name: Verify exact release handoff contents
-        shell: bash
-        env:
-          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
           WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
         run: |
-          handoff="$RUNNER_TEMP/release-handoff"
-          expected="$(printf '%s\n' SHA256SUMS "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" | sort)"
-          actual="$(find "$handoff" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
-          if [[ "$actual" != "$expected" ]]; then
-            echo "Release handoff contains an unexpected file set." >&2
-            exit 1
-          fi
-          (
-            cd "$handoff"
-            sha256sum "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" \
-              > "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            sha256sum --check --strict SHA256SUMS
-          )
+          python -I .github/scripts/download_release_handoff.py \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$EXPECTED_ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" \
+            --head-sha "$GITHUB_SHA" \
+            --destination "$RUNNER_TEMP/release-handoff" \
+            --wheel "$WHEEL_NAME" \
+            --sdist "$SDIST_NAME" \
+            --archive "$ARCHIVE_NAME"
 
       - name: Test exact Python artifact
         shell: bash
@@ -656,93 +592,29 @@ jobs:
           echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
           chmod -R a-w "$wheelhouse" "$tool_wheelhouse"
 
-      - name: Verify immutable release handoff binding
+      - name: Download and verify exact immutable release handoff
         shell: bash
         env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
           EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
           EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "The build job returned an invalid artifact ID." >&2
-            exit 1
-          fi
-
-          expected_digest="${EXPECTED_ARTIFACT_DIGEST#sha256:}"
-          if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "The build job returned an invalid artifact digest." >&2
-            exit 1
-          fi
-
-          metadata="$RUNNER_TEMP/release-artifact.json"
-          status="$(
-            curl --disable --silent --show-error --max-redirs 0 \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --output "$metadata" \
-              --write-out "%{http_code}" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
-          )"
-          if [[ "$status" =~ ^30[0-9]$ ]]; then
-            echo "Authenticated GitHub API requests must not follow redirects." >&2
-            exit 1
-          fi
-          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "GitHub artifact metadata request failed with HTTP status $status." >&2
-            exit 1
-          fi
-
-          actual_id="$(jq -r '.id // empty' "$metadata")"
-          actual_name="$(jq -r '.name // empty' "$metadata")"
-          actual_digest="$(jq -r '.digest // empty' "$metadata")"
-          actual_digest="${actual_digest#sha256:}"
-          workflow_run_id="$(jq -r '.workflow_run.id // empty' "$metadata")"
-          workflow_head_sha="$(jq -r '.workflow_run.head_sha // empty' "$metadata")"
-          expired="$(jq -r '.expired | tostring' "$metadata")"
-
-          if [[ "$actual_id" != "$ARTIFACT_ID" || \
-                "$actual_name" != "$EXPECTED_ARTIFACT_NAME" || \
-                "$actual_digest" != "$expected_digest" || \
-                "$workflow_run_id" != "$GITHUB_RUN_ID" || \
-                "$workflow_head_sha" != "$GITHUB_SHA" || \
-                "$expired" != "false" ]]; then
-            echo "The release artifact does not match this workflow run." >&2
-            exit 1
-          fi
-
-      - name: Download exact immutable release handoff
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          artifact-ids: ${{ needs.build-release.outputs.artifact_id }}
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-          path: ${{ runner.temp }}/release-handoff
-          merge-multiple: true
-
-      - name: Verify exact release handoff contents
-        shell: bash
-        env:
-          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
           WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
         run: |
-          handoff="$RUNNER_TEMP/release-handoff"
-          expected="$(printf '%s\n' SHA256SUMS "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" | sort)"
-          actual="$(find "$handoff" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
-          if [[ "$actual" != "$expected" ]]; then
-            echo "Release handoff contains an unexpected file set." >&2
-            exit 1
-          fi
-          (
-            cd "$handoff"
-            sha256sum "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" \
-              > "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            sha256sum --check --strict SHA256SUMS
-          )
+          python -I .github/scripts/download_release_handoff.py \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$EXPECTED_ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" \
+            --head-sha "$GITHUB_SHA" \
+            --destination "$RUNNER_TEMP/release-handoff" \
+            --wheel "$WHEEL_NAME" \
+            --sdist "$SDIST_NAME" \
+            --archive "$ARCHIVE_NAME"
 
       - name: Test exact CMake prefix artifact
         shell: bash
@@ -753,24 +625,31 @@ jobs:
           UV_NO_INDEX: "1"
           UV_OFFLINE: "1"
         run: |
-          unset \
-            GITHUB_ENV \
-            GITHUB_OUTPUT \
-            GITHUB_PATH \
-            GITHUB_STATE \
-            GITHUB_STEP_SUMMARY
+          clean_environment=(
+            env -i
+            "HOME=$HOME"
+            "PATH=$PATH"
+            "LANG=$LANG"
+            "LC_ALL=$LC_ALL"
+            "TMPDIR=${TMPDIR:-$RUNNER_TEMP}"
+            "PIP_CONFIG_FILE=$PIP_CONFIG_FILE"
+            "PIP_FIND_LINKS=$PIP_FIND_LINKS"
+            "PIP_NO_INDEX=$PIP_NO_INDEX"
+            "UV_NO_INDEX=$UV_NO_INDEX"
+            "UV_OFFLINE=$UV_OFFLINE"
+          )
           mkdir -p staging/release-tests/cmake-prefix
           python -m tarfile -e \
             "$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.archive_name }}" \
             staging/release-tests/cmake-prefix
-          "$RELEASE_CMAKE" \
+          "${clean_environment[@]}" "$RELEASE_CMAKE" \
             -S tests/find_package \
             -B staging/release-tests/cmake-build \
             -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix" \
             "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}"
-          "$RELEASE_CMAKE" \
+          "${clean_environment[@]}" "$RELEASE_CMAKE" \
             --build staging/release-tests/cmake-build
-          "$RELEASE_CTEST" \
+          "${clean_environment[@]}" "$RELEASE_CTEST" \
             --test-dir staging/release-tests/cmake-build --output-on-failure
 
   publish:
@@ -797,155 +676,29 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Bind and download immutable release handoff
+      - name: Download and verify exact immutable release handoff
         shell: bash
         env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
           EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
           EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "The build job returned an invalid artifact ID." >&2
-            exit 1
-          fi
-
-          expected_digest="${EXPECTED_ARTIFACT_DIGEST#sha256:}"
-          if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "The build job returned an invalid artifact digest." >&2
-            exit 1
-          fi
-
-          metadata="$RUNNER_TEMP/release-artifact.json"
-          status="$(
-            curl --disable --silent --show-error --max-redirs 0 \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --output "$metadata" \
-              --write-out "%{http_code}" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
-          )"
-          if [[ "$status" =~ ^30[0-9]$ ]]; then
-            echo "Authenticated GitHub API requests must not follow redirects." >&2
-            exit 1
-          fi
-          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "GitHub artifact metadata request failed with HTTP status $status." >&2
-            exit 1
-          fi
-
-          actual_id="$(jq -r '.id // empty' "$metadata")"
-          actual_name="$(jq -r '.name // empty' "$metadata")"
-          actual_digest="$(jq -r '.digest // empty' "$metadata")"
-          actual_digest="${actual_digest#sha256:}"
-          workflow_run_id="$(jq -r '.workflow_run.id // empty' "$metadata")"
-          workflow_head_sha="$(jq -r '.workflow_run.head_sha // empty' "$metadata")"
-          expired="$(jq -r '.expired | tostring' "$metadata")"
-
-          if [[ "$actual_id" != "$ARTIFACT_ID" || \
-                "$actual_name" != "$EXPECTED_ARTIFACT_NAME" || \
-                "$actual_digest" != "$expected_digest" || \
-                "$workflow_run_id" != "$GITHUB_RUN_ID" || \
-                "$workflow_head_sha" != "$GITHUB_SHA" || \
-                "$expired" != "false" ]]; then
-            echo "The release artifact does not match this workflow run." >&2
-            exit 1
-          fi
-
-          archive="$RUNNER_TEMP/release-handoff.zip"
-          redirect_headers="$RUNNER_TEMP/release-handoff-redirect.headers"
-          status="$(
-            curl --disable --silent --show-error --max-redirs 0 \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --dump-header "$redirect_headers" \
-              --output /dev/null \
-              --write-out "%{http_code}" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"
-          )"
-          if [[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]; then
-            echo "GitHub artifact download did not return an expected redirect." >&2
-            exit 1
-          fi
-          redirect_url="$(python -I .github/scripts/parse_release_redirect.py "$redirect_headers")"
-          status="$(
-            curl --disable --silent --show-error --location --max-redirs 3 \
-              --proto '=https' --proto-redir '=https' \
-              --output "$archive" \
-              --write-out "%{http_code}" \
-              "$redirect_url"
-          )"
-          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "GitHub artifact download failed with HTTP status $status." >&2
-            exit 1
-          fi
-          downloaded_digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
-          if [[ "$downloaded_digest" != "$expected_digest" ]]; then
-            echo "The downloaded release artifact failed SHA-256 verification." >&2
-            exit 1
-          fi
-
-      - name: Extract and verify exact release handoff
-        shell: bash
-        env:
-          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
           WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
         run: |
-          handoff="$RUNNER_TEMP/release-handoff"
-          python -I - \
-            "$RUNNER_TEMP/release-handoff.zip" \
-            "$handoff" \
-            SHA256SUMS \
-            "$WHEEL_NAME" \
-            "$SDIST_NAME" \
-            "$ARCHIVE_NAME" <<'PY'
-          from pathlib import Path, PurePosixPath
-          import shutil
-          import stat
-          import sys
-          import zipfile
-
-          archive = Path(sys.argv[1])
-          destination = Path(sys.argv[2])
-          expected = set(sys.argv[3:])
-          if len(expected) != 4:
-              raise SystemExit("release handoff names must be unique")
-
-          with zipfile.ZipFile(archive) as artifact:
-              entries = artifact.infolist()
-              names = [entry.filename for entry in entries]
-              if len(names) != len(expected) or set(names) != expected:
-                  raise SystemExit("release handoff contains an unexpected file set")
-              for entry in entries:
-                  path = PurePosixPath(entry.filename)
-                  mode = entry.external_attr >> 16
-                  if (
-                      entry.is_dir()
-                      or path.is_absolute()
-                      or len(path.parts) != 1
-                      or path.name != entry.filename
-                      or stat.S_ISLNK(mode)
-                  ):
-                      raise SystemExit("release handoff contains an unsafe entry")
-
-              destination.mkdir(mode=0o700, parents=False, exist_ok=False)
-              for entry in entries:
-                  with artifact.open(entry) as source, (
-                      destination / entry.filename
-                  ).open("xb") as target:
-                      shutil.copyfileobj(source, target)
-          PY
-
-          (
-            cd "$handoff"
-            sha256sum "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" \
-              > "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            sha256sum --check --strict SHA256SUMS
-          )
+          python -I .github/scripts/download_release_handoff.py \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$EXPECTED_ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" \
+            --head-sha "$GITHUB_SHA" \
+            --destination "$RUNNER_TEMP/release-handoff" \
+            --wheel "$WHEEL_NAME" \
+            --sdist "$SDIST_NAME" \
+            --archive "$ARCHIVE_NAME"
 
       - name: Create, verify, and publish immutable GitHub release
         env:
