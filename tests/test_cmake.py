@@ -12346,6 +12346,140 @@ def test_descriptor_set_discover_uses_explicit_plugin_environment(
     subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
 
 
+def test_managed_descriptor_set_discover_sanitizes_python_environment(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    protoc = _find_real_protoc(repo_root)
+    protobuf_import_dir = _find_protobuf_import_dir(repo_root, protoc)
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    managed_environment_root = tmp_path / "managed environments"
+    poison_path = tmp_path / "poison path"
+    poison_home = tmp_path / "poison home"
+    source_dir.mkdir()
+    poison_package = poison_path / "protocyte"
+    poison_package.mkdir(parents=True)
+    poison_home.mkdir()
+    (poison_package / "__init__.py").write_text(
+        'raise RuntimeError("poisoned Protocyte import")\n',
+        encoding="utf-8",
+    )
+    descriptor_set = source_dir / "descriptor set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(managed_descriptor_set_discover_isolation LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'set(PROTOCYTE_PYTHON_ENV_ROOT "{managed_environment_root.as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                "protocyte_setup_codegen()",
+                f'set(ENV{{PYTHONPATH}} "{poison_path.as_posix()}")',
+                f'set(ENV{{PYTHONHOME}} "{poison_home.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                "    OPTIONS format=off",
+                "    GENERATED_HEADERS_VAR generated_headers",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/headers.txt" "${generated_headers}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    subprocess.run(["cmake", "-S", str(source_dir), "-B", str(build_dir)], check=True)
+
+    headers = (build_dir / "headers.txt").read_text(encoding="utf-8")
+    assert "generated/api/demo.protocyte.hpp" in headers
+
+
+def test_descriptor_set_discover_keeps_explicit_plugin_pythonpath(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    plugin_module_dir = tmp_path / "plugin module"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+    user = file_set.file.add()
+    user.name = "api/demo.proto"
+    user.syntax = "proto3"
+    user.message_type.add().name = "Demo"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+    plugin = _write_inherited_pythonpath_plugin_wrapper(
+        source_dir / "tools" / "protoc-gen-protocyte",
+        plugin_module_dir,
+        repo_root,
+    )
+    protoc = source_dir / "tools" / "protoc"
+    protoc.parent.mkdir(parents=True, exist_ok=True)
+    protoc.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(explicit_descriptor_set_discover_environment LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    plugin_environment = os.environ.copy()
+    plugin_environment["PYTHONPATH"] = str(plugin_module_dir)
+
+    subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=True,
+        env=plugin_environment,
+    )
+
+
+def test_descriptor_set_discover_managed_plugin_error_is_not_an_override(
+    tmp_path: Path,
+) -> None:
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "${CMAKE_COMMAND}")',
+                "set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_IS_MANAGED TRUE)",
+                '_protocyte_discover_descriptor_set(discovered "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb")',
+            ]
+        ),
+        files={"descriptor_set.pb": "placeholder"},
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "Protocyte's managed plugin is expected to support" in output
+    assert "PROTOCYTE_PLUGIN_EXECUTABLE overrides" not in output
+
+
 def test_descriptor_set_discover_reports_incompatible_explicit_plugin(
     tmp_path: Path,
 ) -> None:
