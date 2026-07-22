@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
+
 if(NOT DEFINED MANIFEST_FILE OR "${MANIFEST_FILE}" STREQUAL "")
     message(FATAL_ERROR "Protocyte pre-build guard requires MANIFEST_FILE")
 endif()
@@ -27,6 +29,19 @@ if(NOT manifest_version STREQUAL "version=1")
 endif()
 if(NOT DEFINED FAIL_ON_CHANGE)
     set(FAIL_ON_CHANGE TRUE)
+endif()
+
+set(topology_timeout_argument)
+if(
+    DEFINED PROTOCYTE_TOOL_TIMEOUT_SECONDS
+    AND NOT "${PROTOCYTE_TOOL_TIMEOUT_SECONDS}" STREQUAL ""
+)
+    _protocyte_resolve_tool_timeout(topology_timeout)
+    list(
+        APPEND
+        topology_timeout_argument
+        "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${topology_timeout}"
+    )
 endif()
 
 set(changed_count 0)
@@ -103,7 +118,7 @@ foreach(manifest_line IN LISTS manifest_lines)
                 "-DREQUEST_FILE=${request_file}"
                 "-DWITNESS_FILE=${guarded_file}"
                 "-DLOCK_FILE=${lock_file}"
-                "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
+                ${topology_timeout_argument}
                 -P "${check_script}"
             RESULT_VARIABLE check_result
             OUTPUT_VARIABLE check_output
