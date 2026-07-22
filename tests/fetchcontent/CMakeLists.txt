@@ -5,9 +5,11 @@ project(protocyte_fetchcontent_demo LANGUAGES CXX)
 include(FetchContent)
 
 set(PROTOCYTE_PYTHON_ENV_ROOT "consumer-managed-python")
+set(protocyte_source_dir "${CMAKE_CURRENT_LIST_DIR}/../..")
+cmake_path(NORMAL_PATH protocyte_source_dir)
 FetchContent_Declare(
     protocyte
-    SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../.."
+    SOURCE_DIR "${protocyte_source_dir}"
 )
 FetchContent_MakeAvailable(protocyte)
 
