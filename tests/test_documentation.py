@@ -394,9 +394,12 @@ def test_readme_documents_build_time_ownership_staging_and_safe_transfer() -> No
     assert "runs `protoc` into a private staging directory" in ownership
     assert "before it publishes an ownership transaction" in ownership
     assert "A `protoc` failure, timeout, or invalid staging\n  result" in ownership
+    assert "attempts to discard staging" in ownership
     assert "publishes no new ownership claim" in ownership
-    assert "does not change a declared generated\n  file" in ownership
-    assert "Configuration itself never\n  publishes a claim" in ownership
+    assert "cleanup refuses an unsafe staging path" in ownership
+    assert "inert staging data outside `OUT_DIR` may remain" in ownership
+    assert "ownership claims and declared generated files stay unchanged" in ownership
+    assert "Configuration itself never publishes a claim" in ownership
     assert "before Protocyte creates\n  `OUT_DIR` or runs `protoc`" not in ownership
 
     transfer = readme.split("Deleting a build directory", maxsplit=1)[1].split(

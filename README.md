@@ -840,15 +840,17 @@ This is the lower-level primitive. It creates the custom target named by
   runs `protoc` into a private staging directory, and validates every expected
   staged file before it publishes an ownership transaction or replaces a
   declared generated output. A `protoc` failure, timeout, or invalid staging
-  result discards staging and publishes no new ownership claim; it can create an
-  empty `OUT_DIR` or staging directory, but does not change a declared generated
-  file. After staging succeeds, Protocyte durably records and atomically commits
-  the ownership transaction before publishing generated files, so an interrupted
-  publication is reconciled by a later build before it proceeds, instead of
-  silently handing the outputs to another tree. Configuration itself never
-  publishes a claim, and a later configuration failure cannot leave one. A
-  previously configured tree loses write access at its next build after a
-  deliberate ownership transfer.
+  result attempts to discard staging and publishes no new ownership claim. If
+  cleanup refuses an unsafe staging path or cannot remove it, Protocyte warns
+  that inert staging data outside `OUT_DIR` may remain for manual removal;
+  ownership claims and declared generated files stay unchanged. The failed
+  attempt may still create an empty `OUT_DIR`. After staging succeeds, Protocyte
+  durably records and atomically commits the ownership transaction before
+  publishing generated files, so an interrupted publication is reconciled by a
+  later build before it proceeds, instead of silently handing the outputs to
+  another tree. Configuration itself never publishes a claim, and a later
+  configuration failure cannot leave one. A previously configured tree loses
+  write access at its next build after a deliberate ownership transfer.
 - `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
   `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
   must exist during configuration, and must be inside `PROTO_ROOT`.
