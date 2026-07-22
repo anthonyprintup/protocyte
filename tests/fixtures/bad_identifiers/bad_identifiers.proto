@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package compat.bad;
+
+import "protocyte/options.proto";
+import "types.proto";
+
+message HelperFields {
+  option (protocyte.constant) = { name: "create" i32: 1 };
+  option (protocyte.constant) = { name: "validate" i32: 2 };
+  option (protocyte.constant) = { name: "merge_field_from_" i32: 3 };
+  option (protocyte.constant) = { name: "cap-value" i32: 4 };
+  option (protocyte.constant) = { name: "cap_value" i32: 5 };
+  option (protocyte.constant) = { name: "class" i32: 6 };
+  option (protocyte.constant) = { name: "class_" i32: 7 };
+
+  int32 serialize = 1;
+  int32 parse = 2;
+  int32 context = 3;
+  int32 unknown_fields = 4;
+  int32 validate = 5;
+  int32 copy_from = 6;
+  foo lower = 7;
+  Foo upper = 8;
+  payload lowercase_type = 9;
+  Container.serialize nested_serialize = 10;
+  Container.parse nested_parse = 11;
+  Container.context nested_context = 12;
+  Container.unknown_fields nested_unknown_fields = 13;
+  Container.validate nested_validate = 14;
+  Container.copy_from nested_copy_from = 15;
+  Container.std nested_std = 16;
+  Container.while nested_enum = 17;
+  _Private private_type = 18;
+  proto__reserved reserved_type = 19;
+
+  oneof helper_choice {
+    int32 none = 20;
+    int32 context_oneof = 21;
+  }
+}
