@@ -203,6 +203,10 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Install prebuilt protoc for release artifact tests
+        id: release-protoc
+        run: python .github/scripts/install_protoc.py --dest "$RUNNER_TEMP/protoc"
+
       - name: Build and normalize plugin packages twice
         shell: bash
         run: |
@@ -263,24 +267,20 @@ jobs:
       - name: Test exact wheel artifact
         shell: bash
         run: |
-          python="staging/release-tests/wheel-venv/bin/python"
-          uv venv "staging/release-tests/wheel-venv" --python 3.12
-          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.wheel_name }}"
-          "$python" -m protocyte --help
-          "$python" -m protocyte --version
-          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --help
-          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --version
+          python .github/scripts/test_release_plugin_artifact.py \
+            --artifact "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            --cmake-version "$CMAKE_VERSION" \
+            --protoc "${{ steps.release-protoc.outputs.protoc }}" \
+            --test-root staging/release-tests/wheel
 
       - name: Test exact source artifact
         shell: bash
         run: |
-          python="staging/release-tests/sdist-venv/bin/python"
-          uv venv "staging/release-tests/sdist-venv" --python 3.12
-          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.sdist_name }}"
-          "$python" -m protocyte --help
-          "$python" -m protocyte --version
-          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --help
-          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --version
+          python .github/scripts/test_release_plugin_artifact.py \
+            --artifact "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            --cmake-version "$CMAKE_VERSION" \
+            --protoc "${{ steps.release-protoc.outputs.protoc }}" \
+            --test-root staging/release-tests/sdist
 
       - name: Test exact CMake prefix artifact
         shell: bash
@@ -290,9 +290,13 @@ jobs:
             "staging/${{ needs.validate-tag.outputs.archive_name }}" \
             staging/release-tests/cmake-prefix
           uvx --from "cmake==$CMAKE_VERSION" cmake \
-            -S tests/release_cmake_consumer \
+            -S tests/find_package \
             -B staging/release-tests/cmake-build \
-            -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix"
+            -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix" \
+            "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}"
+          uvx --from "cmake==$CMAKE_VERSION" cmake \
+            --build staging/release-tests/cmake-build
+          ctest --test-dir staging/release-tests/cmake-build --output-on-failure
 
       - name: Stage exact publication handoff
         shell: bash

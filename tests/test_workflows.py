@@ -288,9 +288,44 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     assert "staging/release-handoff/SHA256SUMS" in upload
     assert "if-no-files-found: error" in upload
     assert "python -m tarfile -e" in build
-    assert "-S tests/release_cmake_consumer" in build
-    assert build.count("-m protocyte --help") == 2
-    assert build.count('protoc-gen-protocyte" --help') == 2
+    assert "Install prebuilt protoc for release artifact tests" in build
+    assert "id: release-protoc" in build
+    assert build.index("Install prebuilt protoc for release artifact tests") < build.index(
+        "Test exact wheel artifact"
+    )
+    for artifact, test_root in (
+        ("wheel_name", "wheel"),
+        ("sdist_name", "sdist"),
+    ):
+        test_step = build_steps[test_step_names[artifact]]
+        assert "test_release_plugin_artifact.py" in test_step
+        assert f'"dist/${{{{ needs.validate-tag.outputs.{artifact} }}}}"' in test_step
+        assert f"staging/release-tests/{test_root}" in test_step
+        assert "steps.release-protoc.outputs.protoc" in test_step
+
+    cmake_prefix_test = build_steps["Test exact CMake prefix artifact"]
+    assert "-S tests/find_package" in cmake_prefix_test
+    assert "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}" in cmake_prefix_test
+    assert "--build staging/release-tests/cmake-build" in cmake_prefix_test
+    assert "ctest --test-dir staging/release-tests/cmake-build --output-on-failure" in cmake_prefix_test
+    assert "PROTOCYTE_PLUGIN_EXECUTABLE" not in cmake_prefix_test
+
+    find_package_consumer = (
+        REPO_ROOT / "tests" / "find_package" / "CMakeLists.txt"
+    ).read_text(encoding="utf-8")
+    assert "protocyte_add_proto_library(" in find_package_consumer
+    assert "PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE" in find_package_consumer
+    assert "add_test(NAME find_package_demo COMMAND find_package_demo)" in find_package_consumer
+
+    plugin_artifact_test = (
+        REPO_ROOT / ".github" / "scripts" / "test_release_plugin_artifact.py"
+    ).read_text(encoding="utf-8")
+    assert '"examples/quickstart"' in plugin_artifact_test
+    assert '"--build", str(quickstart_build)' in plugin_artifact_test
+    assert '"ctest", "--test-dir", str(quickstart_build), "--output-on-failure"' in plugin_artifact_test
+    assert '"uv", "pip", "install", "--python", str(python), str(artifact)' in plugin_artifact_test
+    assert '"-DPROTOC_EXECUTABLE={protoc}"' in plugin_artifact_test
+    assert '"-DPROTOCYTE_PLUGIN_EXECUTABLE={plugin}"' in plugin_artifact_test
 
 
 def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() -> None:
