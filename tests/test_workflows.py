@@ -31,6 +31,21 @@ def _steps_by_name(job: str) -> dict[str, str]:
     }
 
 
+def _continued_shell_commands(step: str) -> list[str]:
+    commands: list[str] = []
+    continued: list[str] = []
+    for raw_line in step.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        continued.append(line.removesuffix("\\").rstrip())
+        if not line.endswith("\\"):
+            commands.append(" ".join(continued))
+            continued = []
+    assert not continued
+    return commands
+
+
 def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     fallback = (
         REPO_ROOT / ".github" / "workflows" / "protobuf-fallback.yml"
@@ -248,7 +263,12 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     cmake_build = build_steps["Build and normalize CMake prefix twice"]
     assert plugin_build.count("cmp \\") == 2
     assert cmake_build.count("cmp \\") == 1
-    assert 'uv build "$source_dir" --out-dir "$output_dir"' in plugin_build
+    assert 'uv build "$source_dir" \\' in plugin_build
+    assert '--out-dir "$output_dir"' in plugin_build
+    assert '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"' in plugin_build
+    assert "--no-build-isolation" in plugin_build
+    assert "--no-index" in plugin_build
+    assert "--offline" in plugin_build
     assert '-S "$source_dir" -B "${build_root}/cmake-build"' in cmake_build
     assert '"$RELEASE_CMAKE" \\' in cmake_build
 
@@ -354,17 +374,77 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert build.index(prepare_name) < build.index(
         "Build and normalize plugin packages twice"
     )
-    assert '"cmake==$CMAKE_VERSION"' in prepare
+    assert ".github/release-cmake-constraints.txt" in prepare
+    assert 'locked_cmake_version="$(' in prepare
+    assert '"$locked_cmake_version" != "$CMAKE_VERSION"' in prepare
     assert "protocyte-cmake-constraints.txt" in prepare
-    assert "--require-hashes" in prepare
-    assert "--only-binary=:all:" in prepare
-    assert "pip --isolated download" in prepare
+    assert prepare.count("--require-hashes") == 5
+    assert prepare.count("--only-binary=:all:") == 5
+    assert prepare.count("pip --isolated download") == 2
     assert "--no-deps" in prepare
     assert "--dest \"$wheelhouse\"" in prepare
+    assert "--dest \"$tool_wheelhouse\"" in prepare
+    assert '--find-links "$tool_wheelhouse"' in prepare
+    assert '--requirement "$cmake_constraints"' in prepare
     assert "for artifact_kind in wheel sdist; do" in prepare
     assert "--no-index" in prepare
     assert '--find-links "$wheelhouse"' in prepare
-    assert "chmod -R a-w \"$wheelhouse\"" in prepare
+    assert 'chmod -R a-w "$wheelhouse" "$tool_wheelhouse"' in prepare
+
+    prepare_commands = _continued_shell_commands(prepare)
+    resolver_commands = [
+        command
+        for command in prepare_commands
+        if "uv pip install" in command or "pip --isolated download" in command
+    ]
+    assert len(resolver_commands) == 5
+    assert all("--require-hashes" in command for command in resolver_commands)
+    cmake_install = next(
+        command
+        for command in resolver_commands
+        if '--requirement "$cmake_constraints"' in command
+        and "uv pip install" in command
+    )
+    assert "--no-index" in cmake_install
+    assert '--find-links "$tool_wheelhouse"' in cmake_install
+
+    plugin_build = steps["Build and normalize plugin packages twice"]
+    assert 'uv build "$source_dir" \\' in plugin_build
+    assert '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"' in plugin_build
+    assert "--no-build-isolation" in plugin_build
+    assert "--no-index" in plugin_build
+    assert "--offline" in plugin_build
+    assert 'uv build "$source_dir" --out-dir' not in plugin_build
+    build_commands = [
+        command
+        for command in _continued_shell_commands(plugin_build)
+        if command.startswith('uv build "$source_dir"')
+    ]
+    assert len(build_commands) == 1
+    release_build = build_commands[0]
+    assert "--no-build-isolation" in release_build
+    assert "--no-index" in release_build
+    assert "--offline" in release_build
+    assert '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"' in release_build
+    artifact_build_boundary = build.index("Build and normalize plugin packages twice")
+    post_bootstrap_build = build[artifact_build_boundary:]
+    assert "uv pip install" not in post_bootstrap_build
+    assert "pip --isolated download" not in post_bootstrap_build
+    assert "uv run" not in post_bootstrap_build
+    assert post_bootstrap_build.count('"$PWD/.venv/bin/python"') == 3
+
+    cmake_lock = (
+        REPO_ROOT / ".github" / "release-cmake-constraints.txt"
+    ).read_text(encoding="utf-8")
+    assert "cmake==4.3.2 \\" in cmake_lock
+    cmake_hashes = [
+        line.strip()
+        for line in cmake_lock.splitlines()
+        if line.strip().startswith("--hash=sha256:")
+    ]
+    assert cmake_hashes == [
+        "--hash=sha256:339655b93289c1b03c6a72523d46d3b0d19dc51406d3a90f8eefcbec525cb271"
+    ]
 
     assert build.index("Build and normalize CMake prefix twice") < build.index(
         "Freeze exact release artifacts for isolated smoke tests"

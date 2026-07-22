@@ -213,15 +213,17 @@ jobs:
           tools_root="$PWD/staging/release-tools"
           smoke_root="$PWD/staging/release-tests"
           constraints="$PWD/protocyte-cmake-constraints.txt"
+          cmake_constraints="$PWD/.github/release-cmake-constraints.txt"
           wheelhouse="$smoke_root/wheelhouse"
+          tool_wheelhouse="$tools_root/wheelhouse"
 
-          uv venv "$tools_root/cmake-venv" --python 3.12
-          uv pip install \
-            --python "$tools_root/cmake-venv/bin/python" \
-            --no-deps \
-            "cmake==$CMAKE_VERSION"
-          echo "RELEASE_CMAKE=$tools_root/cmake-venv/bin/cmake" >> "$GITHUB_ENV"
-          echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
+          locked_cmake_version="$(
+            sed -nE 's/^cmake==([^[:space:]\\]+).*/\1/p' "$cmake_constraints"
+          )"
+          if [[ "$locked_cmake_version" != "$CMAKE_VERSION" ]]; then
+            echo "Release CMake lock version $locked_cmake_version does not match $CMAKE_VERSION." >&2
+            exit 1
+          fi
 
           bootstrap_python="$tools_root/bootstrap-venv/bin/python"
           uv venv "$tools_root/bootstrap-venv" --python 3.12
@@ -239,6 +241,26 @@ jobs:
             --require-hashes \
             --requirement "$constraints" \
             --dest "$wheelhouse"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints" \
+            --dest "$tool_wheelhouse"
+
+          uv venv "$tools_root/cmake-venv" --python 3.12
+          uv pip install \
+            --python "$tools_root/cmake-venv/bin/python" \
+            --no-index \
+            --find-links "$tool_wheelhouse" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints"
+          echo "RELEASE_CMAKE=$tools_root/cmake-venv/bin/cmake" >> "$GITHUB_ENV"
+          echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
 
           for artifact_kind in wheel sdist; do
             artifact_python="$smoke_root/$artifact_kind/venv/bin/python"
@@ -252,7 +274,7 @@ jobs:
               --require-hashes \
               --requirement "$constraints"
           done
-          chmod -R a-w "$wheelhouse"
+          chmod -R a-w "$wheelhouse" "$tool_wheelhouse"
 
       - name: Build and normalize plugin packages twice
         shell: bash
@@ -262,11 +284,16 @@ jobs:
             output_dir="staging/reproducibility/${build}/dist"
             mkdir -p "$source_dir"
             git archive HEAD | tar -x -C "$source_dir"
-            uv build "$source_dir" --out-dir "$output_dir"
-            uv run python .github/scripts/reproducible_archive.py \
+            uv build "$source_dir" \
+              --out-dir "$output_dir" \
+              --python "$PWD/staging/release-tools/bootstrap-venv/bin/python" \
+              --no-build-isolation \
+              --no-index \
+              --offline
+            "$PWD/.venv/bin/python" .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" normalize zip \
               "$output_dir/${{ needs.validate-tag.outputs.wheel_name }}"
-            uv run python .github/scripts/reproducible_archive.py \
+            "$PWD/.venv/bin/python" .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" normalize tar-gz \
               "$output_dir/${{ needs.validate-tag.outputs.sdist_name }}"
           done
@@ -299,7 +326,7 @@ jobs:
               -S "$source_dir" -B "${build_root}/cmake-build"
             "$RELEASE_CMAKE" \
               --install "${build_root}/cmake-build" --prefix "$prefix_dir"
-            uv run python .github/scripts/reproducible_archive.py \
+            "$PWD/.venv/bin/python" .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" pack-tar-gz "$prefix_dir" \
               "${build_root}/${{ needs.validate-tag.outputs.archive_name }}"
           done
