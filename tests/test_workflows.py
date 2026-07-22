@@ -38,7 +38,9 @@ def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
 
@@ -224,7 +226,9 @@ def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
 
 
 def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
@@ -249,7 +253,9 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
 
 
 def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
@@ -288,7 +294,9 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
 
 
 def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     validate_tag = _job_named(release, "validate-tag")
@@ -310,41 +318,57 @@ def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() 
     assert "persist-credentials: false" in trusted_checkout
     assert "ref: ${{ github.sha }}" in trusted_checkout
 
-    reachability = _steps_by_name(validate_tag)[
-        "Ensure tag commit is reachable from fetched main"
+    trusted_revision = _steps_by_name(validate_tag)[
+        "Require the live default-branch workflow revision"
     ]
-    assert 'main_ref="refs/remotes/origin/main"' in reachability
-    assert 'git rev-parse --verify "${main_ref}^{commit}"' in reachability
-    assert 'git merge-base --is-ancestor "$GITHUB_SHA" "$main_ref"' in reachability
+    validation = _steps_by_name(validate_tag)["Compare tag and package version"]
+    assert '"$GITHUB_REF" != "refs/heads/main"' in trusted_revision
+    assert '"$fetched_main" != "$GITHUB_SHA"' in trusted_revision
+    assert 'tag_ref="refs/tags/$tag"' in validation
+    assert 'git merge-base --is-ancestor "$target" "$main_ref"' in validation
+    assert 'git show "${target}:src/protocyte/__init__.py"' in validation
+    assert "ref: ${{ needs.validate-tag.outputs.target }}" in build
     assert "git fetch" not in validate_tag
 
 
-def test_release_policy_preflight_is_checkout_free_and_gates_expensive_work() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+def test_release_policy_preflight_uses_trusted_code_and_gates_expensive_work() -> None:
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     policy = _job_named(release, "release-policy")
     gate = _job_named(release, "release-gate")
     build = _job_named(release, "build-release")
-    preflight = _steps_by_name(policy)["Require immutable releases before build"]
+    policy_steps = _steps_by_name(policy)
+    preflight = policy_steps[
+        "Require trusted single-writer release policy before build"
+    ]
+    checkout = policy_steps["Check out trusted policy code"]
 
     assert "needs: validate-tag" in policy
     assert "environment: release" in policy
-    assert "permissions:\n      contents: none" in policy
-    assert "actions/checkout@" not in policy
-    assert "RELEASE_IMMUTABILITY_TOKEN" in preflight
-    assert 'if [[ -z "$GH_TOKEN" ]]' in preflight
-    assert '"$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/immutable-releases"' in preflight
-    assert "curl --disable --silent --show-error --max-redirs 0" in preflight
-    assert '-H "Authorization: Bearer $GH_TOKEN"' in preflight
-    assert "Authenticated GitHub API requests must not follow redirects." in preflight
-    assert '[[ "$enabled" != "true" ]]' in preflight
+    assert "permissions:\n      contents: read" in policy
+    assert "clean: true" in checkout
+    assert "persist-credentials: false" in checkout
+    assert "ref: ${{ github.sha }}" in checkout
+    assert "RELEASE_POLICY_AUDIT_TOKEN" in preflight
+    assert "RELEASE_IMMUTABILITY_TOKEN" not in preflight
+    assert "RELEASE_TAG_RULESET_ID" in preflight
+    assert "LEGACY_RELEASE_WORKFLOW_ID" in preflight
+    assert "python .github/scripts/check_release_policy.py" in preflight
+    assert '--workflow-ref "$GITHUB_REF"' in preflight
+    assert '--workflow-target "$GITHUB_SHA"' in preflight
+    assert "--default-branch main" in preflight
+    assert '--repository-root "$GITHUB_WORKSPACE"' in preflight
     assert "- release-policy" in gate
     assert "- release-gate" in build
 
 
 def test_release_publication_uses_isolated_least_privilege_credentials() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     policy = _job_named(release, "release-policy")
@@ -357,8 +381,11 @@ def test_release_publication_uses_isolated_least_privilege_credentials() -> None
 
     assert "environment: release" in policy
     assert "environment: release" in publish
+    assert "RELEASE_POLICY_AUDIT_TOKEN" in policy
+    assert "RELEASE_POLICY_AUDIT_TOKEN" not in publish
     assert "contents: write" not in build
     assert "RELEASE_IMMUTABILITY_TOKEN" not in build
+    assert "RELEASE_POLICY_AUDIT_TOKEN" not in build
     assert "PROTOCYTE_RELEASE_POLICY_TOKEN" not in build
     assert "python .github/scripts/publish_release.py" not in build
     assert "uv sync" not in publish
@@ -370,8 +397,10 @@ def test_release_publication_uses_isolated_least_privilege_credentials() -> None
     ) in publication
     assert "python .github/scripts/publish_release.py" in publication
     assert '"$GITHUB_REPOSITORY"' in publication
-    assert '"$GITHUB_REF_NAME"' in publication
-    assert '"$GITHUB_SHA"' in publication
+    assert '"${{ needs.validate-tag.outputs.tag }}"' in publication
+    assert '"${{ needs.validate-tag.outputs.target }}"' in publication
+    assert "--trusted-branch main" in publication
+    assert '--trusted-target "$GITHUB_SHA"' in publication
     assert publish.index("Check out trusted publication code") < publish.index(
         "Bind and download immutable release handoff"
     )
@@ -384,7 +413,9 @@ def test_release_publication_uses_isolated_least_privilege_credentials() -> None
 
 
 def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
@@ -441,7 +472,9 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
 
 
 def test_authenticated_release_http_requests_reject_redirects() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     policy = _job_named(release, "release-policy")
@@ -450,18 +483,19 @@ def test_authenticated_release_http_requests_reject_redirects() -> None:
 
     assert "gh api" not in policy
     assert "gh api" not in binding
-    for authenticated_request in (policy, binding):
-        assert (
-            "curl --disable --silent --show-error --max-redirs 0"
-            in authenticated_request
-        )
-        assert '-H "Authorization: Bearer $GH_TOKEN"' in authenticated_request
+    assert "curl --disable --silent --show-error --max-redirs 0" in binding
+    assert '-H "Authorization: Bearer $GH_TOKEN"' in binding
+    policy_script = (
+        REPO_ROOT / ".github" / "scripts" / "check_release_policy.py"
+    ).read_text(encoding="utf-8")
+    assert "_GitHubClient" in policy_script
     artifact_probe = binding.split('archive="$RUNNER_TEMP/release-handoff.zip"', 1)[1]
     artifact_probe = artifact_probe.split(
         'redirect_url="$(python -I .github/scripts/parse_release_redirect.py', 1
     )[0]
     assert artifact_probe.count('Authorization: Bearer $GH_TOKEN') == 1
-    assert "Authenticated GitHub API requests must not follow redirects." in policy
+    assert "_GitHubClient(contents_token, api_url)" in policy_script
+    assert "_GitHubClient(policy_token, api_url)" in policy_script
     assert "Authenticated GitHub API requests must not follow redirects." in binding
     assert '--dump-header "$redirect_headers"' in binding
     assert '[[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]' in binding
@@ -485,14 +519,19 @@ def test_release_transaction_is_create_only_id_bound_and_immutable() -> None:
     assert 'f"{self._repository_path}/releases/{release_id}"' in transaction
     assert 'f"/{self._repository_path}/releases/{release_id}/assets"' in transaction
     assert "api.immutable_releases_enabled()" in transaction
+    assert "api.resolve_tag_target(spec.tag)" in transaction
+    assert transaction.count("_require_tag_target(api, spec)") >= 5
+    assert transaction.count("_require_trusted_source(api, spec)") >= 5
     assert "this workflow never mutates existing" in transaction
     assert "release creation lost an existence race" in transaction
     assert '"DELETE"' not in transaction
     assert "overwrite_files" not in transaction
 
 
-def test_release_transaction_order_is_build_test_then_atomic_publication() -> None:
-    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+def test_release_transaction_order_is_build_test_then_serialized_publication() -> None:
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
         encoding="utf-8"
     )
     gate = _job_named(release, "release-gate")
@@ -517,3 +556,81 @@ def test_release_transaction_order_is_build_test_then_atomic_publication() -> No
     assert publish.rstrip().endswith(
         '"$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.archive_name }}"'
     )
+
+
+def test_release_publication_is_the_repository_single_writer() -> None:
+    workflow_directory = REPO_ROOT / ".github" / "workflows"
+    workflows = {
+        path.name: path.read_text(encoding="utf-8")
+        for pattern in ("*.yml", "*.yaml")
+        for path in workflow_directory.glob(pattern)
+    }
+    legacy = workflows["release.yml"]
+    release = workflows["publish-release.yml"]
+    publish = _job_named(release, "publish")
+
+    assert "workflow_call:" in legacy
+    assert "workflow_dispatch:" not in legacy
+    assert "push:" not in legacy
+    assert "contents: none" in legacy
+    assert "contents: write" not in legacy
+    assert "if: ${{ false }}" in legacy
+    assert "run: exit 1" in legacy
+    assert "group: protocyte-release-publication-${{ github.repository }}" in release
+    assert "cancel-in-progress: false" in release
+    assert "queue: max" in release
+    assert "workflow_dispatch:" in release
+    assert "push:\n    tags:" not in release
+    assert '"$GITHUB_REF" != "refs/heads/main"' in release
+    assert "check_release_policy.py" in release
+    assert "RELEASE_TAG_RULESET_ID" in release
+    assert "LEGACY_RELEASE_WORKFLOW_ID" in release
+    assert release.count("contents: write") == 1
+    assert "contents: write" in publish
+    assert "environment: release" in publish
+    for name, workflow in workflows.items():
+        assert "write-all" not in workflow
+        if name != "publish-release.yml":
+            assert "contents: write" not in workflow
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "single-writer boundary" in readme
+    assert "cannot make separate GitHub" in readme
+    assert "API calls atomic" in readme
+    assert "prohibit tag updates and deletions" in readme
+    assert "disable administrator bypass" in readme
+    assert "Source changes cannot retroactively disable copies" in readme
+    assert "actions/workflows/release.yml --jq .id" in readme
+    assert "actions/workflows/$legacy_id/disable" in readme
+    assert "deliberately keeps `.github/workflows/release.yml`" in readme
+    assert "always-skipped retirement job" in readme
+    assert "instead of `disabled_manually`" in readme
+    assert "`disabled_manually`" in readme
+    assert "publish-release.yml" in readme
+
+
+def test_release_gate_tests_the_requested_tag_with_trusted_workflow_code() -> None:
+    release = (
+        REPO_ROOT / ".github" / "workflows" / "publish-release.yml"
+    ).read_text(
+        encoding="utf-8"
+    )
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    fallback = (
+        REPO_ROOT / ".github" / "workflows" / "protobuf-fallback.yml"
+    ).read_text(encoding="utf-8")
+
+    gate = _job_named(release, "release-gate")
+    assert "uses: ./.github/workflows/ci.yml" in gate
+    assert "checkout_ref: ${{ needs.validate-tag.outputs.target }}" in gate
+    assert "workflow_call:" in ci
+    assert "checkout_ref:" in ci
+    checkout_action = (
+        "uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+    )
+    exact_ref = "\n          ref: ${{ inputs.checkout_ref || github.sha }}"
+    assert ci.count(checkout_action) == ci.count(exact_ref)
+    assert fallback.count(checkout_action) == fallback.count(exact_ref)
+    assert "checkout_ref: ${{ inputs.checkout_ref || github.sha }}" in ci

@@ -180,6 +180,83 @@ def test_authenticated_client_preserves_normal_and_error_handling() -> None:
     )
 
 
+class _RecordedJSONClient:
+    def __init__(self, responses: list[object]) -> None:
+        self.responses = responses
+        self.requests: list[tuple[str, str]] = []
+
+    def request_json(self, method: str, url: str) -> object:
+        self.requests.append((method, url))
+        return self.responses.pop(0)
+
+
+def _release_api_with_contents(contents: _RecordedJSONClient) -> Any:
+    api = object.__new__(publish_release.GitHubReleaseAPI)
+    api._repository_path = "repos/example/protocyte"
+    api._contents = contents
+    return api
+
+
+def test_live_tag_resolution_accepts_a_lightweight_tag() -> None:
+    target = "a" * 40
+    contents = _RecordedJSONClient(
+        [
+            {
+                "ref": "refs/tags/releases/v1.2.3",
+                "object": {"type": "commit", "sha": target},
+            }
+        ]
+    )
+    api = _release_api_with_contents(contents)
+
+    assert api.resolve_tag_target("releases/v1.2.3") == target
+    assert contents.requests == [
+        ("GET", "repos/example/protocyte/git/ref/tags/releases%2Fv1.2.3")
+    ]
+
+
+def test_live_trusted_branch_resolution_requires_a_direct_commit() -> None:
+    target = "e" * 40
+    contents = _RecordedJSONClient(
+        [
+            {
+                "ref": "refs/heads/main",
+                "object": {"type": "commit", "sha": target},
+            }
+        ]
+    )
+    api = _release_api_with_contents(contents)
+
+    assert api.resolve_branch_target("main") == target
+    assert contents.requests == [
+        ("GET", "repos/example/protocyte/git/ref/heads/main")
+    ]
+
+
+def test_live_tag_resolution_peels_nested_annotated_tags() -> None:
+    outer = "b" * 40
+    inner = "c" * 40
+    target = "d" * 40
+    contents = _RecordedJSONClient(
+        [
+            {
+                "ref": "refs/tags/v1.2.3",
+                "object": {"type": "tag", "sha": outer},
+            },
+            {"sha": outer, "object": {"type": "tag", "sha": inner}},
+            {"sha": inner, "object": {"type": "commit", "sha": target}},
+        ]
+    )
+    api = _release_api_with_contents(contents)
+
+    assert api.resolve_tag_target("v1.2.3") == target
+    assert contents.requests == [
+        ("GET", "repos/example/protocyte/git/ref/tags/v1.2.3"),
+        ("GET", f"repos/example/protocyte/git/tags/{outer}"),
+        ("GET", f"repos/example/protocyte/git/tags/{inner}"),
+    ]
+
+
 def _release(
     release_id: int,
     *,
@@ -204,6 +281,8 @@ def _release(
 class FakeReleaseAPI:
     def __init__(self) -> None:
         self.policy_enabled = True
+        self.tag_target = "a" * 40
+        self.branch_target = "e" * 40
         self.releases: list[dict[str, Any]] = []
         self.assets: dict[int, list[dict[str, Any]]] = {}
         self.successful_mutations: list[tuple[str, int, str | None]] = []
@@ -211,9 +290,34 @@ class FakeReleaseAPI:
         self.competing_release_after_create = False
         self.publish_before_next_state_read = False
         self.disable_policy_after_create = False
+        self.retarget_after_create = False
+        self.retarget_after_final_upload = False
+        self.inject_asset_at_final_boundary = False
+        self.inject_asset_inside_publish = False
 
     def immutable_releases_enabled(self) -> bool:
         return self.policy_enabled
+
+    def default_branch(self) -> str:
+        return "main"
+
+    def resolve_branch_target(self, branch: str) -> str:
+        assert branch == "main"
+        return self.branch_target
+
+    def resolve_tag_target(self, tag: str) -> str:
+        assert tag == "v1.2.3"
+        if self.inject_asset_at_final_boundary and len(self.assets.get(41, [])) == 3:
+            self.assets[41].append(
+                {
+                    "name": "injected.txt",
+                    "state": "uploaded",
+                    "size": 8,
+                    "digest": f"sha256:{'b' * 64}",
+                }
+            )
+            self.inject_asset_at_final_boundary = False
+        return self.tag_target
 
     def list_releases(self) -> list[dict[str, Any]]:
         return [release.copy() for release in self.releases]
@@ -242,6 +346,8 @@ class FakeReleaseAPI:
         self.successful_mutations.append(("create", 41, None))
         if self.disable_policy_after_create:
             self.policy_enabled = False
+        if self.retarget_after_create:
+            self.tag_target = "b" * 40
         return created.copy()
 
     def get_release(self, release_id: int) -> dict[str, Any]:
@@ -270,10 +376,21 @@ class FakeReleaseAPI:
         }
         self.assets[release_id].append(asset)
         self.successful_mutations.append(("upload", release_id, artifact.name))
+        if self.retarget_after_final_upload and len(self.assets[release_id]) == 3:
+            self.tag_target = "b" * 40
         return asset.copy()
 
     def publish_release(self, release_id: int) -> dict[str, Any]:
         release = next(item for item in self.releases if item["id"] == release_id)
+        if self.inject_asset_inside_publish:
+            self.assets[release_id].append(
+                {
+                    "name": "injected-after-list.txt",
+                    "state": "uploaded",
+                    "size": 8,
+                    "digest": f"sha256:{'c' * 64}",
+                }
+            )
         release["draft"] = False
         release["immutable"] = True
         self.successful_mutations.append(("publish", release_id, None))
@@ -285,6 +402,8 @@ def _spec(*, prerelease: bool = False) -> publish_release.ReleaseSpec:
         repository="example/protocyte",
         tag="v1.2.3",
         target="a" * 40,
+        trusted_branch="main",
+        trusted_target="e" * 40,
         prerelease=prerelease,
     )
 
@@ -385,6 +504,80 @@ def test_disabled_immutable_release_policy_fails_before_mutation(
     api.policy_enabled = False
 
     with pytest.raises(publish_release.ReleaseError, match="immutability"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == []
+
+
+def test_initial_tag_target_mismatch_fails_before_mutation(tmp_path: Path) -> None:
+    api = FakeReleaseAPI()
+    api.tag_target = "b" * 40
+
+    with pytest.raises(publish_release.ReleaseError, match="not expected target"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == []
+
+
+def test_tag_retarget_after_creation_fails_before_upload(tmp_path: Path) -> None:
+    api = FakeReleaseAPI()
+    api.retarget_after_create = True
+
+    with pytest.raises(publish_release.ReleaseError, match="not expected target"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations == [("create", 41, None)]
+    assert api.assets == {41: []}
+
+
+def test_tag_retarget_at_publication_boundary_fails_before_publish(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.retarget_after_final_upload = True
+
+    with pytest.raises(publish_release.ReleaseError, match="not expected target"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert all(mutation[0] != "publish" for mutation in api.successful_mutations)
+    assert api.releases[0]["draft"] is True
+
+
+def test_unexpected_asset_observed_during_final_preflight_fails_before_publish(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.inject_asset_at_final_boundary = True
+
+    with pytest.raises(publish_release.ReleaseError, match="exactly the expected"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert all(mutation[0] != "publish" for mutation in api.successful_mutations)
+    assert api.releases[0]["draft"] is True
+
+
+def test_external_writer_after_last_read_is_detected_only_after_publication(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.inject_asset_inside_publish = True
+
+    with pytest.raises(publish_release.ReleaseError, match="exactly the expected"):
+        publish_release.publish(api, _spec(), _artifacts(tmp_path))
+
+    assert api.successful_mutations[-1] == ("publish", 41, None)
+    assert api.releases[0]["draft"] is False
+    assert api.releases[0]["immutable"] is True
+    assert api.assets[41][-1]["name"] == "injected-after-list.txt"
+
+
+def test_untrusted_workflow_revision_fails_before_release_mutation(
+    tmp_path: Path,
+) -> None:
+    api = FakeReleaseAPI()
+    api.branch_target = "f" * 40
+
+    with pytest.raises(publish_release.ReleaseError, match="live trusted"):
         publish_release.publish(api, _spec(), _artifacts(tmp_path))
 
     assert api.successful_mutations == []

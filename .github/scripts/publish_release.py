@@ -8,6 +8,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -81,6 +82,8 @@ class ReleaseSpec:
     repository: str
     tag: str
     target: str
+    trusted_branch: str
+    trusted_target: str
     prerelease: bool
 
 
@@ -109,6 +112,12 @@ class Artifact:
 
 class ReleaseAPI(Protocol):
     def immutable_releases_enabled(self) -> bool: ...
+
+    def default_branch(self) -> str: ...
+
+    def resolve_branch_target(self, branch: str) -> str: ...
+
+    def resolve_tag_target(self, tag: str) -> str: ...
 
     def list_releases(self) -> list[dict[str, Any]]: ...
 
@@ -217,6 +226,55 @@ class GitHubReleaseAPI:
             raise
         return isinstance(policy, dict) and policy.get("enabled") is True
 
+    def default_branch(self) -> str:
+        response = self._contents.request_json("GET", self._repository_path)
+        if not isinstance(response, dict) or not isinstance(
+            response.get("default_branch"), str
+        ):
+            raise ReleaseError("GitHub returned invalid repository metadata")
+        return response["default_branch"]
+
+    def resolve_branch_target(self, branch: str) -> str:
+        target = self._resolve_ref("heads", branch)
+        object_type, object_sha = _git_object(target)
+        if object_type != "commit":
+            raise ReleaseError("default branch does not resolve directly to a commit")
+        return object_sha
+
+    def resolve_tag_target(self, tag: str) -> str:
+        target = self._resolve_ref("tags", tag)
+        visited: set[str] = set()
+        for _ in range(32):
+            object_type, object_sha = _git_object(target)
+            if object_type == "commit":
+                return object_sha
+            if object_type != "tag":
+                raise ReleaseError(
+                    f"release tag resolves to unsupported Git object type: {object_type}"
+                )
+            if object_sha in visited:
+                raise ReleaseError("release tag contains an annotated-tag cycle")
+            visited.add(object_sha)
+            tag_object = self._contents.request_json(
+                "GET", f"{self._repository_path}/git/tags/{object_sha}"
+            )
+            if not isinstance(tag_object, dict) or tag_object.get("sha") != object_sha:
+                raise ReleaseError("GitHub returned an invalid annotated tag object")
+            target = tag_object.get("object")
+        raise ReleaseError("release tag contains too many nested annotated tags")
+
+    def _resolve_ref(self, namespace: str, name: str) -> object:
+        quoted_name = urllib.parse.quote(name, safe="")
+        response = self._contents.request_json(
+            "GET", f"{self._repository_path}/git/ref/{namespace}/{quoted_name}"
+        )
+        if (
+            not isinstance(response, dict)
+            or response.get("ref") != f"refs/{namespace}/{name}"
+        ):
+            raise ReleaseError("GitHub returned an invalid trusted Git reference")
+        return response.get("object")
+
     def list_releases(self) -> list[dict[str, Any]]:
         releases: list[dict[str, Any]] = []
         page = 1
@@ -320,6 +378,18 @@ def _release_id(release: dict[str, Any]) -> int:
     return release_id
 
 
+def _git_object(value: object) -> tuple[str, str]:
+    if not isinstance(value, dict):
+        raise ReleaseError("GitHub returned an invalid release tag target")
+    object_type = value.get("type")
+    object_sha = value.get("sha")
+    if not isinstance(object_type, str) or not isinstance(object_sha, str):
+        raise ReleaseError("GitHub returned an invalid release tag target")
+    if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", object_sha) is None:
+        raise ReleaseError("GitHub returned an invalid release tag object ID")
+    return object_type, object_sha
+
+
 def _require_release_state(
     release: dict[str, Any],
     spec: ReleaseSpec,
@@ -355,6 +425,27 @@ def _require_current_draft(api: ReleaseAPI, spec: ReleaseSpec, release_id: int) 
     _require_release_state(api.get_release(release_id), spec, release_id, draft=True)
 
 
+def _require_tag_target(api: ReleaseAPI, spec: ReleaseSpec) -> None:
+    actual = api.resolve_tag_target(spec.tag)
+    if actual != spec.target:
+        raise ReleaseError(
+            f"release tag {spec.tag} resolves to {actual}, not expected target "
+            f"{spec.target}; refusing to mutate a release"
+        )
+
+
+def _require_trusted_source(api: ReleaseAPI, spec: ReleaseSpec) -> None:
+    if api.default_branch() != spec.trusted_branch:
+        raise ReleaseError(
+            f"repository default branch is not trusted branch {spec.trusted_branch}"
+        )
+    actual = api.resolve_branch_target(spec.trusted_branch)
+    if actual != spec.trusted_target:
+        raise ReleaseError(
+            "publication code is not the live trusted default-branch revision"
+        )
+
+
 def _require_exact_assets(
     actual_assets: list[dict[str, Any]], expected_artifacts: list[Artifact]
 ) -> None:
@@ -379,6 +470,8 @@ def publish(api: ReleaseAPI, spec: ReleaseSpec, artifact_paths: list[Path]) -> i
     if not artifacts:
         raise ReleaseError("at least one release artifact is required")
 
+    _require_trusted_source(api, spec)
+    _require_tag_target(api, spec)
     if not api.immutable_releases_enabled():
         raise ReleaseError(
             "repository release immutability must be enabled before publishing"
@@ -391,6 +484,8 @@ def publish(api: ReleaseAPI, spec: ReleaseSpec, artifact_paths: list[Path]) -> i
             "releases. Inspect and manually delete an unpublished draft before retrying"
         )
 
+    _require_trusted_source(api, spec)
+    _require_tag_target(api, spec)
     try:
         created = api.create_release(spec)
     except ApiError as error:
@@ -407,6 +502,8 @@ def publish(api: ReleaseAPI, spec: ReleaseSpec, artifact_paths: list[Path]) -> i
     if not isinstance(upload_url, str):
         raise ReleaseError("created release did not contain an upload URL")
 
+    _require_trusted_source(api, spec)
+    _require_tag_target(api, spec)
     if not api.immutable_releases_enabled():
         raise ReleaseError(
             "release immutability changed during creation; the empty draft requires "
@@ -417,6 +514,8 @@ def publish(api: ReleaseAPI, spec: ReleaseSpec, artifact_paths: list[Path]) -> i
     for artifact in artifacts:
         _require_current_draft(api, spec, release_id)
         _require_exact_assets(api.list_assets(release_id), uploaded)
+        _require_trusted_source(api, spec)
+        _require_tag_target(api, spec)
         uploaded_asset = api.upload_asset(release_id, upload_url, artifact)
         _require_exact_assets([uploaded_asset], [artifact])
         uploaded.append(artifact)
@@ -424,7 +523,19 @@ def publish(api: ReleaseAPI, spec: ReleaseSpec, artifact_paths: list[Path]) -> i
 
     _require_current_draft(api, spec, release_id)
     _require_only_owned_draft(api, spec, release_id)
+    _require_trusted_source(api, spec)
+    _require_tag_target(api, spec)
     _require_exact_assets(api.list_assets(release_id), artifacts)
+    if not api.immutable_releases_enabled():
+        raise ReleaseError(
+            "release immutability changed before publication; the populated draft "
+            "requires manual inspection and cleanup"
+        )
+    # GitHub does not support conditional PATCH requests for release publication.
+    # This last read is therefore a drift detector, not a lock: the repository's
+    # single-writer workflow and credential policy is the publication boundary.
+    _require_trusted_source(api, spec)
+    _require_tag_target(api, spec)
 
     published = api.publish_release(release_id)
     _require_release_state(published, spec, release_id, draft=False)
@@ -447,6 +558,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--target", required=True)
+    parser.add_argument("--trusted-branch", required=True)
+    parser.add_argument("--trusted-target", required=True)
     parser.add_argument("--prerelease", required=True, type=_parse_bool)
     parser.add_argument("artifacts", nargs="+")
     return parser
@@ -467,6 +580,8 @@ def main(argv: list[str] | None = None) -> int:
         repository=args.repository,
         tag=args.tag,
         target=args.target,
+        trusted_branch=args.trusted_branch,
+        trusted_target=args.trusted_target,
         prerelease=args.prerelease,
     )
     try:
