@@ -766,6 +766,7 @@ if(NOT "${protoc_result}" STREQUAL "0")
     )
 endif()
 
+set(generation_staged_hashes)
 foreach(staged_generation_output IN LISTS staged_generation_outputs)
     if(
         NOT EXISTS "${staged_generation_output}"
@@ -792,6 +793,8 @@ foreach(staged_generation_output IN LISTS staged_generation_outputs)
             "No generated output was changed."
         )
     endif()
+    file(SHA256 "${staged_generation_output}" generation_staged_hash)
+    list(APPEND generation_staged_hashes "${generation_staged_hash}")
 endforeach()
 _protocyte_validate_generation_paths()
 _protocyte_validate_generation_staging_directory()
@@ -799,6 +802,7 @@ _protocyte_validate_generation_staging_directory()
 set(generation_initial_states)
 set(generation_operation_states)
 set(generation_recovery_states)
+set(generation_initial_hashes)
 foreach(generation_output IN LISTS generation_outputs)
     if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
         if(
@@ -813,16 +817,23 @@ foreach(generation_output IN LISTS generation_outputs)
             )
         endif()
         list(APPEND generation_initial_states "prior")
+        file(SHA256 "${generation_output}" generation_initial_hash)
+        list(APPEND generation_initial_hashes "${generation_initial_hash}")
     else()
         list(APPEND generation_initial_states "absent")
+        # CMake lists do not retain an empty element.  The transaction writer
+        # serializes this internal sentinel as the required empty prior hash.
+        list(APPEND generation_initial_hashes "absent")
     endif()
     list(APPEND generation_operation_states "untouched")
     list(APPEND generation_recovery_states "none")
 endforeach()
 set(generation_transaction_owner_markers)
+set(generation_owner_release_states)
 if(root_owner_is_missing)
     string(REPLACE ";" "\\;" generation_transaction_owner_marker "${OUT_DIR_OWNER_MARKER}")
     list(APPEND generation_transaction_owner_markers "${generation_transaction_owner_marker}")
+    list(APPEND generation_owner_release_states "unreleased")
 endif()
 foreach(output_lock_key IN LISTS missing_output_owner_keys)
     set(generation_transaction_owner_marker "${LOCK_DIRECTORY}/${output_lock_key}.owner")
@@ -832,9 +843,6 @@ foreach(output_lock_key IN LISTS missing_output_owner_keys)
         generation_transaction_owner_markers
         "${generation_transaction_owner_marker}"
     )
-endforeach()
-set(generation_owner_release_states)
-foreach(generation_transaction_owner_marker IN LISTS generation_transaction_owner_markers)
     list(APPEND generation_owner_release_states "unreleased")
 endforeach()
 set(generation_ownership_state "commit-pending")
@@ -854,6 +862,8 @@ _protocyte_write_generation_transaction(
     generation_initial_states
     generation_operation_states
     generation_recovery_states
+    generation_initial_hashes
+    generation_staged_hashes
 )
 if(NOT generation_transaction_written)
     _protocyte_discard_generation_staging()
@@ -877,6 +887,12 @@ if(generation_transaction_owner_markers)
     endif()
     set(generation_owner_witness_state "retained")
 else()
+    if(NOT "${generation_owner_transaction_id}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "Protocyte created an unexpected ownership transaction for target '${GENERATION_TARGET}'."
+        )
+    endif()
     set(generation_owner_witness_state "removed")
 endif()
 _protocyte_write_generation_transaction(
@@ -889,6 +905,8 @@ _protocyte_write_generation_transaction(
     generation_initial_states
     generation_operation_states
     generation_recovery_states
+    generation_initial_hashes
+    generation_staged_hashes
 )
 if(NOT generation_transaction_written)
     _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -907,9 +925,7 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     list(GET generation_initial_states ${generation_output_index} generation_initial_state)
     if(generation_initial_state STREQUAL "prior")
         _protocyte_staged_output_path(
-            backup_generation_output
-            "backups"
-            "${generation_output}"
+            backup_generation_output "backups" "${generation_output}"
         )
         _protocyte_generated_output_path_is_safe(
             backup_output_is_safe
@@ -944,6 +960,8 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
             generation_initial_states
             generation_operation_states
             generation_recovery_states
+            generation_initial_hashes
+            generation_staged_hashes
         )
         if(NOT generation_transaction_written)
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -991,6 +1009,8 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
             generation_initial_states
             generation_operation_states
             generation_recovery_states
+            generation_initial_hashes
+            generation_staged_hashes
         )
         if(NOT generation_transaction_written)
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -1044,6 +1064,8 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         generation_initial_states
         generation_operation_states
         generation_recovery_states
+        generation_initial_hashes
+        generation_staged_hashes
     )
     if(NOT generation_transaction_written)
         _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -1089,6 +1111,8 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         generation_initial_states
         generation_operation_states
         generation_recovery_states
+        generation_initial_hashes
+        generation_staged_hashes
     )
     if(NOT generation_transaction_written)
         _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -1120,6 +1144,14 @@ if(NOT "${transaction_complete_result}" STREQUAL "0")
     )
 endif()
 _protocyte_discard_generation_staging()
+file(REMOVE "${transaction_committed}")
+if(EXISTS "${transaction_committed}" OR IS_SYMLINK "${transaction_committed}")
+    message(
+        WARNING
+        "Protocyte left completed transaction data at '${transaction_committed}' for target '${GENERATION_TARGET}'. "
+        "It will be validated and removed before the next generation."
+    )
+endif()
 
 if(
     DEFINED OWNERSHIP_MANIFEST_DIR
