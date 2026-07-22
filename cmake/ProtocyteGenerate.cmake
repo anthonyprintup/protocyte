@@ -92,7 +92,6 @@ function(_protocyte_load_generation_outputs out_var)
         cmake_path(NORMAL_PATH owned_output OUTPUT_VARIABLE normalized_owned_output)
         _protocyte_normalized_path_identity(output_identity "${normalized_owned_output}")
         string(SHA256 recorded_output_key "${output_identity}")
-        list(FIND output_lock_keys "${output_key}" output_lock_index)
         _protocyte_generated_output_path_is_safe(
             output_is_safe
             "${normalized_owned_output}"
@@ -100,7 +99,7 @@ function(_protocyte_load_generation_outputs out_var)
         )
         if(
             NOT recorded_output_key STREQUAL output_key
-            OR output_lock_index EQUAL -1
+            OR NOT DEFINED "protocyte_generation_known_owner_${output_key}"
             OR NOT output_is_safe
         )
             message(
@@ -326,12 +325,6 @@ if(NOT output_lock_keys)
 endif()
 list(REMOVE_DUPLICATES output_lock_keys)
 list(SORT output_lock_keys)
-foreach(output_lock_key IN LISTS output_lock_keys)
-    # The immutable transaction journal stores a claim key, never a path.  A
-    # constant-time variable lookup keeps journal rendering/parsing linear even
-    # when every output needs a fresh ownership claim.
-    set("protocyte_generation_known_owner_${output_lock_key}" TRUE)
-endforeach()
 
 string(LENGTH "${BUILD_OWNER_HASH}" build_owner_hash_length)
 if(NOT build_owner_hash_length EQUAL 64 OR NOT BUILD_OWNER_HASH MATCHES "^[0-9a-f]+$")
@@ -346,6 +339,9 @@ foreach(output_lock_key IN LISTS output_lock_keys)
             "Protocyte generation lock manifest contains an invalid output identity: ${output_lock_key}"
         )
     endif()
+    # This validated hexadecimal key is used as a variable suffix, so marker
+    # membership does not require an O(N) list search for every output.
+    set("protocyte_generation_known_owner_${output_lock_key}" TRUE)
 endforeach()
 
 # Re-attest the configured namespace before creating or locking anything. The
@@ -939,8 +935,33 @@ endif()
 foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     list(GET generation_outputs ${generation_output_index} generation_output)
     list(GET generation_initial_states ${generation_output_index} generation_initial_state)
+    list(GET generation_initial_hashes ${generation_output_index} generation_initial_hash)
     if(generation_initial_state STREQUAL "prior")
         _protocyte_staged_output_path(backup_generation_output "backups" "${generation_output}")
+        _protocyte_generated_output_path_is_safe(
+            current_output_is_safe "${generation_output}" "${OUTPUT_DIRECTORY}"
+        )
+        _protocyte_generated_output_path_is_safe(
+            current_backup_is_safe "${backup_generation_output}"
+            "${STAGING_OUTPUT_DIRECTORY}/backups"
+        )
+        _protocyte_generation_transaction_file_hash_matches(
+            current_output_hash_matches "${generation_output}"
+            "${generation_initial_hash}"
+        )
+        if(
+            NOT current_output_is_safe
+            OR NOT current_backup_is_safe
+            OR NOT current_output_hash_matches
+            OR EXISTS "${backup_generation_output}"
+            OR IS_SYMLINK "${backup_generation_output}"
+        )
+            _protocyte_recover_generation_transaction(recovered_generation_transaction)
+            if(recovered_generation_transaction)
+                _protocyte_discard_generation_staging()
+            endif()
+            message(FATAL_ERROR "Protocyte output state changed before backup publication for target '${GENERATION_TARGET}'. Existing output was restored.")
+        endif()
         file(RENAME "${generation_output}" "${backup_generation_output}" NO_REPLACE RESULT backup_output_result)
         if(NOT "${backup_output_result}" STREQUAL "0")
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -955,6 +976,35 @@ endforeach()
 foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     list(GET generation_outputs ${generation_output_index} generation_output)
     list(GET staged_generation_outputs ${generation_output_index} staged_generation_output)
+    list(GET generation_staged_hashes ${generation_output_index} generation_staged_hash)
+    # Re-attest this individual output immediately before its final atomic
+    # rename.  The complete preflight above catches static corruption before
+    # owner publication; this O(1) check closes the interval between that pass
+    # and each later output publication without reintroducing an O(N^2) scan.
+    _protocyte_generated_output_path_is_safe(
+        staged_output_is_safe "${staged_generation_output}"
+        "${STAGING_OUTPUT_DIRECTORY}/generated"
+    )
+    _protocyte_generated_output_path_is_safe(
+        publication_output_is_safe "${generation_output}" "${OUTPUT_DIRECTORY}"
+    )
+    _protocyte_generation_transaction_file_hash_matches(
+        staged_output_hash_matches "${staged_generation_output}"
+        "${generation_staged_hash}"
+    )
+    if(
+        NOT staged_output_is_safe
+        OR NOT publication_output_is_safe
+        OR NOT staged_output_hash_matches
+        OR EXISTS "${generation_output}"
+        OR IS_SYMLINK "${generation_output}"
+    )
+        _protocyte_recover_generation_transaction(recovered_generation_transaction)
+        if(recovered_generation_transaction)
+            _protocyte_discard_generation_staging()
+        endif()
+        message(FATAL_ERROR "Protocyte staged output changed before publication for target '${GENERATION_TARGET}'. Existing output was restored.")
+    endif()
     file(RENAME "${staged_generation_output}" "${generation_output}" NO_REPLACE RESULT output_publish_result)
     if(NOT "${output_publish_result}" STREQUAL "0")
         _protocyte_recover_generation_transaction(recovered_generation_transaction)

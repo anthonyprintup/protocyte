@@ -10531,6 +10531,40 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         backup_abort_anchor, backup_abort_instrumentation
     )
 
+    staged_tamper_anchor = (
+        "    # Re-attest this individual output immediately before its final atomic\n"
+    )
+    staged_tamper_instrumentation = (
+        "    if(\n"
+        "        DEFINED PROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_INDEX\n"
+        "        AND generation_output_index EQUAL PROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_INDEX\n"
+        "    )\n"
+        '        if(PROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_KIND STREQUAL "bytes")\n'
+        '            file(WRITE "${staged_generation_output}" "forged staged bytes\\n")\n'
+        '        elseif(PROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_KIND STREQUAL "directory")\n'
+        '            file(REMOVE "${staged_generation_output}")\n'
+        '            file(MAKE_DIRECTORY "${staged_generation_output}")\n'
+        '        elseif(PROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_KIND STREQUAL "replacement")\n'
+        '            file(REMOVE "${staged_generation_output}")\n'
+        "            file(RENAME\n"
+        '                "${PROTOCYTE_TEST_TAMPER_STAGED_REPLACEMENT}"\n'
+        '                "${staged_generation_output}"\n'
+        "                NO_REPLACE\n"
+        "                RESULT staged_replacement_result\n"
+        "            )\n"
+        '            if(NOT "${staged_replacement_result}" STREQUAL "0")\n'
+        '                message(FATAL_ERROR "could not inject staged replacement: ${staged_replacement_result}")\n'
+        "            endif()\n"
+        "        else()\n"
+        '            message(FATAL_ERROR "unknown staged-output tamper kind")\n'
+        "        endif()\n"
+        "    endif()\n" + staged_tamper_anchor
+    )
+    assert generation_source.count(staged_tamper_anchor) == 1
+    generation_source = generation_source.replace(
+        staged_tamper_anchor, staged_tamper_instrumentation
+    )
+
     publish_abort_anchor = (
         "    endif()\n"
         "endforeach()\n"
@@ -11547,6 +11581,282 @@ def test_generation_transaction_valid_committed_journal_is_cleaned(
     assert _committed_owner_build_hash(root_owner, root_owner) == (
         _build_tree_owner_hash(owner_build_dir)
     )
+
+
+@pytest.mark.parametrize(
+    "forward_fault",
+    [
+        pytest.param(
+            "-DPROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX=0",
+            id="backup",
+        ),
+        pytest.param(
+            "-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=0",
+            id="publish",
+        ),
+        pytest.param(
+            "-DPROTOCYTE_TEST_ABORT_BEFORE_STAGING_CLEANUP=TRUE",
+            id="committed",
+        ),
+    ],
+)
+def test_generation_transaction_recovers_noop_regeneration_cuts(
+    tmp_path: Path,
+    forward_fault: str,
+) -> None:
+    source_dir = tmp_path / "project"
+    initial_build_dir = tmp_path / "initial-build"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    )
+    _write_out_dir_owner_project(source_dir, output_directory)
+    initial = _run_direct_owner_generation(
+        source_dir,
+        initial_build_dir,
+        output_directory,
+        generation_script,
+    )
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    expected_outputs = _out_dir_snapshot(output_directory)
+
+    # Deliberate operator cleanup creates a fresh owner for a deterministic
+    # no-op regeneration: every prior byte is also the next staged byte.
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in root_owner.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        root_owner, owner_fields["transaction-sha256"], "committed"
+    )
+    for owner_record in [root_owner, *(tmp_path / "output-locks").glob("*.owner")]:
+        owner_record.unlink()
+    witness.unlink()
+
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        forward_fault,
+    )
+    assert interrupted.returncode != 0
+    assert "injected generation transaction abort" in (
+        interrupted.stdout + interrupted.stderr
+    )
+
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _out_dir_snapshot(output_directory) == expected_outputs
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+    assert _committed_owner_build_hash(root_owner, root_owner) == (
+        _build_tree_owner_hash(owner_build_dir)
+    )
+
+
+def test_generation_transaction_recovers_noop_regeneration_release_cut(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    initial_build_dir = tmp_path / "initial-build"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    )
+    _write_out_dir_owner_project(source_dir, output_directory)
+    initial = _run_direct_owner_generation(
+        source_dir,
+        initial_build_dir,
+        output_directory,
+        generation_script,
+    )
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    expected_outputs = _out_dir_snapshot(output_directory)
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in root_owner.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        root_owner, owner_fields["transaction-sha256"], "committed"
+    )
+    for owner_record in [root_owner, *(tmp_path / "output-locks").glob("*.owner")]:
+        owner_record.unlink()
+    witness.unlink()
+
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=0",
+    )
+    assert interrupted.returncode != 0
+    release_interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RELEASE_PHASE=TRUE",
+        reuse_build=True,
+    )
+    assert release_interrupted.returncode != 0
+    assert "injected recovery abort after owner-release phase" in (
+        release_interrupted.stdout + release_interrupted.stderr
+    )
+    assert list((tmp_path / "output-locks").glob(".protocyte-generation-*.releasing"))
+
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _out_dir_snapshot(output_directory) == expected_outputs
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+    assert _committed_owner_build_hash(root_owner, root_owner) == (
+        _build_tree_owner_hash(owner_build_dir)
+    )
+
+
+@pytest.mark.parametrize(
+    "forward_fault",
+    [
+        pytest.param("-DPROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX=0", id="backup"),
+        pytest.param("-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=0", id="publish"),
+        pytest.param(
+            "-DPROTOCYTE_TEST_ABORT_BEFORE_STAGING_CLEANUP=TRUE", id="committed"
+        ),
+    ],
+)
+def test_generation_transaction_recovers_retained_owner_noop_cuts(
+    tmp_path: Path,
+    forward_fault: str,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    )
+    _write_out_dir_owner_project(source_dir, output_directory)
+    initial = _run_direct_owner_generation(
+        source_dir, build_dir, output_directory, generation_script
+    )
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    expected_outputs = _out_dir_snapshot(output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        build_dir,
+        output_directory,
+        instrumented_script,
+        forward_fault,
+        reuse_build=True,
+    )
+    assert interrupted.returncode != 0
+    assert "injected generation transaction abort" in (
+        interrupted.stdout + interrupted.stderr
+    )
+
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _out_dir_snapshot(output_directory) == expected_outputs
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    assert _committed_owner_build_hash(root_owner, root_owner) == (
+        _build_tree_owner_hash(build_dir)
+    )
+
+
+@pytest.mark.parametrize("tamper", ["bytes", "directory", "replacement"])
+def test_generation_transaction_rejects_late_staged_output_tamper_and_rolls_back(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    )
+    initial = _run_direct_owner_generation(
+        source_dir, build_dir, output_directory, generation_script
+    )
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    expected_outputs = _out_dir_snapshot(output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    arguments = [
+        "-DPROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_INDEX=0",
+        f"-DPROTOCYTE_TEST_TAMPER_STAGED_OUTPUT_KIND={tamper}",
+    ]
+    foreign_target = tmp_path / "foreign-target"
+    foreign_snapshot: dict[str, bytes | str] | None = None
+    if tamper == "replacement":
+        foreign_target.mkdir()
+        (foreign_target / "sentinel.txt").write_text("preserve\n", encoding="utf-8")
+        replacement = tmp_path / "staged-replacement"
+        _create_generated_output_directory_link(replacement, foreign_target)
+        foreign_snapshot = _path_tree_snapshot(foreign_target)
+        arguments.append(f"-DPROTOCYTE_TEST_TAMPER_STAGED_REPLACEMENT={replacement}")
+
+    rejected = _run_direct_owner_generation(
+        source_dir,
+        build_dir,
+        output_directory,
+        instrumented_script,
+        *arguments,
+        reuse_build=True,
+    )
+
+    assert rejected.returncode != 0
+    assert "staged output changed before publication" in (
+        rejected.stdout + rejected.stderr
+    )
+    assert _out_dir_snapshot(output_directory) == expected_outputs
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+    assert not list(tmp_path.glob(".protocyte-generation-staging-*"))
+    if foreign_snapshot is not None:
+        assert _path_tree_snapshot(foreign_target) == foreign_snapshot
+
+    retried = _run_direct_owner_generation(
+        source_dir,
+        build_dir,
+        output_directory,
+        generation_script,
+        reuse_build=True,
+    )
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert _out_dir_snapshot(output_directory) == expected_outputs
 
 
 def test_generation_transaction_backup_link_tamper_fails_closed(tmp_path: Path) -> None:
