@@ -1059,6 +1059,16 @@ def _managed_environment_executables(environment: Path) -> tuple[Path, Path]:
     )
 
 
+def _managed_environment_process_environment() -> dict[str, str]:
+    """Return an environment that cannot redirect managed Python imports."""
+    environment = os.environ.copy()
+    environment.pop("PYTHONHOME", None)
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONSAFEPATH"] = "1"
+    return environment
+
+
 def _write_managed_environment_consumer(
     source_dir: Path,
     environment_root: Path,
@@ -4421,6 +4431,8 @@ def test_relocated_install_provisions_managed_python_environment(
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=_managed_environment_process_environment(),
         ).stdout.strip()
         == __version__
     )
@@ -13586,12 +13598,15 @@ def test_managed_environment_rejects_additive_pip_install_inputs(
         installed = subprocess.run(
             [
                 str(python),
+                "-I",
                 "-c",
                 "import importlib.util; print(importlib.util.find_spec('injected'))",
             ],
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=_managed_environment_process_environment(),
         )
         assert installed.stdout.strip() == "None"
     else:
@@ -13638,12 +13653,15 @@ def test_managed_environment_ignores_pip26_script_requirements_from_environment(
     installed = subprocess.run(
         [
             str(python),
+            "-I",
             "-c",
             "import importlib.util; print(importlib.util.find_spec('injected'))",
         ],
         check=True,
         capture_output=True,
         text=True,
+        cwd=tmp_path,
+        env=_managed_environment_process_environment(),
     )
     assert installed.stdout.strip() == "None"
     assert not sentinel.exists()
@@ -13652,6 +13670,8 @@ def test_managed_environment_ignores_pip26_script_requirements_from_environment(
     # pip prepares the injected local source even with --dry-run. The managed
     # configure above must never reach it.
     control_environment = environment.copy()
+    control_environment.pop("PYTHONHOME", None)
+    control_environment.pop("PYTHONPATH", None)
     control_environment.pop("PIP_REQUIREMENTS_FROM_SCRIPT")
     control = subprocess.run(
         [
@@ -13963,6 +13983,8 @@ def test_shared_managed_environment_serializes_concurrent_configures(
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=_managed_environment_process_environment(),
         ).stdout.strip()
         == __version__
     )
@@ -13973,6 +13995,7 @@ def test_shared_managed_environment_serializes_concurrent_configures(
 
 def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     environment_root = tmp_path / "managed-environments"
     source_dir = tmp_path / "project"
@@ -13995,19 +14018,35 @@ def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
     )
     assert ready_marker.stat().st_mtime_ns == ready_mtime_ns
 
+    repo_package_init = (
+        Path(__file__).resolve().parents[1] / "src" / "protocyte" / "__init__.py"
+    )
+    original_repo_package_init = repo_package_init.read_text(encoding="utf-8")
+    poison_home = tmp_path / "poison-home"
+    poison_home.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(repo_package_init.parents[1]))
+    monkeypatch.setenv("PYTHONHOME", str(poison_home))
+    managed_environment = _managed_environment_process_environment()
+    assert "PYTHONPATH" not in managed_environment
+    assert "PYTHONHOME" not in managed_environment
+
     python, plugin = _managed_environment_executables(environment)
     package_init = Path(
         subprocess.run(
             [
                 str(python),
+                "-I",
                 "-c",
                 "from pathlib import Path; import protocyte; print(Path(protocyte.__file__).resolve())",
             ],
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=managed_environment,
         ).stdout.strip()
     )
+    assert package_init.is_relative_to(environment)
     original_package_init = package_init.read_text(encoding="utf-8")
     expected_literal = f'__version__ = "{__version__}"'
     assert expected_literal in original_package_init
@@ -14022,13 +14061,16 @@ def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=managed_environment,
         ).stdout.strip()
         == "99.0.0"
     )
+    assert repo_package_init.read_text(encoding="utf-8") == original_repo_package_init
 
     empty_pip_cache = tmp_path / "empty-pip-cache"
     empty_pip_cache.mkdir()
-    offline_env = os.environ.copy()
+    offline_env = managed_environment.copy()
     offline_env.update(
         PIP_CACHE_DIR=str(empty_pip_cache),
         PIP_CONFIG_FILE=os.devnull,
@@ -14051,12 +14093,19 @@ def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=managed_environment,
         ).stdout.strip()
         == "99.0.0"
     )
+    assert repo_package_init.read_text(encoding="utf-8") == original_repo_package_init
     _assert_no_managed_environment_transaction_leftovers(environment_root)
 
-    repaired = _configure_managed_environment(source_dir, build_dir)
+    repaired = _configure_managed_environment(
+        source_dir,
+        build_dir,
+        env=managed_environment,
+    )
     assert repaired.returncode == 0, repaired.stdout + repaired.stderr
     assert (
         "Provisioning Protocyte Python environment:"
@@ -14073,9 +14122,12 @@ def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
             check=True,
             capture_output=True,
             text=True,
+            cwd=tmp_path,
+            env=managed_environment,
         ).stdout.strip()
         == __version__
     )
+    assert repo_package_init.read_text(encoding="utf-8") == original_repo_package_init
     _assert_no_managed_environment_transaction_leftovers(environment_root)
 
 
