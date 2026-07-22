@@ -88,8 +88,7 @@ def test_smoke_regeneration_uses_managed_python_and_documents_portability_ci() -
     guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
 
     assert (
-        "uv run python .github/scripts/install_protoc.py "
-        "--dest build/canonical-protoc"
+        "uv run python .github/scripts/install_protoc.py --dest build/canonical-protoc"
     ) in guide
     assert "\npython .github/scripts/install_protoc.py" not in guide
     assert "complete wheel\nand quick-start path on Linux, Windows, and macOS" in guide
@@ -303,15 +302,16 @@ def test_readme_propagates_public_string_view_configuration() -> None:
     assert "all translation units in that target graph" in string_views
 
 
-def test_readme_requires_public_reflection_configuration_for_generated_libraries() -> None:
+def test_readme_requires_public_reflection_configuration_for_generated_libraries() -> (
+    None
+):
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     reflection = readme.split("Reflection tables are emitted", maxsplit=1)[1].split(
         "`ReflectionFieldInfo::label`", maxsplit=1
     )[0]
 
     assert (
-        "target_compile_definitions(demo_proto PUBLIC "
-        "PROTOCYTE_ENABLE_REFLECTION=1)"
+        "target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_REFLECTION=1)"
     ) in reflection
     assert "PUBLIC visibility is required" in reflection
     assert "TYPE SHARED" in reflection
