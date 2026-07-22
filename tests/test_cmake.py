@@ -1198,7 +1198,12 @@ def _write_incompatible_protocyte_plugin(path: Path) -> Path:
     return plugin
 
 
-def _write_slow_descriptor_set_plugin(path: Path, delay_seconds: float) -> Path:
+def _write_slow_descriptor_set_plugin(
+    path: Path,
+    delay_seconds: float,
+    *,
+    platform_name: str | None = None,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     script = path.with_suffix(".py")
     script.write_text(
@@ -1214,7 +1219,9 @@ def _write_slow_descriptor_set_plugin(path: Path, delay_seconds: float) -> Path:
         ),
         encoding="utf-8",
     )
-    if os.name == "nt":
+    if platform_name is None:
+        platform_name = os.name
+    if platform_name == "nt":
         plugin = path.with_suffix(".cmd")
         plugin.write_text(
             f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
@@ -1223,7 +1230,13 @@ def _write_slow_descriptor_set_plugin(path: Path, delay_seconds: float) -> Path:
     else:
         plugin = path
         plugin.write_text(
-            f'#!{sys.executable}\nexec "{sys.executable}" "{script}" "$@"\n',
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
         plugin.chmod(0o755)
@@ -13967,6 +13980,36 @@ def test_descriptor_set_discover_managed_plugin_error_is_not_an_override(
     assert result.returncode != 0
     assert "Protocyte's managed plugin is expected to support" in output
     assert "PROTOCYTE_PLUGIN_EXECUTABLE overrides" not in output
+
+
+def test_slow_descriptor_set_plugin_posix_wrapper_is_valid_shell(
+    tmp_path: Path,
+) -> None:
+    plugin = _write_slow_descriptor_set_plugin(
+        tmp_path / "slow plugin's dir" / "slow-plugin",
+        0,
+        platform_name="posix",
+    )
+    wrapper_lines = plugin.read_text(encoding="utf-8").splitlines()
+
+    assert wrapper_lines[0] == "#!/usr/bin/env sh"
+    assert shlex.split(wrapper_lines[1]) == [
+        "exec",
+        sys.executable,
+        str(plugin.with_suffix(".py")),
+        "$@",
+    ]
+
+    if shell := shutil.which("sh"):
+        result = subprocess.run(
+            [shell, str(plugin), "descriptor-set", "list", "descriptor_set.pb"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout.strip() == '["api/demo.proto"]'
+        assert result.stderr.strip() == "slow descriptor discovery stderr"
 
 
 def test_descriptor_set_discover_honors_configured_tool_timeout(
