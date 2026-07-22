@@ -2059,6 +2059,153 @@ function(_protocyte_stage_python_project source_root constraints_file destinatio
 endfunction()
 
 function(
+    _protocyte_run_managed_pip
+    out_result
+    out_output
+    out_error
+    timeout
+    python_executable
+)
+    _protocyte_check_managed_pip_configuration(
+        configuration_result
+        configuration_error
+        "${python_executable}"
+    )
+    if(NOT "${configuration_result}" STREQUAL "0")
+        set(${out_result} "${configuration_result}" PARENT_SCOPE)
+        set(${out_output} "" PARENT_SCOPE)
+        set(${out_error} "${configuration_error}" PARENT_SCOPE)
+        return()
+    endif()
+
+    # Remove PIP_* destination and additive-install overrides, plus Python
+    # import-path overrides, so every installation stays inside the managed
+    # environment while index, proxy, and certificate configuration remains
+    # available.
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "--unset=PIP_TARGET"
+            "--unset=PIP_PREFIX"
+            "--unset=PIP_ROOT"
+            "--unset=PIP_USER"
+            "--unset=PIP_PYTHON"
+            "--unset=PIP_QUIET"
+            "--unset=PIP_REQUIREMENT"
+            "--unset=PIP_EDITABLE"
+            "--unset=PIP_GROUP"
+            "--unset=PIP_REQUIREMENTS_FROM_SCRIPT"
+            "--unset=PYTHONUSERBASE"
+            "--unset=PYTHONPATH"
+            "--unset=PYTHONHOME"
+            "PIP_ISOLATED=0"
+            "${python_executable}" -I -m pip install
+            --disable-pip-version-check
+            --no-input
+            --no-user
+            ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+        TIMEOUT "${timeout}"
+    )
+    set(${out_result} "${result}" PARENT_SCOPE)
+    set(${out_output} "${output}" PARENT_SCOPE)
+    set(${out_error} "${error}" PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_check_managed_pip_configuration
+    out_result
+    out_error
+    python_executable
+)
+    # Inspect the effective configuration without destination overrides from
+    # the parent process. The script reports only unsafe option names, never
+    # values: index URLs can contain credentials.
+    set(configuration_script [=[
+from pip._internal.configuration import Configuration, ConfigurationError
+
+configuration = Configuration(isolated=False)
+configuration.load()
+unsafe = set()
+for scope in ("global", "install"):
+    for option in ("target", "prefix", "root"):
+        key = f"{scope}.{option}"
+        try:
+            value = configuration.get_value(key)
+        except ConfigurationError:
+            continue
+        normalized = str(value).strip().casefold()
+        if normalized:
+            unsafe.add(key)
+    for option in ("requirement", "editable", "group", "requirements-from-script"):
+        key = f"{scope}.{option}"
+        try:
+            value = configuration.get_value(key)
+        except ConfigurationError:
+            continue
+        if str(value).strip():
+            unsafe.add(key)
+try:
+    global_python = configuration.get_value("global.python")
+except ConfigurationError:
+    global_python = ""
+if str(global_python).strip():
+    unsafe.add("global.python")
+print(",".join(sorted(unsafe)))
+]=])
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "--unset=PIP_TARGET"
+            "--unset=PIP_PREFIX"
+            "--unset=PIP_ROOT"
+            "--unset=PIP_USER"
+            "--unset=PIP_PYTHON"
+            "--unset=PIP_QUIET"
+            "--unset=PIP_REQUIREMENT"
+            "--unset=PIP_EDITABLE"
+            "--unset=PIP_GROUP"
+            "--unset=PIP_REQUIREMENTS_FROM_SCRIPT"
+            "--unset=PYTHONUSERBASE"
+            "--unset=PYTHONPATH"
+            "--unset=PYTHONHOME"
+            "PIP_ISOLATED=0"
+            "${python_executable}" -I -c "${configuration_script}"
+        RESULT_VARIABLE config_result
+        OUTPUT_VARIABLE config_output
+        ERROR_VARIABLE config_error
+        TIMEOUT 30
+    )
+    if(NOT "${config_result}" STREQUAL "0")
+        set(${out_result} "configuration-inspection-failed" PARENT_SCOPE)
+        set(
+            ${out_error}
+            "Failed to inspect pip configuration before provisioning Protocyte's managed Python environment. "
+            "Fix the local pip configuration and retry."
+            PARENT_SCOPE
+        )
+        return()
+    endif()
+    string(STRIP "${config_output}" configured_options)
+    if(NOT "${configured_options}" STREQUAL "")
+        set(${out_result} "unsafe-pip-configuration" PARENT_SCOPE)
+        set(
+            ${out_error}
+            "Refusing to provision Protocyte's managed Python environment because the effective pip configuration "
+            "sets unsupported managed-install options: ${configured_options}. Remove those options or use a pip "
+            "configuration without custom install destinations or additional requirements; index, proxy, certificate, "
+            "and cache settings remain supported."
+            PARENT_SCOPE
+        )
+        return()
+    endif()
+    set(${out_result} "0" PARENT_SCOPE)
+    set(${out_error} "" PARENT_SCOPE)
+endfunction()
+
+function(
     _protocyte_verify_python_environment
     out_result
     out_output
@@ -2086,11 +2233,12 @@ from importlib.metadata import version
 from pathlib import Path
 import sys
 
-requirements = [
-    line.strip()
-    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
-    if line.strip() and not line.lstrip().startswith("#")
-]
+requirements = []
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or line.startswith("--hash="):
+        continue
+    requirements.append(line.removesuffix("\\").rstrip())
 expected = dict(requirement.split("==", 1) for requirement in requirements)
 mismatches = {
     name: (wanted, version(name))
@@ -2113,7 +2261,10 @@ import protocyte.main
 ]=])
     execute_process(
         COMMAND
-            "${python_executable}" -c "${verify_script}"
+            "${CMAKE_COMMAND}" -E env
+            "--unset=PYTHONPATH"
+            "--unset=PYTHONHOME"
+            "${python_executable}" -I -c "${verify_script}"
             "${constraints_file}" "${expected_version}"
         RESULT_VARIABLE verify_result
         OUTPUT_VARIABLE verify_output
@@ -2122,7 +2273,17 @@ import protocyte.main
     )
     if("${verify_result}" STREQUAL "0")
         execute_process(
-            COMMAND "${python_executable}" -m pip check
+            COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "--unset=PIP_PYTHON"
+                "--unset=PIP_REQUIREMENT"
+                "--unset=PIP_EDITABLE"
+                "--unset=PIP_GROUP"
+                "--unset=PIP_REQUIREMENTS_FROM_SCRIPT"
+                "--unset=PYTHONPATH"
+                "--unset=PYTHONHOME"
+                "PIP_ISOLATED=0"
+                "${python_executable}" -I -m pip check
             RESULT_VARIABLE pip_check_result
             OUTPUT_VARIABLE pip_check_output
             ERROR_VARIABLE pip_check_error
@@ -2136,7 +2297,11 @@ import protocyte.main
     endif()
     if("${verify_result}" STREQUAL "0")
         execute_process(
-            COMMAND "${plugin_executable}" --version
+            COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "--unset=PYTHONPATH"
+                "--unset=PYTHONHOME"
+                "${plugin_executable}" --version
             RESULT_VARIABLE plugin_verify_result
             OUTPUT_VARIABLE plugin_verify_output
             ERROR_VARIABLE plugin_verify_error
@@ -2225,7 +2390,13 @@ function(
         )
     endif()
     set(transaction_command
+        "${CMAKE_COMMAND}"
+        -E
+        env
+        "--unset=PYTHONPATH"
+        "--unset=PYTHONHOME"
         "${python_executable}"
+        -I
         "${transaction_helper}"
         "${action}"
         --destination "${destination}"
@@ -2404,28 +2575,6 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         endif()
         string(STRIP "${protocyte_python_transaction}" protocyte_python_transaction)
 
-        if(EXISTS "${protocyte_python_environment}")
-            _protocyte_run_managed_environment_transaction(
-                backup_result
-                backup_output
-                "${Python3_EXECUTABLE}"
-                "${protocyte_python_environment}"
-                "${protocyte_python_fingerprint}"
-                backup
-                "${protocyte_python_transaction}"
-            )
-            if(NOT "${backup_result}" STREQUAL "0")
-                message(
-                    FATAL_ERROR
-                    "Failed to preserve the identity-bound backup of Protocyte's managed Python environment "
-                    "before provisioning its replacement.\n\n"
-                    "Environment: ${protocyte_python_environment}\n\n"
-                    "Details:\n${backup_output}\n\n"
-                    "The live environment and transaction were left unchanged."
-                )
-            endif()
-        endif()
-
         message(STATUS "Provisioning Protocyte Python environment: ${protocyte_python_environment}")
         set(protocyte_python_staging "${protocyte_python_transaction}/staging")
         _protocyte_python_environment_paths(
@@ -2433,9 +2582,31 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             protocyte_staged_plugin_executable
             "${protocyte_python_staging}"
         )
+        if(WIN32)
+            set(protocyte_disabled_pip_config "NUL")
+        else()
+            set(protocyte_disabled_pip_config "/dev/null")
+        endif()
         set(venv_arguments -m venv "${protocyte_python_staging}")
         execute_process(
-            COMMAND "${Python3_EXECUTABLE}" ${venv_arguments}
+            COMMAND
+                "${CMAKE_COMMAND}" -E env
+                "--unset=PIP_TARGET"
+                "--unset=PIP_PREFIX"
+                "--unset=PIP_ROOT"
+                "--unset=PIP_USER"
+                "--unset=PIP_PYTHON"
+                "--unset=PIP_QUIET"
+                "--unset=PIP_REQUIREMENT"
+                "--unset=PIP_EDITABLE"
+                "--unset=PIP_GROUP"
+                "--unset=PIP_REQUIREMENTS_FROM_SCRIPT"
+                "--unset=PYTHONUSERBASE"
+                "--unset=PYTHONPATH"
+                "--unset=PYTHONHOME"
+                "PIP_ISOLATED=0"
+                "PIP_CONFIG_FILE=${protocyte_disabled_pip_config}"
+                "${Python3_EXECUTABLE}" -I ${venv_arguments}
             RESULT_VARIABLE venv_result
             OUTPUT_VARIABLE venv_output
             ERROR_VARIABLE venv_error
@@ -2463,6 +2634,54 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             )
         endif()
 
+        _protocyte_check_managed_pip_configuration(
+            configuration_result
+            configuration_error
+            "${protocyte_staged_python_executable}"
+        )
+        if(NOT "${configuration_result}" STREQUAL "0")
+            _protocyte_rollback_python_environment(
+                rollback_result
+                rollback_output
+                "${Python3_EXECUTABLE}"
+                "${protocyte_python_environment}"
+                "${protocyte_python_fingerprint}"
+                "${protocyte_python_transaction}"
+            )
+            if(NOT "${rollback_result}" STREQUAL "0")
+                string(APPEND configuration_error "\nFailed to clean up the staging environment: ${rollback_output}")
+            endif()
+            _protocyte_python_provisioning_error(
+                "validate pip configuration for the managed Python environment"
+                "\"${protocyte_staged_python_executable}\" -c pip-configuration-inspection"
+                "${configuration_result}"
+                ""
+                "${configuration_error}"
+            )
+        endif()
+
+        if(EXISTS "${protocyte_python_environment}")
+            _protocyte_run_managed_environment_transaction(
+                backup_result
+                backup_output
+                "${Python3_EXECUTABLE}"
+                "${protocyte_python_environment}"
+                "${protocyte_python_fingerprint}"
+                backup
+                "${protocyte_python_transaction}"
+            )
+            if(NOT "${backup_result}" STREQUAL "0")
+                message(
+                    FATAL_ERROR
+                    "Failed to preserve the identity-bound backup of Protocyte's managed Python environment "
+                    "before provisioning its replacement.\n\n"
+                    "Environment: ${protocyte_python_environment}\n\n"
+                    "Details:\n${backup_output}\n\n"
+                    "The live environment and transaction were left unchanged."
+                )
+            endif()
+        endif()
+
         set(protocyte_staged_project "${protocyte_python_staging}/project")
         set(protocyte_staged_constraints "${protocyte_staged_project}/protocyte-cmake-constraints.txt")
         _protocyte_stage_python_project(
@@ -2471,19 +2690,18 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             "${protocyte_staged_project}"
         )
 
-        execute_process(
-            COMMAND
-                "${protocyte_staged_python_executable}" -m pip install
-                --disable-pip-version-check
-                --no-input
-                --upgrade
-                --force-reinstall
-                --constraint "${protocyte_staged_constraints}"
-                pip setuptools wheel
-            RESULT_VARIABLE bootstrap_result
-            OUTPUT_VARIABLE bootstrap_output
-            ERROR_VARIABLE bootstrap_error
-            TIMEOUT 300
+        _protocyte_run_managed_pip(
+            bootstrap_result
+            bootstrap_output
+            bootstrap_error
+            300
+            "${protocyte_staged_python_executable}"
+            --no-build-isolation
+            --upgrade
+            --force-reinstall
+            --only-binary=:all:
+            --require-hashes
+            --requirement "${protocyte_staged_constraints}"
         )
         if(NOT "${bootstrap_result}" STREQUAL "0")
             _protocyte_rollback_python_environment(
@@ -2499,27 +2717,24 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             endif()
             _protocyte_python_provisioning_error(
                 "install Protocyte's pinned Python build tools"
-                "\"${protocyte_staged_python_executable}\" -m pip install --disable-pip-version-check --no-input --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" pip setuptools wheel"
+                "\"${protocyte_staged_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --upgrade --force-reinstall --only-binary=:all: --require-hashes --requirement \"${protocyte_staged_constraints}\""
                 "${bootstrap_result}"
                 "${bootstrap_output}"
                 "${bootstrap_error}"
             )
         endif()
 
-        execute_process(
-            COMMAND
-                "${protocyte_staged_python_executable}" -m pip install
-                --disable-pip-version-check
-                --no-input
-                --no-build-isolation
-                --upgrade
-                --force-reinstall
-                --constraint "${protocyte_staged_constraints}"
-                "${protocyte_staged_project}"
-            RESULT_VARIABLE install_result
-            OUTPUT_VARIABLE install_output
-            ERROR_VARIABLE install_error
-            TIMEOUT 300
+        _protocyte_run_managed_pip(
+            install_result
+            install_output
+            install_error
+            300
+            "${protocyte_staged_python_executable}"
+            --no-build-isolation
+            --upgrade
+            --force-reinstall
+            --no-deps
+            "${protocyte_staged_project}"
         )
         if(NOT "${install_result}" STREQUAL "0")
             _protocyte_rollback_python_environment(
@@ -2535,7 +2750,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
             endif()
             _protocyte_python_provisioning_error(
                 "install Protocyte and its Python dependencies"
-                "\"${protocyte_staged_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --upgrade --force-reinstall --constraint \"${protocyte_staged_constraints}\" \"${protocyte_staged_project}\""
+                "\"${protocyte_staged_python_executable}\" -m pip install --disable-pip-version-check --no-input --no-build-isolation --upgrade --force-reinstall --no-deps \"${protocyte_staged_project}\""
                 "${install_result}"
                 "${install_output}"
                 "${install_error}"
@@ -2635,19 +2850,16 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${promote_output}"
             )
         endif()
-        execute_process(
-            COMMAND
-                "${protocyte_python_executable}" -m pip install
-                --disable-pip-version-check
-                --no-input
-                --no-build-isolation
-                --no-deps
-                --force-reinstall
-                "${protocyte_python_environment}/project"
-            RESULT_VARIABLE relocation_result
-            OUTPUT_VARIABLE relocation_output
-            ERROR_VARIABLE relocation_error
-            TIMEOUT 120
+        _protocyte_run_managed_pip(
+            relocation_result
+            relocation_output
+            relocation_error
+            120
+            "${protocyte_python_executable}"
+            --no-build-isolation
+            --no-deps
+            --force-reinstall
+            "${protocyte_python_environment}/project"
         )
         if(NOT "${relocation_result}" STREQUAL "0")
             _protocyte_rollback_python_environment(
@@ -3730,8 +3942,16 @@ function(protocyte_generate)
     _protocyte_get_internal(protocyte_options_proto OPTIONS_PROTO)
     _protocyte_get_internal(protocyte_generator_sources GENERATOR_SOURCES)
     _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
+    _protocyte_get_internal(protocyte_managed_plugin MANAGED_PLUGIN_EXECUTABLE)
     if("${protocyte_plugin_executable}" STREQUAL "")
         message(FATAL_ERROR "Protocyte code generation plugin was not prepared")
+    endif()
+    set(protocyte_plugin_is_managed FALSE)
+    if(
+        NOT "${protocyte_managed_plugin}" STREQUAL ""
+        AND "${protocyte_plugin_executable}" STREQUAL "${protocyte_managed_plugin}"
+    )
+        set(protocyte_plugin_is_managed TRUE)
     endif()
     _protocyte_canonical_output_directory(
         PROTOCYTE_OUT_DIR
@@ -3957,6 +4177,7 @@ function(protocyte_generate)
                     "-DDEPENDENCY_DEPFILE=${dependency_depfile_rel}"
                     "-DDEPENDENCY_DEPFILE_TARGET=${dependency_depfile_target}"
                     "-DDEPENDENCY_FILE_FORMAT=${protocyte_dependency_file_format}"
+                    "-DMANAGED_DEPENDENCY_READER=${protocyte_plugin_is_managed}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
                 DEPENDS
@@ -4081,6 +4302,7 @@ function(protocyte_generate)
             "-DBUILD_OWNER_HASH=${protocyte_build_tree_owner_hash}"
             "-DOWNERSHIP_MANIFEST_DIR=${PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR}"
             "-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"
+            "-DPROTOCYTE_MANAGED_PLUGIN=${protocyte_plugin_is_managed}"
             -P "${protocyte_generation_script}"
         DEPENDS
             ${protocyte_input_depends}

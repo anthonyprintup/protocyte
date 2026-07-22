@@ -367,8 +367,14 @@ installable copy of the protocyte Python generator project. It does not bundle
 Python itself. The first downstream configuration that needs code generation
 finds a local Python 3.12+ interpreter, creates a fingerprinted virtual
 environment under the build tree, and installs protocyte and its Python
-dependencies there from the exact versions in the bundled CMake constraints
-file. The install is built from a writable staged copy, so it never modifies
+dependencies there from the bundled hash-locked CMake requirements file. The
+file records the published wheel and source-archive hashes; the installer accepts
+only a recorded wheel, while the
+local staged Protocyte project is installed without resolving further
+dependencies. It deliberately accepts binary packages only: all managed
+dependencies provide universal or supported platform wheels, so provisioning
+does not execute a dependency source build. The install is built from a writable
+staged copy, so it never modifies
 the CMake package prefix, installs packages globally, or changes the selected
 base interpreter. That interpreter must include Python's `venv` module and
 `ensurepip`; on Debian and Ubuntu these may require installing `python3-venv`

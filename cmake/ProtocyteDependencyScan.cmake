@@ -33,6 +33,11 @@ if(NOT "${lock_result}" STREQUAL "0")
     )
 endif()
 
+set(protocyte_dependency_environment)
+if(MANAGED_DEPENDENCY_READER)
+    list(APPEND protocyte_dependency_environment "--unset=PYTHONPATH" "--unset=PYTHONHOME")
+endif()
+
 execute_process(
     COMMAND
         "${PROTOC_EXECUTABLE}"
@@ -74,6 +79,8 @@ endif()
 
 execute_process(
     COMMAND
+        "${CMAKE_COMMAND}" -E env
+        ${protocyte_dependency_environment}
         "${DEPENDENCY_READER}"
         descriptor-set
         dependency-file
