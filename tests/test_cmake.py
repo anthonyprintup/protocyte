@@ -10578,16 +10578,33 @@ def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> N
 
 def test_cmake_constraints_pin_the_private_environment() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    constraint_lines = [
-        line.strip()
-        for line in (repo_root / "protocyte-cmake-constraints.txt")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    constraints = dict(line.split("==", 1) for line in constraint_lines)
+    constraints_path = repo_root / "protocyte-cmake-constraints.txt"
+    constraint_lines = []
+    hashes: dict[str, list[str]] = {}
+    current_package: str | None = None
+    for raw_line in constraints_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("--hash="):
+            assert current_package is not None
+            hashes.setdefault(current_package, []).append(
+                line.removesuffix("\\").rstrip()
+            )
+            continue
+        package, version = line.removesuffix("\\").rstrip().split("==", 1)
+        constraint_lines.append((package, version))
+        current_package = package
+    constraints = dict(constraint_lines)
 
     assert set(constraints) == {"pip", "protobuf", "setuptools", "wheel"}
+    assert set(hashes) == set(constraints)
+    assert all(package_hashes for package_hashes in hashes.values())
+    assert all(
+        package_hash.startswith("--hash=sha256:") and len(package_hash) == 78
+        for package_hashes in hashes.values()
+        for package_hash in package_hashes
+    )
     locked_packages = tomllib.loads(
         (repo_root / "uv.lock").read_text(encoding="utf-8")
     )["package"]
@@ -10597,6 +10614,344 @@ def test_cmake_constraints_pin_the_private_environment() -> None:
         if package["name"] == "protobuf"
     )
     assert constraints["protobuf"] == locked_protobuf
+
+    functions = (repo_root / "cmake" / "ProtocyteFunctions.cmake").read_text(
+        encoding="utf-8"
+    )
+    assert "--unset=PIP_TARGET" in functions
+    assert "--unset=PIP_PREFIX" in functions
+    assert "--unset=PIP_ROOT" in functions
+    assert "--unset=PIP_USER" in functions
+    assert "--unset=PIP_PYTHON" in functions
+    assert "--unset=PIP_QUIET" in functions
+    assert "--unset=PIP_REQUIREMENT" in functions
+    assert "--unset=PIP_EDITABLE" in functions
+    assert "--unset=PIP_GROUP" in functions
+    assert "--unset=PIP_REQUIREMENTS_FROM_SCRIPT" in functions
+    assert "--unset=PYTHONUSERBASE" in functions
+    assert "--unset=PYTHONPATH" in functions
+    assert "--unset=PYTHONHOME" in functions
+    assert "PIP_ISOLATED=0" in functions
+    assert '"${python_executable}" -I -m pip install' in functions
+    assert 'for option in ("target", "prefix", "root"):' in functions
+    assert 'for option in ("requirement", "editable", "group", "requirements-from-script"):' in functions
+    assert 'configuration.get_value("global.python")' in functions
+    assert "--no-user" in functions
+    assert functions.count("_protocyte_run_managed_pip(") == 3
+    assert functions.count("_protocyte_check_managed_pip_configuration(") == 2
+    assert "--only-binary=:all:\n            --require-hashes" in functions
+    assert "--require-hashes\n            --requirement" in functions
+    assert '--no-deps\n            "${protocyte_staged_project}"' in functions
+    generation = (repo_root / "cmake" / "ProtocyteGenerate.cmake").read_text(
+        encoding="utf-8"
+    )
+    assert "if(PROTOCYTE_MANAGED_PLUGIN)" in generation
+    assert '"--unset=PYTHONPATH" "--unset=PYTHONHOME"' in generation
+
+
+def test_hash_locked_requirements_reject_same_version_different_bytes(
+    tmp_path: Path,
+) -> None:
+    package_name = "managed-hash-fixture"
+    package_version = "1.0"
+    wheel = tmp_path / "managed_hash_fixture-1.0-py3-none-any.whl"
+    wheel.write_bytes(b"same-version-but-untrusted-bytes")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        f"{package_name}=={package_version} --hash=sha256:{'0' * 64}\n",
+        encoding="utf-8",
+    )
+    environment = tmp_path / "environment"
+    subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+    result = subprocess.run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "download",
+            "--no-deps",
+            "--no-index",
+            "--find-links",
+            str(tmp_path),
+            "--require-hashes",
+            "--requirement",
+            str(requirements),
+            "--dest",
+            str(tmp_path / "download"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "hashes" in output.casefold()
+    assert f"{'0' * 64}" in output
+    assert "got" in output.casefold()
+
+
+def test_managed_environment_rejects_wrong_hash_from_configured_index(
+    tmp_path: Path,
+) -> None:
+    index_root = tmp_path / "package-index"
+    package_directory = index_root / "pip"
+    package_directory.mkdir(parents=True)
+    wheel_name = "pip-26.0.1-py3-none-any.whl"
+    (package_directory / wheel_name).write_bytes(b"malicious-same-version-pip-wheel")
+    (package_directory / "index.html").write_text(
+        f'<a href="{wheel_name}">{wheel_name}</a>\n', encoding="utf-8"
+    )
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PIP_INDEX_URL": index_root.as_uri(),
+            "PIP_EXTRA_INDEX_URL": "",
+            "PIP_NO_CACHE_DIR": "1",
+        }
+    )
+
+    configured = _configure_managed_environment(source_dir, build_dir, env=environment)
+
+    output = configured.stdout + configured.stderr
+    assert configured.returncode != 0
+    assert "hashes from the requirements file" in output.casefold()
+    assert "pip-26.0.1-py3-none-any.whl" in output
+    assert not environment_root.exists() or not any(
+        child.is_dir() and (child / ".protocyte-ready").is_file()
+        for child in environment_root.iterdir()
+    )
+
+
+def _write_pip_requirement_injection_project(project: Path, sentinel: Path) -> None:
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools"]\n'
+        'build-backend = "setuptools.build_meta"\n',
+        encoding="utf-8",
+    )
+    (project / "setup.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "from setuptools import setup\n"
+        "Path(os.environ['PROTOCYTE_TEST_INJECTION_SENTINEL']).write_text(\n"
+        "    'source-build-ran\\n', encoding='utf-8'\n"
+        ")\n"
+        "setup(name='protocyte-pip-injection', version='1.0', py_modules=['injected'])\n",
+        encoding="utf-8",
+    )
+    (project / "injected.py").write_text("value = 1\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("settings_source", ["environment", "config-file"])
+@pytest.mark.parametrize("input_kind", ["requirement", "editable"])
+def test_managed_environment_rejects_additive_pip_install_inputs(
+    tmp_path: Path,
+    settings_source: str,
+    input_kind: str,
+) -> None:
+    injection_project = tmp_path / "injected-project"
+    sentinel = tmp_path / "injected-source-build.txt"
+    _write_pip_requirement_injection_project(injection_project, sentinel)
+    if input_kind == "requirement":
+        injection_input = tmp_path / "injected-requirements.txt"
+        injection_input.write_text(f"{injection_project}\n", encoding="utf-8")
+    else:
+        injection_input = injection_project
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    environment = os.environ.copy()
+    environment["PROTOCYTE_TEST_INJECTION_SENTINEL"] = str(sentinel)
+    if settings_source == "environment":
+        environment[f"PIP_{input_kind.upper()}"] = str(injection_input)
+    else:
+        config_file = tmp_path / "pip.ini"
+        config_file.write_text(
+            "[install]\n"
+            f"{input_kind} = {injection_input}\n",
+            encoding="utf-8",
+        )
+        environment["PIP_CONFIG_FILE"] = str(config_file)
+
+    configured = _configure_managed_environment(source_dir, build_dir, env=environment)
+
+    if settings_source == "environment":
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        environment_directory = _published_managed_environment(environment_root)
+        python, _plugin = _managed_environment_executables(environment_directory)
+        installed = subprocess.run(
+            [str(python), "-c", "import importlib.util; print(importlib.util.find_spec('injected'))"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert installed.stdout.strip() == "None"
+    else:
+        assert configured.returncode != 0
+        assert f"install.{input_kind}" in (configured.stdout + configured.stderr)
+        assert not environment_root.exists() or not any(
+            child.is_dir() and (child / ".protocyte-ready").is_file()
+            for child in environment_root.iterdir()
+        )
+    assert not sentinel.exists()
+
+
+def test_managed_environment_ignores_pip26_script_requirements_from_environment(
+    tmp_path: Path,
+) -> None:
+    injection_project = tmp_path / "injected-project"
+    sentinel = tmp_path / "injected-source-build.txt"
+    _write_pip_requirement_injection_project(injection_project, sentinel)
+    script = tmp_path / "injected-requirements.py"
+    script.write_text(
+        "# /// script\n"
+        "# dependencies = [\n"
+        f"#   \"protocyte-pip-injection @ {injection_project.as_uri()}\",\n"
+        "# ]\n"
+        "# ///\n",
+        encoding="utf-8",
+    )
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PIP_REQUIREMENTS_FROM_SCRIPT": str(script),
+            "PROTOCYTE_TEST_INJECTION_SENTINEL": str(sentinel),
+        }
+    )
+
+    configured = _configure_managed_environment(source_dir, build_dir, env=environment)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    environment_directory = _published_managed_environment(environment_root)
+    python, _plugin = _managed_environment_executables(environment_directory)
+    installed = subprocess.run(
+        [str(python), "-c", "import importlib.util; print(importlib.util.find_spec('injected'))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert installed.stdout.strip() == "None"
+    assert not sentinel.exists()
+
+    # This pip 26 control proves the inline script is a real additive input:
+    # pip prepares the injected local source even with --dry-run. The managed
+    # configure above must never reach it.
+    control_environment = environment.copy()
+    control_environment.pop("PIP_REQUIREMENTS_FROM_SCRIPT")
+    control = subprocess.run(
+        [
+            str(python),
+            "-I",
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--no-deps",
+            "--no-build-isolation",
+            "--requirements-from-script",
+            str(script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=control_environment,
+    )
+    assert control.returncode == 0, control.stdout + control.stderr
+    assert sentinel.read_text(encoding="utf-8") == "source-build-ran\n"
+
+
+@pytest.mark.parametrize("settings_source", ["environment", "config-file"])
+def test_managed_environment_confines_pip_destination_settings(
+    tmp_path: Path,
+    settings_source: str,
+) -> None:
+    destination_names = ("target", "prefix", "root", "user")
+    destinations = {
+        name: tmp_path / "outside-managed-environment" / name
+        for name in destination_names
+    }
+    sentinels = {}
+    for name, destination in destinations.items():
+        destination.mkdir(parents=True)
+        sentinel = destination / "keep.txt"
+        sentinel.write_text("user-owned\n", encoding="utf-8")
+        sentinels[name] = sentinel
+
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    shadow_modules = tmp_path / "shadow-modules"
+    shadow_package = shadow_modules / "protocyte"
+    shadow_package.mkdir(parents=True)
+    (shadow_package / "__init__.py").write_text("\n", encoding="utf-8")
+    (shadow_package / "main.py").write_text(
+        "raise RuntimeError('ambient PYTHONPATH was imported')\n",
+        encoding="utf-8",
+    )
+    configure_cwd = tmp_path / "configure-cwd"
+    configure_cwd.mkdir()
+    environment = os.environ.copy()
+    if settings_source == "environment":
+        environment.update(
+            {
+                "PIP_TARGET": str(destinations["target"]),
+                "PIP_PREFIX": str(destinations["prefix"]),
+                "PIP_ROOT": str(destinations["root"]),
+                "PIP_USER": "1",
+                "PIP_PYTHON": str(destinations["user"] / "python.exe"),
+                "PIP_ISOLATED": "1",
+                "PYTHONUSERBASE": str(destinations["user"]),
+                "PYTHONPATH": str(shadow_modules),
+            }
+        )
+    else:
+        config_file = tmp_path / "pip.ini"
+        config_file.write_text(
+            "[global]\n"
+            f"target = {destinations['target']}\n"
+            f"prefix = {destinations['prefix']}\n"
+            f"root = {destinations['root']}\n"
+            f"python = {destinations['user'] / 'python.exe'}\n"
+            "user = true\n",
+            encoding="utf-8",
+        )
+        environment["PIP_CONFIG_FILE"] = str(config_file)
+        environment["PYTHONUSERBASE"] = str(destinations["user"])
+
+    configured = _configure_managed_environment(
+        source_dir,
+        build_dir,
+        env=environment,
+        cwd=configure_cwd,
+    )
+
+    if settings_source == "environment":
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        _published_managed_environment(environment_root)
+    else:
+        assert configured.returncode != 0
+        output = configured.stdout + configured.stderr
+        assert "effective pip configuration" in output
+        assert "global.python" in output
+        assert str(destinations["target"]) not in output
+        assert not environment_root.exists() or not any(
+            child.is_dir() and (child / ".protocyte-ready").is_file()
+            for child in environment_root.iterdir()
+        )
+    for name, destination in destinations.items():
+        assert list(destination.iterdir()) == [sentinels[name]], name
+    assert not (configure_cwd / "Lib").exists()
+    assert not (configure_cwd / "Scripts").exists()
 
 
 def test_relative_managed_environment_root_is_canonical_and_confined(

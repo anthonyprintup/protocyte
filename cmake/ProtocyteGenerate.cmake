@@ -559,9 +559,16 @@ endif()
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
 _protocyte_validate_generation_paths()
 
+set(protoc_environment)
+if(PROTOCYTE_MANAGED_PLUGIN)
+    # protoc inherits this environment when it launches the managed Python
+    # plugin; explicit user-provided plugins keep their environment unchanged.
+    list(APPEND protoc_environment "--unset=PYTHONPATH" "--unset=PYTHONHOME")
+endif()
 execute_process(
     COMMAND
         "${CMAKE_COMMAND}" -E env
+        ${protoc_environment}
         "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=${SOURCE_DIRECTORY_HEX}"
         "${PROTOC_EXECUTABLE}"
         "@${ARGUMENT_FILE}"
