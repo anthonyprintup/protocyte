@@ -5244,6 +5244,10 @@ function(protocyte_generate)
     )
     set(protocyte_generation_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerate.cmake")
     set(
+        protocyte_generation_transaction_script
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerationTransaction.cmake"
+    )
+    set(
         protocyte_output_safety_script
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteOutputSafety.cmake"
     )
@@ -5285,6 +5289,7 @@ function(protocyte_generate)
             "${protocyte_response_file}"
             "${protocyte_generation_lock_manifest}"
             "${protocyte_generation_script}"
+            "${protocyte_generation_transaction_script}"
             "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteProcess.cmake"
             "${protocyte_output_safety_script}"
             "${PROTOCYTE_PROTOC_DEPENDENCY}"

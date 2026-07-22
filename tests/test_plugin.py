@@ -4093,7 +4093,9 @@ def test_generator_policy_metadata_limit_covers_dependency_surfaces(
     monkeypatch.setattr(
         protocyte_plugin,
         "build_model",
-        lambda _: pytest.fail("dependency metadata must be rejected before model construction"),
+        lambda _: pytest.fail(
+            "dependency metadata must be rejected before model construction"
+        ),
     )
     response = generate_response(
         request,
@@ -4139,7 +4141,9 @@ def test_generator_policy_rejects_source_metadata_before_model_construction(
     monkeypatch.setattr(
         protocyte_plugin,
         "build_model",
-        lambda _: pytest.fail("source metadata must be rejected before model construction"),
+        lambda _: pytest.fail(
+            "source metadata must be rejected before model construction"
+        ),
     )
 
     response = generate_response(
@@ -4285,7 +4289,9 @@ def test_generator_policy_counts_unknown_descriptor_wire_payload_before_model(
     monkeypatch.setattr(
         protocyte_plugin,
         "build_model",
-        lambda _: pytest.fail("unknown descriptor payload must be rejected before model construction"),
+        lambda _: pytest.fail(
+            "unknown descriptor payload must be rejected before model construction"
+        ),
     )
 
     response = generate_response(
@@ -4432,6 +4438,20 @@ def test_generator_policy_rejects_non_positive_formatter_timeout(
 ) -> None:
     with pytest.raises(ValueError, match="formatter_timeout_seconds must be positive"):
         GeneratorPolicy(formatter_timeout_seconds=invalid_value)
+
+
+@pytest.mark.parametrize("value", ["1e-9999", "-0", "1e9999"])
+def test_plugin_rejects_nonrepresentable_formatter_timeout(value: str) -> None:
+    response = generate_response(
+        _basic_request(parameter=f"formatter_timeout_seconds={value}"),
+        use_plugin_defaults=True,
+    )
+
+    assert (
+        "formatter_timeout_seconds must be a finite non-negative number"
+        in response.error
+    )
+    assert not response.file
 
 
 def test_generator_policy_preserves_valid_limits_and_timeout() -> None:

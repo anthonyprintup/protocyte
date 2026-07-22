@@ -173,6 +173,7 @@ if(PROTOCYTE_INSTALL)
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocytePreBuildGuard.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteSourceDependency.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteGenerate.cmake"
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteGenerationTransaction.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteProcess.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteManagedEnvironment.py"

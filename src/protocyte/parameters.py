@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from protocyte.errors import ProtocyteError
 from protocyte.paths import MIN_HASHED_GENERATED_FILE_PATH_BYTES
@@ -118,6 +119,33 @@ _WINDOWS_RESERVED_PATH_NAMES = frozenset(
     | {f"LPT{index}" for index in range(1, 10)}
 )
 _DEFAULT_FORMATTER_TIMEOUT_SECONDS = 60.0
+
+
+def _parse_formatter_timeout_seconds(raw_value: str) -> float | None:
+    """Parse a formatter timeout without silently turning underflow into no limit."""
+    try:
+        exact_timeout = Decimal(raw_value)
+    except InvalidOperation as exc:
+        raise ProtocyteError(
+            "formatter_timeout_seconds must be a finite non-negative number of seconds"
+        ) from exc
+    if not exact_timeout.is_finite() or exact_timeout.is_signed():
+        raise ProtocyteError(
+            "formatter_timeout_seconds must be a finite non-negative number of seconds"
+        )
+    if exact_timeout.is_zero():
+        return None
+    try:
+        timeout = float(raw_value)
+    except ValueError as exc:
+        raise ProtocyteError(
+            "formatter_timeout_seconds must be a finite non-negative number of seconds"
+        ) from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ProtocyteError(
+            "formatter_timeout_seconds must be a finite non-negative number of seconds"
+        )
+    return timeout
 
 
 def _validate_namespace_prefix(value: str) -> str:
@@ -282,7 +310,9 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
                 key = raw_key.strip()
                 value = raw_value.strip()
                 if not key:
-                    raise ProtocyteError(f"invalid empty parameter name in {parameter!r}")
+                    raise ProtocyteError(
+                        f"invalid empty parameter name in {parameter!r}"
+                    )
                 if key in values:
                     raise ProtocyteError(f"duplicate protocyte parameter: {key}")
                 prefix_parameter = None
@@ -297,10 +327,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
                 elif key == "_protocyte_reflection_api_macro":
                     prefix_parameter = "internal reflection API macro"
                 if prefix_parameter is not None:
-                    if any(
-                        ord(char) < 0x20 or ord(char) == 0x7F
-                        for char in raw_value
-                    ):
+                    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw_value):
                         raise ProtocyteError(
                             f"{prefix_parameter} must not contain control characters"
                         )
@@ -310,7 +337,9 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
                         )
                 values[key] = value
             else:
-                raise ProtocyteError(f"invalid protocyte parameter {part!r}; expected key=value")
+                raise ProtocyteError(
+                    f"invalid protocyte parameter {part!r}; expected key=value"
+                )
 
     unknown = set(values) - {
         "runtime",
@@ -384,23 +413,9 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         raw_formatter_timeout = values["formatter_timeout_seconds"]
         if raw_formatter_timeout == "":
             raise ProtocyteError("formatter_timeout_seconds must not be empty")
-        try:
-            formatter_timeout_seconds = float(raw_formatter_timeout)
-        except ValueError as exc:
-            raise ProtocyteError(
-                "formatter_timeout_seconds must be a finite non-negative number of seconds"
-            ) from exc
-        try:
-            valid_formatter_timeout = (
-                math.isfinite(formatter_timeout_seconds)
-                and formatter_timeout_seconds >= 0
-            )
-        except OverflowError:
-            valid_formatter_timeout = False
-        if not valid_formatter_timeout:
-            raise ProtocyteError(
-                "formatter_timeout_seconds must be a finite non-negative number of seconds"
-            )
+        formatter_timeout_seconds = _parse_formatter_timeout_seconds(
+            raw_formatter_timeout
+        )
     generated_path_max_bytes = None
     if raw_generated_path_max_bytes := values.get(
         "_protocyte_generated_path_max_bytes"
@@ -450,14 +465,20 @@ def _decode_transport_parameter(parameter: str) -> str:
     transport_decoders = {
         "_protocyte_options_hex": _decode_hex_transport_parameter,
     }
-    transport_parts = [part for part in parts if part.split("=", 1)[0] in transport_decoders]
+    transport_parts = [
+        part for part in parts if part.split("=", 1)[0] in transport_decoders
+    ]
     if not transport_parts:
         return parameter
     if len(transport_parts) != 1 or len(parts) != 1:
-        raise ProtocyteError("encoded protocyte transport parameter must be the only protocyte parameter")
+        raise ProtocyteError(
+            "encoded protocyte transport parameter must be the only protocyte parameter"
+        )
     if "=" not in transport_parts[0]:
         name = transport_parts[0]
-        raise ProtocyteError(f"invalid protocyte parameter {name!r}; expected key=value")
+        raise ProtocyteError(
+            f"invalid protocyte parameter {name!r}; expected key=value"
+        )
 
     name, encoded = transport_parts[0].split("=", 1)
     return transport_decoders[name](encoded)

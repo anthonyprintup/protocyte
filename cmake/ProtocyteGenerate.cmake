@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteGenerationTransaction.cmake")
 
 foreach(
     required_variable
@@ -223,578 +224,6 @@ function(_protocyte_staged_output_path out_var staging_subdirectory generation_o
     )
     cmake_path(NORMAL_PATH staged_output)
     set(${out_var} "${staged_output}" PARENT_SCOPE)
-endfunction()
-
-function(
-    _protocyte_release_generation_ownership
-    out_released
-    owner_markers_var
-    transaction_id
-)
-    set(released FALSE)
-    if("${transaction_id}" STREQUAL "")
-        set(${out_released} TRUE PARENT_SCOPE)
-        return()
-    endif()
-    string(LENGTH "${transaction_id}" transaction_id_length)
-    if(NOT transaction_id_length EQUAL 64 OR NOT transaction_id MATCHES "^[0-9a-f]+$")
-        set(${out_released} FALSE PARENT_SCOPE)
-        return()
-    endif()
-    _protocyte_owner_transaction_paths(
-        unused_transaction_prepared
-        transaction_committed
-        "${OUT_DIR_OWNER_MARKER}"
-        "${transaction_id}"
-    )
-    if(
-        NOT EXISTS "${transaction_committed}"
-        OR IS_DIRECTORY "${transaction_committed}"
-        OR IS_SYMLINK "${transaction_committed}"
-    )
-        set(${out_released} FALSE PARENT_SCOPE)
-        return()
-    endif()
-    file(SHA256 "${transaction_committed}" observed_transaction_id)
-    if(NOT observed_transaction_id STREQUAL transaction_id)
-        set(${out_released} FALSE PARENT_SCOPE)
-        return()
-    endif()
-
-    foreach(owner_marker IN LISTS ${owner_markers_var})
-        _protocyte_owner_record_status(
-            owner_status
-            owner_transaction_id
-            "${owner_marker}"
-            "${BUILD_OWNER_HASH}"
-            "${OUT_DIR_OWNER_MARKER}"
-        )
-        if(
-            NOT owner_status STREQUAL "current"
-            OR NOT owner_transaction_id STREQUAL transaction_id
-        )
-            set(${out_released} FALSE PARENT_SCOPE)
-            return()
-        endif()
-    endforeach()
-
-    foreach(owner_marker IN LISTS ${owner_markers_var})
-        file(REMOVE "${owner_marker}")
-        if(EXISTS "${owner_marker}" OR IS_SYMLINK "${owner_marker}")
-            set(${out_released} FALSE PARENT_SCOPE)
-            return()
-        endif()
-    endforeach()
-    file(REMOVE "${transaction_committed}")
-    if(NOT EXISTS "${transaction_committed}" AND NOT IS_SYMLINK "${transaction_committed}")
-        set(released TRUE)
-    endif()
-    set(${out_released} "${released}" PARENT_SCOPE)
-endfunction()
-
-function(_protocyte_decode_generation_hex out_var encoded_value)
-    string(LENGTH "${encoded_value}" encoded_length)
-    math(EXPR encoded_is_odd "${encoded_length} % 2")
-    if(encoded_length EQUAL 0 OR encoded_length GREATER 32768 OR encoded_is_odd)
-        set(${out_var} "" PARENT_SCOPE)
-        return()
-    endif()
-    math(EXPR encoded_last "${encoded_length} - 2")
-    set(decoded_value "")
-    foreach(offset RANGE 0 ${encoded_last} 2)
-        string(SUBSTRING "${encoded_value}" ${offset} 2 encoded_byte)
-        if(NOT encoded_byte MATCHES "^[0-9a-f][0-9a-f]$")
-            set(${out_var} "" PARENT_SCOPE)
-            return()
-        endif()
-        math(EXPR byte_value "0x${encoded_byte}")
-        string(ASCII ${byte_value} decoded_character)
-        string(APPEND decoded_value "${decoded_character}")
-    endforeach()
-    set(${out_var} "${decoded_value}" PARENT_SCOPE)
-endfunction()
-
-function(_protocyte_generation_transaction_paths out_active out_committed)
-    set(transaction_prefix "${STAGING_OUTPUT_DIRECTORY}/publication.transaction")
-    set(${out_active} "${transaction_prefix}.active" PARENT_SCOPE)
-    set(${out_committed} "${transaction_prefix}.committed" PARENT_SCOPE)
-endfunction()
-
-function(
-    _protocyte_write_generation_transaction
-    out_written
-    owner_markers_var
-    initial_states_var
-    operation_states_var
-)
-    set(${out_written} FALSE PARENT_SCOPE)
-    list(LENGTH generation_outputs generation_output_count)
-    list(LENGTH ${initial_states_var} initial_state_count)
-    list(LENGTH ${operation_states_var} operation_state_count)
-    if(
-        NOT initial_state_count EQUAL generation_output_count
-        OR NOT operation_state_count EQUAL generation_output_count
-    )
-        return()
-    endif()
-    _protocyte_generation_transaction_paths(transaction_active transaction_committed)
-    set(transaction_content "version=1\nbuild-tree-sha256=${BUILD_OWNER_HASH}\n")
-    list(LENGTH ${owner_markers_var} owner_marker_count)
-    string(APPEND transaction_content "owner-count=${owner_marker_count}\n")
-    foreach(owner_marker IN LISTS ${owner_markers_var})
-        string(HEX "${owner_marker}" encoded_owner_marker)
-        string(APPEND transaction_content "owner-hex=${encoded_owner_marker}\n")
-    endforeach()
-    string(APPEND transaction_content "output-count=${generation_output_count}\n")
-    if(generation_output_count GREATER 0)
-        math(EXPR last_generation_output_index "${generation_output_count} - 1")
-        foreach(generation_output_index RANGE 0 ${last_generation_output_index})
-            list(GET generation_outputs ${generation_output_index} generation_output)
-            list(GET ${initial_states_var} ${generation_output_index} initial_state)
-            list(GET ${operation_states_var} ${generation_output_index} operation_state)
-            if(
-                NOT (initial_state STREQUAL "prior" OR initial_state STREQUAL "absent")
-                OR NOT (
-                    operation_state STREQUAL "untouched"
-                    OR operation_state STREQUAL "backup-pending"
-                    OR operation_state STREQUAL "backed-up"
-                    OR operation_state STREQUAL "publish-pending"
-                    OR operation_state STREQUAL "published"
-                )
-            )
-                return()
-            endif()
-            string(HEX "${generation_output}" encoded_generation_output)
-            string(APPEND transaction_content "output-hex=${encoded_generation_output}\n")
-            string(APPEND transaction_content "initial=${initial_state}\n")
-            string(APPEND transaction_content "state=${operation_state}\n")
-        endforeach()
-    endif()
-
-    set(transaction_staging "${transaction_active}.tmp")
-    file(WRITE "${transaction_staging}" "${transaction_content}")
-    if(
-        NOT EXISTS "${transaction_staging}"
-        OR IS_DIRECTORY "${transaction_staging}"
-        OR IS_SYMLINK "${transaction_staging}"
-    )
-        return()
-    endif()
-    file(READ "${transaction_staging}" observed_transaction_content)
-    if(NOT observed_transaction_content STREQUAL transaction_content)
-        return()
-    endif()
-    file(
-        RENAME "${transaction_staging}" "${transaction_active}"
-        RESULT transaction_write_result
-    )
-    if("${transaction_write_result}" STREQUAL "0")
-        set(${out_written} TRUE PARENT_SCOPE)
-    endif()
-endfunction()
-
-function(
-    _protocyte_read_generation_transaction
-    out_is_present
-    out_is_committed
-    out_owner_markers
-    out_initial_states
-    out_operation_states
-)
-    set(${out_is_present} FALSE PARENT_SCOPE)
-    set(${out_is_committed} FALSE PARENT_SCOPE)
-    set(${out_owner_markers} "" PARENT_SCOPE)
-    set(${out_initial_states} "" PARENT_SCOPE)
-    set(${out_operation_states} "" PARENT_SCOPE)
-    _protocyte_generation_transaction_paths(transaction_active transaction_committed)
-    if(
-        (EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
-        AND (EXISTS "${transaction_committed}" OR IS_SYMLINK "${transaction_committed}")
-    )
-        return()
-    endif()
-    if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
-        set(transaction_record "${transaction_active}")
-        set(transaction_is_committed FALSE)
-    elseif(EXISTS "${transaction_committed}" OR IS_SYMLINK "${transaction_committed}")
-        set(transaction_record "${transaction_committed}")
-        set(transaction_is_committed TRUE)
-    else()
-        return()
-    endif()
-    if(IS_DIRECTORY "${transaction_record}" OR IS_SYMLINK "${transaction_record}")
-        return()
-    endif()
-    file(SIZE "${transaction_record}" transaction_size)
-    if(transaction_size GREATER 16777216)
-        return()
-    endif()
-    file(STRINGS "${transaction_record}" transaction_lines)
-    list(LENGTH transaction_lines transaction_line_count)
-    if(transaction_line_count LESS 4)
-        return()
-    endif()
-    list(GET transaction_lines 0 transaction_version)
-    list(GET transaction_lines 1 transaction_build_hash_line)
-    list(GET transaction_lines 2 transaction_owner_count_line)
-    if(
-        NOT transaction_version STREQUAL "version=1"
-        OR NOT transaction_build_hash_line STREQUAL "build-tree-sha256=${BUILD_OWNER_HASH}"
-        OR NOT transaction_owner_count_line MATCHES "^owner-count=([0-9]+)$"
-    )
-        return()
-    endif()
-    set(transaction_owner_count "${CMAKE_MATCH_1}")
-    if(transaction_owner_count GREATER 256)
-        return()
-    endif()
-    set(transaction_line_index 3)
-    set(transaction_owner_markers)
-    if(transaction_owner_count GREATER 0)
-        math(EXPR last_owner_index "${transaction_owner_count} - 1")
-        foreach(owner_index RANGE 0 ${last_owner_index})
-            if(transaction_line_index GREATER_EQUAL transaction_line_count)
-                return()
-            endif()
-            list(GET transaction_lines ${transaction_line_index} owner_line)
-            if(NOT owner_line MATCHES "^owner-hex=([0-9a-f]+)$")
-                return()
-            endif()
-            _protocyte_decode_generation_hex(owner_marker "${CMAKE_MATCH_1}")
-            if(owner_marker STREQUAL "")
-                return()
-            endif()
-            list(APPEND transaction_owner_markers "${owner_marker}")
-            math(EXPR transaction_line_index "${transaction_line_index} + 1")
-        endforeach()
-    endif()
-    if(transaction_line_index GREATER_EQUAL transaction_line_count)
-        return()
-    endif()
-    list(GET transaction_lines ${transaction_line_index} transaction_output_count_line)
-    if(NOT transaction_output_count_line MATCHES "^output-count=([0-9]+)$")
-        return()
-    endif()
-    set(transaction_output_count "${CMAKE_MATCH_1}")
-    list(LENGTH generation_outputs generation_output_count)
-    if(NOT transaction_output_count EQUAL generation_output_count)
-        return()
-    endif()
-    math(EXPR transaction_line_index "${transaction_line_index} + 1")
-    set(transaction_initial_states)
-    set(transaction_operation_states)
-    if(generation_output_count GREATER 0)
-        math(EXPR last_generation_output_index "${generation_output_count} - 1")
-        foreach(generation_output_index RANGE 0 ${last_generation_output_index})
-            math(EXPR transaction_last_output_line "${transaction_line_index} + 2")
-            if(transaction_last_output_line GREATER_EQUAL transaction_line_count)
-                return()
-            endif()
-            list(GET transaction_lines ${transaction_line_index} transaction_output_line)
-            math(EXPR transaction_initial_line_index "${transaction_line_index} + 1")
-            math(EXPR transaction_state_line_index "${transaction_line_index} + 2")
-            list(GET transaction_lines ${transaction_initial_line_index} transaction_initial_line)
-            list(GET transaction_lines ${transaction_state_line_index} transaction_state_line)
-            if(NOT transaction_output_line MATCHES "^output-hex=([0-9a-f]+)$")
-                return()
-            endif()
-            set(encoded_transaction_output "${CMAKE_MATCH_1}")
-            if(NOT transaction_initial_line MATCHES "^initial=(prior|absent)$")
-                return()
-            endif()
-            if(
-                NOT transaction_state_line MATCHES
-                "^state=(untouched|backup-pending|backed-up|publish-pending|published)$"
-            )
-                return()
-            endif()
-            _protocyte_decode_generation_hex(
-                transaction_output
-                "${encoded_transaction_output}"
-            )
-            list(GET generation_outputs ${generation_output_index} generation_output)
-            _protocyte_normalized_path_identity(
-                transaction_output_identity
-                "${transaction_output}"
-            )
-            _protocyte_normalized_path_identity(
-                generation_output_identity
-                "${generation_output}"
-            )
-            if(NOT transaction_output_identity STREQUAL generation_output_identity)
-                return()
-            endif()
-            string(REGEX REPLACE "^initial=" "" transaction_initial_state "${transaction_initial_line}")
-            string(REGEX REPLACE "^state=" "" transaction_operation_state "${transaction_state_line}")
-            list(APPEND transaction_initial_states "${transaction_initial_state}")
-            list(APPEND transaction_operation_states "${transaction_operation_state}")
-            math(EXPR transaction_line_index "${transaction_line_index} + 3")
-        endforeach()
-    endif()
-    if(NOT transaction_line_index EQUAL transaction_line_count)
-        return()
-    endif()
-    set(${out_is_present} TRUE PARENT_SCOPE)
-    set(${out_is_committed} "${transaction_is_committed}" PARENT_SCOPE)
-    set(${out_owner_markers} "${transaction_owner_markers}" PARENT_SCOPE)
-    set(${out_initial_states} "${transaction_initial_states}" PARENT_SCOPE)
-    set(${out_operation_states} "${transaction_operation_states}" PARENT_SCOPE)
-endfunction()
-
-function(_protocyte_recover_generation_transaction out_recovered)
-    set(${out_recovered} FALSE PARENT_SCOPE)
-    _protocyte_generation_transaction_paths(transaction_active transaction_committed)
-    if(
-        (EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
-        AND (EXISTS "${transaction_committed}" OR IS_SYMLINK "${transaction_committed}")
-    )
-        return()
-    endif()
-    foreach(transaction_record IN ITEMS "${transaction_active}" "${transaction_committed}")
-        if(
-            (EXISTS "${transaction_record}" OR IS_SYMLINK "${transaction_record}")
-            AND (IS_DIRECTORY "${transaction_record}" OR IS_SYMLINK "${transaction_record}")
-        )
-            return()
-        endif()
-    endforeach()
-    _protocyte_read_generation_transaction(
-        transaction_is_present
-        transaction_is_committed
-        transaction_owner_markers
-        transaction_initial_states
-        transaction_operation_states
-    )
-    if(NOT transaction_is_present)
-        if(
-            NOT EXISTS "${transaction_active}"
-            AND NOT IS_SYMLINK "${transaction_active}"
-            AND NOT EXISTS "${transaction_committed}"
-            AND NOT IS_SYMLINK "${transaction_committed}"
-        )
-            set(${out_recovered} TRUE PARENT_SCOPE)
-        endif()
-        return()
-    endif()
-    if(transaction_is_committed)
-        foreach(transaction_operation_state IN LISTS transaction_operation_states)
-            if(NOT transaction_operation_state STREQUAL "published")
-                return()
-            endif()
-        endforeach()
-        foreach(generation_output IN LISTS generation_outputs)
-            if(
-                NOT EXISTS "${generation_output}"
-                OR IS_DIRECTORY "${generation_output}"
-                OR IS_SYMLINK "${generation_output}"
-            )
-                return()
-            endif()
-        endforeach()
-        set(${out_recovered} TRUE PARENT_SCOPE)
-        return()
-    endif()
-
-    list(LENGTH generation_outputs generation_output_count)
-    math(EXPR last_generation_output_index "${generation_output_count} - 1")
-    foreach(generation_output_index RANGE 0 ${last_generation_output_index})
-        list(GET generation_outputs ${generation_output_index} generation_output)
-        list(GET transaction_initial_states ${generation_output_index} transaction_initial_state)
-        list(GET transaction_operation_states ${generation_output_index} transaction_operation_state)
-        _protocyte_staged_output_path(
-            backup_generation_output
-            "backups"
-            "${generation_output}"
-        )
-        _protocyte_generated_output_path_is_safe(
-            backup_output_is_safe
-            "${backup_generation_output}"
-            "${STAGING_OUTPUT_DIRECTORY}/backups"
-        )
-        if(NOT backup_output_is_safe)
-            return()
-        endif()
-        if(transaction_initial_state STREQUAL "prior")
-            if(transaction_operation_state STREQUAL "untouched")
-                if(
-                    NOT EXISTS "${generation_output}"
-                    OR IS_DIRECTORY "${generation_output}"
-                    OR IS_SYMLINK "${generation_output}"
-                    OR EXISTS "${backup_generation_output}"
-                    OR IS_SYMLINK "${backup_generation_output}"
-                )
-                    return()
-                endif()
-            elseif(transaction_operation_state STREQUAL "backup-pending")
-                if(EXISTS "${backup_generation_output}")
-                    if(
-                        IS_DIRECTORY "${backup_generation_output}"
-                        OR IS_SYMLINK "${backup_generation_output}"
-                        OR EXISTS "${generation_output}"
-                        OR IS_SYMLINK "${generation_output}"
-                    )
-                        return()
-                    endif()
-                    file(
-                        RENAME "${backup_generation_output}" "${generation_output}"
-                        NO_REPLACE
-                        RESULT restore_output_result
-                    )
-                    if(NOT "${restore_output_result}" STREQUAL "0")
-                        return()
-                    endif()
-                elseif(
-                    NOT EXISTS "${generation_output}"
-                    OR IS_DIRECTORY "${generation_output}"
-                    OR IS_SYMLINK "${generation_output}"
-                )
-                    return()
-                endif()
-            elseif(
-                transaction_operation_state STREQUAL "backed-up"
-                OR transaction_operation_state STREQUAL "publish-pending"
-                OR transaction_operation_state STREQUAL "published"
-            )
-                if(
-                    NOT EXISTS "${backup_generation_output}"
-                    OR IS_DIRECTORY "${backup_generation_output}"
-                    OR IS_SYMLINK "${backup_generation_output}"
-                )
-                    return()
-                endif()
-                if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
-                    if(
-                        IS_DIRECTORY "${generation_output}"
-                        OR IS_SYMLINK "${generation_output}"
-                    )
-                        return()
-                    endif()
-                    file(REMOVE "${generation_output}")
-                    if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
-                        return()
-                    endif()
-                endif()
-                file(
-                    RENAME "${backup_generation_output}" "${generation_output}"
-                    NO_REPLACE
-                    RESULT restore_output_result
-                )
-                if(NOT "${restore_output_result}" STREQUAL "0")
-                    return()
-                endif()
-            else()
-                return()
-            endif()
-        elseif(transaction_initial_state STREQUAL "absent")
-            if(
-                transaction_operation_state STREQUAL "publish-pending"
-                OR transaction_operation_state STREQUAL "published"
-            )
-                if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
-                    if(
-                        IS_DIRECTORY "${generation_output}"
-                        OR IS_SYMLINK "${generation_output}"
-                    )
-                        return()
-                    endif()
-                    file(REMOVE "${generation_output}")
-                    if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
-                        return()
-                    endif()
-                endif()
-            elseif(NOT transaction_operation_state STREQUAL "untouched")
-                return()
-            endif()
-            if(EXISTS "${backup_generation_output}" OR IS_SYMLINK "${backup_generation_output}")
-                return()
-            endif()
-        else()
-            return()
-        endif()
-    endforeach()
-
-    set(allowed_transaction_owner_markers "${OUT_DIR_OWNER_MARKER}")
-    foreach(output_lock_key IN LISTS output_lock_keys)
-        list(
-            APPEND
-            allowed_transaction_owner_markers
-            "${LOCK_DIRECTORY}/${output_lock_key}.owner"
-        )
-    endforeach()
-    list(LENGTH transaction_owner_markers transaction_owner_count)
-    set(unique_transaction_owner_markers "${transaction_owner_markers}")
-    list(REMOVE_DUPLICATES unique_transaction_owner_markers)
-    list(LENGTH unique_transaction_owner_markers unique_transaction_owner_count)
-    if(NOT unique_transaction_owner_count EQUAL transaction_owner_count)
-        return()
-    endif()
-    foreach(transaction_owner_marker IN LISTS transaction_owner_markers)
-        list(
-            FIND
-            allowed_transaction_owner_markers
-            "${transaction_owner_marker}"
-            allowed_owner_index
-        )
-        if(allowed_owner_index EQUAL -1)
-            return()
-        endif()
-    endforeach()
-
-    set(current_transaction_owner_markers)
-    set(observed_transaction_ids)
-    foreach(transaction_owner_marker IN LISTS transaction_owner_markers)
-        _protocyte_owner_record_status(
-            transaction_owner_status
-            transaction_owner_id
-            "${transaction_owner_marker}"
-            "${BUILD_OWNER_HASH}"
-            "${OUT_DIR_OWNER_MARKER}"
-        )
-        if(transaction_owner_status STREQUAL "incomplete")
-            _protocyte_recover_incomplete_owner_record(
-                recovered_incomplete_transaction_owner
-                "${transaction_owner_marker}"
-                "${transaction_owner_id}"
-                "${OUT_DIR_OWNER_MARKER}"
-            )
-            if(NOT recovered_incomplete_transaction_owner)
-                return()
-            endif()
-        elseif(transaction_owner_status STREQUAL "current")
-            if("${transaction_owner_id}" STREQUAL "")
-                return()
-            endif()
-            list(APPEND current_transaction_owner_markers "${transaction_owner_marker}")
-            list(APPEND observed_transaction_ids "${transaction_owner_id}")
-        elseif(NOT transaction_owner_status STREQUAL "missing")
-            return()
-        endif()
-    endforeach()
-    if(current_transaction_owner_markers)
-        list(LENGTH current_transaction_owner_markers current_transaction_owner_count)
-        list(REMOVE_DUPLICATES observed_transaction_ids)
-        list(LENGTH observed_transaction_ids observed_transaction_id_count)
-        if(
-            NOT current_transaction_owner_count EQUAL transaction_owner_count
-            OR NOT observed_transaction_id_count EQUAL 1
-        )
-            return()
-        endif()
-        list(GET observed_transaction_ids 0 observed_transaction_id)
-        _protocyte_release_generation_ownership(
-            released_generation_ownership
-            "current_transaction_owner_markers"
-            "${observed_transaction_id}"
-        )
-        if(NOT released_generation_ownership)
-            return()
-        endif()
-    endif()
-    file(REMOVE "${transaction_active}")
-    if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
-        return()
-    endif()
-    set(${out_recovered} TRUE PARENT_SCOPE)
 endfunction()
 
 function(_protocyte_discard_generation_staging)
@@ -1369,6 +798,7 @@ _protocyte_validate_generation_staging_directory()
 
 set(generation_initial_states)
 set(generation_operation_states)
+set(generation_recovery_states)
 foreach(generation_output IN LISTS generation_outputs)
     if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
         if(
@@ -1387,23 +817,43 @@ foreach(generation_output IN LISTS generation_outputs)
         list(APPEND generation_initial_states "absent")
     endif()
     list(APPEND generation_operation_states "untouched")
+    list(APPEND generation_recovery_states "none")
 endforeach()
 set(generation_transaction_owner_markers)
 if(root_owner_is_missing)
-    list(APPEND generation_transaction_owner_markers "${OUT_DIR_OWNER_MARKER}")
+    string(REPLACE ";" "\\;" generation_transaction_owner_marker "${OUT_DIR_OWNER_MARKER}")
+    list(APPEND generation_transaction_owner_markers "${generation_transaction_owner_marker}")
 endif()
 foreach(output_lock_key IN LISTS missing_output_owner_keys)
+    set(generation_transaction_owner_marker "${LOCK_DIRECTORY}/${output_lock_key}.owner")
+    string(REPLACE ";" "\\;" generation_transaction_owner_marker "${generation_transaction_owner_marker}")
     list(
         APPEND
         generation_transaction_owner_markers
-        "${LOCK_DIRECTORY}/${output_lock_key}.owner"
+        "${generation_transaction_owner_marker}"
     )
 endforeach()
+set(generation_owner_release_states)
+foreach(generation_transaction_owner_marker IN LISTS generation_transaction_owner_markers)
+    list(APPEND generation_owner_release_states "unreleased")
+endforeach()
+set(generation_ownership_state "commit-pending")
+set(generation_owner_transaction_id "")
+if(generation_transaction_owner_markers)
+    set(generation_owner_witness_state "retained")
+else()
+    set(generation_owner_witness_state "removed")
+endif()
 _protocyte_write_generation_transaction(
     generation_transaction_written
     generation_transaction_owner_markers
+    "${generation_ownership_state}"
+    "${generation_owner_transaction_id}"
+    "${generation_owner_witness_state}"
+    generation_owner_release_states
     generation_initial_states
     generation_operation_states
+    generation_recovery_states
 )
 if(NOT generation_transaction_written)
     _protocyte_discard_generation_staging()
@@ -1417,6 +867,39 @@ _protocyte_commit_generation_ownership(
     generation_owner_transaction_id
     generation_published_owner_markers
 )
+set(generation_ownership_state "committed")
+if(generation_transaction_owner_markers)
+    if("${generation_owner_transaction_id}" STREQUAL "")
+        message(
+            FATAL_ERROR
+            "Protocyte committed ownership without a transaction witness for target '${GENERATION_TARGET}'."
+        )
+    endif()
+    set(generation_owner_witness_state "retained")
+else()
+    set(generation_owner_witness_state "removed")
+endif()
+_protocyte_write_generation_transaction(
+    generation_transaction_written
+    generation_transaction_owner_markers
+    "${generation_ownership_state}"
+    "${generation_owner_transaction_id}"
+    "${generation_owner_witness_state}"
+    generation_owner_release_states
+    generation_initial_states
+    generation_operation_states
+    generation_recovery_states
+)
+if(NOT generation_transaction_written)
+    _protocyte_recover_generation_transaction(recovered_generation_transaction)
+    if(recovered_generation_transaction)
+        _protocyte_discard_generation_staging()
+    endif()
+    message(
+        FATAL_ERROR
+        "Protocyte could not persist committed ownership for target '${GENERATION_TARGET}'."
+    )
+endif()
 list(LENGTH generation_outputs generation_output_count)
 math(EXPR last_generation_output_index "${generation_output_count} - 1")
 foreach(generation_output_index RANGE 0 ${last_generation_output_index})
@@ -1454,8 +937,13 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         _protocyte_write_generation_transaction(
             generation_transaction_written
             generation_transaction_owner_markers
+            "${generation_ownership_state}"
+            "${generation_owner_transaction_id}"
+            "${generation_owner_witness_state}"
+            generation_owner_release_states
             generation_initial_states
             generation_operation_states
+            generation_recovery_states
         )
         if(NOT generation_transaction_written)
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -1496,8 +984,13 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         _protocyte_write_generation_transaction(
             generation_transaction_written
             generation_transaction_owner_markers
+            "${generation_ownership_state}"
+            "${generation_owner_transaction_id}"
+            "${generation_owner_witness_state}"
+            generation_owner_release_states
             generation_initial_states
             generation_operation_states
+            generation_recovery_states
         )
         if(NOT generation_transaction_written)
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -1544,8 +1037,13 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     _protocyte_write_generation_transaction(
         generation_transaction_written
         generation_transaction_owner_markers
+        "${generation_ownership_state}"
+        "${generation_owner_transaction_id}"
+        "${generation_owner_witness_state}"
+        generation_owner_release_states
         generation_initial_states
         generation_operation_states
+        generation_recovery_states
     )
     if(NOT generation_transaction_written)
         _protocyte_recover_generation_transaction(recovered_generation_transaction)
@@ -1584,8 +1082,13 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     _protocyte_write_generation_transaction(
         generation_transaction_written
         generation_transaction_owner_markers
+        "${generation_ownership_state}"
+        "${generation_owner_transaction_id}"
+        "${generation_owner_witness_state}"
+        generation_owner_release_states
         generation_initial_states
         generation_operation_states
+        generation_recovery_states
     )
     if(NOT generation_transaction_written)
         _protocyte_recover_generation_transaction(recovered_generation_transaction)

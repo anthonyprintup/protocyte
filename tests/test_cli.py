@@ -116,6 +116,29 @@ def test_plugin_protocol_enables_normal_formatter_timeout_defaults(
     assert observed["use_plugin_defaults"] is True
 
 
+def test_plugin_protocol_rejects_formatter_timeout_positive_underflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    request.parameter = "formatter_timeout_seconds=1e-9999"
+    standard_input = _BinaryInput(request.SerializeToString(), interactive=False)
+    standard_output = _BinaryOutput()
+
+    with monkeypatch.context() as context:
+        context.setattr(sys, "stdin", standard_input)
+        context.setattr(sys, "stdout", standard_output)
+        assert plugin_main([]) == 0
+
+    response = plugin_pb2.CodeGeneratorResponse.FromString(
+        standard_output.buffer.getvalue()
+    )
+    assert (
+        "formatter_timeout_seconds must be a finite non-negative number"
+        in response.error
+    )
+    assert not response.file
+
+
 def test_plugin_protocol_rejects_malformed_descriptor_utf8(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
