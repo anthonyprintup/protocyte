@@ -1198,6 +1198,51 @@ def _write_incompatible_protocyte_plugin(path: Path) -> Path:
     return plugin
 
 
+def _write_slow_descriptor_set_plugin(
+    path: Path,
+    delay_seconds: float,
+    *,
+    platform_name: str | None = None,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    script = path.with_suffix(".py")
+    script.write_text(
+        "\n".join(
+            [
+                "import sys",
+                "import time",
+                'print("[\\"api/demo.proto\\"]", flush=True)',
+                'print("slow descriptor discovery stderr", file=sys.stderr, flush=True)',
+                f"time.sleep({delay_seconds!r})",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if platform_name is None:
+        platform_name = os.name
+    if platform_name == "nt":
+        plugin = path.with_suffix(".cmd")
+        plugin.write_text(
+            f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+            encoding="utf-8",
+        )
+    else:
+        plugin = path
+        plugin.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        plugin.chmod(0o755)
+    return plugin
+
+
 def _write_version_only_plugin(path: Path, version: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
@@ -13935,6 +13980,88 @@ def test_descriptor_set_discover_managed_plugin_error_is_not_an_override(
     assert result.returncode != 0
     assert "Protocyte's managed plugin is expected to support" in output
     assert "PROTOCYTE_PLUGIN_EXECUTABLE overrides" not in output
+
+
+def test_slow_descriptor_set_plugin_posix_wrapper_is_valid_shell(
+    tmp_path: Path,
+) -> None:
+    plugin = _write_slow_descriptor_set_plugin(
+        tmp_path / "slow plugin's dir" / "slow-plugin",
+        0,
+        platform_name="posix",
+    )
+    wrapper_lines = plugin.read_text(encoding="utf-8").splitlines()
+
+    assert wrapper_lines[0] == "#!/usr/bin/env sh"
+    assert shlex.split(wrapper_lines[1]) == [
+        "exec",
+        sys.executable,
+        str(plugin.with_suffix(".py")),
+        "$@",
+    ]
+
+    if shell := shutil.which("sh"):
+        result = subprocess.run(
+            [shell, str(plugin), "descriptor-set", "list", "descriptor_set.pb"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.stdout.strip() == '["api/demo.proto"]'
+        assert result.stderr.strip() == "slow descriptor discovery stderr"
+
+
+def test_descriptor_set_discover_honors_configured_tool_timeout(
+    tmp_path: Path,
+) -> None:
+    plugin = _write_slow_descriptor_set_plugin(tmp_path / "tools" / "slow-plugin", 0.3)
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "set(PROTOCYTE_TOOL_TIMEOUT_SECONDS 0.1)",
+                f'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_IS_MANAGED FALSE)",
+                '_protocyte_discover_descriptor_set(discovered "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb")',
+            ]
+        ),
+        files={"descriptor_set.pb": "placeholder"},
+    )
+
+    output = result.stdout + result.stderr
+    normalized_output = " ".join(output.split())
+    assert result.returncode != 0
+    assert "timed out after 0.1 seconds" in normalized_output
+    assert (
+        "Set PROTOCYTE_TOOL_TIMEOUT_SECONDS to a larger value or 0" in normalized_output
+    )
+    assert '["api/demo.proto"]' in output
+    assert "slow descriptor discovery stderr" in output
+
+
+def test_descriptor_set_discover_timeout_zero_disables_the_process_limit(
+    tmp_path: Path,
+) -> None:
+    plugin = _write_slow_descriptor_set_plugin(tmp_path / "tools" / "slow-plugin", 0.3)
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "set(PROTOCYTE_TOOL_TIMEOUT_SECONDS 0)",
+                f'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PLUGIN_IS_MANAGED FALSE)",
+                '_protocyte_discover_descriptor_set(discovered "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb")',
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/discovered.txt" "${discovered}")',
+            ]
+        ),
+        files={"descriptor_set.pb": "placeholder"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "build" / "discovered.txt").read_text(encoding="utf-8") == (
+        "api/demo.proto"
+    )
 
 
 def test_descriptor_set_discover_reports_incompatible_explicit_plugin(
