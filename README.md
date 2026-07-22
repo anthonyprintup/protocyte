@@ -593,6 +593,16 @@ Formatter executable and config values in `OPTIONS` may use absolute Windows
 or POSIX paths. Generated include and runtime prefixes are not filesystem paths;
 they must use the normalized relative virtual-directory form documented below.
 
+Every CMake-launched `protoc`, dependency-reader, and import-scan process has a
+wall-clock limit. `PROTOCYTE_TOOL_TIMEOUT_SECONDS` is a cache setting with a
+default of `300`; it accepts a non-negative decimal number of seconds. Set it
+before including Protocyte (for example, `-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=900`)
+when a known-large schema needs more time. Set it to `0` only when another
+supervisor enforces a build timeout. On expiry, Protocyte names the timed-out
+operation and the setting to change; generation stops before publishing its
+ownership transaction, and dependency scans remove their descriptor/depfile
+outputs so a later build cannot consume a partial result.
+
 For its compiler, Protocyte first honors an explicit
 `Protobuf_PROTOC_EXECUTABLE`. Native builds then prefer a package-provided
 `protobuf::protoc` target before a host `protoc` on `PATH`. Cross builds reverse
@@ -1116,6 +1126,12 @@ Supported Protocyte plugin parameters:
 - `clang_format_config=<path>`: use an explicit clang-format config file when
   formatting runs. Supplying either explicit formatter parameter implies
   `format=required`; neither can be combined with `format=off`.
+- `formatter_timeout_seconds=<seconds>`: maximum wall-clock time for each
+  `clang-format` invocation in the command-line plugin. The default is `60`.
+  Use a positive finite number for a per-file limit, or `0` to disable the
+  formatter timeout when an external build supervisor owns that limit. On a
+  timeout Protocyte terminates the formatter process tree and returns a plugin
+  error without generated response files.
 
 Runtime and include prefixes are portable protobuf virtual directories, not
 filesystem paths. They must be normalized relative paths using `/`; absolute or
@@ -1175,6 +1191,9 @@ prefixes remain relative virtual directories. Runtime state is the exception:
 use the dedicated `EMIT_RUNTIME` and `RUNTIME_PREFIX` arguments so CMake can
 declare the emitted runtime header and runtime linkage consistently. Forwarded
 `runtime` and `runtime_prefix` parameters are rejected.
+For example, a project that needs a slower formatter may set
+`OPTIONS "formatter_timeout_seconds=180"`; `0` retains formatting but disables
+only its per-file timeout.
 
 Direct `protoc` callers should pass plugin parameters through
 `--protocyte_opt=...` and keep the output directory in a separate
@@ -1239,9 +1258,11 @@ policy = GeneratorPolicy(
 response = generate_response(request, policy=policy)
 ```
 
-`GeneratorPolicy()` preserves normal local plugin behavior: its resource
-budgets are unset, formatter parameters are allowed, and output formatting is
-enabled. An embedding service must pass its own explicit policy; merely calling
+`GeneratorPolicy()` preserves the embedding API's opt-in behavior: its resource
+budgets and formatter timeout are unset, formatter parameters are allowed, and
+output formatting is enabled. The command-line plugin separately uses the
+finite `formatter_timeout_seconds` plugin-parameter default described above.
+An embedding service must pass its own explicit policy; merely calling
 `generate_response()` does not opt into the example limits above. When a
 request requires formatting, a policy with `format_outputs=False` rejects the
 request rather than silently returning unformatted output.

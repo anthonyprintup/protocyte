@@ -62,9 +62,7 @@ class GeneratorPolicy:
         if timeout is None:
             return
         if isinstance(timeout, bool) or not isinstance(timeout, int | float):
-            raise TypeError(
-                "formatter_timeout_seconds must be a real number or None"
-            )
+            raise TypeError("formatter_timeout_seconds must be a real number or None")
         try:
             finite = math.isfinite(timeout)
         except OverflowError:
@@ -79,9 +77,12 @@ def generate_response(
     request: plugin_pb2.CodeGeneratorRequest,
     *,
     policy: GeneratorPolicy | None = None,
+    use_plugin_defaults: bool = False,
 ) -> plugin_pb2.CodeGeneratorResponse:
     response = plugin_pb2.CodeGeneratorResponse()
-    response.supported_features = plugin_pb2.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
+    response.supported_features = (
+        plugin_pb2.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
+    )
     active_policy = policy or GeneratorPolicy()
     phase = "validating the generator request"
 
@@ -91,8 +92,7 @@ def generate_response(
         phase = "parsing generator parameters"
         options = parse_parameter(request.parameter)
         if not active_policy.allow_formatter_parameters and (
-            options.clang_format is not None
-            or options.clang_format_config is not None
+            options.clang_format is not None or options.clang_format_config is not None
         ):
             raise ProtocyteError(
                 "clang_format and clang_format_config are disabled by the generator policy"
@@ -100,11 +100,16 @@ def generate_response(
         phase = "building the descriptor model"
         model = build_model(request)
         phase = "generating C++ outputs"
+        formatter_timeout_seconds = (
+            options.formatter_timeout_seconds
+            if use_plugin_defaults and policy is None
+            else active_policy.formatter_timeout_seconds
+        )
         outputs = generate_outputs(
             model,
             options,
             format_outputs=active_policy.format_outputs,
-            formatter_timeout_seconds=active_policy.formatter_timeout_seconds,
+            formatter_timeout_seconds=formatter_timeout_seconds,
             max_output_bytes=active_policy.max_generated_bytes,
         )
         phase = "assembling the generator response"
@@ -119,7 +124,9 @@ def generate_response(
     except Exception as exc:
         response.ClearField("file")
         detail = render_diagnostic_context(str(exc).strip())
-        response.error = f"internal Protocyte error while {phase} ({type(exc).__name__})"
+        response.error = (
+            f"internal Protocyte error while {phase} ({type(exc).__name__})"
+        )
         if detail:
             response.error += f": {detail}"
         return response
@@ -231,12 +238,7 @@ def _add_descriptor_nodes(nodes: int, count: int, limit: int | None) -> int:
 
 
 def _enum_node_count(enum: descriptor_pb2.EnumDescriptorProto) -> int:
-    return (
-        1
-        + len(enum.value)
-        + len(enum.reserved_name)
-        + len(enum.reserved_range)
-    )
+    return 1 + len(enum.value) + len(enum.reserved_name) + len(enum.reserved_range)
 
 
 def _message_node_count(message: descriptor_pb2.DescriptorProto) -> int:

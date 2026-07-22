@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
+
 foreach(
     required_variable
     IN ITEMS
@@ -41,18 +43,28 @@ if(PLUGIN_IS_MANAGED)
     )
 endif()
 
-execute_process(
+_protocyte_resolve_tool_timeout(protocyte_tool_timeout)
+_protocyte_execute_bounded(
+    topology_check_result
+    topology_check_output
+    topology_check_error
+    topology_check_timed_out
+    TIMEOUT_SECONDS "${protocyte_tool_timeout}"
     COMMAND
         ${import_scan_launcher}
         "${IMPORT_SCAN_COMMAND}"
         --scan-topology-witness
         "${REQUEST_FILE}"
         "${WITNESS_FILE}"
-    TIMEOUT 60
-    RESULT_VARIABLE topology_check_result
-    OUTPUT_VARIABLE topology_check_output
-    ERROR_VARIABLE topology_check_error
 )
+if(topology_check_timed_out)
+    message(
+        FATAL_ERROR
+        "Protocyte import topology check through '${PLUGIN_EXECUTABLE}' timed out after "
+        "${protocyte_tool_timeout} seconds. Set PROTOCYTE_TOOL_TIMEOUT_SECONDS to a larger "
+        "value or 0 to disable this timeout."
+    )
+endif()
 if(NOT topology_check_result EQUAL 0)
     string(STRIP "${topology_check_output}" topology_check_output)
     string(STRIP "${topology_check_error}" topology_check_error)

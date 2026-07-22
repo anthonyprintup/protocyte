@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
+
 foreach(
     required_variable
     IN ITEMS
@@ -38,16 +40,28 @@ if(MANAGED_DEPENDENCY_READER)
     list(APPEND protocyte_dependency_environment "--unset=PYTHONPATH" "--unset=PYTHONHOME")
 endif()
 
-execute_process(
+_protocyte_resolve_tool_timeout(protocyte_tool_timeout)
+_protocyte_execute_bounded(
+    protoc_result
+    protoc_output
+    protoc_error
+    protoc_timed_out
+    WORKING_DIRECTORY "${SCAN_WORKING_DIRECTORY}"
+    TIMEOUT_SECONDS "${protocyte_tool_timeout}"
     COMMAND
         "${PROTOC_EXECUTABLE}"
         "@${ARGUMENT_FILE}"
-    WORKING_DIRECTORY "${SCAN_WORKING_DIRECTORY}"
-    RESULT_VARIABLE protoc_result
-    OUTPUT_VARIABLE protoc_output
-    ERROR_VARIABLE protoc_error
 )
 
+if(protoc_timed_out)
+    file(REMOVE "${DEPENDENCY_DESCRIPTOR}" "${DEPENDENCY_DEPFILE}")
+    message(
+        FATAL_ERROR
+        "Protocyte dependency scan for '${PROTO_FILE}' timed out while running protoc after "
+        "${protocyte_tool_timeout} seconds. Partial dependency outputs were removed. Set "
+        "PROTOCYTE_TOOL_TIMEOUT_SECONDS to a larger value or 0 to disable this timeout."
+    )
+endif()
 if(NOT "${protoc_result}" STREQUAL "0")
     string(STRIP "${protoc_output}" protoc_output)
     string(STRIP "${protoc_error}" protoc_error)
@@ -77,7 +91,13 @@ if(DEFINED DEPENDENCY_FILE_FORMAT AND NOT "${DEPENDENCY_FILE_FORMAT}" STREQUAL "
     list(APPEND dependency_reader_format_arguments "${DEPENDENCY_FILE_FORMAT}")
 endif()
 
-execute_process(
+_protocyte_execute_bounded(
+    dependency_reader_result
+    dependency_reader_output
+    dependency_reader_error
+    dependency_reader_timed_out
+    WORKING_DIRECTORY "${SCAN_WORKING_DIRECTORY}"
+    TIMEOUT_SECONDS "${protocyte_tool_timeout}"
     COMMAND
         "${CMAKE_COMMAND}" -E env
         ${protocyte_dependency_environment}
@@ -89,12 +109,17 @@ execute_process(
         "${ARGUMENT_FILE}"
         "${DEPENDENCY_DEPFILE}"
         "${DEPENDENCY_DEPFILE_TARGET}"
-    WORKING_DIRECTORY "${SCAN_WORKING_DIRECTORY}"
-    RESULT_VARIABLE dependency_reader_result
-    OUTPUT_VARIABLE dependency_reader_output
-    ERROR_VARIABLE dependency_reader_error
 )
 
+if(dependency_reader_timed_out)
+    file(REMOVE "${DEPENDENCY_DESCRIPTOR}" "${DEPENDENCY_DEPFILE}")
+    message(
+        FATAL_ERROR
+        "Protocyte dependency scan for '${PROTO_FILE}' timed out while reading its descriptor after "
+        "${protocyte_tool_timeout} seconds. Partial dependency outputs were removed. Set "
+        "PROTOCYTE_TOOL_TIMEOUT_SECONDS to a larger value or 0 to disable this timeout."
+    )
+endif()
 if(NOT "${dependency_reader_result}" STREQUAL "0")
     string(STRIP "${dependency_reader_output}" dependency_reader_output)
     string(STRIP "${dependency_reader_error}" dependency_reader_error)

@@ -3,6 +3,8 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
+_protocyte_configure_tool_timeout()
 set_property(
     GLOBAL
     PROPERTY PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER
@@ -3759,20 +3761,28 @@ function(
         file(WRITE "${import_scan_request}" "${import_scan_request_content}")
     endif()
 
-    execute_process(
+    _protocyte_execute_bounded(
+        import_scan_result
+        import_scan_output
+        import_scan_error
+        import_scan_timed_out
         COMMAND
             ${import_scan_launcher}
             "${import_scan_command}"
             "${import_scan_request}"
-        RESULT_VARIABLE import_scan_result
-        OUTPUT_VARIABLE import_scan_output
-        ERROR_VARIABLE import_scan_error
-        TIMEOUT 60
     )
     string(REPLACE "\r\n" "\n" import_scan_output "${import_scan_output}")
     string(REPLACE "\r" "\n" import_scan_output "${import_scan_output}")
     string(STRIP "${import_scan_output}" import_scan_output)
     string(STRIP "${import_scan_error}" import_scan_error)
+    if(import_scan_timed_out)
+        message(
+            FATAL_ERROR
+            "Protocyte source import scan through '${import_scan_plugin}' timed out after "
+            "${PROTOCYTE_TOOL_TIMEOUT_SECONDS} seconds. Set PROTOCYTE_TOOL_TIMEOUT_SECONDS "
+            "to a larger value or 0 to disable this timeout."
+        )
+    endif()
     if(NOT import_scan_result EQUAL 0)
         message(
             FATAL_ERROR
@@ -4108,6 +4118,7 @@ function(
                 "${CMAKE_COMMAND}"
                 "-DMANIFEST_FILE=${guard_manifest}"
                 "-DFAIL_ON_CHANGE=${guard_fail_on_change}"
+                "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
                 -P "${guard_script}"
             VERBATIM
         )
@@ -5132,6 +5143,7 @@ function(protocyte_generate)
                     "-DDEPENDENCY_DEPFILE_TARGET=${dependency_depfile_target}"
                     "-DDEPENDENCY_FILE_FORMAT=${protocyte_dependency_file_format}"
                     "-DMANAGED_DEPENDENCY_READER=${protocyte_plugin_is_managed}"
+                    "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
                 DEPENDS
@@ -5139,6 +5151,7 @@ function(protocyte_generate)
                     ${protocyte_import_inventory_depends}
                     "${dependency_response_file}"
                     "${protocyte_dependency_scan_script}"
+                    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteProcess.cmake"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
                     "${protocyte_plugin_executable}"
                     ${protocyte_generator_sources}
@@ -5163,12 +5176,6 @@ function(protocyte_generate)
         list(APPEND protocyte_input_depends "${protocyte_descriptor_set}")
     endif()
 
-    if(encoded_generator_parameter STREQUAL "")
-        set(protocyte_out_arg "--protocyte_out=${PROTOCYTE_OUT_DIR}")
-    else()
-        set(protocyte_out_arg "--protocyte_out=${encoded_generator_parameter}:${PROTOCYTE_OUT_DIR}")
-    endif()
-
     set(protocyte_command_outputs "${protocyte_outputs}")
     _protocyte_preflight_output_ownership(
         protocyte_out_dir_owner_marker
@@ -5183,6 +5190,39 @@ function(protocyte_generate)
         "${PROTOCYTE_OUT_DIR}"
         protocyte_command_outputs
     )
+    # Generate into an unclaimed sibling tree first.  It deliberately sits
+    # outside OUT_DIR: a protobuf path is user-controlled and could otherwise
+    # collide with an internal staging path beneath the generated root.
+    # ProtocyteGenerate.cmake validates this path again under the output locks
+    # and publishes expected files only after protoc and ownership publication
+    # both succeed.
+    # A stable, target-specific name also lets a retry safely discard only an
+    # interrupted attempt's private staging tree.
+    string(
+        SHA256
+        protocyte_generation_staging_key
+        "generation-staging|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+    )
+    cmake_path(GET PROTOCYTE_OUT_DIR PARENT_PATH protocyte_out_dir_parent)
+    set(
+        protocyte_generation_staging_directory
+        "${protocyte_out_dir_parent}/.protocyte-generation-staging-${protocyte_generation_staging_key}"
+    )
+    set(
+        protocyte_generation_staged_output_directory
+        "${protocyte_generation_staging_directory}/generated"
+    )
+    if(encoded_generator_parameter STREQUAL "")
+        set(
+            protocyte_staging_out_arg
+            "--protocyte_out=${protocyte_generation_staged_output_directory}"
+        )
+    else()
+        set(
+            protocyte_staging_out_arg
+            "--protocyte_out=${encoded_generator_parameter}:${protocyte_generation_staged_output_directory}"
+        )
+    endif()
     set(protocyte_response_content "")
     if(NOT "${protoc_descriptor_argument}" STREQUAL "")
         _protocyte_append_protoc_response_argument(
@@ -5203,7 +5243,7 @@ function(protocyte_generate)
     )
     _protocyte_append_protoc_response_argument(
         protocyte_response_content
-        "${protocyte_out_arg}"
+        "${protocyte_staging_out_arg}"
     )
     foreach(proto_file IN LISTS normalized_proto_files)
         if(protocyte_has_DESCRIPTOR_SET)
@@ -5223,7 +5263,7 @@ function(protocyte_generate)
     _protocyte_write_protoc_response_file(
         protocyte_response_file
         protocyte_response_file_relative
-        "generation|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+        "generation-staging|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
         "${protocyte_response_content}"
     )
     set(protocyte_generation_lock_keys)
@@ -5239,6 +5279,10 @@ function(protocyte_generate)
         protocyte_generation_lock_keys
     )
     set(protocyte_generation_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerate.cmake")
+    set(
+        protocyte_generation_transaction_script
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerationTransaction.cmake"
+    )
     set(
         protocyte_output_safety_script
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteOutputSafety.cmake"
@@ -5266,12 +5310,14 @@ function(protocyte_generate)
             "-DLOCK_DIRECTORY_IDENTITY_SHA256=${protocyte_lock_directory_identity_hash}"
             "-DLOCK_MANIFEST=${protocyte_generation_lock_manifest}"
             "-DOUTPUT_DIRECTORY=${PROTOCYTE_OUT_DIR}"
+            "-DSTAGING_OUTPUT_DIRECTORY=${protocyte_generation_staging_directory}"
             "-DOUT_DIR_OWNER_MARKER=${protocyte_out_dir_owner_marker}"
             "-DOUT_DIR_OWNER_LOCK=${protocyte_out_dir_owner_lock}"
             "-DBUILD_OWNER_HASH=${protocyte_build_tree_owner_hash}"
             "-DOWNERSHIP_MANIFEST_DIR=${PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR}"
             "-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"
             "-DPROTOCYTE_MANAGED_PLUGIN=${protocyte_plugin_is_managed}"
+            "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
             -P "${protocyte_generation_script}"
         DEPENDS
             ${protocyte_input_depends}
@@ -5279,6 +5325,8 @@ function(protocyte_generate)
             "${protocyte_response_file}"
             "${protocyte_generation_lock_manifest}"
             "${protocyte_generation_script}"
+            "${protocyte_generation_transaction_script}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteProcess.cmake"
             "${protocyte_output_safety_script}"
             "${PROTOCYTE_PROTOC_DEPENDENCY}"
             "${protocyte_plugin_executable}"

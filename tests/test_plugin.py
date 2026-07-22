@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 from shutil import which as find_executable
+import shlex
 import struct
 import subprocess
 import sys
@@ -3113,7 +3114,10 @@ def test_proto2_huge_exponent_zero_defaults_preserve_signed_zero(
     )
 
     assert len(default_value) == 62
-    assert struct.unpack(bits_format, struct.pack(value_format, parsed))[0] == expected_bits
+    assert (
+        struct.unpack(bits_format, struct.pack(value_format, parsed))[0]
+        == expected_bits
+    )
 
 
 @pytest.mark.parametrize(
@@ -3723,7 +3727,9 @@ def test_unbounded_formatter_uses_utf8_despite_non_utf8_locale(
     source = "// café 🧪\nint value;\n"
     calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(locale, "getpreferredencoding", lambda _setlocale=True: "cp1252")
+    monkeypatch.setattr(
+        locale, "getpreferredencoding", lambda _setlocale=True: "cp1252"
+    )
     if hasattr(locale, "getencoding"):
         monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
 
@@ -3761,7 +3767,9 @@ def test_unbounded_formatter_preserves_utf8_stderr_diagnostics(
 ) -> None:
     import locale
 
-    monkeypatch.setattr(locale, "getpreferredencoding", lambda _setlocale=True: "cp1252")
+    monkeypatch.setattr(
+        locale, "getpreferredencoding", lambda _setlocale=True: "cp1252"
+    )
     if hasattr(locale, "getencoding"):
         monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
     monkeypatch.setattr(
@@ -3915,6 +3923,68 @@ def test_generator_policy_applies_formatter_timeout(
         in response.error
     )
     assert not response.file
+
+
+def test_command_line_plugin_formatter_timeout_stops_hanging_process_tree(
+    tmp_path: Path,
+) -> None:
+    grandchild_ready = tmp_path / "formatter-grandchild-ready"
+    child_survived = tmp_path / "formatter-child-survived"
+    grandchild = (
+        "from pathlib import Path; import time; "
+        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
+        f"Path({str(child_survived)!r}).touch()"
+    )
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
+    )
+    formatter_script = tmp_path / "hanging_formatter.py"
+    formatter_script.write_text(
+        "\n".join(
+            [
+                "import subprocess",
+                "import sys",
+                "import time",
+                f"subprocess.Popen([sys.executable, '-c', {child!r}])",
+                "time.sleep(30)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        formatter = tmp_path / "hanging-formatter.cmd"
+        formatter.write_text(
+            f'@echo off\r\n"{sys.executable}" "{formatter_script}"\r\n',
+            encoding="utf-8",
+        )
+    else:
+        formatter = tmp_path / "hanging-formatter"
+        formatter.write_text(
+            "#!/usr/bin/env sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(formatter_script))}\n",
+            encoding="utf-8",
+        )
+        formatter.chmod(0o755)
+
+    response = generate_response(
+        _basic_request(
+            parameter=(
+                f"clang_format={formatter.as_posix()},formatter_timeout_seconds=0.5"
+            )
+        ),
+        use_plugin_defaults=True,
+    )
+
+    assert (
+        "clang-format timed out for simple.protocyte.hpp after 0.5 seconds"
+        in response.error
+    )
+    assert not response.file
+    assert grandchild_ready.is_file()
+    time.sleep(1.25)
+    assert not child_survived.exists()
 
 
 def test_formatter_timeout_terminates_descendants_that_inherit_pipes(
@@ -4635,7 +4705,9 @@ def test_generator_policy_metadata_limit_covers_dependency_surfaces(
     monkeypatch.setattr(
         protocyte_plugin,
         "build_model",
-        lambda _: pytest.fail("dependency metadata must be rejected before model construction"),
+        lambda _: pytest.fail(
+            "dependency metadata must be rejected before model construction"
+        ),
     )
     response = generate_response(
         request,
@@ -4681,7 +4753,9 @@ def test_generator_policy_rejects_source_metadata_before_model_construction(
     monkeypatch.setattr(
         protocyte_plugin,
         "build_model",
-        lambda _: pytest.fail("source metadata must be rejected before model construction"),
+        lambda _: pytest.fail(
+            "source metadata must be rejected before model construction"
+        ),
     )
 
     response = generate_response(
@@ -4827,7 +4901,9 @@ def test_generator_policy_counts_unknown_descriptor_wire_payload_before_model(
     monkeypatch.setattr(
         protocyte_plugin,
         "build_model",
-        lambda _: pytest.fail("unknown descriptor payload must be rejected before model construction"),
+        lambda _: pytest.fail(
+            "unknown descriptor payload must be rejected before model construction"
+        ),
     )
 
     response = generate_response(
@@ -4974,6 +5050,20 @@ def test_generator_policy_rejects_non_positive_formatter_timeout(
 ) -> None:
     with pytest.raises(ValueError, match="formatter_timeout_seconds must be positive"):
         GeneratorPolicy(formatter_timeout_seconds=invalid_value)
+
+
+@pytest.mark.parametrize("value", ["1e-9999", "-0", "1e9999"])
+def test_plugin_rejects_nonrepresentable_formatter_timeout(value: str) -> None:
+    response = generate_response(
+        _basic_request(parameter=f"formatter_timeout_seconds={value}"),
+        use_plugin_defaults=True,
+    )
+
+    assert (
+        "formatter_timeout_seconds must be a finite non-negative number"
+        in response.error
+    )
+    assert not response.file
 
 
 def test_generator_policy_preserves_valid_limits_and_timeout() -> None:
@@ -5820,15 +5910,11 @@ def test_rejects_reflection_symbol_collision_with_child_package_namespace() -> N
 def test_namespace_scope_validation_ignores_unused_and_custom_option_imports() -> None:
     request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
     request.file_to_generate.append("target.proto")
-    target = request.proto_file.add(
-        name="target.proto", package="foo", syntax="proto3"
-    )
+    target = request.proto_file.add(name="target.proto", package="foo", syntax="proto3")
     target.dependency.extend(["unused.proto", "custom_options.proto"])
     target.message_type.add(name="Bar")
 
-    request.proto_file.add(
-        name="unused.proto", package="foo.Bar", syntax="proto3"
-    )
+    request.proto_file.add(name="unused.proto", package="foo.Bar", syntax="proto3")
     custom_options = request.proto_file.add(
         name="custom_options.proto", package="foo.Bar", syntax="proto2"
     )

@@ -41,6 +41,7 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.format_mode == "auto"
     assert options.clang_format is None
     assert options.clang_format_config is None
+    assert options.formatter_timeout_seconds == 60.0
 
 
 def test_accepts_internal_sha_based_reflection_api_macro() -> None:
@@ -65,7 +66,9 @@ def test_rejects_invalid_internal_reflection_api_macro(macro: str) -> None:
 
 
 def test_parse_accepts_clang_format_options() -> None:
-    options = parse_parameter("clang_format=custom-format,clang_format_config=configs/protocyte.style")
+    options = parse_parameter(
+        "clang_format=custom-format,clang_format_config=configs/protocyte.style"
+    )
 
     assert options.clang_format == "custom-format"
     assert options.clang_format_config == "configs/protocyte.style"
@@ -81,9 +84,7 @@ def test_parse_accepts_comment_modes(value: str, expected: bool) -> None:
 
 
 def test_rejects_invalid_comment_mode() -> None:
-    with pytest.raises(
-        ProtocyteError, match="comments must be one of: on, off"
-    ):
+    with pytest.raises(ProtocyteError, match="comments must be one of: on, off"):
         parse_parameter("comments=sometimes")
 
 
@@ -99,6 +100,44 @@ def test_rejects_invalid_format_mode() -> None:
         ProtocyteError, match="format must be one of: auto, off, required"
     ):
         parse_parameter("format=sometimes")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("0", None),
+        ("0.0", None),
+        ("0e-9999", None),
+        ("0.25", 0.25),
+        ("120", 120.0),
+        ("5e-324", 5e-324),
+    ],
+)
+def test_parse_formatter_timeout_seconds(value: str, expected: float | None) -> None:
+    assert (
+        parse_parameter(f"formatter_timeout_seconds={value}").formatter_timeout_seconds
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "-1",
+        "-0",
+        "-0.0",
+        "-0e-9999",
+        "1e-9999",
+        "1e9999",
+        "nan",
+        "inf",
+        "not-a-number",
+    ],
+)
+def test_rejects_invalid_formatter_timeout_seconds(value: str) -> None:
+    with pytest.raises(ProtocyteError, match="formatter_timeout_seconds"):
+        parse_parameter(f"formatter_timeout_seconds={value}")
 
 
 def test_generator_options_rejects_invalid_format_mode() -> None:
@@ -194,12 +233,18 @@ def test_rejects_removed_base64_transport_parameter() -> None:
 def test_rejects_mixed_encoded_transport_parameter() -> None:
     encoded = b"runtime=emit".hex()
 
-    with pytest.raises(ProtocyteError, match="encoded protocyte transport parameter must be the only protocyte parameter"):
+    with pytest.raises(
+        ProtocyteError,
+        match="encoded protocyte transport parameter must be the only protocyte parameter",
+    ):
         parse_parameter(f"_protocyte_options_hex={encoded},include_prefix=generated")
 
 
 def test_rejects_bare_encoded_transport_parameter() -> None:
-    with pytest.raises(ProtocyteError, match=r"invalid protocyte parameter '_protocyte_options_hex'; expected key=value"):
+    with pytest.raises(
+        ProtocyteError,
+        match=r"invalid protocyte parameter '_protocyte_options_hex'; expected key=value",
+    ):
         parse_parameter("_protocyte_options_hex")
 
 
@@ -292,12 +337,17 @@ def test_rejects_runtime_omit_aliases(parameter: str) -> None:
 
 
 def test_rejects_bare_tokens_without_equals() -> None:
-    with pytest.raises(ProtocyteError, match=r"invalid protocyte parameter 'runtime'; expected key=value"):
+    with pytest.raises(
+        ProtocyteError,
+        match=r"invalid protocyte parameter 'runtime'; expected key=value",
+    ):
         parse_parameter("runtime")
 
 
 def test_rejects_unknown_parameters() -> None:
-    with pytest.raises(ProtocyteError, match=r"unknown protocyte parameter\(s\): debug"):
+    with pytest.raises(
+        ProtocyteError, match=r"unknown protocyte parameter\(s\): debug"
+    ):
         parse_parameter("debug=true")
 
 
@@ -352,7 +402,14 @@ def test_rejects_prefix_whitespace_and_terminal_controls(parameter: str) -> None
 
 
 @pytest.mark.parametrize(
-    "prefix", ["../generated", "/generated", "C:/generated", "nested\\generated", "nested//generated"]
+    "prefix",
+    [
+        "../generated",
+        "/generated",
+        "C:/generated",
+        "nested\\generated",
+        "nested//generated",
+    ],
 )
 def test_rejects_unsafe_include_prefixes(prefix: str) -> None:
     with pytest.raises(ProtocyteError, match="include prefix"):
