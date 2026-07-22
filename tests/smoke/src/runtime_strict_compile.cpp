@@ -30,4 +30,15 @@ namespace {
         return values.capacity();
     }
 
+    [[maybe_unused]] auto instantiate_noncopyable_sequence_lvalue_push_back() noexcept -> protocyte::Status {
+        protocyte::DefaultConfig::Context context {};
+        protocyte::DefaultConfig::String value {&context};
+        protocyte::DefaultConfig::Vector<protocyte::DefaultConfig::String> vector {&context};
+        protocyte::Array<protocyte::DefaultConfig::String, 2u> array {&context};
+        if (const auto st = vector.push_back(value); !st) {
+            return st;
+        }
+        return array.push_back(value);
+    }
+
 } // namespace

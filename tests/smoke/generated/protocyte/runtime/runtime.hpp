@@ -2625,7 +2625,23 @@ namespace protocyte {
             return data_[size_++];
         }
 
-        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
+        Status push_back(const T &value) noexcept {
+            if constexpr (requires { T {value}; }) {
+                return emplace_back(value).status();
+            } else {
+                if (size_ == max_size()) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                if (ctx_ == nullptr) {
+                    return protocyte::unexpected(ErrorCode::invalid_argument, {});
+                }
+                auto copied = protocyte::copy_value(ctx_, value);
+                if (!copied) {
+                    return copied.status();
+                }
+                return emplace_back(protocyte::move(*copied)).status();
+            }
+        }
 
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
@@ -3071,7 +3087,20 @@ namespace protocyte {
             return *ptr(size_++);
         }
 
-        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
+        Status push_back(const T &value) noexcept {
+            if constexpr (requires { T {value}; }) {
+                return emplace_back(value).status();
+            } else {
+                if (size_ >= Max) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                auto copied = protocyte::copy_value(context(), value);
+                if (!copied) {
+                    return copied.status();
+                }
+                return emplace_back(protocyte::move(*copied)).status();
+            }
+        }
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
         Status assign(const Span<const u8> view) noexcept
