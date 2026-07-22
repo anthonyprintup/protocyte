@@ -44,7 +44,7 @@ def load_descriptor_set(path: str | Path) -> descriptor_pb2.FileDescriptorSet:
             f"{render_diagnostic_context(str(path))}: "
             f"{render_diagnostic_context(str(exc))}"
         ) from exc
-    except DecodeError as exc:
+    except (DecodeError, UnicodeDecodeError) as exc:
         raise ProtocyteError(
             "failed to parse FileDescriptorSet "
             f"{render_diagnostic_context(str(path))}: "
@@ -77,6 +77,28 @@ def _render_descriptor_bytes(value: bytes) -> str:
     return rendered
 
 
+def _descriptor_field_is_repeated(field: object) -> bool:
+    """Read repeated cardinality across protobuf 6 and 7 descriptor APIs."""
+    is_repeated = getattr(field, "is_repeated", None)
+    if is_repeated is not None:
+        return bool(is_repeated)
+    return getattr(field, "label") == getattr(field, "LABEL_REPEATED")
+
+
+def _descriptor_field_is_map(field: object) -> bool:
+    """Identify synthetic map-entry fields across protobuf descriptor APIs."""
+    message_type = getattr(field, "message_type", None)
+    return message_type is not None and bool(message_type.GetOptions().map_entry)
+
+
+def _render_map_key_path(field_path: str, key: object) -> str:
+    if isinstance(key, str):
+        return f"{field_path}[{render_diagnostic_context(key)!r}]"
+    if isinstance(key, bytes):
+        return f"{field_path}[{_render_descriptor_bytes(key)}]"
+    return f"{field_path}[{render_diagnostic_context(str(key))}]"
+
+
 def validate_descriptor_string_fields(message: Message, *, root: str) -> None:
     """Reject malformed UTF-8 returned as bytes for protobuf string fields."""
 
@@ -99,8 +121,22 @@ def validate_descriptor_string_fields(message: Message, *, root: str) -> None:
         nested_messages: list[tuple[Message, str]] = []
         for field, value in current.ListFields():
             field_path = f"{path}.{field.name}"
+            is_repeated = _descriptor_field_is_repeated(field)
+            if _descriptor_field_is_map(field):
+                map_entry_fields = field.message_type.fields_by_name
+                key_field = map_entry_fields["key"]
+                value_field = map_entry_fields["value"]
+                for key, item in value.items():
+                    entry_path = _render_map_key_path(field_path, key)
+                    if key_field.type == descriptor_pb2.FieldDescriptorProto.TYPE_STRING:
+                        validate_value(key, f"{entry_path}.key")
+                    if value_field.type == descriptor_pb2.FieldDescriptorProto.TYPE_STRING:
+                        validate_value(item, f"{entry_path}.value")
+                    elif value_field.type == descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE:
+                        nested_messages.append((item, f"{entry_path}.value"))
+                continue
             if field.type == descriptor_pb2.FieldDescriptorProto.TYPE_STRING:
-                if field.is_repeated:
+                if is_repeated:
                     for index, item in enumerate(value):
                         validate_value(item, f"{field_path}[{index}]")
                 else:
@@ -108,7 +144,7 @@ def validate_descriptor_string_fields(message: Message, *, root: str) -> None:
                 continue
             if field.type != descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE:
                 continue
-            if field.is_repeated:
+            if is_repeated:
                 for index, item in enumerate(value):
                     nested_messages.append((item, f"{field_path}[{index}]"))
             else:

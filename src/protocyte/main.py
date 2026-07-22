@@ -121,9 +121,9 @@ def main(argv: list[str] | None = None) -> int:
         request = plugin_pb2.CodeGeneratorRequest()
         try:
             request.ParseFromString(sys.stdin.buffer.read())
-        except DecodeError as exc:
+        except (DecodeError, UnicodeDecodeError):
             print(
-                f"protocyte: failed to parse CodeGeneratorRequest: {exc}",
+                "protocyte: failed to parse CodeGeneratorRequest",
                 file=sys.stderr,
             )
             return 1
