@@ -92,7 +92,6 @@ function(_protocyte_load_generation_outputs out_var)
         cmake_path(NORMAL_PATH owned_output OUTPUT_VARIABLE normalized_owned_output)
         _protocyte_normalized_path_identity(output_identity "${normalized_owned_output}")
         string(SHA256 recorded_output_key "${output_identity}")
-        list(FIND output_lock_keys "${output_key}" output_lock_index)
         _protocyte_generated_output_path_is_safe(
             output_is_safe
             "${normalized_owned_output}"
@@ -100,7 +99,7 @@ function(_protocyte_load_generation_outputs out_var)
         )
         if(
             NOT recorded_output_key STREQUAL output_key
-            OR output_lock_index EQUAL -1
+            OR NOT DEFINED "protocyte_generation_known_owner_${output_key}"
             OR NOT output_is_safe
         )
             message(
@@ -340,6 +339,9 @@ foreach(output_lock_key IN LISTS output_lock_keys)
             "Protocyte generation lock manifest contains an invalid output identity: ${output_lock_key}"
         )
     endif()
+    # This validated hexadecimal key is used as a variable suffix, so marker
+    # membership does not require an O(N) list search for every output.
+    set("protocyte_generation_known_owner_${output_lock_key}" TRUE)
 endforeach()
 
 # Re-attest the configured namespace before creating or locking anything. The
@@ -857,91 +859,86 @@ _protocyte_validate_generation_paths()
 _protocyte_validate_generation_staging_directory()
 
 set(generation_initial_states)
-set(generation_operation_states)
-set(generation_recovery_states)
 set(generation_initial_hashes)
 foreach(generation_output IN LISTS generation_outputs)
     if(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
-        if(
-            IS_DIRECTORY "${generation_output}"
-            OR IS_SYMLINK "${generation_output}"
-        )
+        if(IS_DIRECTORY "${generation_output}" OR IS_SYMLINK "${generation_output}")
             _protocyte_discard_generation_staging()
-            message(
-                FATAL_ERROR
-                "Protocyte cannot replace unsafe existing output '${generation_output}' for target "
-                "'${GENERATION_TARGET}'. No generated output was changed."
-            )
+            message(FATAL_ERROR "Protocyte cannot replace unsafe existing output '${generation_output}' for target '${GENERATION_TARGET}'. No generated output was changed.")
         endif()
         list(APPEND generation_initial_states "prior")
         file(SHA256 "${generation_output}" generation_initial_hash)
         list(APPEND generation_initial_hashes "${generation_initial_hash}")
     else()
         list(APPEND generation_initial_states "absent")
-        # CMake lists do not retain an empty element.  The transaction writer
-        # serializes this internal sentinel as the required empty prior hash.
         list(APPEND generation_initial_hashes "absent")
     endif()
-    list(APPEND generation_operation_states "untouched")
-    list(APPEND generation_recovery_states "none")
 endforeach()
+
+set(generation_transaction_owner_keys)
 set(generation_transaction_owner_markers)
-set(generation_owner_release_states)
 if(root_owner_is_missing)
-    string(REPLACE ";" "\\;" generation_transaction_owner_marker "${OUT_DIR_OWNER_MARKER}")
-    list(APPEND generation_transaction_owner_markers "${generation_transaction_owner_marker}")
-    list(APPEND generation_owner_release_states "unreleased")
+    list(APPEND generation_transaction_owner_keys root)
+    list(APPEND generation_transaction_owner_markers "${OUT_DIR_OWNER_MARKER}")
 endif()
 foreach(output_lock_key IN LISTS missing_output_owner_keys)
-    set(generation_transaction_owner_marker "${LOCK_DIRECTORY}/${output_lock_key}.owner")
-    string(REPLACE ";" "\\;" generation_transaction_owner_marker "${generation_transaction_owner_marker}")
-    list(
-        APPEND
-        generation_transaction_owner_markers
-        "${generation_transaction_owner_marker}"
-    )
-    list(APPEND generation_owner_release_states "unreleased")
+    list(APPEND generation_transaction_owner_keys "${output_lock_key}")
+    list(APPEND generation_transaction_owner_markers "${LOCK_DIRECTORY}/${output_lock_key}.owner")
 endforeach()
-set(generation_ownership_state "commit-pending")
 set(generation_owner_transaction_id "")
 set(generation_owner_transaction_manifest "")
-if(generation_transaction_owner_markers)
-    _protocyte_prepare_generation_ownership(
-        generation_owner_transaction_id
-        generation_owner_transaction_manifest
-    )
-    if(
-        "${generation_owner_transaction_id}" STREQUAL ""
-        OR "${generation_owner_transaction_manifest}" STREQUAL ""
-    )
+if(generation_transaction_owner_keys)
+    _protocyte_prepare_generation_ownership(generation_owner_transaction_id generation_owner_transaction_manifest)
+    if("${generation_owner_transaction_id}" STREQUAL "" OR "${generation_owner_transaction_manifest}" STREQUAL "")
         _protocyte_discard_generation_staging()
         message(FATAL_ERROR "Protocyte could not prepare ownership claims for target '${GENERATION_TARGET}'.")
     endif()
-    set(generation_owner_witness_state "planned")
-else()
-    set(generation_owner_witness_state "removed")
 endif()
 _protocyte_write_generation_transaction(
-    generation_transaction_written
-    generation_transaction_owner_markers
-    "${generation_ownership_state}"
-    "${generation_owner_transaction_id}"
-    "${generation_owner_witness_state}"
-    generation_owner_release_states
-    generation_initial_states
-    generation_operation_states
-    generation_recovery_states
-    generation_initial_hashes
-    generation_staged_hashes
+    generation_transaction_written generation_transaction_owner_keys
+    "${generation_owner_transaction_id}" generation_initial_states
+    generation_initial_hashes generation_staged_hashes
 )
 if(NOT generation_transaction_written)
     _protocyte_discard_generation_staging()
-    message(
-        FATAL_ERROR
-        "Protocyte could not persist the generation transaction for target '${GENERATION_TARGET}'. "
-        "No generated output was changed."
-    )
+    message(FATAL_ERROR "Protocyte could not persist the generation transaction for target '${GENERATION_TARGET}'. No generated output was changed.")
 endif()
+
+# One complete preflight attests every source, destination, and backup path
+# before ownership or output publication starts.  The execution model guards
+# against static corruption, not a same-privilege actor racing these atomics.
+_protocyte_validate_generation_paths()
+_protocyte_validate_generation_staging_directory()
+list(LENGTH generation_outputs generation_output_count)
+math(EXPR last_generation_output_index "${generation_output_count} - 1")
+foreach(generation_output_index RANGE 0 ${last_generation_output_index})
+    list(GET generation_outputs ${generation_output_index} generation_output)
+    list(GET staged_generation_outputs ${generation_output_index} staged_generation_output)
+    list(GET generation_initial_states ${generation_output_index} generation_initial_state)
+    list(GET generation_initial_hashes ${generation_output_index} generation_initial_hash)
+    list(GET generation_staged_hashes ${generation_output_index} generation_staged_hash)
+    _protocyte_generated_output_path_is_safe(staged_output_is_safe "${staged_generation_output}" "${STAGING_OUTPUT_DIRECTORY}/generated")
+    if(NOT staged_output_is_safe)
+        message(FATAL_ERROR "Protocyte staging changed before publication for target '${GENERATION_TARGET}'. No generated output was changed.")
+    endif()
+    _protocyte_generation_transaction_file_hash_matches(staged_hash_matches "${staged_generation_output}" "${generation_staged_hash}")
+    if(NOT staged_hash_matches)
+        message(FATAL_ERROR "Protocyte staged output changed before publication for target '${GENERATION_TARGET}'. No generated output was changed.")
+    endif()
+    if(generation_initial_state STREQUAL "prior")
+        _protocyte_generation_transaction_file_hash_matches(initial_hash_matches "${generation_output}" "${generation_initial_hash}")
+        _protocyte_staged_output_path(backup_generation_output "backups" "${generation_output}")
+        _protocyte_generated_output_path_is_safe(backup_output_is_safe "${backup_generation_output}" "${STAGING_OUTPUT_DIRECTORY}/backups")
+        if(NOT initial_hash_matches OR NOT backup_output_is_safe OR EXISTS "${backup_generation_output}" OR IS_SYMLINK "${backup_generation_output}")
+            message(FATAL_ERROR "Protocyte output state changed before publication for target '${GENERATION_TARGET}'. No generated output was changed.")
+        endif()
+        cmake_path(GET backup_generation_output PARENT_PATH backup_output_parent)
+        file(MAKE_DIRECTORY "${backup_output_parent}")
+    elseif(EXISTS "${generation_output}" OR IS_SYMLINK "${generation_output}")
+        message(FATAL_ERROR "Protocyte output state changed before publication for target '${GENERATION_TARGET}'. No generated output was changed.")
+    endif()
+endforeach()
+
 if(generation_transaction_owner_markers)
     _protocyte_commit_generation_ownership(
         generation_published_owner_markers
@@ -950,151 +947,44 @@ if(generation_transaction_owner_markers)
         "${generation_owner_transaction_manifest}"
     )
 endif()
-set(generation_ownership_state "committed")
-if(generation_transaction_owner_markers)
-    if("${generation_owner_transaction_id}" STREQUAL "")
-        message(
-            FATAL_ERROR
-            "Protocyte committed ownership without a transaction witness for target '${GENERATION_TARGET}'."
-        )
-    endif()
-    set(generation_owner_witness_state "retained")
-else()
-    if(NOT "${generation_owner_transaction_id}" STREQUAL "")
-        message(
-            FATAL_ERROR
-            "Protocyte created an unexpected ownership transaction for target '${GENERATION_TARGET}'."
-        )
-    endif()
-    set(generation_owner_witness_state "removed")
-endif()
-_protocyte_write_generation_transaction(
-    generation_transaction_written
-    generation_transaction_owner_markers
-    "${generation_ownership_state}"
-    "${generation_owner_transaction_id}"
-    "${generation_owner_witness_state}"
-    generation_owner_release_states
-    generation_initial_states
-    generation_operation_states
-    generation_recovery_states
-    generation_initial_hashes
-    generation_staged_hashes
-)
-if(NOT generation_transaction_written)
-    _protocyte_recover_generation_transaction(recovered_generation_transaction)
-    if(recovered_generation_transaction)
-        _protocyte_discard_generation_staging()
-    endif()
-    message(
-        FATAL_ERROR
-        "Protocyte could not persist committed ownership for target '${GENERATION_TARGET}'."
-    )
-endif()
-list(LENGTH generation_outputs generation_output_count)
-math(EXPR last_generation_output_index "${generation_output_count} - 1")
+
 foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     list(GET generation_outputs ${generation_output_index} generation_output)
     list(GET generation_initial_states ${generation_output_index} generation_initial_state)
+    list(GET generation_initial_hashes ${generation_output_index} generation_initial_hash)
     if(generation_initial_state STREQUAL "prior")
-        _protocyte_staged_output_path(
-            backup_generation_output "backups" "${generation_output}"
+        _protocyte_staged_output_path(backup_generation_output "backups" "${generation_output}")
+        _protocyte_generated_output_path_is_safe(
+            current_output_is_safe "${generation_output}" "${OUTPUT_DIRECTORY}"
         )
         _protocyte_generated_output_path_is_safe(
-            backup_output_is_safe
-            "${backup_generation_output}"
+            current_backup_is_safe "${backup_generation_output}"
             "${STAGING_OUTPUT_DIRECTORY}/backups"
         )
-        if(NOT backup_output_is_safe)
+        _protocyte_generation_transaction_file_hash_matches(
+            current_output_hash_matches "${generation_output}"
+            "${generation_initial_hash}"
+        )
+        if(
+            NOT current_output_is_safe
+            OR NOT current_backup_is_safe
+            OR NOT current_output_hash_matches
+            OR EXISTS "${backup_generation_output}"
+            OR IS_SYMLINK "${backup_generation_output}"
+        )
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
             if(recovered_generation_transaction)
                 _protocyte_discard_generation_staging()
             endif()
-            message(
-                FATAL_ERROR
-                "Protocyte backup path changed before publication for target '${GENERATION_TARGET}'. "
-                "Existing output was restored."
-            )
+            message(FATAL_ERROR "Protocyte output state changed before backup publication for target '${GENERATION_TARGET}'. Existing output was restored.")
         endif()
-        list(REMOVE_AT generation_operation_states ${generation_output_index})
-        list(
-            INSERT
-            generation_operation_states
-            ${generation_output_index}
-            "backup-pending"
-        )
-        _protocyte_write_generation_transaction(
-            generation_transaction_written
-            generation_transaction_owner_markers
-            "${generation_ownership_state}"
-            "${generation_owner_transaction_id}"
-            "${generation_owner_witness_state}"
-            generation_owner_release_states
-            generation_initial_states
-            generation_operation_states
-            generation_recovery_states
-            generation_initial_hashes
-            generation_staged_hashes
-        )
-        if(NOT generation_transaction_written)
-            _protocyte_recover_generation_transaction(recovered_generation_transaction)
-            if(recovered_generation_transaction)
-                _protocyte_discard_generation_staging()
-            endif()
-            message(
-                FATAL_ERROR
-                "Protocyte could not persist backup intent for '${generation_output}' in target "
-                "'${GENERATION_TARGET}'."
-            )
-        endif()
-        cmake_path(GET backup_generation_output PARENT_PATH backup_output_parent)
-        file(MAKE_DIRECTORY "${backup_output_parent}")
-        file(
-            RENAME "${generation_output}" "${backup_generation_output}"
-            NO_REPLACE
-            RESULT backup_output_result
-        )
+        file(RENAME "${generation_output}" "${backup_generation_output}" NO_REPLACE RESULT backup_output_result)
         if(NOT "${backup_output_result}" STREQUAL "0")
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
             if(recovered_generation_transaction)
                 _protocyte_discard_generation_staging()
             endif()
-            message(
-                FATAL_ERROR
-                "Protocyte could not prepare existing output '${generation_output}' for atomic publication "
-                "for target '${GENERATION_TARGET}': ${backup_output_result}."
-            )
-        endif()
-        list(REMOVE_AT generation_operation_states ${generation_output_index})
-        list(
-            INSERT
-            generation_operation_states
-            ${generation_output_index}
-            "backed-up"
-        )
-        _protocyte_write_generation_transaction(
-            generation_transaction_written
-            generation_transaction_owner_markers
-            "${generation_ownership_state}"
-            "${generation_owner_transaction_id}"
-            "${generation_owner_witness_state}"
-            generation_owner_release_states
-            generation_initial_states
-            generation_operation_states
-            generation_recovery_states
-            generation_initial_hashes
-            generation_staged_hashes
-        )
-        if(NOT generation_transaction_written)
-            _protocyte_recover_generation_transaction(recovered_generation_transaction)
-            if(recovered_generation_transaction)
-                _protocyte_discard_generation_staging()
-            endif()
-            message(
-                FATAL_ERROR
-                "Protocyte could not persist completed backup state for '${generation_output}' in target "
-                "'${GENERATION_TARGET}'."
-            )
+            message(FATAL_ERROR "Protocyte could not prepare existing output '${generation_output}' for atomic publication for target '${GENERATION_TARGET}': ${backup_output_result}.")
         endif()
     endif()
 endforeach()
@@ -1102,104 +992,45 @@ endforeach()
 foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     list(GET generation_outputs ${generation_output_index} generation_output)
     list(GET staged_generation_outputs ${generation_output_index} staged_generation_output)
-    _protocyte_validate_generation_paths()
-    _protocyte_validate_generation_staging_directory()
+    list(GET generation_staged_hashes ${generation_output_index} generation_staged_hash)
+    # Re-attest this individual output immediately before its final atomic
+    # rename.  The complete preflight above catches static corruption before
+    # owner publication; this O(1) check closes the interval between that pass
+    # and each later output publication without reintroducing an O(N^2) scan.
     _protocyte_generated_output_path_is_safe(
-        staged_output_is_safe
-        "${staged_generation_output}"
+        staged_output_is_safe "${staged_generation_output}"
         "${STAGING_OUTPUT_DIRECTORY}/generated"
     )
-    if(NOT staged_output_is_safe)
+    _protocyte_generated_output_path_is_safe(
+        publication_output_is_safe "${generation_output}" "${OUTPUT_DIRECTORY}"
+    )
+    _protocyte_generation_transaction_file_hash_matches(
+        staged_output_hash_matches "${staged_generation_output}"
+        "${generation_staged_hash}"
+    )
+    if(
+        NOT staged_output_is_safe
+        OR NOT publication_output_is_safe
+        OR NOT staged_output_hash_matches
+        OR EXISTS "${generation_output}"
+        OR IS_SYMLINK "${generation_output}"
+    )
         _protocyte_recover_generation_transaction(recovered_generation_transaction)
         if(recovered_generation_transaction)
             _protocyte_discard_generation_staging()
         endif()
-        message(
-            FATAL_ERROR
-            "Protocyte staging changed before output publication for target '${GENERATION_TARGET}'. "
-            "Existing output was restored."
-        )
+        message(FATAL_ERROR "Protocyte staged output changed before publication for target '${GENERATION_TARGET}'. Existing output was restored.")
     endif()
-    list(REMOVE_AT generation_operation_states ${generation_output_index})
-    list(
-        INSERT
-        generation_operation_states
-        ${generation_output_index}
-        "publish-pending"
-    )
-    _protocyte_write_generation_transaction(
-        generation_transaction_written
-        generation_transaction_owner_markers
-        "${generation_ownership_state}"
-        "${generation_owner_transaction_id}"
-        "${generation_owner_witness_state}"
-        generation_owner_release_states
-        generation_initial_states
-        generation_operation_states
-        generation_recovery_states
-        generation_initial_hashes
-        generation_staged_hashes
-    )
-    if(NOT generation_transaction_written)
-        _protocyte_recover_generation_transaction(recovered_generation_transaction)
-        if(recovered_generation_transaction)
-            _protocyte_discard_generation_staging()
-        endif()
-        message(
-            FATAL_ERROR
-            "Protocyte could not persist publication intent for '${generation_output}' in target "
-            "'${GENERATION_TARGET}'."
-        )
-    endif()
-    file(
-        RENAME "${staged_generation_output}" "${generation_output}"
-        NO_REPLACE
-        RESULT output_publish_result
-    )
+    file(RENAME "${staged_generation_output}" "${generation_output}" NO_REPLACE RESULT output_publish_result)
     if(NOT "${output_publish_result}" STREQUAL "0")
         _protocyte_recover_generation_transaction(recovered_generation_transaction)
         if(recovered_generation_transaction)
             _protocyte_discard_generation_staging()
         endif()
-        message(
-            FATAL_ERROR
-            "Protocyte could not publish staged output '${generation_output}' for target "
-            "'${GENERATION_TARGET}': ${output_publish_result}. Existing output was restored."
-        )
-    endif()
-    list(REMOVE_AT generation_operation_states ${generation_output_index})
-    list(
-        INSERT
-        generation_operation_states
-        ${generation_output_index}
-        "published"
-    )
-    _protocyte_write_generation_transaction(
-        generation_transaction_written
-        generation_transaction_owner_markers
-        "${generation_ownership_state}"
-        "${generation_owner_transaction_id}"
-        "${generation_owner_witness_state}"
-        generation_owner_release_states
-        generation_initial_states
-        generation_operation_states
-        generation_recovery_states
-        generation_initial_hashes
-        generation_staged_hashes
-    )
-    if(NOT generation_transaction_written)
-        _protocyte_recover_generation_transaction(recovered_generation_transaction)
-        if(recovered_generation_transaction)
-            _protocyte_discard_generation_staging()
-        endif()
-        message(
-            FATAL_ERROR
-            "Protocyte could not persist completed publication state for '${generation_output}' in target "
-            "'${GENERATION_TARGET}'."
-        )
+        message(FATAL_ERROR "Protocyte could not publish staged output '${generation_output}' for target '${GENERATION_TARGET}': ${output_publish_result}. Existing output was restored.")
     endif()
 endforeach()
-_protocyte_generation_transaction_paths(transaction_active transaction_committed)
+_protocyte_generation_transaction_paths(transaction_active unused_transaction_releasing transaction_committed)
 file(
     RENAME "${transaction_active}" "${transaction_committed}"
     NO_REPLACE
