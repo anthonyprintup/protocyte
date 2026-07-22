@@ -50,6 +50,29 @@ def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     assert "    uses: ./.github/workflows/ci.yml\n" in release
 
 
+def test_ci_generates_with_the_public_protobuf_dependency_floor() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    floor = _job_named(ci, "protobuf-floor")
+    floor_steps = _steps_by_name(floor)
+    install = floor_steps["Install the public protobuf floor outside the lockfile"]
+
+    assert "runs-on: ubuntu-latest" in floor
+    assert "uv venv build/protobuf-floor-venv --python 3.12" in install
+    assert "uv pip install --python build/protobuf-floor-venv/bin/python --no-deps ." in install
+    assert '"protobuf==6.30.0"' in install
+    assert "google.protobuf.__version__ == \"6.30.0\"" in install
+    upb = floor_steps["Generate with the protobuf floor (upb)"]
+    assert "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: upb" in upb
+    assert 'PROTOCYTE_EXPECTED_PROTOBUF_VERSION: "6.30.0"' in upb
+    assert "tests/test_protobuf_floor.py" in upb
+    pure_python = floor_steps["Generate with the protobuf floor (pure Python)"]
+    assert "PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python" in pure_python
+    assert 'PROTOCYTE_EXPECTED_PROTOBUF_VERSION: "6.30.0"' in pure_python
+    assert "tests/test_protobuf_floor.py" in pure_python
+
+
 def test_ci_private_path_guard_scans_the_complete_checkout_object_database() -> None:
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
