@@ -1,0 +1,523 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (vX.Y.Z or vX.Y.Z-rcN)
+        required: true
+        type: string
+
+permissions:
+  contents: none
+
+concurrency:
+  # GitHub has no conditional/atomic asset-set publication operation. Serialize
+  # the complete transaction across every release tag in this repository.
+  group: protocyte-release-publication-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  validate-tag:
+    name: Validate Release Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      target: ${{ steps.version.outputs.target }}
+      version: ${{ steps.version.outputs.version }}
+      archive_name: ${{ steps.version.outputs.archive_name }}
+      wheel_name: ${{ steps.version.outputs.wheel_name }}
+      sdist_name: ${{ steps.version.outputs.sdist_name }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the live default-branch workflow revision
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release workflow must be dispatched from refs/heads/main." >&2
+            exit 1
+          fi
+          main_ref="refs/remotes/origin/main"
+          workflow_target="$(git rev-parse --verify "HEAD^{commit}")"
+          fetched_main="$(git rev-parse --verify "${main_ref}^{commit}")"
+          if [[ "$workflow_target" != "$GITHUB_SHA" || \
+                "$fetched_main" != "$GITHUB_SHA" ]]; then
+            echo "Release workflow is not running the fetched main revision." >&2
+            exit 1
+          fi
+
+      - name: Compare tag and package version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          tag="$RELEASE_TAG"
+          version="${tag#v}"
+          if [[ "$tag" == "$version" ]]; then
+            echo "Release tags must start with 'v': $tag" >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "Release tags must use vX.Y.Z or prerelease vX.Y.Z-rcN format: $tag" >&2
+            exit 1
+          fi
+
+          tag_ref="refs/tags/$tag"
+          target="$(git rev-parse --verify "${tag_ref}^{commit}")"
+          main_ref="refs/remotes/origin/main"
+          git merge-base --is-ancestor "$target" "$main_ref"
+
+          package_version="$(git show "${target}:src/protocyte/__init__.py" | grep -E '^__version__ = "[^"]+"' | sed -E 's/^__version__ = "([^"]+)"/\1/')"
+          if [[ -z "$package_version" ]]; then
+            echo "Failed to read package version from src/protocyte/__init__.py" >&2
+            exit 1
+          fi
+
+          expected_package_version="${version/-rc/rc}"
+          if [[ "$expected_package_version" != "$package_version" ]]; then
+            echo "Tag version $version does not match package version $package_version" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-rc* ]]; then
+            prerelease=true
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "archive_name=protocyte-${version}-cmake-prefix.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "wheel_name=protocyte-${expected_package_version}-py3-none-any.whl" >> "$GITHUB_OUTPUT"
+          echo "sdist_name=protocyte-${expected_package_version}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  release-policy:
+    name: Preflight Immutable Release Policy
+    needs: validate-tag
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out trusted policy code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Require trusted single-writer release policy before build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROTOCYTE_RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
+          RELEASE_TAG_RULESET_ID: ${{ vars.RELEASE_TAG_RULESET_ID }}
+          LEGACY_RELEASE_WORKFLOW_ID: ${{ vars.LEGACY_RELEASE_WORKFLOW_ID }}
+        run: |
+          if [[ -z "$PROTOCYTE_RELEASE_POLICY_TOKEN" ]]; then
+            echo "The release environment must define RELEASE_POLICY_AUDIT_TOKEN." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG_RULESET_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The release environment must define numeric RELEASE_TAG_RULESET_ID." >&2
+            exit 1
+          fi
+          if [[ ! "$LEGACY_RELEASE_WORKFLOW_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The release environment must define numeric LEGACY_RELEASE_WORKFLOW_ID." >&2
+            exit 1
+          fi
+          python .github/scripts/check_release_policy.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --environment release \
+            --default-branch main \
+            --workflow-ref "$GITHUB_REF" \
+            --workflow-target "$GITHUB_SHA" \
+            --tag-ruleset-id "$RELEASE_TAG_RULESET_ID" \
+            --legacy-workflow-id "$LEGACY_RELEASE_WORKFLOW_ID" \
+            --repository-root "$GITHUB_WORKSPACE"
+
+  release-gate:
+    name: Release Gate
+    needs:
+      - validate-tag
+      - release-policy
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      checkout_ref: ${{ needs.validate-tag.outputs.target }}
+
+  build-release:
+    name: Build And Test Release Artifacts
+    needs:
+      - validate-tag
+      - release-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.release-handoff.outputs.artifact-id }}
+      artifact_digest: ${{ steps.release-handoff.outputs.artifact-digest }}
+    env:
+      CMAKE_VERSION: "4.3.2"
+      LC_ALL: C.UTF-8
+      PYTHONHASHSEED: "0"
+      TZ: UTC
+      UV_PYTHON: "3.12.9"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate-tag.outputs.target }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12.9"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          version: "0.11.7"
+
+      - name: Set normalized release timestamp
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Build and normalize plugin packages twice
+        shell: bash
+        run: |
+          for build in first second; do
+            source_dir="staging/reproducibility/${build}/source"
+            output_dir="staging/reproducibility/${build}/dist"
+            mkdir -p "$source_dir"
+            git archive HEAD | tar -x -C "$source_dir"
+            uv build "$source_dir" --out-dir "$output_dir"
+            uv run python .github/scripts/reproducible_archive.py \
+              --epoch "$SOURCE_DATE_EPOCH" normalize zip \
+              "$output_dir/${{ needs.validate-tag.outputs.wheel_name }}"
+            uv run python .github/scripts/reproducible_archive.py \
+              --epoch "$SOURCE_DATE_EPOCH" normalize tar-gz \
+              "$output_dir/${{ needs.validate-tag.outputs.sdist_name }}"
+          done
+
+          cmp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "staging/reproducibility/second/dist/${{ needs.validate-tag.outputs.wheel_name }}"
+          cmp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "staging/reproducibility/second/dist/${{ needs.validate-tag.outputs.sdist_name }}"
+
+          mkdir -p dist
+          cp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}"
+          cp \
+            "staging/reproducibility/first/dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}"
+
+      - name: Build and normalize CMake prefix twice
+        shell: bash
+        run: |
+          version="${{ needs.validate-tag.outputs.version }}"
+          prefix_name="protocyte-${version}-cmake-prefix"
+          for build in first second; do
+            build_root="staging/reproducibility/${build}"
+            source_dir="${build_root}/source"
+            prefix_dir="${build_root}/${prefix_name}"
+            uvx --from "cmake==$CMAKE_VERSION" cmake \
+              -S "$source_dir" -B "${build_root}/cmake-build"
+            uvx --from "cmake==$CMAKE_VERSION" cmake \
+              --install "${build_root}/cmake-build" --prefix "$prefix_dir"
+            uv run python .github/scripts/reproducible_archive.py \
+              --epoch "$SOURCE_DATE_EPOCH" pack-tar-gz "$prefix_dir" \
+              "${build_root}/${{ needs.validate-tag.outputs.archive_name }}"
+          done
+
+          cmp \
+            "staging/reproducibility/first/${{ needs.validate-tag.outputs.archive_name }}" \
+            "staging/reproducibility/second/${{ needs.validate-tag.outputs.archive_name }}"
+          cp \
+            "staging/reproducibility/first/${{ needs.validate-tag.outputs.archive_name }}" \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}"
+
+      - name: Test exact wheel artifact
+        shell: bash
+        run: |
+          python="staging/release-tests/wheel-venv/bin/python"
+          uv venv "staging/release-tests/wheel-venv" --python 3.12
+          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.wheel_name }}"
+          "$python" -m protocyte --help
+          "$python" -m protocyte --version
+          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --help
+          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --version
+
+      - name: Test exact source artifact
+        shell: bash
+        run: |
+          python="staging/release-tests/sdist-venv/bin/python"
+          uv venv "staging/release-tests/sdist-venv" --python 3.12
+          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.sdist_name }}"
+          "$python" -m protocyte --help
+          "$python" -m protocyte --version
+          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --help
+          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --version
+
+      - name: Test exact CMake prefix artifact
+        shell: bash
+        run: |
+          mkdir -p staging/release-tests/cmake-prefix
+          python -m tarfile -e \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            staging/release-tests/cmake-prefix
+          uvx --from "cmake==$CMAKE_VERSION" cmake \
+            -S tests/release_cmake_consumer \
+            -B staging/release-tests/cmake-build \
+            -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix"
+
+      - name: Stage exact publication handoff
+        shell: bash
+        run: |
+          handoff="staging/release-handoff"
+          mkdir -p "$handoff"
+          cp \
+            "dist/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "$handoff/${{ needs.validate-tag.outputs.wheel_name }}"
+          cp \
+            "dist/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "$handoff/${{ needs.validate-tag.outputs.sdist_name }}"
+          cp \
+            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
+            "$handoff/${{ needs.validate-tag.outputs.archive_name }}"
+
+          (
+            cd "$handoff"
+            sha256sum \
+              "${{ needs.validate-tag.outputs.wheel_name }}" \
+              "${{ needs.validate-tag.outputs.sdist_name }}" \
+              "${{ needs.validate-tag.outputs.archive_name }}" \
+              > SHA256SUMS
+            sha256sum --check --strict SHA256SUMS
+          )
+
+      - name: Upload exact publication handoff
+        id: release-handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: protocyte-release-${{ github.run_id }}-${{ github.sha }}
+          path: |
+            staging/release-handoff/SHA256SUMS
+            staging/release-handoff/${{ needs.validate-tag.outputs.wheel_name }}
+            staging/release-handoff/${{ needs.validate-tag.outputs.sdist_name }}
+            staging/release-handoff/${{ needs.validate-tag.outputs.archive_name }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Publish Immutable Release
+    needs:
+      - validate-tag
+      - release-policy
+      - release-gate
+      - build-release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Check out trusted publication code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Bind and download immutable release handoff
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
+          EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "The build job returned an invalid artifact ID." >&2
+            exit 1
+          fi
+
+          expected_digest="${EXPECTED_ARTIFACT_DIGEST#sha256:}"
+          if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "The build job returned an invalid artifact digest." >&2
+            exit 1
+          fi
+
+          metadata="$RUNNER_TEMP/release-artifact.json"
+          status="$(
+            curl --disable --silent --show-error --max-redirs 0 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --output "$metadata" \
+              --write-out "%{http_code}" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+          )"
+          if [[ "$status" =~ ^30[0-9]$ ]]; then
+            echo "Authenticated GitHub API requests must not follow redirects." >&2
+            exit 1
+          fi
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "GitHub artifact metadata request failed with HTTP status $status." >&2
+            exit 1
+          fi
+
+          actual_id="$(jq -r '.id // empty' "$metadata")"
+          actual_name="$(jq -r '.name // empty' "$metadata")"
+          actual_digest="$(jq -r '.digest // empty' "$metadata")"
+          actual_digest="${actual_digest#sha256:}"
+          workflow_run_id="$(jq -r '.workflow_run.id // empty' "$metadata")"
+          workflow_head_sha="$(jq -r '.workflow_run.head_sha // empty' "$metadata")"
+          expired="$(jq -r '.expired | tostring' "$metadata")"
+
+          if [[ "$actual_id" != "$ARTIFACT_ID" || \
+                "$actual_name" != "$EXPECTED_ARTIFACT_NAME" || \
+                "$actual_digest" != "$expected_digest" || \
+                "$workflow_run_id" != "$GITHUB_RUN_ID" || \
+                "$workflow_head_sha" != "$GITHUB_SHA" || \
+                "$expired" != "false" ]]; then
+            echo "The release artifact does not match this workflow run." >&2
+            exit 1
+          fi
+
+          archive="$RUNNER_TEMP/release-handoff.zip"
+          redirect_headers="$RUNNER_TEMP/release-handoff-redirect.headers"
+          status="$(
+            curl --disable --silent --show-error --max-redirs 0 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --dump-header "$redirect_headers" \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"
+          )"
+          if [[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]; then
+            echo "GitHub artifact download did not return an expected redirect." >&2
+            exit 1
+          fi
+          redirect_url="$(python -I .github/scripts/parse_release_redirect.py "$redirect_headers")"
+          status="$(
+            curl --disable --silent --show-error --location --max-redirs 3 \
+              --proto '=https' --proto-redir '=https' \
+              --output "$archive" \
+              --write-out "%{http_code}" \
+              "$redirect_url"
+          )"
+          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+            echo "GitHub artifact download failed with HTTP status $status." >&2
+            exit 1
+          fi
+          downloaded_digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          if [[ "$downloaded_digest" != "$expected_digest" ]]; then
+            echo "The downloaded release artifact failed SHA-256 verification." >&2
+            exit 1
+          fi
+
+      - name: Extract and verify exact release handoff
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
+          SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
+          WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
+        run: |
+          handoff="$RUNNER_TEMP/release-handoff"
+          python -I - \
+            "$RUNNER_TEMP/release-handoff.zip" \
+            "$handoff" \
+            SHA256SUMS \
+            "$WHEEL_NAME" \
+            "$SDIST_NAME" \
+            "$ARCHIVE_NAME" <<'PY'
+          from pathlib import Path, PurePosixPath
+          import shutil
+          import stat
+          import sys
+          import zipfile
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          expected = set(sys.argv[3:])
+          if len(expected) != 4:
+              raise SystemExit("release handoff names must be unique")
+
+          with zipfile.ZipFile(archive) as artifact:
+              entries = artifact.infolist()
+              names = [entry.filename for entry in entries]
+              if len(names) != len(expected) or set(names) != expected:
+                  raise SystemExit("release handoff contains an unexpected file set")
+              for entry in entries:
+                  path = PurePosixPath(entry.filename)
+                  mode = entry.external_attr >> 16
+                  if (
+                      entry.is_dir()
+                      or path.is_absolute()
+                      or len(path.parts) != 1
+                      or path.name != entry.filename
+                      or stat.S_ISLNK(mode)
+                  ):
+                      raise SystemExit("release handoff contains an unsafe entry")
+
+              destination.mkdir(mode=0o700, parents=False, exist_ok=False)
+              for entry in entries:
+                  with artifact.open(entry) as source, (
+                      destination / entry.filename
+                  ).open("xb") as target:
+                      shutil.copyfileobj(source, target)
+          PY
+
+          (
+            cd "$handoff"
+            sha256sum "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" \
+              > "$RUNNER_TEMP/recomputed-SHA256SUMS"
+            cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"
+            sha256sum --check --strict SHA256SUMS
+          )
+
+      - name: Create, verify, and publish immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROTOCYTE_RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_IMMUTABILITY_TOKEN }}
+        shell: bash
+        run: |
+          python .github/scripts/publish_release.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "${{ needs.validate-tag.outputs.tag }}" \
+            --target "${{ needs.validate-tag.outputs.target }}" \
+            --trusted-branch main \
+            --trusted-target "$GITHUB_SHA" \
+            --prerelease "${{ needs.validate-tag.outputs.prerelease }}" \
+            "$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.wheel_name }}" \
+            "$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.sdist_name }}" \
+            "$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.archive_name }}"

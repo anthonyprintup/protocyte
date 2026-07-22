@@ -406,23 +406,91 @@ while the CMake prefix archive keeps the Git tag spelling
 Release publication requires GitHub release immutability to be enabled for the
 repository. Create a protected `release` environment and configure its
 `RELEASE_IMMUTABILITY_TOKEN` secret with a fine-grained credential that has only
-`Administration: read` access. An isolated, checkout-free preflight uses that
-credential to reject a missing secret or disabled policy before the release
-gate and artifact builds run.
+`Administration: read` access. Configure a separate
+`RELEASE_POLICY_AUDIT_TOKEN` secret with `Administration: write` and
+`Actions: read`; GitHub returns tag-ruleset bypass actors only to a credential
+with ruleset write visibility, and that credential is used only by the read-only
+preflight. Configure the environment's `RELEASE_TAG_RULESET_ID` variable with
+the numeric ID of the active release-tag ruleset.
+
+The repository previously published from `.github/workflows/release.yml` on tag
+pushes. Source changes cannot retroactively disable copies of that workflow in
+Git history. Before installing this workflow version, record and manually
+disable that legacy workflow identity with an administrator credential that has
+`Actions: write`, then store its ID in the environment's
+`LEGACY_RELEASE_WORKFLOW_ID` variable:
+
+```console
+legacy_id="$(gh api repos/OWNER/REPOSITORY/actions/workflows/release.yml --jq .id)"
+gh api --method PUT "repos/OWNER/REPOSITORY/actions/workflows/$legacy_id/disable"
+```
+
+This version deliberately keeps `.github/workflows/release.yml` as an exact
+inert stub: it has no push, tag, or manual-dispatch trigger, grants
+`contents: none`, and defines only an always-skipped retirement job. Removing or
+renaming the stub would make GitHub report the legacy identity as deleted
+instead of `disabled_manually`. Do not enable or modify that retained workflow.
+
+The trusted-code preflight requires that exact workflow ID and historical path
+to report `disabled_manually`. It also rejects disabled immutability, a stale
+default-branch workflow revision, unsafe environment branch policy, a missing
+non-self reviewer, a nonempty or hidden tag-ruleset bypass list, or another
+write-capable workflow before the release gate and artifact builds run.
+
+GitHub's release API exposes asset upload, asset listing, and draft publication
+as separate operations; its publication `PATCH` has no conditional-write
+precondition. The workflow therefore serializes the complete release pipeline
+for all tags in one repository-wide concurrency group, and repository tests
+reserve `contents: write` for its protected `release`-environment publication
+job. Configure that environment to allow exactly the `main` branch (not tags),
+require reviewers with self-review disabled, and disable administrator bypass.
+Configure the identified ruleset to target exactly `refs/tags/v*`, actively
+prohibit tag updates and deletions, and allow no bypass actors. No user,
+GitHub App, PAT, deploy key, or other automation with `contents: write` may edit
+a release draft while the transaction runs. The REST API exposes most of this
+configuration to the audit preflight, including the exact empty tag-ruleset
+bypass list. It does not expose the environment's administrator-bypass setting;
+that no-bypass setting and the absence of other writers are unavoidable
+administrator prerequisites.
+
+Create the version tag, then dispatch `.github/workflows/publish-release.yml` from
+`main` with the tag name, for example:
+
+```console
+gh workflow run publish-release.yml --ref main -f tag=vX.Y.Z
+```
+
+The new write-capable workflow identity can enter the `release` environment only
+from `main`. The separately enforced `disabled_manually` state prevents a tag
+push from activating the legacy workflow identity from an older commit. The
+preflight and publication client also require the workflow SHA to remain the
+live default-branch target. These controls establish the single-writer boundary
+required because source code cannot make separate GitHub API calls atomic.
 
 The build job has only `contents: read` access. It hands the three tested files
 and their SHA-256 manifest to a separate `release`-environment job as one
-immutable Actions artifact. On a fresh runner, publication checks out the tag
-commit again, binds the handoff's numeric artifact ID, name, workflow run, tag
-commit, and server-side digest, and verifies the downloaded archive and exact
-file manifest under the runner's temporary directory. Only then does the clean
-checkout's publication script receive the short-lived `GITHUB_TOKEN` scoped to
-`contents: write` and the administration-read policy token.
+immutable Actions artifact. On a fresh runner, publication checks out the
+trusted workflow revision again, binds the handoff's numeric artifact ID, name,
+workflow run, workflow commit, tag commit, and server-side digest, and verifies
+the downloaded archive and exact file manifest under the runner's temporary
+directory. Only then does the clean checkout's publication script receive the
+short-lived `GITHUB_TOKEN` scoped to
+`contents: write` and the administration-read policy token. The script resolves
+the live tag reference through annotated tags before creation, each upload, and
+publication, and rejects any target that differs from the requested tag commit;
+`target_commitish` is not trusted because GitHub ignores it when a tag exists.
+
+If an external writer violates the required single-writer policy and uploads an
+asset after the client's final list but before GitHub processes the publication
+`PATCH`, the client can detect the extra asset only after the release has become
+public and immutable. There is no conditional release-publication operation to
+close that interval, which is why writer exclusivity is a release prerequisite,
+not merely a client-side check.
 
 The workflow never resumes, repairs, or replaces assets on an existing release.
 If a failed run leaves an unpublished draft, inspect it and manually delete that
-draft before rerunning the tag workflow. A published release is terminal and
-must not be deleted merely to retry a workflow run.
+draft before redispatching the release workflow. A published release is
+terminal and must not be deleted merely to retry a workflow run.
 
 ### FetchContent
 
