@@ -3203,7 +3203,7 @@ def test_implicit_formatting_anchors_style_lookup_to_invocation_directory(
 
     def fake_run(command: list[str], **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout=kwargs["input"], stderr="")
+        return SimpleNamespace(returncode=0, stdout=kwargs["input"], stderr=b"")
 
     monkeypatch.chdir(invocation_dir)
     monkeypatch.setattr(
@@ -3234,7 +3234,7 @@ def test_generation_uses_explicit_clang_format_override_verbatim(
 
     def fake_run(command: list[str], **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout="formatted\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout=b"formatted\n", stderr=b"")
 
     monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
     monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
@@ -3245,6 +3245,143 @@ def test_generation_uses_explicit_clang_format_override_verbatim(
     assert commands
     assert all(command[0] == "my-format" for command in commands)
     assert all(item.content == "formatted\n" for item in response.file)
+
+
+def test_unbounded_formatter_uses_utf8_despite_non_utf8_locale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import locale
+
+    source = "// café 🧪\nint value;\n"
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _setlocale=True: "cp1252")
+    if hasattr(locale, "getencoding"):
+        monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        del command
+        calls.append(kwargs)
+        input_bytes = kwargs["input"]
+        assert isinstance(input_bytes, bytes)
+        assert input_bytes == source.encode("utf-8")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b"// formatted \xf0\x9f\x9a\x80\nint value;\n",
+            stderr=b"formatter diagnostic \xcf\x80\n",
+        )
+
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    formatted = protocyte_cpp._format_cpp_outputs(
+        {"sample.cpp": source},
+        protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+    )
+
+    assert formatted == {"sample.cpp": "// formatted 🚀\nint value;\n"}
+    assert calls == [
+        {
+            "input": source.encode("utf-8"),
+            "capture_output": True,
+            "check": False,
+        }
+    ]
+
+
+def test_unbounded_formatter_preserves_utf8_stderr_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import locale
+
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _setlocale=True: "cp1252")
+    if hasattr(locale, "getencoding"):
+        monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=7,
+            stdout=b"partial \xf0\x9f\x9a\x80\n",
+            stderr=b"formatter rejected schema comment: caf\xc3\xa9 \xf0\x9f\xa7\xaa\n",
+        ),
+    )
+
+    with pytest.raises(
+        ProtocyteError,
+        match="formatter rejected schema comment: café 🧪",
+    ):
+        protocyte_cpp._format_cpp_outputs(
+            {"sample.cpp": "// 🧪\nint value;\n"},
+            protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+        )
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds",
+    [pytest.param(None, id="unbounded"), pytest.param(2.0, id="bounded")],
+)
+def test_formatter_rejects_invalid_utf8_output_from_real_process(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float | None,
+) -> None:
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'\\xff'); sys.stdout.buffer.flush(); "
+        "sys.stderr.buffer.write(b'formatter diagnostic \\xff\\n'); sys.stderr.buffer.flush()"
+    )
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_clang_format_style_args",
+        lambda options: ["-c", script],
+    )
+
+    with pytest.raises(
+        ProtocyteError,
+        match="clang-format produced invalid UTF-8 output for sample.cpp",
+    ) as error:
+        protocyte_cpp._format_cpp_outputs(
+            {"sample.cpp": "int value;\n"},
+            protocyte_cpp.GeneratorOptions(clang_format=sys.executable),
+            timeout_seconds=timeout_seconds,
+        )
+
+    assert isinstance(error.value.__cause__, UnicodeDecodeError)
+    assert "UnicodeDecodeError" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds",
+    [pytest.param(None, id="unbounded"), pytest.param(2.0, id="bounded")],
+)
+def test_formatter_rejects_invalid_utf8_input_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float | None,
+) -> None:
+    if timeout_seconds is None:
+        monkeypatch.setattr(
+            protocyte_cpp.subprocess,
+            "run",
+            lambda *args, **kwargs: pytest.fail("formatter must not be launched"),
+        )
+    else:
+        monkeypatch.setattr(
+            protocyte_cpp,
+            "_start_formatter_process",
+            lambda command: pytest.fail("formatter must not be launched"),
+        )
+
+    with pytest.raises(
+        ProtocyteError,
+        match="clang-format input for sample.cpp is not valid UTF-8",
+    ) as error:
+        protocyte_cpp._format_cpp_outputs(
+            {"sample.cpp": "// \udcff\nint value;\n"},
+            protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+            timeout_seconds=timeout_seconds,
+        )
+
+    assert isinstance(error.value.__cause__, UnicodeEncodeError)
+    assert "UnicodeEncodeError" not in str(error.value)
 
 
 def test_generator_policy_rejects_tenant_formatter_parameters(
@@ -4403,7 +4540,7 @@ def test_generation_decodes_explicit_clang_format_override_from_transport_parame
 
     def fake_run(command: list[str], **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout="formatted\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout=b"formatted\n", stderr=b"")
 
     monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
 
@@ -4451,7 +4588,7 @@ def test_generation_reports_explicit_clang_format_failure(
         protocyte_cpp.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
-            returncode=1, stdout="", stderr="broken style"
+            returncode=1, stdout=b"", stderr=b"broken style"
         ),
     )
 
@@ -4474,7 +4611,11 @@ def test_generation_passes_explicit_clang_format_config(
         assume_filename = next(
             part for part in command if part.startswith("--assume-filename=")
         )
-        return SimpleNamespace(returncode=0, stdout=assume_filename + "\n", stderr="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(assume_filename + "\n").encode("utf-8"),
+            stderr=b"",
+        )
 
     monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
 
@@ -4520,7 +4661,9 @@ def test_generation_uses_clang_format_found_on_path(
         )
         filename = Path(assume_filename.split("=", 1)[1]).name
         return SimpleNamespace(
-            returncode=0, stdout=f"formatted:{filename}\n", stderr=""
+            returncode=0,
+            stdout=f"formatted:{filename}\n".encode("utf-8"),
+            stderr=b"",
         )
 
     monkeypatch.setattr(

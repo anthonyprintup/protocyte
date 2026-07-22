@@ -112,6 +112,20 @@ class _FormatterResult:
     stderr: str
 
 
+def _decode_formatter_result(
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> _FormatterResult:
+    return _FormatterResult(
+        returncode=returncode,
+        stdout=stdout.decode("utf-8")
+        if returncode == 0
+        else stdout.decode("utf-8", errors="replace"),
+        stderr=stderr.decode("utf-8", errors="replace"),
+    )
+
+
 class _FormatterOutputLimit(Exception):
     pass
 
@@ -548,6 +562,7 @@ def _run_formatter_bounded(
     timeout_seconds: float | None,
     max_output_bytes: int | None,
 ) -> _FormatterResult:
+    input_bytes = content.encode("utf-8")
     process, job = _start_formatter_process(command)
     started_threads: list[threading.Thread] = []
     worker_streams: list[tuple[threading.Thread, BinaryIO]] = []
@@ -597,7 +612,7 @@ def _run_formatter_bounded(
 
         def write_input() -> None:
             try:
-                process.stdin.write(content.encode("utf-8"))
+                process.stdin.write(input_bytes)
             except (BrokenPipeError, OSError, ValueError):
                 pass
             finally:
@@ -708,10 +723,10 @@ def _run_formatter_bounded(
         raise OSError(f"{descendant_error}{suffix}")
     if io_errors:
         raise io_errors[0]
-    return _FormatterResult(
-        returncode=returncode,
-        stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
-        stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+    return _decode_formatter_result(
+        returncode,
+        b"".join(stdout_chunks),
+        b"".join(stderr_chunks),
     )
 
 
@@ -948,12 +963,16 @@ def _format_cpp_outputs(
             ]
             remaining = formatted_budget.remaining()
             if remaining is None and timeout_seconds is None:
-                result = subprocess.run(
+                completed = subprocess.run(
                     command,
-                    input=content,
-                    text=True,
+                    input=content.encode("utf-8"),
                     capture_output=True,
                     check=False,
+                )
+                result = _decode_formatter_result(
+                    completed.returncode,
+                    completed.stdout,
+                    completed.stderr,
                 )
             else:
                 result = _run_formatter_bounded(
@@ -975,6 +994,14 @@ def _format_cpp_outputs(
             raise ProtocyteError(
                 "generator policy limit exceeded for generated output bytes while "
                 f"formatting {name}: more than {max_output_bytes} bytes"
+            ) from exc
+        except UnicodeEncodeError as exc:
+            raise ProtocyteError(
+                f"clang-format input for {name} is not valid UTF-8"
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise ProtocyteError(
+                f"clang-format produced invalid UTF-8 output for {name}"
             ) from exc
         except OSError as exc:
             raise ProtocyteError(f"failed to run clang-format: {exc}") from exc
