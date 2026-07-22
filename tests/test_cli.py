@@ -9,6 +9,7 @@ import pytest
 from google.protobuf.compiler import plugin_pb2
 
 from protocyte import __version__
+import protocyte.main as protocyte_main_module
 from protocyte.main import main as plugin_main
 from protocyte.plugin import generate_response
 
@@ -86,6 +87,33 @@ def test_no_argument_non_interactive_invocation_preserves_plugin_protocol(
         == generate_response(request).SerializeToString()
     )
     assert capsys.readouterr().err == ""
+
+
+def test_plugin_protocol_enables_normal_formatter_timeout_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    standard_input = _BinaryInput(request.SerializeToString(), interactive=False)
+    standard_output = _BinaryOutput()
+    observed: dict[str, object] = {}
+
+    def fake_generate_response(
+        received_request: plugin_pb2.CodeGeneratorRequest, **kwargs: object
+    ) -> plugin_pb2.CodeGeneratorResponse:
+        observed["request"] = received_request
+        observed.update(kwargs)
+        return plugin_pb2.CodeGeneratorResponse()
+
+    with monkeypatch.context() as context:
+        context.setattr(sys, "stdin", standard_input)
+        context.setattr(sys, "stdout", standard_output)
+        context.setattr(
+            protocyte_main_module, "generate_response", fake_generate_response
+        )
+        assert plugin_main([]) == 0
+
+    assert observed["request"] == request
+    assert observed["use_plugin_defaults"] is True
 
 
 def test_plugin_protocol_rejects_malformed_descriptor_utf8(

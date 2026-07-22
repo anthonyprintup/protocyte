@@ -41,6 +41,7 @@ def test_parse_defaults_to_no_runtime_emission() -> None:
     assert options.format_mode == "auto"
     assert options.clang_format is None
     assert options.clang_format_config is None
+    assert options.formatter_timeout_seconds == 60.0
 
 
 def test_accepts_internal_sha_based_reflection_api_macro() -> None:
@@ -99,6 +100,23 @@ def test_rejects_invalid_format_mode() -> None:
         ProtocyteError, match="format must be one of: auto, off, required"
     ):
         parse_parameter("format=sometimes")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("0", None), ("0.0", None), ("0.25", 0.25), ("120", 120.0)],
+)
+def test_parse_formatter_timeout_seconds(value: str, expected: float | None) -> None:
+    assert (
+        parse_parameter(f"formatter_timeout_seconds={value}").formatter_timeout_seconds
+        == expected
+    )
+
+
+@pytest.mark.parametrize("value", ["", "-1", "nan", "inf", "not-a-number"])
+def test_rejects_invalid_formatter_timeout_seconds(value: str) -> None:
+    with pytest.raises(ProtocyteError, match="formatter_timeout_seconds"):
+        parse_parameter(f"formatter_timeout_seconds={value}")
 
 
 def test_generator_options_rejects_invalid_format_mode() -> None:

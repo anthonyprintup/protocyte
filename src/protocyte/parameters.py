@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -116,6 +117,7 @@ _WINDOWS_RESERVED_PATH_NAMES = frozenset(
     | {f"COM{index}" for index in range(1, 10)}
     | {f"LPT{index}" for index in range(1, 10)}
 )
+_DEFAULT_FORMATTER_TIMEOUT_SECONDS = 60.0
 
 
 def _validate_namespace_prefix(value: str) -> str:
@@ -164,6 +166,7 @@ class GeneratorOptions:
     format_mode: str = "auto"
     clang_format: str | None = None
     clang_format_config: str | None = None
+    formatter_timeout_seconds: float | None = _DEFAULT_FORMATTER_TIMEOUT_SECONDS
     generated_path_max_bytes: int | None = None
     generated_directory_max_bytes: int | None = None
 
@@ -184,6 +187,22 @@ class GeneratorOptions:
             raise ProtocyteError("clang_format must not be empty")
         if self.clang_format_config == "":
             raise ProtocyteError("clang_format_config must not be empty")
+        timeout = self.formatter_timeout_seconds
+        if timeout is not None:
+            if isinstance(timeout, bool) or not isinstance(timeout, int | float):
+                raise ProtocyteError(
+                    "formatter_timeout_seconds must be a non-negative number of seconds"
+                )
+            try:
+                finite_timeout = math.isfinite(timeout)
+            except OverflowError:
+                finite_timeout = False
+            if not finite_timeout or timeout < 0:
+                raise ProtocyteError(
+                    "formatter_timeout_seconds must be a finite non-negative number of seconds"
+                )
+            if timeout == 0:
+                object.__setattr__(self, "formatter_timeout_seconds", None)
         if (
             self.generated_path_max_bytes is not None
             and self.generated_path_max_bytes < MIN_HASHED_GENERATED_FILE_PATH_BYTES
@@ -302,6 +321,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         "format",
         "clang_format",
         "clang_format_config",
+        "formatter_timeout_seconds",
         "_protocyte_reflection_api_macro",
         "_protocyte_generated_path_max_bytes",
         "_protocyte_generated_directory_max_bytes",
@@ -359,6 +379,28 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         )
     if clang_format is not None or clang_format_config is not None:
         format_mode = "required"
+    formatter_timeout_seconds: float | None = _DEFAULT_FORMATTER_TIMEOUT_SECONDS
+    if "formatter_timeout_seconds" in values:
+        raw_formatter_timeout = values["formatter_timeout_seconds"]
+        if raw_formatter_timeout == "":
+            raise ProtocyteError("formatter_timeout_seconds must not be empty")
+        try:
+            formatter_timeout_seconds = float(raw_formatter_timeout)
+        except ValueError as exc:
+            raise ProtocyteError(
+                "formatter_timeout_seconds must be a finite non-negative number of seconds"
+            ) from exc
+        try:
+            valid_formatter_timeout = (
+                math.isfinite(formatter_timeout_seconds)
+                and formatter_timeout_seconds >= 0
+            )
+        except OverflowError:
+            valid_formatter_timeout = False
+        if not valid_formatter_timeout:
+            raise ProtocyteError(
+                "formatter_timeout_seconds must be a finite non-negative number of seconds"
+            )
     generated_path_max_bytes = None
     if raw_generated_path_max_bytes := values.get(
         "_protocyte_generated_path_max_bytes"
@@ -394,6 +436,7 @@ def parse_parameter(parameter: str) -> GeneratorOptions:
         format_mode=format_mode,
         clang_format=clang_format,
         clang_format_config=clang_format_config,
+        formatter_timeout_seconds=formatter_timeout_seconds,
         generated_path_max_bytes=generated_path_max_bytes,
         generated_directory_max_bytes=generated_directory_max_bytes,
     )

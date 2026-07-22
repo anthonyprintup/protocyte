@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-        response = generate_response(request)
+        response = generate_response(request, use_plugin_defaults=True)
         sys.stdout.buffer.write(response.SerializeToString())
         return 0
     finally:

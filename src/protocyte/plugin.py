@@ -79,6 +79,7 @@ def generate_response(
     request: plugin_pb2.CodeGeneratorRequest,
     *,
     policy: GeneratorPolicy | None = None,
+    use_plugin_defaults: bool = False,
 ) -> plugin_pb2.CodeGeneratorResponse:
     response = plugin_pb2.CodeGeneratorResponse()
     response.supported_features = plugin_pb2.CodeGeneratorResponse.FEATURE_PROTO3_OPTIONAL
@@ -100,11 +101,16 @@ def generate_response(
         phase = "building the descriptor model"
         model = build_model(request)
         phase = "generating C++ outputs"
+        formatter_timeout_seconds = (
+            options.formatter_timeout_seconds
+            if use_plugin_defaults and policy is None
+            else active_policy.formatter_timeout_seconds
+        )
         outputs = generate_outputs(
             model,
             options,
             format_outputs=active_policy.format_outputs,
-            formatter_timeout_seconds=active_policy.formatter_timeout_seconds,
+            formatter_timeout_seconds=formatter_timeout_seconds,
             max_output_bytes=active_policy.max_generated_bytes,
         )
         phase = "assembling the generator response"

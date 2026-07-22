@@ -3,6 +3,8 @@ include_guard(GLOBAL)
 include(CMakeParseArguments)
 include(FetchContent)
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
+_protocyte_configure_tool_timeout()
 set_property(
     GLOBAL
     PROPERTY PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER
@@ -3723,20 +3725,28 @@ function(
         file(WRITE "${import_scan_request}" "${import_scan_request_content}")
     endif()
 
-    execute_process(
+    _protocyte_execute_bounded(
+        import_scan_result
+        import_scan_output
+        import_scan_error
+        import_scan_timed_out
         COMMAND
             ${import_scan_launcher}
             "${import_scan_command}"
             "${import_scan_request}"
-        RESULT_VARIABLE import_scan_result
-        OUTPUT_VARIABLE import_scan_output
-        ERROR_VARIABLE import_scan_error
-        TIMEOUT 60
     )
     string(REPLACE "\r\n" "\n" import_scan_output "${import_scan_output}")
     string(REPLACE "\r" "\n" import_scan_output "${import_scan_output}")
     string(STRIP "${import_scan_output}" import_scan_output)
     string(STRIP "${import_scan_error}" import_scan_error)
+    if(import_scan_timed_out)
+        message(
+            FATAL_ERROR
+            "Protocyte source import scan through '${import_scan_plugin}' timed out after "
+            "${PROTOCYTE_TOOL_TIMEOUT_SECONDS} seconds. Set PROTOCYTE_TOOL_TIMEOUT_SECONDS "
+            "to a larger value or 0 to disable this timeout."
+        )
+    endif()
     if(NOT import_scan_result EQUAL 0)
         message(
             FATAL_ERROR
@@ -4072,6 +4082,7 @@ function(
                 "${CMAKE_COMMAND}"
                 "-DMANIFEST_FILE=${guard_manifest}"
                 "-DFAIL_ON_CHANGE=${guard_fail_on_change}"
+                "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
                 -P "${guard_script}"
             VERBATIM
         )
@@ -5096,6 +5107,7 @@ function(protocyte_generate)
                     "-DDEPENDENCY_DEPFILE_TARGET=${dependency_depfile_target}"
                     "-DDEPENDENCY_FILE_FORMAT=${protocyte_dependency_file_format}"
                     "-DMANAGED_DEPENDENCY_READER=${protocyte_plugin_is_managed}"
+                    "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
                     -P "${protocyte_dependency_scan_script}"
                 COMMAND "${CMAKE_COMMAND}" -E touch "${dependency_descriptor}"
                 DEPENDS
@@ -5103,6 +5115,7 @@ function(protocyte_generate)
                     ${protocyte_import_inventory_depends}
                     "${dependency_response_file}"
                     "${protocyte_dependency_scan_script}"
+                    "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteProcess.cmake"
                     "${PROTOCYTE_PROTOC_DEPENDENCY}"
                     "${protocyte_plugin_executable}"
                     ${protocyte_generator_sources}
@@ -5236,6 +5249,7 @@ function(protocyte_generate)
             "-DOWNERSHIP_MANIFEST_DIR=${PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR}"
             "-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"
             "-DPROTOCYTE_MANAGED_PLUGIN=${protocyte_plugin_is_managed}"
+            "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
             -P "${protocyte_generation_script}"
         DEPENDS
             ${protocyte_input_depends}
@@ -5243,6 +5257,7 @@ function(protocyte_generate)
             "${protocyte_response_file}"
             "${protocyte_generation_lock_manifest}"
             "${protocyte_generation_script}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteProcess.cmake"
             "${protocyte_output_safety_script}"
             "${PROTOCYTE_PROTOC_DEPENDENCY}"
             "${protocyte_plugin_executable}"

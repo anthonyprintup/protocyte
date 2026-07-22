@@ -1220,6 +1220,9 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     import_topology = (repo_root / "cmake" / "ProtocyteImportTopology.cmake").read_text(
         encoding="utf-8"
     )
+    process_launcher = (repo_root / "cmake" / "ProtocyteProcess.cmake").read_text(
+        encoding="utf-8"
+    )
 
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in source_config
     assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
@@ -1257,7 +1260,40 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
     assert "PROTOCYTE_INTERNAL_VERSION" in source_config
     assert "PROTOCYTE_INTERNAL_VERSION" in installed_config
     assert '"${PROTOCYTE_PYTHON_PROJECT_ROOT}/src"' in installed_config
-    assert "TIMEOUT 60" in import_topology
+    assert "_protocyte_execute_bounded(" in import_topology
+    assert "PROTOCYTE_TOOL_TIMEOUT_SECONDS" in process_launcher
+    assert '_PROTOCYTE_DEFAULT_TOOL_TIMEOUT_SECONDS "300"' in process_launcher
+
+
+def test_tool_timeout_zero_explicitly_disables_cmake_process_limit(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    script = tmp_path / "disable-timeout.cmake"
+    script.write_text(
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "ProtocyteProcess.cmake").as_posix()}")',
+                "set(PROTOCYTE_TOOL_TIMEOUT_SECONDS 0)",
+                "_protocyte_resolve_tool_timeout(timeout)",
+                "_protocyte_execute_bounded(result output error timed_out",
+                '    TIMEOUT_SECONDS "${timeout}"',
+                '    COMMAND "${CMAKE_COMMAND}" -E sleep 0.2',
+                ")",
+                'if(NOT "${result}" STREQUAL "0" OR timed_out)',
+                '    message(FATAL_ERROR "zero timeout did not disable the process limit")',
+                "endif()",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-P", str(script)], check=False, capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_explicit_plugin_override_must_exist(tmp_path: Path) -> None:
@@ -3296,6 +3332,7 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert any(prefix.rglob("protocyteConfig.cmake"))
     assert any(prefix.rglob("ProtocyteDependencyScan.cmake"))
     assert any(prefix.rglob("ProtocyteGenerate.cmake"))
+    assert any(prefix.rglob("ProtocyteProcess.cmake"))
     assert any(prefix.rglob("ProtocyteManagedEnvironment.py"))
     assert any(prefix.rglob("owned_transactions.py"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
@@ -10302,12 +10339,50 @@ def _make_fake_protoc_fail_in_build(
     fake_protoc_script.write_text(instrumented, encoding="utf-8")
 
 
+def _make_fake_protoc_hang_in_build(
+    source_dir: Path,
+    build_dir: Path,
+    grandchild_ready: Path,
+    child_survived: Path,
+) -> None:
+    fake_protoc_script = source_dir / "fake-protoc.py"
+    original = fake_protoc_script.read_text(encoding="utf-8")
+    grandchild = (
+        "from pathlib import Path; import time; "
+        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
+        f"Path({str(child_survived)!r}).touch()"
+    )
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
+    )
+    hanging_protoc = "\n".join(
+        [
+            f"if Path.cwd().resolve() == Path({str(build_dir)!r}).resolve():",
+            f"    subprocess.Popen([sys.executable, '-c', {child!r}])",
+            "    time.sleep(30)",
+        ]
+    )
+    instrumented = original.replace(
+        "import sys\n", "import sys\nimport subprocess\nimport time\n"
+    )
+    instrumented = instrumented.replace(
+        "for proto_name, paths in outputs.items():",
+        hanging_protoc + "\nfor proto_name, paths in outputs.items():",
+    )
+    fake_protoc_script.write_text(instrumented, encoding="utf-8")
+
+
 def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     repo_root = Path(__file__).resolve().parents[1]
     script_dir.mkdir()
     shutil.copy2(
         repo_root / "cmake" / "ProtocyteOutputSafety.cmake",
         script_dir / "ProtocyteOutputSafety.cmake",
+    )
+    shutil.copy2(
+        repo_root / "cmake" / "ProtocyteProcess.cmake",
+        script_dir / "ProtocyteProcess.cmake",
     )
     generation_source = (repo_root / "cmake" / "ProtocyteGenerate.cmake").read_text(
         encoding="utf-8"
@@ -11646,6 +11721,154 @@ def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
     assert "Exit code: 23" in output
     assert "captured generation output" in output
     assert "captured generation error" in output
+
+
+def test_generation_timeout_kills_wrapper_descendants_without_publishing_outputs(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    timed_out_build_dir = tmp_path / "timed-out-build"
+    retry_build_dir = tmp_path / "retry-build"
+    output_directory = tmp_path / "generated"
+    grandchild_ready = tmp_path / "protoc-grandchild-ready"
+    child_survived = tmp_path / "protoc-child-survived"
+    _write_out_dir_owner_project(source_dir, output_directory)
+
+    configured = _configure_out_dir_owner_project(
+        source_dir,
+        timed_out_build_dir,
+        "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=0.5",
+    )
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    _make_fake_protoc_hang_in_build(
+        source_dir, timed_out_build_dir, grandchild_ready, child_survived
+    )
+
+    timed_out = _build_out_dir_owner_project(timed_out_build_dir)
+
+    assert timed_out.returncode != 0
+    output = " ".join((timed_out.stdout + timed_out.stderr).split())
+    assert "timed out after 0.5 seconds" in output
+    assert "before generation ownership was published" in output
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert not marker.exists()
+    assert not any(output_directory.rglob("*"))
+    assert grandchild_ready.is_file()
+    time.sleep(1.25)
+    assert not child_survived.exists()
+
+    retry_configured = _configure_out_dir_owner_project(
+        source_dir, retry_build_dir, "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=0.5"
+    )
+    assert retry_configured.returncode == 0, (
+        retry_configured.stdout + retry_configured.stderr
+    )
+    retried = _build_out_dir_owner_project(retry_build_dir)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(retry_build_dir)
+    )
+
+
+def test_dependency_scan_timeout_removes_partial_outputs_and_kills_descendants(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    descriptor = tmp_path / "dependency.pb"
+    depfile = tmp_path / "dependency.d"
+    argument_file = tmp_path / "arguments.rsp"
+    argument_file.write_text("", encoding="utf-8")
+    grandchild_ready = tmp_path / "dependency-reader-grandchild-ready"
+    child_survived = tmp_path / "dependency-reader-child-survived"
+    release_reader = tmp_path / "release-reader"
+    protoc_script = tmp_path / "fake-protoc.py"
+    protoc_script.write_text(
+        f"from pathlib import Path\nPath({str(descriptor)!r}).write_bytes(b'partial descriptor')\n",
+        encoding="utf-8",
+    )
+    reader_script = tmp_path / "reader.py"
+    grandchild = (
+        "from pathlib import Path; import time; "
+        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
+        f"Path({str(child_survived)!r}).touch()"
+    )
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
+    )
+    reader_script.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import subprocess",
+                "import sys",
+                "import time",
+                f"depfile = Path({str(depfile)!r})",
+                "if Path(sys.argv[-1]).with_name('release-reader').exists():",
+                "    depfile.write_text('complete: input.proto\\n', encoding='utf-8')",
+                "    raise SystemExit(0)",
+                "depfile.write_text('partial', encoding='utf-8')",
+                f"subprocess.Popen([sys.executable, '-c', {child!r}])",
+                "time.sleep(30)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def write_wrapper(path: Path, script: Path) -> Path:
+        if os.name == "nt":
+            wrapper = path.with_suffix(".cmd")
+            wrapper.write_text(
+                f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n',
+                encoding="utf-8",
+            )
+        else:
+            wrapper = path
+            wrapper.write_text(
+                "#!/usr/bin/env sh\n"
+                f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"\n',
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+        return wrapper
+
+    protoc = write_wrapper(tmp_path / "fake-protoc", protoc_script)
+    reader = write_wrapper(tmp_path / "hanging-reader", reader_script)
+    command = [
+        "cmake",
+        f"-DPROTOC_EXECUTABLE={protoc}",
+        f"-DARGUMENT_FILE={argument_file}",
+        f"-DLOCK_FILE={tmp_path / 'dependency.lock'}",
+        "-DPROTO_FILE=input.proto",
+        f"-DSCAN_WORKING_DIRECTORY={tmp_path}",
+        f"-DDEPENDENCY_READER={reader}",
+        f"-DDEPENDENCY_DESCRIPTOR={descriptor}",
+        f"-DDEPENDENCY_DEPFILE={depfile}",
+        "-DDEPENDENCY_DEPFILE_TARGET=dependency.pb",
+        "-DMANAGED_DEPENDENCY_READER=FALSE",
+        "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=0.5",
+        "-P",
+        str(repo_root / "cmake" / "ProtocyteDependencyScan.cmake"),
+    ]
+
+    timed_out = subprocess.run(command, check=False, capture_output=True, text=True)
+
+    assert timed_out.returncode != 0
+    output = " ".join((timed_out.stdout + timed_out.stderr).split())
+    assert "timed out while reading its descriptor after 0.5 seconds" in output
+    assert "Partial dependency outputs were removed" in output
+    assert not descriptor.exists()
+    assert not depfile.exists()
+    assert grandchild_ready.is_file()
+    time.sleep(1.25)
+    assert not child_survived.exists()
+
+    release_reader.write_text("release\n", encoding="utf-8")
+    retried = subprocess.run(command, check=False, capture_output=True, text=True)
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert descriptor.is_file()
+    assert depfile.read_text(encoding="utf-8") == "complete: input.proto\n"
 
 
 @pytest.mark.parametrize("protoc_selection", ["relative_path", "imported_target"])

@@ -4,6 +4,7 @@ from io import BytesIO
 import math
 import os
 from pathlib import Path
+import shlex
 import struct
 import subprocess
 import sys
@@ -3310,6 +3311,68 @@ def test_generator_policy_applies_formatter_timeout(
         in response.error
     )
     assert not response.file
+
+
+def test_command_line_plugin_formatter_timeout_stops_hanging_process_tree(
+    tmp_path: Path,
+) -> None:
+    grandchild_ready = tmp_path / "formatter-grandchild-ready"
+    child_survived = tmp_path / "formatter-child-survived"
+    grandchild = (
+        "from pathlib import Path; import time; "
+        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
+        f"Path({str(child_survived)!r}).touch()"
+    )
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
+    )
+    formatter_script = tmp_path / "hanging_formatter.py"
+    formatter_script.write_text(
+        "\n".join(
+            [
+                "import subprocess",
+                "import sys",
+                "import time",
+                f"subprocess.Popen([sys.executable, '-c', {child!r}])",
+                "time.sleep(30)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        formatter = tmp_path / "hanging-formatter.cmd"
+        formatter.write_text(
+            f'@echo off\r\n"{sys.executable}" "{formatter_script}"\r\n',
+            encoding="utf-8",
+        )
+    else:
+        formatter = tmp_path / "hanging-formatter"
+        formatter.write_text(
+            "#!/usr/bin/env sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(formatter_script))}\n",
+            encoding="utf-8",
+        )
+        formatter.chmod(0o755)
+
+    response = generate_response(
+        _basic_request(
+            parameter=(
+                f"clang_format={formatter.as_posix()},formatter_timeout_seconds=0.5"
+            )
+        ),
+        use_plugin_defaults=True,
+    )
+
+    assert (
+        "clang-format timed out for simple.protocyte.hpp after 0.5 seconds"
+        in response.error
+    )
+    assert not response.file
+    assert grandchild_ready.is_file()
+    time.sleep(1.25)
+    assert not child_survived.exists()
 
 
 def test_formatter_timeout_terminates_descendants_that_inherit_pipes(

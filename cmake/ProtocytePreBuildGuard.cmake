@@ -103,6 +103,7 @@ foreach(manifest_line IN LISTS manifest_lines)
                 "-DREQUEST_FILE=${request_file}"
                 "-DWITNESS_FILE=${guarded_file}"
                 "-DLOCK_FILE=${lock_file}"
+                "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
                 -P "${check_script}"
             RESULT_VARIABLE check_result
             OUTPUT_VARIABLE check_output

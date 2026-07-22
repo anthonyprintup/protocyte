@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteOutputSafety.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteProcess.cmake")
 
 foreach(
     required_variable
@@ -565,21 +566,32 @@ if(PROTOCYTE_MANAGED_PLUGIN)
     # plugin; explicit user-provided plugins keep their environment unchanged.
     list(APPEND protoc_environment "--unset=PYTHONPATH" "--unset=PYTHONHOME")
 endif()
-execute_process(
+_protocyte_resolve_tool_timeout(protocyte_tool_timeout)
+_protocyte_execute_bounded(
+    protoc_result
+    protoc_output
+    protoc_error
+    protoc_timed_out
+    WORKING_DIRECTORY "${GENERATION_WORKING_DIRECTORY}"
+    TIMEOUT_SECONDS "${protocyte_tool_timeout}"
+    ECHO_OUTPUT
+    ECHO_ERROR
     COMMAND
         "${CMAKE_COMMAND}" -E env
         ${protoc_environment}
         "PROTOCYTE_CMAKE_WORKING_DIRECTORY_HEX=${SOURCE_DIRECTORY_HEX}"
         "${PROTOC_EXECUTABLE}"
         "@${ARGUMENT_FILE}"
-    WORKING_DIRECTORY "${GENERATION_WORKING_DIRECTORY}"
-    RESULT_VARIABLE protoc_result
-    OUTPUT_VARIABLE protoc_output
-    ERROR_VARIABLE protoc_error
-    ECHO_OUTPUT_VARIABLE
-    ECHO_ERROR_VARIABLE
 )
 
+if(protoc_timed_out)
+    message(
+        FATAL_ERROR
+        "Protocyte generation for target '${GENERATION_TARGET}' timed out after ${protocyte_tool_timeout} seconds. "
+        "The process was terminated before generation ownership was published. Set "
+        "PROTOCYTE_TOOL_TIMEOUT_SECONDS to a larger value or 0 to disable this timeout."
+    )
+endif()
 if(NOT "${protoc_result}" STREQUAL "0")
     string(STRIP "${protoc_output}" protoc_output)
     string(STRIP "${protoc_error}" protoc_error)
