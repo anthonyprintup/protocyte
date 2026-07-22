@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <type_traits>
 
@@ -3934,6 +3935,12 @@ namespace protocyte {
         }
 
     protected:
+        template<class T> static bool begins_within_key_storage(const K &key, const T &value) noexcept {
+            const uptr key_address {reinterpret_cast<uptr>(::std::addressof(key))};
+            const uptr value_address {reinterpret_cast<uptr>(::std::addressof(value))};
+            return value_address >= key_address && value_address - key_address < sizeof(K);
+        }
+
         template<class KeyArg, class ValueArg> Status insert_or_assign_impl(KeyArg &&key, ValueArg &&value) noexcept {
             if (buckets_.size()) {
                 usize existing_index {Config::hash(key) & (buckets_.size() - 1u)};
@@ -3943,6 +3950,26 @@ namespace protocyte {
                         break;
                     }
                     if (Config::equal((*bucket).key, key)) {
+                        // The mapped argument can designate the matched key or
+                        // one of its base/member subobjects. Stage it before
+                        // moving the key so even destructive moves cannot make
+                        // a later copy observe a moved-from value. An xvalue is
+                        // still an alias, so it requires the same protection.
+                        if (begins_within_key_storage((*bucket).key, value)) {
+                            if constexpr (CopyValueCompatible<::std::remove_cvref_t<ValueArg>, Context>) {
+                                auto copied_value = protocyte::copy_value(ctx_, value);
+                                if (!copied_value) {
+                                    return copied_value.status();
+                                }
+                                Entry replacement {protocyte::move((*bucket).key), protocyte::move(*copied_value)};
+                                bucket.reset();
+                                static_cast<void>(bucket.emplace(protocyte::move(replacement.key),
+                                                                 protocyte::move(replacement.value)));
+                                return {};
+                            } else {
+                                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+                            }
+                        }
                         Entry replacement {protocyte::move((*bucket).key), protocyte::forward<ValueArg>(value)};
                         bucket.reset();
                         static_cast<void>(
