@@ -10450,6 +10450,84 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     generation_source = generation_source.replace(
         output_publication_anchor, output_publication_instrumentation
     )
+
+    ownership_commit_anchor = (
+        "_protocyte_commit_generation_ownership(\n"
+        "    generation_owner_transaction_id\n"
+        "    generation_published_owner_markers\n"
+        ")\n"
+    )
+    ownership_commit_instrumentation = (
+        ownership_commit_anchor
+        + "if(DEFINED PROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT)\n"
+        + '    message(FATAL_ERROR "injected generation transaction abort after owner commit")\n'
+        + "endif()\n"
+    )
+    assert generation_source.count(ownership_commit_anchor) == 1
+    generation_source = generation_source.replace(
+        ownership_commit_anchor, ownership_commit_instrumentation
+    )
+
+    backup_abort_anchor = (
+        "        endif()\n"
+        "        list(REMOVE_AT generation_operation_states ${generation_output_index})\n"
+        "        list(\n"
+        "            INSERT\n"
+        "            generation_operation_states\n"
+        "            ${generation_output_index}\n"
+        '            "backed-up"\n'
+        "        )\n"
+    )
+    backup_abort_instrumentation = (
+        "        endif()\n"
+        "        if(\n"
+        "            DEFINED PROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX\n"
+        "            AND generation_output_index EQUAL PROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX\n"
+        "        )\n"
+        '            message(FATAL_ERROR "injected generation transaction abort after backup")\n'
+        "        endif()\n" + backup_abort_anchor.removeprefix("        endif()\n")
+    )
+    assert generation_source.count(backup_abort_anchor) == 1
+    generation_source = generation_source.replace(
+        backup_abort_anchor, backup_abort_instrumentation
+    )
+
+    publish_abort_anchor = (
+        "    endif()\n"
+        "    list(REMOVE_AT generation_operation_states ${generation_output_index})\n"
+        "    list(\n"
+        "        INSERT\n"
+        "        generation_operation_states\n"
+        "        ${generation_output_index}\n"
+        '        "published"\n'
+        "    )\n"
+    )
+    publish_abort_instrumentation = (
+        "    endif()\n"
+        "    if(\n"
+        "        DEFINED PROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX\n"
+        "        AND generation_output_index EQUAL PROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX\n"
+        "    )\n"
+        '        message(FATAL_ERROR "injected generation transaction abort after publish")\n'
+        "    endif()\n" + publish_abort_anchor.removeprefix("    endif()\n")
+    )
+    assert generation_source.count(publish_abort_anchor) == 1
+    generation_source = generation_source.replace(
+        publish_abort_anchor, publish_abort_instrumentation
+    )
+
+    cleanup_abort_anchor = "endif()\n_protocyte_discard_generation_staging()\n\nif(\n"
+    cleanup_abort_instrumentation = (
+        "endif()\n"
+        "if(DEFINED PROTOCYTE_TEST_ABORT_BEFORE_STAGING_CLEANUP)\n"
+        '    message(FATAL_ERROR "injected generation transaction abort before cleanup")\n'
+        "endif()\n"
+        "_protocyte_discard_generation_staging()\n\nif(\n"
+    )
+    assert generation_source.count(cleanup_abort_anchor) == 1
+    generation_source = generation_source.replace(
+        cleanup_abort_anchor, cleanup_abort_instrumentation
+    )
     instrumented_script = script_dir / "ProtocyteGenerate.cmake"
     instrumented_script.write_text(generation_source, encoding="utf-8")
     return instrumented_script
@@ -10461,8 +10539,9 @@ def _run_direct_owner_generation(
     output_directory: Path,
     generation_script: Path,
     *extra_arguments: str,
+    reuse_build: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    build_dir.mkdir()
+    build_dir.mkdir(exist_ok=reuse_build)
     argument_file = build_dir / "arguments.rsp"
     staging_directory = (
         output_directory.parent / ".protocyte-generation-staging-direct-owner"
@@ -10485,7 +10564,7 @@ def _run_direct_owner_generation(
     lock_manifest = build_dir / "locks.list"
     lock_manifest.write_text("\n".join(output_keys) + "\n", encoding="utf-8")
     ownership_manifest = build_dir / "ownership-manifest"
-    ownership_manifest.mkdir()
+    ownership_manifest.mkdir(exist_ok=reuse_build)
     (ownership_manifest / "output-root.path").write_text(
         output_directory.as_posix(), encoding="utf-8"
     )
@@ -11098,6 +11177,174 @@ def test_output_publication_failure_restores_prior_outputs_and_releases_ownershi
         _build_tree_owner_hash(retry_build_dir)
     )
     assert _out_dir_snapshot(output_directory) != previous_outputs
+
+
+@pytest.mark.parametrize(
+    ("abort_argument", "previous_outputs", "completed_publication"),
+    [
+        (
+            "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT=TRUE",
+            {"demo_0.protocyte.hpp": b"// prior header\n"},
+            False,
+        ),
+        (
+            "-DPROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX=0",
+            {
+                "demo_0.protocyte.hpp": b"// prior header\n",
+                "demo_0.protocyte.cpp": b"// prior source\n",
+            },
+            False,
+        ),
+        (
+            "-DPROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX=1",
+            {
+                "demo_0.protocyte.hpp": b"// prior header\n",
+                "demo_0.protocyte.cpp": b"// prior source\n",
+            },
+            False,
+        ),
+        (
+            "-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=0",
+            {"demo_0.protocyte.hpp": b"// prior header\n"},
+            False,
+        ),
+        (
+            "-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=1",
+            {"demo_0.protocyte.hpp": b"// prior header\n"},
+            False,
+        ),
+        (
+            "-DPROTOCYTE_TEST_ABORT_BEFORE_STAGING_CLEANUP=TRUE",
+            {"demo_0.protocyte.hpp": b"// prior header\n"},
+            True,
+        ),
+    ],
+)
+def test_generation_transaction_recovers_subprocess_abort_before_or_after_commit(
+    tmp_path: Path,
+    abort_argument: str,
+    previous_outputs: dict[str, bytes],
+    completed_publication: bool,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    output_directory.mkdir()
+    for relative_path, content in previous_outputs.items():
+        (output_directory / relative_path).write_bytes(content)
+
+    aborted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        abort_argument,
+    )
+
+    assert aborted.returncode != 0
+    assert "injected generation transaction abort" in aborted.stdout + aborted.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    _make_fake_protoc_fail_in_build(source_dir, owner_build_dir)
+    same_owner_retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+
+    assert same_owner_retry.returncode != 0
+    assert (
+        "simulated protoc failure" in same_owner_retry.stdout + same_owner_retry.stderr
+    )
+    if completed_publication:
+        assert _out_dir_snapshot(output_directory) != previous_outputs
+        assert _committed_owner_build_hash(marker, marker) == (
+            _build_tree_owner_hash(owner_build_dir)
+        )
+        fresh = _run_direct_owner_generation(
+            source_dir,
+            fresh_build_dir,
+            output_directory,
+            Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake",
+        )
+        assert fresh.returncode != 0
+        assert (
+            "ownership belongs to a different build tree" in fresh.stdout + fresh.stderr
+        )
+    else:
+        assert _out_dir_snapshot(output_directory) == previous_outputs
+        assert not marker.exists()
+        assert not list((tmp_path / "output-locks").glob("*.owner"))
+        fresh = _run_direct_owner_generation(
+            source_dir,
+            fresh_build_dir,
+            output_directory,
+            Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake",
+        )
+        assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+        assert _committed_owner_build_hash(marker, marker) == (
+            _build_tree_owner_hash(fresh_build_dir)
+        )
+
+
+def test_generation_transaction_backup_link_tamper_fails_closed(tmp_path: Path) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    output_directory.mkdir()
+    prior_header = output_directory / "demo_0.protocyte.hpp"
+    prior_header.write_bytes(b"// prior header\n")
+    # The manifest order is digest-based, so make every declared output prior
+    # state before injecting the first backup interruption.
+    (output_directory / "demo_0.protocyte.cpp").write_bytes(b"// prior source\n")
+
+    aborted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_BACKUP_INDEX=0",
+    )
+
+    assert aborted.returncode != 0
+    staging_directory = next(tmp_path.glob(".protocyte-generation-staging-*"))
+    backup_directory = staging_directory / "backups"
+    backed_output = next(path for path in backup_directory.rglob("*") if path.is_file())
+    backed_generation_output = output_directory / backed_output.relative_to(
+        backup_directory
+    )
+    assert not backed_generation_output.exists()
+    shutil.rmtree(backup_directory)
+    tamper_target = tmp_path / "tamper-target"
+    tamper_target.mkdir()
+    _create_generated_output_directory_link(backup_directory, tamper_target)
+
+    retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+
+    assert retry.returncode != 0
+    assert "could not safely recover an interrupted generation transaction" in (
+        retry.stdout + retry.stderr
+    )
+    assert not backed_generation_output.exists()
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert marker.is_file()
+    assert backup_directory.is_symlink() or backup_directory.is_dir()
 
 
 def test_nested_out_dirs_cannot_claim_the_same_generated_output(
