@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +47,14 @@ def test_release_plugin_artifact_runner_enforces_offline_install(
     monkeypatch.setenv("PIP_REQUIREMENT", str(tmp_path / "injected.txt"))
     monkeypatch.setenv("UV_INDEX", "https://mutable.invalid/simple")
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "injected-python"))
+    for name in (
+        "GITHUB_ENV",
+        "GITHUB_OUTPUT",
+        "GITHUB_PATH",
+        "GITHUB_STATE",
+        "GITHUB_STEP_SUMMARY",
+    ):
+        monkeypatch.setenv(name, str(tmp_path / name))
     monkeypatch.setattr(test_release_plugin_artifact.subprocess, "run", record_run)
     monkeypatch.setattr(
         sys,
@@ -90,6 +101,14 @@ def test_release_plugin_artifact_runner_enforces_offline_install(
     assert "PIP_REQUIREMENT" not in install_env
     assert "UV_INDEX" not in install_env
     assert "PYTHONPATH" not in install_env
+    for name in (
+        "GITHUB_ENV",
+        "GITHUB_OUTPUT",
+        "GITHUB_PATH",
+        "GITHUB_STATE",
+        "GITHUB_STEP_SUMMARY",
+    ):
+        assert name not in install_env
     assert all(call_cwd == test_root for _, call_cwd, _ in calls)
     assert all(call_env == install_env for _, _, call_env in calls)
     assert all(command[0] != "uv" for command, _, _ in calls)
@@ -97,6 +116,21 @@ def test_release_plugin_artifact_runner_enforces_offline_install(
         command[0] == str(cmake) and "--build" in command for command, _, _ in calls
     )
     assert any(command[0] == str(ctest) for command, _, _ in calls)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics required")
+def test_read_only_artifact_can_be_replaced_through_writable_parent(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "release.whl"
+    replacement = tmp_path / "replacement.whl"
+    artifact.write_bytes(b"published bytes")
+    artifact.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+    replacement.write_bytes(b"substituted bytes")
+
+    os.replace(replacement, artifact)
+
+    assert artifact.read_bytes() == b"substituted bytes"
 
 
 def test_release_cmake_hash_lock_rejects_substituted_wheel(tmp_path: Path) -> None:

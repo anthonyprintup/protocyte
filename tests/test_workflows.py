@@ -261,61 +261,69 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     assert 'requires = ["setuptools==80.9.0"]' in pyproject
 
 
-def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
+def test_release_uploads_handoff_before_isolated_smoke_jobs() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
     build_steps = _steps_by_name(build)
+    python_smoke = _job_named(release, "smoke-python-artifacts")
+    python_steps = _steps_by_name(python_smoke)
+    cmake_smoke = _job_named(release, "smoke-cmake-prefix")
+    cmake_steps = _steps_by_name(cmake_smoke)
     publish = _job_named(release, "publish")
     publication = _steps_by_name(publish)[
         "Create, verify, and publish immutable GitHub release"
     ]
     upload = build_steps["Upload exact publication handoff"]
 
-    test_step_names = {
-        "wheel_name": "Test exact wheel artifact",
-        "sdist_name": "Test exact source artifact",
-        "archive_name": "Test exact CMake prefix artifact",
-    }
-    for output, test_step_name in test_step_names.items():
+    for output in ("wheel_name", "sdist_name", "archive_name"):
         artifact = f"${{{{ needs.validate-tag.outputs.{output} }}}}"
-        assert artifact in build_steps[test_step_name]
         assert f"staging/release-handoff/{artifact}" in upload
         assert f"$RUNNER_TEMP/release-handoff/{artifact}" in publication
-        assert build.index(test_step_name) < build.index(
-            "Stage exact publication handoff"
-        )
 
     assert build.index("Stage exact publication handoff") < build.index(
         "Upload exact publication handoff"
     )
+    assert build.count("actions/upload-artifact@") == 1
+    assert build.rstrip().endswith("retention-days: 1")
+    assert "Test exact" not in build
+    assert "test_release_plugin_artifact.py" not in build
+    assert "actions/download-artifact@" not in build
+    assert "staging/release-tests" not in build
     assert "dist/*.whl" not in upload
     assert "dist/*.tar.gz" not in upload
     assert "staging/release-handoff/SHA256SUMS" in upload
     assert "if-no-files-found: error" in upload
-    assert "python -m tarfile -e" in build
-    assert "Install prebuilt protoc for release artifact tests" in build
-    assert "id: release-protoc" in build
-    assert build.index(
-        "Install prebuilt protoc for release artifact tests"
-    ) < build.index("Test exact wheel artifact")
-    for artifact, test_root in (
-        ("wheel_name", "wheel"),
-        ("sdist_name", "sdist"),
-    ):
-        test_step = build_steps[test_step_names[artifact]]
-        assert "test_release_plugin_artifact.py" in test_step
-        assert (
-            f'"staging/release-tests/publication-artifacts/'
-            f'${{{{ needs.validate-tag.outputs.{artifact} }}}}"'
-        ) in test_step
-        assert f"staging/release-tests/{test_root}" in test_step
-        assert "steps.release-protoc.outputs.protoc" in test_step
-        assert '"$RELEASE_CMAKE"' in test_step
-        assert '"$RELEASE_CTEST"' in test_step
 
-    cmake_prefix_test = build_steps["Test exact CMake prefix artifact"]
+    assert "- wheel" in python_smoke
+    assert "- sdist" in python_smoke
+    assert "fail-fast: false" in python_smoke
+    assert "- build-release" in python_smoke
+    assert "- build-release" in cmake_smoke
+    assert "actions: read" in python_smoke
+    assert "actions: read" in cmake_smoke
+    assert "ref: ${{ needs.validate-tag.outputs.target }}" in python_smoke
+    assert "ref: ${{ needs.validate-tag.outputs.target }}" in cmake_smoke
+
+    python_test = python_steps["Test exact Python artifact"]
+    assert 'case "${{ matrix.artifact_kind }}"' in python_test
+    assert 'wheel) artifact_name="$WHEEL_NAME"' in python_test
+    assert 'sdist) artifact_name="$SDIST_NAME"' in python_test
+    assert '--artifact "$RUNNER_TEMP/release-handoff/$artifact_name"' in python_test
+    assert "test_release_plugin_artifact.py" in python_test
+    assert "steps.release-protoc.outputs.protoc" in python_test
+    assert '"$RELEASE_CMAKE"' in python_test
+    assert '"$RELEASE_CTEST"' in python_test
+    assert python_smoke.rstrip().endswith(
+        '--test-root "staging/release-tests/${{ matrix.artifact_kind }}"'
+    )
+
+    cmake_prefix_test = cmake_steps["Test exact CMake prefix artifact"]
+    assert (
+        '"$RUNNER_TEMP/release-handoff/'
+        '${{ needs.validate-tag.outputs.archive_name }}"' in cmake_prefix_test
+    )
     assert "-S tests/find_package" in cmake_prefix_test
     assert (
         "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}"
@@ -328,6 +336,17 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
         in cmake_prefix_test
     )
     assert "PROTOCYTE_PLUGIN_EXECUTABLE" not in cmake_prefix_test
+    assert cmake_smoke.rstrip().endswith(
+        "--test-dir staging/release-tests/cmake-build --output-on-failure"
+    )
+
+    assert "- smoke-python-artifacts" in publish
+    assert "- smoke-cmake-prefix" in publish
+    assert "ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}" in publish
+    assert (
+        "EXPECTED_ARTIFACT_DIGEST: "
+        "${{ needs.build-release.outputs.artifact_digest }}" in publish
+    )
 
     find_package_consumer = (
         REPO_ROOT / "tests" / "find_package" / "CMakeLists.txt"
@@ -354,53 +373,78 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
         encoding="utf-8"
     )
     build = _job_named(release, "build-release")
-    steps = _steps_by_name(build)
-    prepare_name = "Prepare hash-locked release smoke tools and environments"
-    prepare = steps[prepare_name]
-    freeze = steps["Freeze exact release artifacts for isolated smoke tests"]
-    wheel_test = steps["Test exact wheel artifact"]
-    source_test = steps["Test exact source artifact"]
-    cmake_test = steps["Test exact CMake prefix artifact"]
-    handoff = steps["Stage exact publication handoff"]
+    build_steps = _steps_by_name(build)
+    python_smoke = _job_named(release, "smoke-python-artifacts")
+    python_steps = _steps_by_name(python_smoke)
+    cmake_smoke = _job_named(release, "smoke-cmake-prefix")
+    cmake_steps = _steps_by_name(cmake_smoke)
+    build_prepare_name = "Prepare hash-locked release build tools"
+    build_prepare = build_steps[build_prepare_name]
+    stage = build_steps["Stage exact publication handoff"]
+    upload = build_steps["Upload exact publication handoff"]
 
-    assert build.index(prepare_name) < build.index(
+    assert build.index(build_prepare_name) < build.index(
         "Build and normalize plugin packages twice"
     )
-    assert ".github/release-cmake-constraints.txt" in prepare
-    assert 'locked_cmake_version="$(' in prepare
-    assert '"$locked_cmake_version" != "$CMAKE_VERSION"' in prepare
-    assert "protocyte-cmake-constraints.txt" in prepare
-    assert prepare.count("--require-hashes") == 5
-    assert prepare.count("--only-binary=:all:") == 5
-    assert prepare.count("pip --isolated download") == 2
-    assert "--no-deps" in prepare
-    assert '--dest "$wheelhouse"' in prepare
-    assert '--dest "$tool_wheelhouse"' in prepare
-    assert '--find-links "$tool_wheelhouse"' in prepare
-    assert '--requirement "$cmake_constraints"' in prepare
-    assert "for artifact_kind in wheel sdist; do" in prepare
-    assert "--no-index" in prepare
-    assert '--find-links "$wheelhouse"' in prepare
-    assert 'chmod -R a-w "$wheelhouse" "$tool_wheelhouse"' in prepare
+    assert ".github/release-cmake-constraints.txt" in build_prepare
+    assert build_prepare.count("--require-hashes") == 3
+    assert build_prepare.count("--only-binary=:all:") == 3
+    assert build_prepare.count("pip --isolated download") == 1
+    assert '--dest "$tool_wheelhouse"' in build_prepare
+    assert '--find-links "$tool_wheelhouse"' in build_prepare
 
-    prepare_commands = _continued_shell_commands(prepare)
-    resolver_commands = [
-        command
-        for command in prepare_commands
-        if "uv pip install" in command or "pip --isolated download" in command
+    for smoke, smoke_steps, prepare_name, resolver_count in (
+        (
+            python_smoke,
+            python_steps,
+            "Prepare hash-locked release smoke tools and environment",
+            5,
+        ),
+        (
+            cmake_smoke,
+            cmake_steps,
+            "Prepare hash-locked release smoke tools and wheelhouse",
+            4,
+        ),
+    ):
+        prepare = smoke_steps[prepare_name]
+        assert ".github/release-cmake-constraints.txt" in prepare
+        assert 'locked_cmake_version="$(' in prepare
+        assert '"$locked_cmake_version" != "$CMAKE_VERSION"' in prepare
+        assert "protocyte-cmake-constraints.txt" in prepare
+        assert prepare.count("--require-hashes") == resolver_count
+        assert prepare.count("--only-binary=:all:") == resolver_count
+        assert prepare.count("pip --isolated download") == 2
+        assert '--dest "$wheelhouse"' in prepare
+        assert '--dest "$tool_wheelhouse"' in prepare
+        assert '--find-links "$tool_wheelhouse"' in prepare
+        assert '--requirement "$cmake_constraints"' in prepare
+        assert "--no-index" in prepare
+        assert 'chmod -R a-w "$wheelhouse" "$tool_wheelhouse"' in prepare
+
+        resolver_commands = [
+            command
+            for command in _continued_shell_commands(prepare)
+            if "uv pip install" in command or "pip --isolated download" in command
+        ]
+        assert len(resolver_commands) == resolver_count
+        assert all("--require-hashes" in command for command in resolver_commands)
+        cmake_install = next(
+            command
+            for command in resolver_commands
+            if '--requirement "$cmake_constraints"' in command
+            and "uv pip install" in command
+        )
+        assert "--no-index" in cmake_install
+        assert '--find-links "$tool_wheelhouse"' in cmake_install
+
+    python_prepare = python_steps[
+        "Prepare hash-locked release smoke tools and environment"
     ]
-    assert len(resolver_commands) == 5
-    assert all("--require-hashes" in command for command in resolver_commands)
-    cmake_install = next(
-        command
-        for command in resolver_commands
-        if '--requirement "$cmake_constraints"' in command
-        and "uv pip install" in command
-    )
-    assert "--no-index" in cmake_install
-    assert '--find-links "$tool_wheelhouse"' in cmake_install
+    assert '--find-links "$wheelhouse"' in python_prepare
+    assert 'artifact_python="$smoke_root/venv/bin/python"' in python_prepare
 
-    plugin_build = steps["Build and normalize plugin packages twice"]
+    plugin_build = build_steps["Build and normalize plugin packages twice"]
     assert 'uv build "$source_dir" \\' in plugin_build
     assert (
         '--python "$PWD/staging/release-tools/bootstrap-venv/bin/python"'
@@ -445,32 +489,74 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     ]
 
     assert build.index("Build and normalize CMake prefix twice") < build.index(
-        "Freeze exact release artifacts for isolated smoke tests"
+        "Stage exact publication handoff"
     )
-    assert build.index(
-        "Freeze exact release artifacts for isolated smoke tests"
-    ) < build.index("Test exact wheel artifact")
-    assert freeze.count("cmp \\") == 3
-    assert "sha256sum --check --strict SHA256SUMS" in freeze
-    assert "chmod a-w" in freeze
-    assert "publication-artifacts" in wheel_test
-    assert "publication-artifacts" in source_test
+    assert build.index("Stage exact publication handoff") < build.index(
+        "Upload exact publication handoff"
+    )
+    assert build.rstrip().endswith("retention-days: 1")
+    assert "disposable-artifacts" not in release
+    assert "publication-artifacts" not in release
+    assert "sha256sum \\" in stage
+    assert "sha256sum --check --strict SHA256SUMS" in stage
+    assert "chmod a-w" not in stage
+    assert "actions/upload-artifact@" in upload
+    assert "id: release-handoff" in upload
 
+    for smoke, smoke_steps, test_name in (
+        (python_smoke, python_steps, "Test exact Python artifact"),
+        (cmake_smoke, cmake_steps, "Test exact CMake prefix artifact"),
+    ):
+        binding = smoke_steps["Verify immutable release handoff binding"]
+        download = smoke_steps["Download exact immutable release handoff"]
+        integrity = smoke_steps["Verify exact release handoff contents"]
+        assert "ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}" in binding
+        assert (
+            "EXPECTED_ARTIFACT_DIGEST: "
+            "${{ needs.build-release.outputs.artifact_digest }}" in binding
+        )
+        assert ".workflow_run.id" in binding
+        assert ".workflow_run.head_sha" in binding
+        assert ".digest" in binding
+        assert '"$GITHUB_RUN_ID"' in binding
+        assert '"$GITHUB_SHA"' in binding
+        assert (
+            "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+            in download
+        )
+        assert (
+            "artifact-ids: ${{ needs.build-release.outputs.artifact_id }}" in download
+        )
+        assert "run-id: ${{ github.run_id }}" in download
+        assert "path: ${{ runner.temp }}/release-handoff" in download
+        assert "unexpected file set" in integrity
+        assert 'cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"' in integrity
+        assert "sha256sum --check --strict SHA256SUMS" in integrity
+        assert smoke.index("Verify immutable release handoff binding") < smoke.index(
+            "Download exact immutable release handoff"
+        )
+        assert smoke.index("Download exact immutable release handoff") < smoke.index(
+            "Verify exact release handoff contents"
+        )
+        assert smoke.index("Verify exact release handoff contents") < smoke.index(
+            test_name
+        )
+
+    cmake_test = cmake_steps["Test exact CMake prefix artifact"]
     assert "PIP_CONFIG_FILE: /dev/null" in cmake_test
     assert "PIP_FIND_LINKS:" in cmake_test
     assert 'PIP_NO_INDEX: "1"' in cmake_test
     assert 'UV_NO_INDEX: "1"' in cmake_test
     assert 'UV_OFFLINE: "1"' in cmake_test
     assert "uvx" not in cmake_test
-
-    assert handoff.index("sha256sum --check --strict SHA256SUMS") < handoff.index(
-        'mkdir -p "$handoff"'
-    )
-    assert handoff.count("cmp \\") == 3
-    assert 'artifacts="staging/release-tests/publication-artifacts"' in handoff
-    assert '"$artifacts/${{ needs.validate-tag.outputs.wheel_name }}"' in handoff
-    assert '"$artifacts/${{ needs.validate-tag.outputs.sdist_name }}"' in handoff
-    assert '"$artifacts/${{ needs.validate-tag.outputs.archive_name }}"' in handoff
+    for command_environment in (
+        "GITHUB_ENV",
+        "GITHUB_OUTPUT",
+        "GITHUB_PATH",
+        "GITHUB_STATE",
+        "GITHUB_STEP_SUMMARY",
+    ):
+        assert command_environment in cmake_test
 
     helper = (
         REPO_ROOT / ".github" / "scripts" / "test_release_plugin_artifact.py"
@@ -480,6 +566,7 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
     assert '"PIP_NO_INDEX": "1"' in helper
     assert '"UV_NO_INDEX": "1"' in helper
     assert '"UV_OFFLINE": "1"' in helper
+    assert "_GITHUB_COMMAND_ENVIRONMENT" in helper
     assert '"--isolated"' in helper
     assert '"--no-cache-dir"' in helper
     assert '"--no-index"' in helper
@@ -622,6 +709,7 @@ def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None
     assert "name: protocyte-release-${{ github.run_id }}-${{ github.sha }}" in upload
     assert "compression-level: 0" in upload
     assert "retention-days: 1" in upload
+    assert build.rstrip().endswith("retention-days: 1")
 
     assert "- build-release" in publish
     assert "ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}" in binding
@@ -713,20 +801,21 @@ def test_release_transaction_order_is_build_test_then_serialized_publication() -
     )
     gate = _job_named(release, "release-gate")
     build = _job_named(release, "build-release")
+    python_smoke = _job_named(release, "smoke-python-artifacts")
+    cmake_smoke = _job_named(release, "smoke-cmake-prefix")
     publish = _job_named(release, "publish")
     publication_name = "Create, verify, and publish immutable GitHub release"
 
     assert "- release-policy" in gate
     assert "- release-gate" in build
+    assert build.rstrip().endswith("retention-days: 1")
+    assert "- build-release" in python_smoke
+    assert "- build-release" in cmake_smoke
+    assert "Verify exact release handoff contents" in python_smoke
+    assert "Verify exact release handoff contents" in cmake_smoke
     assert "- build-release" in publish
-    for test_step_name in (
-        "Test exact wheel artifact",
-        "Test exact source artifact",
-        "Test exact CMake prefix artifact",
-    ):
-        assert build.index(test_step_name) < build.index(
-            "Upload exact publication handoff"
-        )
+    assert "- smoke-python-artifacts" in publish
+    assert "- smoke-cmake-prefix" in publish
     assert publish.index("Bind and download immutable release handoff") < publish.index(
         publication_name
     )

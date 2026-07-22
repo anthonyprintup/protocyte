@@ -8,6 +8,15 @@ import subprocess
 from pathlib import Path
 
 
+_GITHUB_COMMAND_ENVIRONMENT = {
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_PATH",
+    "GITHUB_STATE",
+    "GITHUB_STEP_SUMMARY",
+}
+
+
 def _run(*command: str, cwd: Path, env: dict[str, str]) -> None:
     subprocess.run(command, check=True, cwd=cwd, env=env)
 
@@ -36,6 +45,7 @@ def main() -> None:
         for key, value in os.environ.items()
         if not key.startswith(("PIP_", "UV_"))
         and key not in {"PYTHONHOME", "PYTHONPATH"}
+        and key not in _GITHUB_COMMAND_ENVIRONMENT
     }
     environment.update(
         {
