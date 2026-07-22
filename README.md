@@ -159,6 +159,19 @@ Run the same complete check directly at any time:
 python .github/scripts/check_private_paths.py
 ```
 
+Run the default Python test suite with:
+
+```bash
+uv run pytest -q
+```
+
+The CMake integration matrix provisions and builds temporary projects, so it is
+excluded from the default run. Run it explicitly when CMake behavior changes:
+
+```bash
+uv run pytest -q -m cmake_integration
+```
+
 If the guard finds a private path, remove every reference, reflog entry, staged
 name, and staged file that retains it, then prune the offending unreachable
 object according to the repository's recovery policy. The guard intentionally

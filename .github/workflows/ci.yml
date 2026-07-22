@@ -135,6 +135,13 @@ jobs:
           PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS: ${{ matrix.python-version == '3.12' && '1' || '0' }}
         run: uv run pytest -q
 
+      - name: Run CMake integration tests
+        if: matrix.python-version == '3.12'
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.integration-protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS: "1"
+        run: uv run pytest -q -m cmake_integration
+
   quickstart-linux:
     name: Quick Start Linux
     runs-on: ubuntu-latest
@@ -198,7 +205,7 @@ jobs:
           PROTOCYTE_CI_REQUIRE_INSTALL_EXPORT_TEST: "1"
           PROTOCYTE_CI_REQUIRE_MULTICONFIG_LOCKING_TEST: "1"
         run: >
-          uv run pytest -q
+          uv run pytest -q -m cmake_integration
           tests/test_cmake.py::test_source_codegen_regenerates_when_transitive_import_changes
           tests/test_cmake.py::test_source_discover_removes_only_outputs_owned_by_a_renamed_proto
           tests/test_cmake.py::test_descriptor_discover_removes_only_outputs_owned_by_a_deleted_file
@@ -338,7 +345,7 @@ jobs:
 
       - name: Verify generated-output containment at the CMake floor
         run: >
-          uv run --with cmake==3.24.3 pytest -q
+          uv run --with cmake==3.24.3 pytest -q -m cmake_integration
           tests/test_cmake.py::test_generation_rejects_nested_output_directory_links
           tests/test_cmake.py::test_retirement_rejects_nested_output_directory_links
           tests/test_cmake.py::test_retirement_rechecks_containment_immediately_before_removal
@@ -353,7 +360,7 @@ jobs:
           PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-protoc.outputs.protoc }}
           PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST: "1"
         run: >
-          uv run pytest -q
+          uv run pytest -q -m cmake_integration
           tests/test_cmake.py::test_prebuilt_windows_protoc_receives_utf8_descriptor_arguments
           tests/test_cmake.py::test_source_mode_codegen_declares_normalized_generated_paths
 
@@ -379,7 +386,7 @@ jobs:
           PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-protoc.outputs.protoc }}
           PROTOCYTE_CI_REQUIRE_INSTALL_EXPORT_TEST: "1"
         run: >
-          uv run pytest -q
+          uv run pytest -q -m cmake_integration
           tests/test_cmake.py::test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix
 
       - name: Configure non-kernel smoke tests
@@ -429,7 +436,7 @@ jobs:
           PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-msvc-protoc.outputs.protoc }}
           PROTOCYTE_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST: "1"
         run: >
-          uv run pytest -q
+          uv run pytest -q -m cmake_integration
           tests/test_cmake.py::test_msvc_shared_library_exports_reflection_to_consumer
 
       - name: Configure non-kernel smoke tests
@@ -481,7 +488,7 @@ jobs:
           PROTOCYTE_CI_REQUIRE_VISUAL_STUDIO_TEST: "1"
           PROTOCYTE_CI_VISUAL_STUDIO_TEST_ROOT: ${{ github.workspace }}/build/visual-studio-incremental
         run: >
-          uv run pytest -q
+          uv run pytest -q -m cmake_integration
           tests/test_cmake.py::test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import
           "tests/test_cmake.py::test_source_codegen_tracks_import_shadow_addition_and_removal[visual-studio]"
           "tests/test_cmake.py::test_source_codegen_tracks_import_directory_identity_changes[visual-studio]"
