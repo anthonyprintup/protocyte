@@ -1351,6 +1351,95 @@ def test_tool_timeout_zero_explicitly_disables_cmake_process_limit(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def _write_topology_only_prebuild_guard_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    repo_root = Path(__file__).resolve().parents[1]
+    witness = tmp_path / "witness.list"
+    timeout_record = tmp_path / "timeout.txt"
+    topology_script = tmp_path / "topology-check.cmake"
+    topology_script.write_text(
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "ProtocyteProcess.cmake").as_posix()}")',
+                "_protocyte_resolve_tool_timeout(resolved_timeout)",
+                f'file(WRITE "{timeout_record.as_posix()}" "${{resolved_timeout}}")',
+                'file(WRITE "${WITNESS_FILE}" "witness\\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def encode(value: Path | str) -> str:
+        return str(value).replace("\\", "/").encode("utf-8").hex()
+
+    witness_content = f"witness{os.linesep}"
+    witness.write_text(witness_content, encoding="utf-8")
+    expected_hash = hashlib.sha256(witness_content.encode("utf-8")).hexdigest()
+    manifest = tmp_path / "guard.list"
+    manifest.write_text(
+        "version=1\n"
+        "topology "
+        f"{encode('unused-plugin')} {encode('_cmake-import-scan-v1')} FALSE "
+        f"{encode(tmp_path / 'request')} {encode(witness)} {encode(tmp_path / 'guard.lock')} "
+        f"{expected_hash} {encode(topology_script)}\n",
+        encoding="utf-8",
+    )
+    return manifest, timeout_record
+
+
+@pytest.mark.parametrize(
+    ("configured_timeout", "expected_timeout"),
+    [(None, "300"), ("0", "0"), ("42.5", "42.5")],
+)
+def test_topology_only_prebuild_guard_preserves_timeout_semantics(
+    tmp_path: Path,
+    configured_timeout: str | None,
+    expected_timeout: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    manifest, timeout_record = _write_topology_only_prebuild_guard_fixture(tmp_path)
+    command = [
+        "cmake",
+        f"-DMANIFEST_FILE={manifest}",
+        "-DFAIL_ON_CHANGE=TRUE",
+    ]
+    if configured_timeout is not None:
+        command.append(f"-DPROTOCYTE_TOOL_TIMEOUT_SECONDS={configured_timeout}")
+    command.extend(["-P", str(repo_root / "cmake" / "ProtocytePreBuildGuard.cmake")])
+
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert timeout_record.read_text(encoding="utf-8") == expected_timeout
+
+
+@pytest.mark.parametrize("configured_timeout", ["not-a-timeout", "1;bad"])
+def test_topology_only_prebuild_guard_reports_malformed_timeout(
+    tmp_path: Path,
+    configured_timeout: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    manifest, _ = _write_topology_only_prebuild_guard_fixture(tmp_path)
+    result = subprocess.run(
+        [
+            "cmake",
+            f"-DMANIFEST_FILE={manifest}",
+            "-DFAIL_ON_CHANGE=TRUE",
+            f"-DPROTOCYTE_TOOL_TIMEOUT_SECONDS={configured_timeout}",
+            "-P",
+            str(repo_root / "cmake" / "ProtocytePreBuildGuard.cmake"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "PROTOCYTE_TOOL_TIMEOUT_SECONDS must be a non-negative decimal" in output
+    assert f"'{configured_timeout}'" in output
+
+
 def test_explicit_plugin_override_must_exist(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     missing = tmp_path / "missing" / "protoc-gen-protocyte"
@@ -1616,7 +1705,9 @@ def test_source_codegen_reports_plugin_without_private_import_scan(
     assert "Could NOT find Python" not in output
 
 
-def test_managed_import_scan_sanitizes_python_environment(tmp_path: Path) -> None:
+def test_managed_import_scan_sanitizes_python_environment_and_direct_guard_timeout_default(
+    tmp_path: Path,
+) -> None:
     if shutil.which("ninja") is None:
         _real_protoc_requirement_unavailable(
             "Ninja is required to verify managed import-scan isolation"
@@ -1684,7 +1775,7 @@ def test_managed_import_scan_sanitizes_python_environment(tmp_path: Path) -> Non
     poisoned_environment = os.environ.copy()
     poisoned_environment["PYTHONPATH"] = str(poison_path)
     poisoned_environment["PYTHONHOME"] = str(poison_home)
-    subprocess.run(
+    direct_guard = subprocess.run(
         [
             "cmake",
             f"-DMANIFEST_FILE={guard_manifests[0]}",
@@ -1692,9 +1783,12 @@ def test_managed_import_scan_sanitizes_python_environment(tmp_path: Path) -> Non
             "-P",
             str(repo_root / "cmake" / "ProtocytePreBuildGuard.cmake"),
         ],
-        check=True,
+        check=False,
+        capture_output=True,
+        text=True,
         env=poisoned_environment,
     )
+    assert direct_guard.returncode == 0, direct_guard.stdout + direct_guard.stderr
 
 
 def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> None:
