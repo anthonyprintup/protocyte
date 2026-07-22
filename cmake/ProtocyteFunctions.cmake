@@ -2076,11 +2076,33 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
     if("${protocyte_plugin_executable}" STREQUAL "")
         message(FATAL_ERROR "Protocyte descriptor discovery requires a prepared plugin executable")
     endif()
+    _protocyte_get_internal(protocyte_plugin_is_managed PLUGIN_IS_MANAGED)
+    if("${protocyte_plugin_is_managed}" STREQUAL "")
+        set(protocyte_plugin_is_managed FALSE)
+    endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${protocyte_plugin_executable}")
+
+    # The managed plugin is part of Protocyte's own environment boundary, so
+    # do not let its Python startup inherit caller import-path overrides.
+    # Explicit plugins remain caller-owned and deliberately retain their
+    # ambient environment.
+    set(descriptor_discovery_launcher "${protocyte_plugin_executable}")
+    if(protocyte_plugin_is_managed)
+        set(
+            descriptor_discovery_launcher
+            "${CMAKE_COMMAND}"
+            -E
+            env
+            --unset=PYTHONHOME
+            --unset=PYTHONPATH
+            "${protocyte_plugin_executable}"
+        )
+    endif()
 
     execute_process(
         COMMAND
-            "${protocyte_plugin_executable}" descriptor-set list "${descriptor_set}"
+            ${descriptor_discovery_launcher}
+            descriptor-set list "${descriptor_set}"
         OUTPUT_VARIABLE discovered
         ERROR_VARIABLE discover_error
         RESULT_VARIABLE discover_result
@@ -2096,6 +2118,21 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
         if(discover_error STREQUAL "")
             set(discover_error "<no standard error>")
         endif()
+        if(protocyte_plugin_is_managed)
+            string(
+                CONCAT
+                discover_plugin_hint
+                "Protocyte's managed plugin is expected to support the 'descriptor-set list' command. "
+                "Reconfigure after replacing the managed environment, or report this failure with the output above."
+            )
+        else()
+            string(
+                CONCAT
+                discover_plugin_hint
+                "PROTOCYTE_PLUGIN_EXECUTABLE overrides must point to a Protocyte plugin that supports "
+                "the 'descriptor-set list' command."
+            )
+        endif()
         message(
             FATAL_ERROR
             "Failed to inspect descriptor set '${descriptor_set}'.\n\n"
@@ -2103,8 +2140,7 @@ function(_protocyte_discover_descriptor_set out_var descriptor_set)
             "Exit code: ${discover_result}\n\n"
             "Standard output:\n${discovered_output}\n\n"
             "Standard error:\n${discover_error}\n\n"
-            "PROTOCYTE_PLUGIN_EXECUTABLE overrides must point to a Protocyte plugin that supports "
-            "the 'descriptor-set list' command."
+            "${discover_plugin_hint}"
         )
     endif()
     _protocyte_parse_discovered_descriptor_names(discovered_list "${discovered}")
