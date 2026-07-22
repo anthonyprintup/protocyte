@@ -10464,13 +10464,7 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         publication_anchor, publication_instrumentation
     )
 
-    output_publication_anchor = (
-        "    file(\n"
-        '        RENAME "${staged_generation_output}" "${generation_output}"\n'
-        "        NO_REPLACE\n"
-        "        RESULT output_publish_result\n"
-        "    )\n"
-    )
+    output_publication_anchor = '    file(RENAME "${staged_generation_output}" "${generation_output}" NO_REPLACE RESULT output_publish_result)\n'
     output_publication_instrumentation = (
         "    if(\n"
         "        DEFINED PROTOCYTE_TEST_FAIL_OUTPUT_PUBLICATION_INDEX\n"
@@ -10519,13 +10513,9 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
 
     backup_abort_anchor = (
         "        endif()\n"
-        "        list(REMOVE_AT generation_operation_states ${generation_output_index})\n"
-        "        list(\n"
-        "            INSERT\n"
-        "            generation_operation_states\n"
-        "            ${generation_output_index}\n"
-        '            "backed-up"\n'
-        "        )\n"
+        "    endif()\n"
+        "endforeach()\n\n"
+        "foreach(generation_output_index RANGE 0 ${last_generation_output_index})\n"
     )
     backup_abort_instrumentation = (
         "        endif()\n"
@@ -10543,13 +10533,8 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
 
     publish_abort_anchor = (
         "    endif()\n"
-        "    list(REMOVE_AT generation_operation_states ${generation_output_index})\n"
-        "    list(\n"
-        "        INSERT\n"
-        "        generation_operation_states\n"
-        "        ${generation_output_index}\n"
-        '        "published"\n'
-        "    )\n"
+        "endforeach()\n"
+        "_protocyte_generation_transaction_paths(transaction_active unused_transaction_releasing transaction_committed)\n"
     )
     publish_abort_instrumentation = (
         "    endif()\n"
@@ -10596,6 +10581,18 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     recovery_prefix = transaction_source[:recovery_offset]
     recovery_source = transaction_source[recovery_offset:]
 
+    release_phase_anchor = "        set(transaction_is_releasing TRUE)\n"
+    release_phase_instrumentation = (
+        release_phase_anchor
+        + "        if(DEFINED PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RELEASE_PHASE)\n"
+        + '            message(FATAL_ERROR "injected recovery abort after owner-release phase")\n'
+        + "        endif()\n"
+    )
+    assert recovery_source.count(release_phase_anchor) == 1
+    recovery_source = recovery_source.replace(
+        release_phase_anchor, release_phase_instrumentation
+    )
+
     def instrument_recovery_action(
         anchor: str, counter: str, option: str, label: str
     ) -> None:
@@ -10623,11 +10620,7 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         "output removal",
     )
     instrument_recovery_action(
-        "            file(\n"
-        '                RENAME "${backup_generation_output}" "${generation_output}"\n'
-        "                NO_REPLACE\n"
-        "                RESULT restore_output_result\n"
-        "            )\n",
+        '            file(RENAME "${backup_generation_output}" "${generation_output}" NO_REPLACE RESULT restore_output_result)\n',
         "protocyte_test_recovery_restore_count",
         "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RESTORE_INDEX",
         "output restoration",
@@ -10637,6 +10630,12 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         "protocyte_test_recovery_owner_release_count",
         "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_OWNER_RELEASE_INDEX",
         "owner release",
+    )
+    instrument_recovery_action(
+        '        file(REMOVE "${transaction_committed_witness}")\n',
+        "protocyte_test_recovery_witness_removal_count",
+        "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_WITNESS_REMOVAL",
+        "owner witness removal",
     )
     transaction_source = recovery_prefix + recovery_source
     instrumented_script = script_dir / "ProtocyteGenerate.cmake"
@@ -11460,6 +11459,96 @@ def test_generation_transaction_recovers_subprocess_abort_before_or_after_commit
         )
 
 
+def test_generation_transaction_committed_journal_requires_every_planned_claim(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_BEFORE_STAGING_CLEANUP=TRUE",
+    )
+    assert interrupted.returncode != 0
+    assert "injected generation transaction abort" in (
+        interrupted.stdout + interrupted.stderr
+    )
+    transaction = next(
+        (tmp_path / "output-locks").glob(".protocyte-generation-*.committed")
+    )
+    removed_claim = next((tmp_path / "output-locks").glob("*.owner"))
+    removed_claim.unlink()
+    staging_directory = next(tmp_path.glob(".protocyte-generation-staging-*"))
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    before_retry = {
+        "outputs": _path_tree_snapshot(output_directory),
+        "staging": _path_tree_snapshot(staging_directory),
+        "locks": _path_tree_snapshot(tmp_path / "output-locks"),
+        "owner-root": _path_tree_snapshot(root_owner.parent),
+    }
+
+    retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert retry.returncode != 0
+    assert "could not safely recover an interrupted generation transaction" in (
+        retry.stdout + retry.stderr
+    )
+    assert transaction.is_file()
+    assert _path_tree_snapshot(output_directory) == before_retry["outputs"]
+    assert _path_tree_snapshot(staging_directory) == before_retry["staging"]
+    assert _path_tree_snapshot(tmp_path / "output-locks") == before_retry["locks"]
+    assert _path_tree_snapshot(root_owner.parent) == before_retry["owner-root"]
+
+
+def test_generation_transaction_valid_committed_journal_is_cleaned(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_BEFORE_STAGING_CLEANUP=TRUE",
+    )
+    assert interrupted.returncode != 0
+    assert list((tmp_path / "output-locks").glob(".protocyte-generation-*.committed"))
+
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    assert _committed_owner_build_hash(root_owner, root_owner) == (
+        _build_tree_owner_hash(owner_build_dir)
+    )
+
+
 def test_generation_transaction_backup_link_tamper_fails_closed(tmp_path: Path) -> None:
     source_dir = tmp_path / "project"
     owner_build_dir = tmp_path / "owner-build"
@@ -11863,9 +11952,60 @@ def test_generation_transaction_rejects_old_authoritative_journal_without_mutati
         (tmp_path / "output-locks").glob(".protocyte-generation-*.active")
     )
     transaction.write_text(
-        transaction.read_text(encoding="utf-8").replace("version=5", "version=4", 1),
+        transaction.read_text(encoding="utf-8").replace("version=6", "version=5", 1),
         encoding="utf-8",
     )
+    staging_directory = next(tmp_path.glob(".protocyte-generation-staging-*"))
+    before_retry = {
+        "outputs": _path_tree_snapshot(output_directory),
+        "staging": _path_tree_snapshot(staging_directory),
+        "locks": _path_tree_snapshot(tmp_path / "output-locks"),
+    }
+
+    retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert retry.returncode != 0
+    assert "could not safely recover an interrupted generation transaction" in (
+        retry.stdout + retry.stderr
+    )
+    assert _path_tree_snapshot(output_directory) == before_retry["outputs"]
+    assert _path_tree_snapshot(staging_directory) == before_retry["staging"]
+    assert _path_tree_snapshot(tmp_path / "output-locks") == before_retry["locks"]
+
+
+def test_generation_transaction_rejects_truncated_journal_before_rollback(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    output_directory.mkdir()
+    for relative_path in ("demo_0.protocyte.hpp", "demo_0.protocyte.cpp"):
+        (output_directory / relative_path).write_text("// prior\n", encoding="utf-8")
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=0",
+    )
+    assert interrupted.returncode != 0
+    transaction = next(
+        (tmp_path / "output-locks").glob(".protocyte-generation-*.active")
+    )
+    transaction_bytes = transaction.read_bytes()
+    assert transaction_bytes.endswith(b"\n")
+    transaction.write_bytes(transaction_bytes[:-7])
     staging_directory = next(tmp_path.glob(".protocyte-generation-staging-*"))
     before_retry = {
         "outputs": _path_tree_snapshot(output_directory),
@@ -11922,7 +12062,7 @@ def test_generation_transaction_journal_contains_relative_plan_and_hashes_only(
 
 
 @pytest.mark.parametrize("tamper", ["bytes", "directory", "symlink"])
-def test_generation_transaction_rejects_tampered_remove_pending_witness(
+def test_generation_transaction_rejects_tampered_owner_release_witness(
     tmp_path: Path,
     tamper: str,
 ) -> None:
@@ -11941,8 +12081,20 @@ def test_generation_transaction_rejects_tampered_remove_pending_witness(
         "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT=TRUE",
     )
     assert interrupted.returncode != 0
+    release_interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RELEASE_PHASE=TRUE",
+        reuse_build=True,
+    )
+    assert release_interrupted.returncode != 0
+    assert "injected recovery abort after owner-release phase" in (
+        release_interrupted.stdout + release_interrupted.stderr
+    )
     transaction = next(
-        (tmp_path / "output-locks").glob(".protocyte-generation-*.active")
+        (tmp_path / "output-locks").glob(".protocyte-generation-*.releasing")
     )
     transaction_lines = transaction.read_text(encoding="utf-8").splitlines()
     transaction_id = next(
@@ -11950,15 +12102,6 @@ def test_generation_transaction_rejects_tampered_remove_pending_witness(
         for line in transaction_lines
         if line.startswith("owner-transaction-sha256=")
     )
-    transaction_lines = [
-        "owner-witness-state=remove-pending"
-        if line == "owner-witness-state=retained"
-        else "owner-recovery=released"
-        if line.startswith("owner-recovery=")
-        else line
-        for line in transaction_lines
-    ]
-    transaction.write_text("\n".join(transaction_lines) + "\n", encoding="utf-8")
     root_owner, _ = _out_dir_owner_record_paths(output_directory)
     for owner_record in [root_owner, *(tmp_path / "output-locks").glob("*.owner")]:
         owner_record.unlink()
@@ -12003,6 +12146,211 @@ def test_generation_transaction_rejects_tampered_remove_pending_witness(
     )
     assert _path_tree_snapshot(tmp_path / "output-locks") == before_retry["locks"]
     assert _path_tree_snapshot(root_owner.parent) == before_retry["owner-root"]
+
+
+def test_generation_transaction_recovers_after_owner_release_phase_rename(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT=TRUE",
+    )
+    assert interrupted.returncode != 0
+    phase_interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RELEASE_PHASE=TRUE",
+        reuse_build=True,
+    )
+    assert phase_interrupted.returncode != 0
+    assert "injected recovery abort after owner-release phase" in (
+        phase_interrupted.stdout + phase_interrupted.stderr
+    )
+    assert list((tmp_path / "output-locks").glob(".protocyte-generation-*.releasing"))
+
+    _make_fake_protoc_fail_in_build(source_dir, owner_build_dir)
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode != 0
+    assert "simulated protoc failure" in recovered.stdout + recovered.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+
+
+def test_generation_transaction_recovers_after_owner_witness_removal(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT=TRUE",
+    )
+    assert interrupted.returncode != 0
+    witness_interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_RECOVERY_WITNESS_REMOVAL=1",
+        reuse_build=True,
+    )
+    assert witness_interrupted.returncode != 0
+    assert "injected recovery abort after owner witness removal" in (
+        witness_interrupted.stdout + witness_interrupted.stderr
+    )
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    assert not root_owner.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    assert list((tmp_path / "output-locks").glob(".protocyte-generation-*.releasing"))
+
+    _make_fake_protoc_fail_in_build(source_dir, owner_build_dir)
+    recovered = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert recovered.returncode != 0
+    assert "simulated protoc failure" in recovered.stdout + recovered.stderr
+    assert not list((tmp_path / "output-locks").glob(".protocyte-generation-*"))
+
+
+def test_generation_transaction_rejects_releasing_journal_without_witness_with_remaining_claims(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_COMMIT=TRUE",
+    )
+    assert interrupted.returncode != 0
+    phase_interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RELEASE_PHASE=TRUE",
+        reuse_build=True,
+    )
+    assert phase_interrupted.returncode != 0
+    root_owner, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in root_owner.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        root_owner, owner_fields["transaction-sha256"], "committed"
+    )
+    witness.unlink()
+    before_retry = {
+        "outputs": _path_tree_snapshot(output_directory),
+        "locks": _path_tree_snapshot(tmp_path / "output-locks"),
+        "owner-root": _path_tree_snapshot(root_owner.parent),
+    }
+
+    retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert retry.returncode != 0
+    assert "could not safely recover an interrupted generation transaction" in (
+        retry.stdout + retry.stderr
+    )
+    assert _path_tree_snapshot(output_directory) == before_retry["outputs"]
+    assert _path_tree_snapshot(tmp_path / "output-locks") == before_retry["locks"]
+    assert _path_tree_snapshot(root_owner.parent) == before_retry["owner-root"]
+
+
+def test_generation_transaction_rejects_releasing_journal_before_output_restoration(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    owner_build_dir = tmp_path / "owner-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+    output_directory.mkdir()
+    for relative_path in ("demo_0.protocyte.hpp", "demo_0.protocyte.cpp"):
+        (output_directory / relative_path).write_text("// prior\n", encoding="utf-8")
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_ABORT_AFTER_PUBLISH_INDEX=0",
+    )
+    assert interrupted.returncode != 0
+    active = next((tmp_path / "output-locks").glob(".protocyte-generation-*.active"))
+    releasing = active.with_name(active.name.removesuffix(".active") + ".releasing")
+    active.replace(releasing)
+    staging_directory = next(tmp_path.glob(".protocyte-generation-staging-*"))
+    before_retry = {
+        "outputs": _path_tree_snapshot(output_directory),
+        "staging": _path_tree_snapshot(staging_directory),
+        "locks": _path_tree_snapshot(tmp_path / "output-locks"),
+    }
+
+    retry = _run_direct_owner_generation(
+        source_dir,
+        owner_build_dir,
+        output_directory,
+        instrumented_script,
+        reuse_build=True,
+    )
+    assert retry.returncode != 0
+    assert "could not safely recover an interrupted generation transaction" in (
+        retry.stdout + retry.stderr
+    )
+    assert _path_tree_snapshot(output_directory) == before_retry["outputs"]
+    assert _path_tree_snapshot(staging_directory) == before_retry["staging"]
+    assert _path_tree_snapshot(tmp_path / "output-locks") == before_retry["locks"]
 
 
 @pytest.mark.parametrize(
@@ -12224,6 +12572,46 @@ def test_generation_transaction_recovers_more_than_256_owner_markers(
     assert _committed_owner_build_hash(marker, marker) == (
         _build_tree_owner_hash(fresh_build_dir)
     )
+
+
+def test_generation_transaction_publication_scales_near_linearly(
+    tmp_path: Path,
+) -> None:
+    """Keep fake-protoc publication below the old journal-rewrite cliff."""
+
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    )
+    timings: dict[tuple[int, str], float] = {}
+    for descriptor_count in (16, 64):
+        source_dir = tmp_path / f"project-{descriptor_count}"
+        build_dir = tmp_path / f"build-{descriptor_count}"
+        output_directory = tmp_path / f"generated-{descriptor_count}"
+        _write_out_dir_owner_project(source_dir, output_directory)
+        _make_direct_owner_fake_protoc_write_outputs(
+            source_dir, output_directory, descriptor_count
+        )
+        for phase in ("first", "repeat"):
+            started = time.perf_counter()
+            result = _run_direct_owner_generation(
+                source_dir,
+                build_dir,
+                output_directory,
+                generation_script,
+                reuse_build=phase == "repeat",
+                descriptor_count=descriptor_count,
+            )
+            timings[descriptor_count, phase] = time.perf_counter() - started
+            assert result.returncode == 0, result.stdout + result.stderr
+
+    # The absolute limit leaves headroom for loaded CI hosts; the ratio rejects
+    # reintroducing per-output whole-plan rewrites while allowing small fixed
+    # process/CMake startup costs to dominate the 16-descriptor sample.
+    for phase in ("first", "repeat"):
+        small = timings[16, phase]
+        large = timings[64, phase]
+        assert large < 12.0, (phase, small, large)
+        assert large < small * 6.0 + 2.0, (phase, small, large)
 
 
 def test_nested_out_dirs_cannot_claim_the_same_generated_output(
