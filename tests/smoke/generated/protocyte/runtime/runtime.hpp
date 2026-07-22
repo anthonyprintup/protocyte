@@ -36,6 +36,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <type_traits>
 
@@ -2618,15 +2619,29 @@ namespace protocyte {
                 if (!next_capacity) {
                     return protocyte::unexpected(next_capacity.error());
                 }
-                if (const auto st = reserve(*next_capacity); !st) {
-                    return protocyte::unexpected(st.error());
-                }
+                return reallocate_and_emplace_back(*next_capacity, protocyte::forward<Args>(args)...);
             }
             new (&data_[size_]) T {protocyte::forward<Args>(args)...};
             return data_[size_++];
         }
 
-        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
+        Status push_back(const T &value) noexcept {
+            if constexpr (requires { T {value}; }) {
+                return emplace_back(value).status();
+            } else {
+                if (size_ == max_size()) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                if (ctx_ == nullptr) {
+                    return protocyte::unexpected(ErrorCode::invalid_argument, {});
+                }
+                auto copied = protocyte::copy_value(ctx_, value);
+                if (!copied) {
+                    return copied.status();
+                }
+                return emplace_back(protocyte::move(*copied)).status();
+            }
+        }
 
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
@@ -2885,6 +2900,45 @@ namespace protocyte {
             return geometric < requested ? requested : geometric;
         }
 
+        template<class... Args>
+        Result<T &> reallocate_and_emplace_back(const usize requested, Args &&...args) noexcept {
+            if (ctx_ == nullptr) {
+                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+            }
+            const auto bytes = checked_mul(requested, sizeof(T));
+            if (!bytes) {
+                return protocyte::unexpected(bytes.error());
+            }
+            auto *raw = Config::allocate(*ctx_, *bytes, alignof(T));
+            if (raw == nullptr) {
+                return protocyte::unexpected(ErrorCode::no_memory, {});
+            }
+            auto *next = static_cast<T *>(raw);
+
+            // Construct the appended value while aliased arguments still refer to
+            // live storage. Relocating first would leave push_back(move(data_[i]))
+            // and emplace_back(data_[i]) referring to destroyed elements. For a
+            // self-rvalue append, the tail receives the original value and the
+            // relocated source element receives its moved-from state.
+            new (&next[size_]) T {protocyte::forward<Args>(args)...};
+            if constexpr (::std::is_trivially_copyable_v<T> && ::std::is_trivially_destructible_v<T>) {
+                if (size_ != 0u) {
+                    ::std::memcpy(next, data_, size_ * sizeof(T));
+                }
+            } else {
+                for (usize i {}; i < size_; ++i) {
+                    new (&next[i]) T {protocyte::move(data_[i])};
+                    data_[i].~T();
+                }
+            }
+            if (data_ != nullptr) {
+                Config::deallocate(*ctx_, data_, capacity_ * sizeof(T), alignof(T));
+            }
+            data_ = next;
+            capacity_ = requested;
+            return data_[size_++];
+        }
+
         void destroy() noexcept {
             clear();
             if (data_ != nullptr && ctx_ != nullptr) {
@@ -3033,7 +3087,20 @@ namespace protocyte {
             return *ptr(size_++);
         }
 
-        Status push_back(const T &value) noexcept { return emplace_back(value).status(); }
+        Status push_back(const T &value) noexcept {
+            if constexpr (requires { T {value}; }) {
+                return emplace_back(value).status();
+            } else {
+                if (size_ >= Max) {
+                    return protocyte::unexpected(ErrorCode::count_limit, {});
+                }
+                auto copied = protocyte::copy_value(context(), value);
+                if (!copied) {
+                    return copied.status();
+                }
+                return emplace_back(protocyte::move(*copied)).status();
+            }
+        }
         Status push_back(T &&value) noexcept { return emplace_back(protocyte::move(value)).status(); }
 
         Status assign(const Span<const u8> view) noexcept
@@ -3840,7 +3907,70 @@ namespace protocyte {
             return {};
         }
 
+        Status insert_or_assign(const K &key, const V &value) noexcept {
+            if constexpr (requires { K {key}; }) {
+                if constexpr (requires { V {value}; }) {
+                    return insert_or_assign_impl(key, value);
+                } else {
+                    auto copied_value = protocyte::copy_value(ctx_, value);
+                    if (!copied_value) {
+                        return copied_value.status();
+                    }
+                    return insert_or_assign_impl(key, protocyte::move(*copied_value));
+                }
+            } else {
+                auto copied_key = protocyte::copy_value(ctx_, key);
+                if (!copied_key) {
+                    return copied_key.status();
+                }
+                if constexpr (requires { V {value}; }) {
+                    return insert_or_assign_impl(protocyte::move(*copied_key), value);
+                } else {
+                    auto copied_value = protocyte::copy_value(ctx_, value);
+                    if (!copied_value) {
+                        return copied_value.status();
+                    }
+                    return insert_or_assign_impl(protocyte::move(*copied_key), protocyte::move(*copied_value));
+                }
+            }
+        }
+
+        Status insert_or_assign(const K &key, V &&value) noexcept {
+            if constexpr (requires { K {key}; }) {
+                return insert_or_assign_impl(key, protocyte::move(value));
+            } else {
+                auto copied_key = protocyte::copy_value(ctx_, key);
+                if (!copied_key) {
+                    return copied_key.status();
+                }
+                return insert_or_assign_impl(protocyte::move(*copied_key), protocyte::move(value));
+            }
+        }
+
+        Status insert_or_assign(K &&key, const V &value) noexcept {
+            if constexpr (requires { V {value}; }) {
+                return insert_or_assign_impl(protocyte::move(key), value);
+            } else {
+                auto copied_value = protocyte::copy_value(ctx_, value);
+                if (!copied_value) {
+                    return copied_value.status();
+                }
+                return insert_or_assign_impl(protocyte::move(key), protocyte::move(*copied_value));
+            }
+        }
+
         Status insert_or_assign(K &&key, V &&value) noexcept {
+            return insert_or_assign_impl(protocyte::move(key), protocyte::move(value));
+        }
+
+    protected:
+        template<class T> static bool begins_within_key_storage(const K &key, const T &value) noexcept {
+            const uptr key_address {reinterpret_cast<uptr>(::std::addressof(key))};
+            const uptr value_address {reinterpret_cast<uptr>(::std::addressof(value))};
+            return value_address >= key_address && value_address - key_address < sizeof(K);
+        }
+
+        template<class KeyArg, class ValueArg> Status insert_or_assign_impl(KeyArg &&key, ValueArg &&value) noexcept {
             if (buckets_.size()) {
                 usize existing_index {Config::hash(key) & (buckets_.size() - 1u)};
                 for (;;) {
@@ -3849,21 +3979,52 @@ namespace protocyte {
                         break;
                     }
                     if (Config::equal((*bucket).key, key)) {
-                        K stored_key {protocyte::move((*bucket).key)};
+                        // The mapped argument can designate the matched key or
+                        // one of its base/member subobjects. Stage it before
+                        // moving the key so even destructive moves cannot make
+                        // a later copy observe a moved-from value. An xvalue is
+                        // still an alias, so it requires the same protection.
+                        if (begins_within_key_storage((*bucket).key, value)) {
+                            if constexpr (CopyValueCompatible<::std::remove_cvref_t<ValueArg>, Context>) {
+                                auto copied_value = protocyte::copy_value(ctx_, value);
+                                if (!copied_value) {
+                                    return copied_value.status();
+                                }
+                                Entry replacement {protocyte::move((*bucket).key), protocyte::move(*copied_value)};
+                                bucket.reset();
+                                static_cast<void>(bucket.emplace(protocyte::move(replacement.key),
+                                                                 protocyte::move(replacement.value)));
+                                return {};
+                            } else {
+                                return protocyte::unexpected(ErrorCode::invalid_argument, {});
+                            }
+                        }
+                        Entry replacement {protocyte::move((*bucket).key), protocyte::forward<ValueArg>(value)};
                         bucket.reset();
-                        static_cast<void>(bucket.emplace(protocyte::move(stored_key), protocyte::move(value)));
+                        static_cast<void>(
+                            bucket.emplace(protocyte::move(replacement.key), protocyte::move(replacement.value)));
                         return {};
                     }
                     existing_index = (existing_index + 1u) & (buckets_.size() - 1u);
                 }
             }
-            if (const auto st = ensure_capacity_for_one_more(); !st) {
-                return st;
+            const auto next_bucket_count = bucket_count_for_one_more();
+            if (!next_bucket_count) {
+                return next_bucket_count.status();
             }
+            if (*next_bucket_count != 0u) {
+                return rehash_and_insert(*next_bucket_count, protocyte::forward<KeyArg>(key),
+                                         protocyte::forward<ValueArg>(value));
+            }
+            return insert_without_rehash(protocyte::forward<KeyArg>(key), protocyte::forward<ValueArg>(value));
+        }
+
+        template<class KeyArg, class ValueArg> Status insert_without_rehash(KeyArg &&key, ValueArg &&value) noexcept {
             usize index {Config::hash(key) & (buckets_.size() - 1u)};
             for (;;) {
                 if (auto &bucket = buckets_[index]; !bucket.has_value()) {
-                    static_cast<void>(bucket.emplace(protocyte::move(key), protocyte::move(value)));
+                    static_cast<void>(
+                        bucket.emplace(protocyte::forward<KeyArg>(key), protocyte::forward<ValueArg>(value)));
                     ++size_;
                     return {};
                 }
@@ -3871,7 +4032,6 @@ namespace protocyte {
             }
         }
 
-    protected:
         static Result<usize> bucket_count_for(const usize count) noexcept {
             if (count > max_size()) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
@@ -3887,17 +4047,39 @@ namespace protocyte {
             return desired;
         }
 
-        Status ensure_capacity_for_one_more() noexcept {
+        Result<usize> bucket_count_for_one_more() const noexcept {
             const auto next_size = checked_add(size_, 1u);
             if (!next_size) {
-                return next_size.status();
+                return protocyte::unexpected(next_size.error());
             }
             if (*next_size > max_size()) {
                 return protocyte::unexpected(ErrorCode::count_limit, {});
             }
             if (buckets_.empty() || *next_size >= rehash_threshold_for(buckets_.size())) {
-                return reserve(*next_size);
+                return bucket_count_for(*next_size);
             }
+            return usize {};
+        }
+
+        template<class KeyArg, class ValueArg>
+        Status rehash_and_insert(const usize bucket_count, KeyArg &&key, ValueArg &&value) noexcept {
+            HashMap next {ctx_};
+            if (const auto st = next.buckets_.resize_default(bucket_count); !st) {
+                return st;
+            }
+
+            // Consume the pending entry while aliased arguments still refer to
+            // live buckets. The allocation above is the only fallible step, so a
+            // failure leaves both the map and its arguments untouched.
+            static_cast<void>(
+                next.insert_without_rehash(protocyte::forward<KeyArg>(key), protocyte::forward<ValueArg>(value)));
+            for (auto &bucket : buckets_) {
+                if (bucket.has_value()) {
+                    static_cast<void>(
+                        next.insert_without_rehash(protocyte::move((*bucket).key), protocyte::move((*bucket).value)));
+                }
+            }
+            *this = protocyte::move(next);
             return {};
         }
 

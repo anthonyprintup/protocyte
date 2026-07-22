@@ -2717,6 +2717,732 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
     }
 }
 
+TEST_CASE("Runtime containers preserve aliased insertion arguments", "[smoke][runtime][alias]") {
+    struct LifetimeProbe {
+        size_t copies {};
+        size_t moves {};
+        size_t destructions {};
+        size_t live {};
+    };
+
+    struct AliasedValue {
+        LifetimeProbe *probe {};
+        int value {};
+
+        explicit AliasedValue(const int initial_value, LifetimeProbe *lifetime_probe = nullptr) noexcept:
+            probe {lifetime_probe}, value {initial_value} {
+            if (probe != nullptr) {
+                ++probe->live;
+            }
+        }
+        AliasedValue(const AliasedValue &other) noexcept: probe {other.probe}, value {other.value} {
+            if (probe != nullptr) {
+                ++probe->copies;
+                ++probe->live;
+            }
+        }
+        AliasedValue(AliasedValue &&other) noexcept: probe {other.probe}, value {other.value} {
+            if (probe != nullptr) {
+                ++probe->moves;
+                ++probe->live;
+            }
+            other.value = -1;
+        }
+        AliasedValue &operator=(const AliasedValue &) = delete;
+        AliasedValue &operator=(AliasedValue &&) = delete;
+        ~AliasedValue() noexcept {
+            if (probe != nullptr) {
+                ++probe->destructions;
+                --probe->live;
+            }
+            value = -99;
+        }
+    };
+
+    struct CopyableMoveTracked {
+        int value {};
+
+        explicit CopyableMoveTracked(const int initial_value = 0) noexcept: value {initial_value} {}
+        CopyableMoveTracked(const CopyableMoveTracked &) noexcept = default;
+        CopyableMoveTracked(CopyableMoveTracked &&other) noexcept: value {other.value} { other.value = -1; }
+        CopyableMoveTracked &operator=(const CopyableMoveTracked &) noexcept = default;
+        CopyableMoveTracked &operator=(CopyableMoveTracked &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+
+        bool operator==(const CopyableMoveTracked other) const noexcept { return value == other.value; }
+    };
+
+    struct MovePoisoningPart {
+        int value {};
+
+        explicit MovePoisoningPart(const int initial_value = 0) noexcept: value {initial_value} {}
+        MovePoisoningPart(const MovePoisoningPart &) noexcept = default;
+        MovePoisoningPart(MovePoisoningPart &&other) noexcept: value {other.value} { other.value = -1; }
+        MovePoisoningPart &operator=(const MovePoisoningPart &) noexcept = default;
+        MovePoisoningPart &operator=(MovePoisoningPart &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+
+        MovePoisoningPart *operator&() = delete;
+        const MovePoisoningPart *operator&() const = delete;
+    };
+
+    struct MemberCompositeKey {
+        int identity {};
+        MovePoisoningPart part {};
+
+        MemberCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            identity {initial_identity}, part {initial_part} {}
+        MemberCompositeKey(const MemberCompositeKey &) noexcept = default;
+        MemberCompositeKey(MemberCompositeKey &&other) noexcept:
+            identity {other.identity}, part {protocyte::move(other.part)} {}
+        MemberCompositeKey &operator=(const MemberCompositeKey &) noexcept = default;
+        MemberCompositeKey &operator=(MemberCompositeKey &&other) noexcept {
+            identity = other.identity;
+            part = protocyte::move(other.part);
+            return *this;
+        }
+
+        bool operator==(const MemberCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    struct BaseCompositeKey: MovePoisoningPart {
+        int identity {};
+
+        BaseCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            MovePoisoningPart {initial_part}, identity {initial_identity} {}
+        BaseCompositeKey(const BaseCompositeKey &) noexcept = default;
+        BaseCompositeKey(BaseCompositeKey &&other) noexcept:
+            MovePoisoningPart {protocyte::move(other)}, identity {other.identity} {}
+        BaseCompositeKey &operator=(const BaseCompositeKey &) noexcept = default;
+        BaseCompositeKey &operator=(BaseCompositeKey &&other) noexcept {
+            static_cast<MovePoisoningPart &>(*this) = protocyte::move(other);
+            identity = other.identity;
+            return *this;
+        }
+
+        BaseCompositeKey *operator&() noexcept { return this; }
+        const BaseCompositeKey *operator&() const noexcept { return this; }
+        bool operator==(const BaseCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    struct UncopyablePart {
+        int value {};
+
+        explicit UncopyablePart(const int initial_value = 0) noexcept: value {initial_value} {}
+        UncopyablePart(const UncopyablePart &) = delete;
+        UncopyablePart(UncopyablePart &&other) noexcept: value {other.value} { other.value = -1; }
+        UncopyablePart &operator=(const UncopyablePart &) = delete;
+        UncopyablePart &operator=(UncopyablePart &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+    };
+
+    struct UncopyableCompositeKey {
+        int identity {};
+        UncopyablePart part {};
+
+        UncopyableCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            identity {initial_identity}, part {initial_part} {}
+        UncopyableCompositeKey(const UncopyableCompositeKey &other) noexcept:
+            identity {other.identity}, part {other.part.value} {}
+        UncopyableCompositeKey(UncopyableCompositeKey &&other) noexcept:
+            identity {other.identity}, part {protocyte::move(other.part)} {}
+        UncopyableCompositeKey &operator=(const UncopyableCompositeKey &) = delete;
+        UncopyableCompositeKey &operator=(UncopyableCompositeKey &&other) noexcept {
+            identity = other.identity;
+            part = protocyte::move(other.part);
+            return *this;
+        }
+
+        bool operator==(const UncopyableCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    const auto free_retained_allocations = [](RetainedAllocationProbe &probe) noexcept {
+        for (size_t index {}; index < probe.count; ++index) { free(probe.pointers[index]); }
+    };
+
+    const auto mapped_value = [](auto &values, const protocyte::i32 key) noexcept -> AliasedValue * {
+        for (auto entry : values) {
+            if (entry.key == key) {
+                return &entry.value;
+            }
+        }
+        return nullptr;
+    };
+
+    constexpr protocyte::i32 aliased_key {1};
+    const protocyte::i32 colliding_new_key = [aliased_key]() noexcept {
+        for (protocyte::i32 candidate {100};; ++candidate) {
+            if ((Config::hash(candidate) & 15u) == (Config::hash(aliased_key) & 15u)) {
+                return candidate;
+            }
+        }
+    }();
+
+    const auto populate_rehash_map = [aliased_key](auto &values, LifetimeProbe &probe) {
+        require_success(values.insert_or_assign(aliased_key, AliasedValue {41, &probe}));
+        for (protocyte::i32 key {2}; key <= 5; ++key) {
+            require_success(values.insert_or_assign(key, AliasedValue {static_cast<int>(key)}));
+        }
+    };
+
+    SECTION("Vector consumes lvalue and rvalue elements before reallocation invalidates them") {
+        RetainedAllocationProbe allocation_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+
+        LifetimeProbe lvalue_probe {};
+        {
+            Config::Vector<AliasedValue> lvalue_values(&ctx);
+            require_success(lvalue_values.reserve(1u));
+            require_success(lvalue_values.emplace_back(41, &lvalue_probe));
+            require_success(lvalue_values.emplace_back(lvalue_values[0]));
+            REQUIRE(lvalue_values.size() == 2u);
+            CHECK(lvalue_values[0].value == 41);
+            CHECK(lvalue_values[1].value == 41);
+            CHECK(lvalue_probe.copies == 1u);
+            CHECK(lvalue_probe.moves == 1u);
+            CHECK(lvalue_probe.destructions == 1u);
+            CHECK(lvalue_probe.live == 2u);
+        }
+        CHECK(lvalue_probe.destructions == 3u);
+        CHECK(lvalue_probe.live == 0u);
+
+        LifetimeProbe rvalue_probe {};
+        {
+            Config::Vector<AliasedValue> rvalue_values(&ctx);
+            require_success(rvalue_values.reserve(1u));
+            require_success(rvalue_values.emplace_back(42, &rvalue_probe));
+            require_success(rvalue_values.push_back(protocyte::move(rvalue_values[0])));
+            REQUIRE(rvalue_values.size() == 2u);
+            CHECK(rvalue_values[0].value == -1);
+            CHECK(rvalue_values[1].value == 42);
+            CHECK(rvalue_probe.copies == 0u);
+            CHECK(rvalue_probe.moves == 2u);
+            CHECK(rvalue_probe.destructions == 1u);
+            CHECK(rvalue_probe.live == 2u);
+        }
+        CHECK(rvalue_probe.destructions == 3u);
+        CHECK(rvalue_probe.live == 0u);
+
+        CHECK(allocation_probe.count == 4u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("Vector leaves an aliased rvalue untouched when growth allocation fails") {
+        AllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        {
+            Config::Vector<AliasedValue> values(&ctx);
+            require_success(values.reserve(1u));
+            require_success(values.emplace_back(41, &lifetime_probe));
+            ctx.allocator = protocyte::Allocator {&allocation_probe, reject_allocation, smoke_deallocate};
+
+            require_failure(values.push_back(protocyte::move(values[0])), protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 1u);
+            CHECK(values[0].value == 41);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == 0u);
+            CHECK(lifetime_probe.destructions == 0u);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(allocation_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.destructions == 1u);
+        CHECK(lifetime_probe.live == 0u);
+    }
+
+    SECTION("HashMap replacement consumes aliased mapped values before resetting the bucket") {
+        auto ctx = make_context();
+        Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+        require_success(values.insert_or_assign(7, AliasedValue {41}));
+
+        auto lvalue_entry = *values.begin();
+        require_success(values.insert_or_assign(lvalue_entry.key, lvalue_entry.value));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).value.value == 41);
+
+        auto rvalue_entry = *values.begin();
+        require_success(values.insert_or_assign(rvalue_entry.key, protocyte::move(rvalue_entry.value)));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).value.value == 41);
+    }
+
+    SECTION("HashMap replacement stages a same-subobject mapped key before moving it") {
+        auto ctx = make_context();
+        Config::Map<CopyableMoveTracked, CopyableMoveTracked> values(&ctx);
+        require_success(values.insert_or_assign(CopyableMoveTracked {41}, CopyableMoveTracked {7}));
+
+        auto source = *values.begin();
+        require_success(values.insert_or_assign(source.key, source.key));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.value == 41);
+        CHECK((*values.begin()).value.value == 41);
+
+        CopyableMoveTracked equivalent_key {41};
+        const auto replacement_source = *values.begin();
+        require_success(values.insert_or_assign(equivalent_key, replacement_source.key));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.value == 41);
+        CHECK((*values.begin()).value.value == 41);
+        CHECK(equivalent_key.value == 41);
+    }
+
+    SECTION("HashMap replacement stages member and base subobject mapped arguments") {
+        auto ctx = make_context();
+
+        Config::Map<MemberCompositeKey, MovePoisoningPart> member_values(&ctx);
+        require_success(member_values.insert_or_assign(MemberCompositeKey {7, 41}, MovePoisoningPart {99}));
+        const auto member_source = *member_values.begin();
+        require_success(member_values.insert_or_assign(member_source.key, member_source.key.part));
+        REQUIRE(member_values.size() == 1u);
+        CHECK((*member_values.begin()).key.identity == 7);
+        CHECK((*member_values.begin()).key.part.value == 41);
+        CHECK((*member_values.begin()).value.value == 41);
+
+        auto &member_rvalue = const_cast<MovePoisoningPart &>(member_source.key.part);
+        require_success(member_values.insert_or_assign(member_source.key, protocyte::move(member_rvalue)));
+        REQUIRE(member_values.size() == 1u);
+        CHECK((*member_values.begin()).key.part.value == 41);
+        CHECK((*member_values.begin()).value.value == 41);
+
+        Config::Map<BaseCompositeKey, MovePoisoningPart> base_values(&ctx);
+        require_success(base_values.insert_or_assign(BaseCompositeKey {8, 51}, MovePoisoningPart {99}));
+        const auto base_source = *base_values.begin();
+        const auto &base_subobject = static_cast<const MovePoisoningPart &>(base_source.key);
+        require_success(base_values.insert_or_assign(base_source.key, base_subobject));
+        REQUIRE(base_values.size() == 1u);
+        CHECK((*base_values.begin()).key.identity == 8);
+        CHECK(static_cast<const MovePoisoningPart &>((*base_values.begin()).key).value == 51);
+        CHECK((*base_values.begin()).value.value == 51);
+    }
+
+    SECTION("HashMap rejects a noncopyable overlapping rvalue before replacement") {
+        auto ctx = make_context();
+        Config::Map<UncopyableCompositeKey, UncopyablePart> values(&ctx);
+        require_success(values.insert_or_assign(UncopyableCompositeKey {9, 61}, UncopyablePart {99}));
+
+        const auto source = *values.begin();
+        auto &overlapping_part = const_cast<UncopyablePart &>(source.key.part);
+        require_failure(values.insert_or_assign(source.key, protocyte::move(overlapping_part)),
+                        protocyte::ErrorCode::invalid_argument);
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.identity == 9);
+        CHECK((*values.begin()).key.part.value == 61);
+        CHECK((*values.begin()).value.value == 99);
+    }
+
+    SECTION("HashMap copies an aliased lvalue before a colliding rehash") {
+        RetainedAllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto copies_before = lifetime_probe.copies;
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+
+            require_success(values.insert_or_assign(colliding_new_key, *source));
+            REQUIRE(values.size() == 6u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            REQUIRE(mapped_value(values, colliding_new_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key)->value == 41);
+            CHECK(lifetime_probe.copies == copies_before + 1u);
+            CHECK(lifetime_probe.moves == moves_before + 1u);
+            CHECK(lifetime_probe.destructions == destructions_before + 1u);
+            CHECK(lifetime_probe.live == 2u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(allocation_probe.count == 2u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("HashMap moves an aliased rvalue before a colliding rehash") {
+        RetainedAllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+
+            require_success(values.insert_or_assign(colliding_new_key, protocyte::move(*source)));
+            REQUIRE(values.size() == 6u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            REQUIRE(mapped_value(values, colliding_new_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == -1);
+            CHECK(mapped_value(values, colliding_new_key)->value == 41);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == moves_before + 2u);
+            CHECK(lifetime_probe.destructions == destructions_before + 1u);
+            CHECK(lifetime_probe.live == 2u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(allocation_probe.count == 2u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("HashMap leaves an aliased lvalue untouched when a colliding rehash allocation fails") {
+        RetainedAllocationProbe retained_probe {};
+        AllocationProbe failure_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&retained_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto copies_before = lifetime_probe.copies;
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+            ctx.allocator = protocyte::Allocator {&failure_probe, reject_allocation, nullptr};
+
+            require_failure(values.insert_or_assign(colliding_new_key, *source), protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 5u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key) == nullptr);
+            CHECK(lifetime_probe.copies == copies_before);
+            CHECK(lifetime_probe.moves == moves_before);
+            CHECK(lifetime_probe.destructions == destructions_before);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(failure_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(retained_probe.count == 1u);
+        free_retained_allocations(retained_probe);
+    }
+
+    SECTION("HashMap leaves an aliased rvalue untouched when a colliding rehash allocation fails") {
+        RetainedAllocationProbe retained_probe {};
+        AllocationProbe failure_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&retained_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+            ctx.allocator = protocyte::Allocator {&failure_probe, reject_allocation, nullptr};
+
+            require_failure(values.insert_or_assign(colliding_new_key, protocyte::move(*source)),
+                            protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 5u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key) == nullptr);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == moves_before);
+            CHECK(lifetime_probe.destructions == destructions_before);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(failure_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(retained_probe.count == 1u);
+        free_retained_allocations(retained_probe);
+    }
+}
+
+TEST_CASE("HashMap deep-copies noncopyable String lvalue arguments transactionally", "[smoke][runtime][map]") {
+    using String = Config::String;
+    using StringMap = Config::Map<String, String>;
+
+    const auto assign_text = [](String &out, const std::string_view text) {
+        require_success(out.assign(protocyte::Span<const char> {text.data(), text.size()}));
+    };
+    const auto contains = [](const StringMap &values, const std::string_view expected_key,
+                             const std::string_view expected_value) noexcept {
+        for (const auto entry : values) {
+            if (view_equal(entry.key.view(), expected_key) && view_equal(entry.value.view(), expected_value)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    SECTION("lvalue strings are cloned into the map context") {
+        RetainedAllocationProbe destination_probe {};
+        auto source_ctx = make_context();
+        auto destination_ctx = make_context();
+        destination_ctx.allocator = protocyte::Allocator {&destination_probe, retain_allocation, nullptr};
+        {
+            StringMap values(&destination_ctx);
+            String key(&source_ctx);
+            String value(&source_ctx);
+            assign_text(key, "lvalue-key");
+            assign_text(value, "lvalue-value");
+
+            require_success(values.insert_or_assign(key, value));
+            REQUIRE(values.size() == 1u);
+            CHECK(contains(values, "lvalue-key", "lvalue-value"));
+            CHECK(view_equal(key.view(), std::string_view {"lvalue-key"}));
+            CHECK(view_equal(value.view(), std::string_view {"lvalue-value"}));
+            for (const auto entry : values) {
+                CHECK(entry.key.context() == &destination_ctx);
+                CHECK(entry.value.context() == &destination_ctx);
+            }
+
+            key.clear();
+            value.clear();
+            CHECK(contains(values, "lvalue-key", "lvalue-value"));
+        }
+        for (size_t index {}; index < destination_probe.count; ++index) { free(destination_probe.pointers[index]); }
+    }
+
+    SECTION("all key and value categories work with noncopyable strings") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+
+        String lvalue_key(&ctx);
+        String lvalue_value(&ctx);
+        assign_text(lvalue_key, "both-lvalues");
+        assign_text(lvalue_value, "both-lvalue-value");
+        require_success(values.insert_or_assign(lvalue_key, lvalue_value));
+        CHECK(contains(values, "both-lvalues", "both-lvalue-value"));
+        CHECK(view_equal(lvalue_key.view(), std::string_view {"both-lvalues"}));
+        CHECK(view_equal(lvalue_value.view(), std::string_view {"both-lvalue-value"}));
+
+        String lvalue_key_rvalue_value(&ctx);
+        String rvalue_value(&ctx);
+        assign_text(lvalue_key_rvalue_value, "lvalue-key");
+        assign_text(rvalue_value, "rvalue-value");
+        require_success(values.insert_or_assign(lvalue_key_rvalue_value, protocyte::move(rvalue_value)));
+        CHECK(contains(values, "lvalue-key", "rvalue-value"));
+        CHECK(view_equal(lvalue_key_rvalue_value.view(), std::string_view {"lvalue-key"}));
+        CHECK(rvalue_value.empty());
+
+        String rvalue_key_lvalue_value(&ctx);
+        String lvalue_value_rvalue_key(&ctx);
+        assign_text(rvalue_key_lvalue_value, "rvalue-key");
+        assign_text(lvalue_value_rvalue_key, "lvalue-value");
+        require_success(values.insert_or_assign(protocyte::move(rvalue_key_lvalue_value), lvalue_value_rvalue_key));
+        CHECK(contains(values, "rvalue-key", "lvalue-value"));
+        CHECK(view_equal(lvalue_value_rvalue_key.view(), std::string_view {"lvalue-value"}));
+        CHECK(rvalue_key_lvalue_value.empty());
+
+        String rvalue_key(&ctx);
+        String rvalue_mapped_value(&ctx);
+        assign_text(rvalue_key, "both-rvalues");
+        assign_text(rvalue_mapped_value, "both-rvalue-value");
+        require_success(values.insert_or_assign(protocyte::move(rvalue_key), protocyte::move(rvalue_mapped_value)));
+        CHECK(contains(values, "both-rvalues", "both-rvalue-value"));
+        CHECK(rvalue_key.empty());
+        CHECK(rvalue_mapped_value.empty());
+
+        String replacement(&ctx);
+        assign_text(replacement, "replacement-value");
+        require_success(values.insert_or_assign(lvalue_key, replacement));
+        REQUIRE(values.size() == 4u);
+        CHECK(contains(values, "both-lvalues", "replacement-value"));
+        CHECK(view_equal(lvalue_key.view(), std::string_view {"both-lvalues"}));
+        CHECK(view_equal(replacement.view(), std::string_view {"replacement-value"}));
+    }
+
+    SECTION("colliding lvalue strings survive rehash") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+        const auto insert_owned = [&ctx, &assign_text, &values](const std::string_view key_text,
+                                                                const std::string_view value_text) {
+            String key(&ctx);
+            String value(&ctx);
+            assign_text(key, key_text);
+            assign_text(value, value_text);
+            require_success(values.insert_or_assign(protocyte::move(key), protocyte::move(value)));
+        };
+
+        String seed_key(&ctx);
+        assign_text(seed_key, "rehash-seed");
+        const auto seed_bucket = Config::hash(seed_key) & 7u;
+        String seed_value(&ctx);
+        assign_text(seed_value, "seed-value");
+        require_success(values.insert_or_assign(protocyte::move(seed_key), protocyte::move(seed_value)));
+        insert_owned("rehash-one", "one");
+        insert_owned("rehash-two", "two");
+        insert_owned("rehash-three", "three");
+        insert_owned("rehash-four", "four");
+
+        String colliding_key(&ctx);
+        bool found_collision {};
+        for (char suffix {'0'}; suffix <= 'z'; ++suffix) {
+            const char candidate[] {'c', 'o', 'l', 'l', 'i', 'd', 'e', '-', suffix};
+            require_success(colliding_key.assign(protocyte::Span<const char> {candidate, std::size(candidate)}));
+            if ((Config::hash(colliding_key) & 7u) == seed_bucket) {
+                found_collision = true;
+                break;
+            }
+        }
+        REQUIRE(found_collision);
+        String colliding_value(&ctx);
+        assign_text(colliding_value, "colliding-lvalue-value");
+
+        require_success(values.insert_or_assign(colliding_key, colliding_value));
+        REQUIRE(values.size() == 6u);
+        CHECK(contains(values, "rehash-seed", "seed-value"));
+        CHECK(
+            contains(values, std::string_view {colliding_key.data(), colliding_key.size()}, "colliding-lvalue-value"));
+        CHECK(view_equal(colliding_value.view(), std::string_view {"colliding-lvalue-value"}));
+
+        colliding_key.clear();
+        colliding_value.clear();
+        CHECK(contains(values, "rehash-seed", "seed-value"));
+    }
+
+    SECTION("failed overlapping rvalue copy leaves the map and source unchanged") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+        String key(&ctx);
+        String value(&ctx);
+        assign_text(key, "stable-key");
+        assign_text(value, "stable-value");
+        require_success(values.insert_or_assign(protocyte::move(key), protocyte::move(value)));
+
+        auto source = *values.begin();
+        FailingAllocationProbe failure_probe {.successful_calls_before_failure = 1u};
+        ctx.allocator = protocyte::Allocator {&failure_probe, fail_after_allocations, smoke_deallocate};
+        auto &overlapping_key = const_cast<String &>(source.key);
+
+        require_failure(values.insert_or_assign(source.key, protocyte::move(overlapping_key)),
+                        protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(contains(values, "stable-key", "stable-value"));
+        CHECK(view_equal(source.key.view(), std::string_view {"stable-key"}));
+        CHECK(view_equal(source.value.view(), std::string_view {"stable-value"}));
+        CHECK(failure_probe.calls == 2u);
+    }
+}
+
+TEST_CASE("Sequence containers deep-copy noncopyable String lvalues transactionally", "[smoke][runtime][sequence]") {
+    using String = Config::String;
+
+    const auto assign_text = [](String &out, const std::string_view text) {
+        require_success(out.assign(protocyte::Span<const char> {text.data(), text.size()}));
+    };
+
+    SECTION("Vector clones lvalues into its context before self-aliasing growth") {
+        auto source_ctx = make_context();
+        String source(&source_ctx);
+        assign_text(source, "vector-lvalue");
+
+        auto destination_ctx = make_context();
+        Config::Vector<String> values(&destination_ctx);
+        require_success(values.push_back(source));
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+
+        source.clear();
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+
+        require_success(values.push_back(values[0]));
+        REQUIRE(values.size() == 2u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(values[1].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+        CHECK(view_equal(values[1].view(), std::string_view {"vector-lvalue"}));
+    }
+
+    SECTION("fixed Array clones lvalues into its context before self-aliasing insertion") {
+        auto source_ctx = make_context();
+        String source(&source_ctx);
+        assign_text(source, "array-lvalue");
+
+        auto destination_ctx = make_context();
+        protocyte::Array<String, 2u> values(&destination_ctx);
+        require_success(values.push_back(source));
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+
+        source.clear();
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+
+        require_success(values.push_back(values[0]));
+        REQUIRE(values.size() == 2u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(values[1].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+        CHECK(view_equal(values[1].view(), std::string_view {"array-lvalue"}));
+    }
+
+    SECTION("Vector leaves an aliased lvalue unchanged when cloning or growth fails") {
+        auto ctx = make_context();
+        Config::Vector<String> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "vector-stable");
+        require_success(values.push_back(source));
+        const auto baseline_allocation = ctx.total_allocated_bytes;
+
+        FailingAllocationProbe clone_failure {};
+        ctx.allocator = protocyte::Allocator {&clone_failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(clone_failure.calls == 1u);
+
+        FailingAllocationProbe growth_failure {.successful_calls_before_failure = 1u};
+        ctx.allocator = protocyte::Allocator {&growth_failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(growth_failure.calls == 2u);
+    }
+
+    SECTION("fixed Array leaves an aliased lvalue unchanged when cloning fails") {
+        auto ctx = make_context();
+        protocyte::Array<String, 2u> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "array-stable");
+        require_success(values.push_back(source));
+        const auto baseline_allocation = ctx.total_allocated_bytes;
+
+        FailingAllocationProbe failure {};
+        ctx.allocator = protocyte::Allocator {&failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(failure.calls == 1u);
+    }
+
+    SECTION("fixed Array reports full capacity without cloning") {
+        auto ctx = make_context();
+        protocyte::Array<String, 1u> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "array-full");
+        require_success(values.push_back(source));
+
+        FailingAllocationProbe failure {};
+        ctx.allocator = protocyte::Allocator {&failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(source), protocyte::ErrorCode::count_limit);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-full"}));
+        CHECK(failure.calls == 0u);
+    }
+}
+
 TEST_CASE("Runtime context rebinding preserves allocator ownership", "[smoke][runtime][allocator][bind]") {
     SECTION("unallocated vectors can bind and live vectors reject context changes") {
         auto first_ctx = make_context();

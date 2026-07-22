@@ -367,8 +367,14 @@ installable copy of the protocyte Python generator project. It does not bundle
 Python itself. The first downstream configuration that needs code generation
 finds a local Python 3.12+ interpreter, creates a fingerprinted virtual
 environment under the build tree, and installs protocyte and its Python
-dependencies there from the exact versions in the bundled CMake constraints
-file. The install is built from a writable staged copy, so it never modifies
+dependencies there from the bundled hash-locked CMake requirements file. The
+file records the published wheel and source-archive hashes; the installer accepts
+only a recorded wheel, while the
+local staged Protocyte project is installed without resolving further
+dependencies. It deliberately accepts binary packages only: all managed
+dependencies provide universal or supported platform wheels, so provisioning
+does not execute a dependency source build. The install is built from a writable
+staged copy, so it never modifies
 the CMake package prefix, installs packages globally, or changes the selected
 base interpreter. That interpreter must include Python's `venv` module and
 `ensurepip`; on Debian and Ubuntu these may require installing `python3-venv`
@@ -396,6 +402,27 @@ For prerelease tags `vX.Y.Z-rcN`, the Python packaging artifacts use the
 normalized version spelling `X.Y.ZrcN` in the wheel and sdist filenames,
 while the CMake prefix archive keeps the Git tag spelling
 `protocyte-X.Y.Z-rcN-cmake-prefix.tar.gz`.
+
+Release publication requires GitHub release immutability to be enabled for the
+repository. Create a protected `release` environment and configure its
+`RELEASE_IMMUTABILITY_TOKEN` secret with a fine-grained credential that has only
+`Administration: read` access. An isolated, checkout-free preflight uses that
+credential to reject a missing secret or disabled policy before the release
+gate and artifact builds run.
+
+The build job has only `contents: read` access. It hands the three tested files
+and their SHA-256 manifest to a separate `release`-environment job as one
+immutable Actions artifact. On a fresh runner, publication checks out the tag
+commit again, binds the handoff's numeric artifact ID, name, workflow run, tag
+commit, and server-side digest, and verifies the downloaded archive and exact
+file manifest under the runner's temporary directory. Only then does the clean
+checkout's publication script receive the short-lived `GITHUB_TOKEN` scoped to
+`contents: write` and the administration-read policy token.
+
+The workflow never resumes, repairs, or replaces assets on an existing release.
+If a failed run leaves an unpublished draft, inspect it and manually delete that
+draft before rerunning the tag workflow. A published release is terminal and
+must not be deleted merely to retry a workflow run.
 
 ### FetchContent
 
@@ -1137,6 +1164,7 @@ policy = GeneratorPolicy(
     max_files_to_generate=256,
     max_proto_files=1_024,
     max_descriptor_nodes=50_000,
+    max_descriptor_metadata_bytes=4 * 1024 * 1024,
     max_nesting_depth=64,
     max_generated_bytes=64 * 1024 * 1024,
 )
@@ -1158,6 +1186,16 @@ Malformed requests return a contextual response error without generated files.
 The values above are an example deployment profile, not protobuf format
 limits. Choose budgets for the service workload. `max_request_bytes` is checked
 on the parsed request, so the transport must also cap bytes before parsing.
+`max_descriptor_nodes` retains its declaration-node accounting.
+`max_descriptor_metadata_bytes` bounds the complete serialized request before
+model construction, including source-code locations, paths, spans, comments,
+dependency strings, and unknown descriptor fields. If an existing policy sets
+`max_descriptor_nodes` but not `max_descriptor_metadata_bytes`, Protocyte uses
+the node limit as a conservative metadata-byte limit; set both explicitly to
+tune them independently. These Python API policy checks apply to
+`generate_response()`; the command-line plugin and descriptor-set inspection
+commands are intended for trusted local build input and should run with
+process-level resource limits when that assumption does not hold.
 `max_generated_bytes` is enforced cumulatively while generated source lines are
 appended and while formatter stdout and stderr are streamed. Formatter capture
 uses the remaining cumulative byte budget and terminates the process before

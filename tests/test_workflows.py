@@ -21,6 +21,16 @@ def _job_named(workflow: str, name: str) -> str:
     return job if next_job is None else job[: next_job.start()]
 
 
+def _steps_by_name(job: str) -> dict[str, str]:
+    steps = job.split("\n    steps:\n", maxsplit=1)[1]
+    blocks = re.split(r"(?=^      - name: )", steps, flags=re.MULTILINE)
+    return {
+        block.splitlines()[0].removeprefix("      - name: "): block
+        for block in blocks
+        if block.startswith("      - name: ")
+    }
+
+
 def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     fallback = (
         REPO_ROOT / ".github" / "workflows" / "protobuf-fallback.yml"
@@ -194,22 +204,22 @@ def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
-    publish = _job_named(release, "publish")
+    build = _job_named(release, "build-release")
 
-    assert 'version: "0.11.7"' in publish
-    assert 'python-version: "3.12.9"' in publish
-    assert 'CMAKE_VERSION: "4.3.2"' in publish
-    assert 'PYTHONHASHSEED: "0"' in publish
-    assert "TZ: UTC" in publish
-    assert 'UV_PYTHON: "3.12.9"' in publish
-    assert "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" in publish
-    assert "for build in first second; do" in publish
-    assert 'git archive HEAD | tar -x -C "$source_dir"' in publish
-    assert publish.count("reproducible_archive.py") == 3
-    assert publish.count("cmp \\") == 3
-    assert 'uv build "$source_dir" --out-dir "$output_dir"' in publish
-    assert '-S "$source_dir" -B "${build_root}/cmake-build"' in publish
-    assert 'uvx --from "cmake==$CMAKE_VERSION" cmake \\' in publish
+    assert 'version: "0.11.7"' in build
+    assert 'python-version: "3.12.9"' in build
+    assert 'CMAKE_VERSION: "4.3.2"' in build
+    assert 'PYTHONHASHSEED: "0"' in build
+    assert "TZ: UTC" in build
+    assert 'UV_PYTHON: "3.12.9"' in build
+    assert "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" in build
+    assert "for build in first second; do" in build
+    assert 'git archive HEAD | tar -x -C "$source_dir"' in build
+    assert build.count("reproducible_archive.py") == 3
+    assert build.count("cmp \\") == 3
+    assert 'uv build "$source_dir" --out-dir "$output_dir"' in build
+    assert '-S "$source_dir" -B "${build_root}/cmake-build"' in build
+    assert 'uvx --from "cmake==$CMAKE_VERSION" cmake \\' in build
 
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires = ["setuptools==80.9.0"]' in pyproject
@@ -219,8 +229,13 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
+    build = _job_named(release, "build-release")
+    build_steps = _steps_by_name(build)
     publish = _job_named(release, "publish")
-    publish_step = _step_containing(publish, "softprops/action-gh-release@")
+    publication = _steps_by_name(publish)[
+        "Create, verify, and publish immutable GitHub release"
+    ]
+    upload = build_steps["Upload exact publication handoff"]
 
     test_step_names = {
         "wheel_name": "Test exact wheel artifact",
@@ -229,12 +244,253 @@ def test_release_tests_each_exact_artifact_before_exact_upload() -> None:
     }
     for output, test_step_name in test_step_names.items():
         artifact = f"${{{{ needs.validate-tag.outputs.{output} }}}}"
-        assert artifact in publish_step
-        assert publish.index(test_step_name) < publish.index("Publish GitHub release")
+        assert artifact in build_steps[test_step_name]
+        assert f"staging/release-handoff/{artifact}" in upload
+        assert f'$RUNNER_TEMP/release-handoff/{artifact}' in publication
+        assert build.index(test_step_name) < build.index(
+            "Stage exact publication handoff"
+        )
 
-    assert "dist/*.whl" not in publish_step
-    assert "dist/*.tar.gz" not in publish_step
-    assert "python -m tarfile -e" in publish
-    assert "-S tests/release_cmake_consumer" in publish
-    assert publish.count("-m protocyte --help") == 2
-    assert publish.count('protoc-gen-protocyte" --help') == 2
+    assert build.index("Stage exact publication handoff") < build.index(
+        "Upload exact publication handoff"
+    )
+    assert "dist/*.whl" not in upload
+    assert "dist/*.tar.gz" not in upload
+    assert "staging/release-handoff/SHA256SUMS" in upload
+    assert "if-no-files-found: error" in upload
+    assert "python -m tarfile -e" in build
+    assert "-S tests/release_cmake_consumer" in build
+    assert build.count("-m protocyte --help") == 2
+    assert build.count('protoc-gen-protocyte" --help') == 2
+
+
+def test_release_checkout_credentials_are_not_persisted_or_needed_for_refetch() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    validate_tag = _job_named(release, "validate-tag")
+    build = _job_named(release, "build-release")
+    publish = _job_named(release, "publish")
+    publish_steps = _steps_by_name(publish)
+
+    assert "permissions:\n  contents: none" in release
+    assert "permissions:\n      contents: read" in build
+    assert "permissions:\n      actions: read\n      contents: write" in publish
+    assert "persist-credentials: false" in _steps_by_name(validate_tag)[
+        "Check out repository"
+    ]
+    assert "persist-credentials: false" in _steps_by_name(build)[
+        "Check out repository"
+    ]
+    trusted_checkout = publish_steps["Check out trusted publication code"]
+    assert "clean: true" in trusted_checkout
+    assert "persist-credentials: false" in trusted_checkout
+    assert "ref: ${{ github.sha }}" in trusted_checkout
+
+    reachability = _steps_by_name(validate_tag)[
+        "Ensure tag commit is reachable from fetched main"
+    ]
+    assert 'main_ref="refs/remotes/origin/main"' in reachability
+    assert 'git rev-parse --verify "${main_ref}^{commit}"' in reachability
+    assert 'git merge-base --is-ancestor "$GITHUB_SHA" "$main_ref"' in reachability
+    assert "git fetch" not in validate_tag
+
+
+def test_release_policy_preflight_is_checkout_free_and_gates_expensive_work() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    policy = _job_named(release, "release-policy")
+    gate = _job_named(release, "release-gate")
+    build = _job_named(release, "build-release")
+    preflight = _steps_by_name(policy)["Require immutable releases before build"]
+
+    assert "needs: validate-tag" in policy
+    assert "environment: release" in policy
+    assert "permissions:\n      contents: none" in policy
+    assert "actions/checkout@" not in policy
+    assert "RELEASE_IMMUTABILITY_TOKEN" in preflight
+    assert 'if [[ -z "$GH_TOKEN" ]]' in preflight
+    assert '"$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/immutable-releases"' in preflight
+    assert "curl --disable --silent --show-error --max-redirs 0" in preflight
+    assert '-H "Authorization: Bearer $GH_TOKEN"' in preflight
+    assert "Authenticated GitHub API requests must not follow redirects." in preflight
+    assert '[[ "$enabled" != "true" ]]' in preflight
+    assert "- release-policy" in gate
+    assert "- release-gate" in build
+
+
+def test_release_publication_uses_isolated_least_privilege_credentials() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    policy = _job_named(release, "release-policy")
+    build = _job_named(release, "build-release")
+    publish = _job_named(release, "publish")
+    publish_steps = _steps_by_name(publish)
+    publication = publish_steps[
+        "Create, verify, and publish immutable GitHub release"
+    ]
+
+    assert "environment: release" in policy
+    assert "environment: release" in publish
+    assert "contents: write" not in build
+    assert "RELEASE_IMMUTABILITY_TOKEN" not in build
+    assert "PROTOCYTE_RELEASE_POLICY_TOKEN" not in build
+    assert "python .github/scripts/publish_release.py" not in build
+    assert "uv sync" not in publish
+    assert "uv build" not in publish
+    assert "Test exact wheel artifact" not in publish
+    assert "GH_TOKEN: ${{ github.token }}" in publication
+    assert (
+        "PROTOCYTE_RELEASE_POLICY_TOKEN: ${{ secrets.RELEASE_IMMUTABILITY_TOKEN }}"
+    ) in publication
+    assert "python .github/scripts/publish_release.py" in publication
+    assert '"$GITHUB_REPOSITORY"' in publication
+    assert '"$GITHUB_REF_NAME"' in publication
+    assert '"$GITHUB_SHA"' in publication
+    assert publish.index("Check out trusted publication code") < publish.index(
+        "Bind and download immutable release handoff"
+    )
+    assert publish.index("Extract and verify exact release handoff") < publish.index(
+        "Create, verify, and publish immutable GitHub release"
+    )
+    assert "softprops/action-gh-release@" not in publish
+    assert "gh release upload" not in publish
+    assert "gh release edit" not in publish
+
+
+def test_release_handoff_is_id_run_and_digest_bound_before_publication() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    build = _job_named(release, "build-release")
+    publish = _job_named(release, "publish")
+    build_steps = _steps_by_name(build)
+    publish_steps = _steps_by_name(publish)
+    stage = build_steps["Stage exact publication handoff"]
+    upload = build_steps["Upload exact publication handoff"]
+    binding = publish_steps["Bind and download immutable release handoff"]
+    extraction = publish_steps["Extract and verify exact release handoff"]
+
+    assert "artifact_id: ${{ steps.release-handoff.outputs.artifact-id }}" in build
+    assert (
+        "artifact_digest: ${{ steps.release-handoff.outputs.artifact-digest }}"
+        in build
+    )
+    assert "sha256sum \\" in stage
+    assert "sha256sum --check --strict SHA256SUMS" in stage
+    assert (
+        "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+        in upload
+    )
+    assert "name: protocyte-release-${{ github.run_id }}-${{ github.sha }}" in upload
+    assert "compression-level: 0" in upload
+    assert "retention-days: 1" in upload
+
+    assert "- build-release" in publish
+    assert "ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}" in binding
+    assert (
+        "EXPECTED_ARTIFACT_DIGEST: "
+        "${{ needs.build-release.outputs.artifact_digest }}" in binding
+    )
+    for fragment in (
+        '"$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"',
+        ".workflow_run.id",
+        ".workflow_run.head_sha",
+        ".digest",
+        '"$GITHUB_RUN_ID"',
+        '"$GITHUB_SHA"',
+        "/actions/artifacts/$ARTIFACT_ID/zip",
+        'sha256sum "$archive"',
+        '"$downloaded_digest" != "$expected_digest"',
+    ):
+        assert fragment in binding
+
+    assert "$RUNNER_TEMP/release-handoff" in extraction
+    assert "python -I -" in extraction
+    assert "release handoff contains an unexpected file set" in extraction
+    assert "stat.S_ISLNK(mode)" in extraction
+    assert 'cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"' in extraction
+    assert "sha256sum --check --strict SHA256SUMS" in extraction
+    assert ".github/scripts" not in upload
+    assert "$GITHUB_WORKSPACE" not in extraction
+
+
+def test_authenticated_release_http_requests_reject_redirects() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    policy = _job_named(release, "release-policy")
+    publish = _job_named(release, "publish")
+    binding = _steps_by_name(publish)["Bind and download immutable release handoff"]
+
+    assert "gh api" not in policy
+    assert "gh api" not in binding
+    for authenticated_request in (policy, binding):
+        assert (
+            "curl --disable --silent --show-error --max-redirs 0"
+            in authenticated_request
+        )
+        assert '-H "Authorization: Bearer $GH_TOKEN"' in authenticated_request
+    artifact_probe = binding.split('archive="$RUNNER_TEMP/release-handoff.zip"', 1)[1]
+    artifact_probe = artifact_probe.split(
+        'redirect_url="$(python -I .github/scripts/parse_release_redirect.py', 1
+    )[0]
+    assert artifact_probe.count('Authorization: Bearer $GH_TOKEN') == 1
+    assert "Authenticated GitHub API requests must not follow redirects." in policy
+    assert "Authenticated GitHub API requests must not follow redirects." in binding
+    assert '--dump-header "$redirect_headers"' in binding
+    assert '[[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]' in binding
+    assert "python -I .github/scripts/parse_release_redirect.py" in binding
+    assert "--location --max-redirs 3" in binding
+    assert "--proto '=https' --proto-redir '=https'" in binding
+    signed_download = binding.split(
+        'redirect_url="$(python -I .github/scripts/parse_release_redirect.py',
+        maxsplit=1,
+    )[1]
+    assert "Authorization: Bearer $GH_TOKEN" not in signed_download
+
+
+def test_release_transaction_is_create_only_id_bound_and_immutable() -> None:
+    transaction = (
+        REPO_ROOT / ".github" / "scripts" / "publish_release.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"POST",\n            f"{self._repository_path}/releases"' in transaction
+    assert 'payload={"draft": False}' in transaction
+    assert 'f"{self._repository_path}/releases/{release_id}"' in transaction
+    assert 'f"/{self._repository_path}/releases/{release_id}/assets"' in transaction
+    assert "api.immutable_releases_enabled()" in transaction
+    assert "this workflow never mutates existing" in transaction
+    assert "release creation lost an existence race" in transaction
+    assert '"DELETE"' not in transaction
+    assert "overwrite_files" not in transaction
+
+
+def test_release_transaction_order_is_build_test_then_atomic_publication() -> None:
+    release = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    gate = _job_named(release, "release-gate")
+    build = _job_named(release, "build-release")
+    publish = _job_named(release, "publish")
+    publication_name = "Create, verify, and publish immutable GitHub release"
+
+    assert "- release-policy" in gate
+    assert "- release-gate" in build
+    assert "- build-release" in publish
+    for test_step_name in (
+        "Test exact wheel artifact",
+        "Test exact source artifact",
+        "Test exact CMake prefix artifact",
+    ):
+        assert build.index(test_step_name) < build.index(
+            "Upload exact publication handoff"
+        )
+    assert publish.index("Bind and download immutable release handoff") < publish.index(
+        publication_name
+    )
+    assert publish.rstrip().endswith(
+        '"$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.archive_name }}"'
+    )

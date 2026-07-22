@@ -600,6 +600,17 @@ def _write_overlap_detecting_protoc_wrapper(
                 '    sys.stderr.write(f"overlapping {kind} protoc invocation\\n")',
                 "    raise SystemExit(91)",
                 "",
+                'if kind == "dependency" and (',
+                '    STATE_DIR / "active-dependency-reader"',
+                ").exists():",
+                '    (STATE_DIR / f"overlap-{kind}-reader-{pid}").write_text(',
+                '        "overlap\\n", encoding="utf-8"',
+                "    )",
+                '    sys.stderr.write("dependency protoc overlapped its descriptor reader\\n")',
+                "    os.close(active_fd)",
+                "    active.unlink(missing_ok=True)",
+                "    raise SystemExit(91)",
+                "",
                 "try:",
                 "    time.sleep(1.0)",
                 "    result = subprocess.run(",
@@ -610,6 +621,101 @@ def _write_overlap_detecting_protoc_wrapper(
                 "    active.unlink(missing_ok=True)",
                 "",
                 '(STATE_DIR / f"complete-{kind}-{pid}").write_text(',
+                '    f"{result.returncode}\\n", encoding="utf-8"',
+                ")",
+                "raise SystemExit(result.returncode)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'"{sys.executable}" "{script}" %*',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
+def _write_overlap_detecting_dependency_reader_wrapper(
+    path: Path, reader: Path, state_dir: Path
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    script = path.with_suffix(".py")
+    script.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "import os",
+                "import subprocess",
+                "import sys",
+                "import time",
+                "from pathlib import Path",
+                "",
+                f"REAL_READER = Path({str(reader)!r})",
+                f"STATE_DIR = Path({str(state_dir)!r})",
+                "",
+                "",
+                'if sys.argv[1:3] != ["descriptor-set", "dependency-file"]:',
+                "    raise SystemExit(",
+                "        subprocess.run([str(REAL_READER), *sys.argv[1:]], check=False).returncode",
+                "    )",
+                "",
+                "pid = os.getpid()",
+                '(STATE_DIR / f"attempt-reader-{pid}").write_text(',
+                '    "attempt\\n", encoding="utf-8"',
+                ")",
+                'active = STATE_DIR / "active-dependency-reader"',
+                "try:",
+                "    active_fd = os.open(",
+                "        active, os.O_CREAT | os.O_EXCL | os.O_WRONLY",
+                "    )",
+                "except FileExistsError:",
+                '    (STATE_DIR / f"overlap-reader-{pid}").write_text(',
+                '        "overlap\\n", encoding="utf-8"',
+                "    )",
+                '    sys.stderr.write("overlapping dependency descriptor readers\\n")',
+                "    raise SystemExit(91)",
+                "",
+                "try:",
+                '    if (STATE_DIR / "active-dependency").exists():',
+                '        (STATE_DIR / f"overlap-reader-writer-{pid}").write_text(',
+                '            "overlap\\n", encoding="utf-8"',
+                "        )",
+                '        sys.stderr.write("dependency descriptor reader overlapped protoc\\n")',
+                "        raise SystemExit(91)",
+                "    time.sleep(1.0)",
+                "    result = subprocess.run(",
+                "        [str(REAL_READER), *sys.argv[1:]], check=False",
+                "    )",
+                "finally:",
+                "    os.close(active_fd)",
+                "    active.unlink(missing_ok=True)",
+                "",
+                '(STATE_DIR / f"complete-reader-{pid}").write_text(',
                 '    f"{result.returncode}\\n", encoding="utf-8"',
                 ")",
                 "raise SystemExit(result.returncode)",
@@ -673,6 +779,187 @@ def _write_synchronized_build_runner(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def _write_python_command_wrapper(path: Path, script: Path) -> Path:
+    if os.name == "nt":
+        wrapper = path.with_suffix(".cmd")
+        wrapper.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f'"{sys.executable}" "{script}" %*',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        wrapper = path
+        wrapper.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+    return wrapper
+
+
+def test_dependency_scan_serializes_descriptor_reader_with_writer(
+    tmp_path: Path,
+) -> None:
+    cmake = shutil.which("cmake")
+    if cmake is None:
+        pytest.skip("CMake is required for dependency-scan locking coverage")
+
+    repo_root = Path(__file__).resolve().parents[1]
+    scan_script = repo_root / "cmake" / "ProtocyteDependencyScan.cmake"
+    working_directory = tmp_path / "working"
+    tools_directory = tmp_path / "tools"
+    state_directory = tmp_path / "state"
+    working_directory.mkdir()
+    tools_directory.mkdir()
+    argument_file = working_directory / "arguments.rsp"
+    descriptor = working_directory / "CMakeFiles" / "dependency.pb"
+    depfile = working_directory / "CMakeFiles" / "dependency.d"
+    argument_file.write_text(
+        "--include_imports\n--descriptor_set_out=CMakeFiles/dependency.pb\n",
+        encoding="utf-8",
+    )
+
+    fake_protoc_script = tools_directory / "fake-protoc.py"
+    fake_protoc_script.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "",
+                "argument_file = Path(sys.argv[1].removeprefix('@'))",
+                "if not argument_file.is_absolute():",
+                "    argument_file = Path.cwd() / argument_file",
+                "for line in argument_file.read_text(encoding='utf-8').splitlines():",
+                "    if line.startswith('--descriptor_set_out='):",
+                "        descriptor = Path(line.removeprefix('--descriptor_set_out='))",
+                "        if not descriptor.is_absolute():",
+                "            descriptor = Path.cwd() / descriptor",
+                "        descriptor.parent.mkdir(parents=True, exist_ok=True)",
+                "        descriptor.write_bytes(b'descriptor')",
+                "        break",
+                "else:",
+                "    raise SystemExit('missing descriptor output')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    real_protoc = _write_python_command_wrapper(
+        tools_directory / "real-protoc", fake_protoc_script
+    )
+    protoc = _write_overlap_detecting_protoc_wrapper(
+        tools_directory / "protoc", real_protoc, state_directory
+    )
+
+    fake_reader_script = tools_directory / "fake-reader.py"
+    fake_reader_script.write_text(
+        "\n".join(
+            [
+                "from pathlib import Path",
+                "import sys",
+                "",
+                "arguments = sys.argv[1:]",
+                "assert arguments[:2] == ['descriptor-set', 'dependency-file']",
+                "while arguments[2].startswith('--'):",
+                "    arguments.pop(2)",
+                "descriptor = Path(arguments[2])",
+                "if not descriptor.is_absolute():",
+                "    descriptor = Path.cwd() / descriptor",
+                "assert descriptor.read_bytes() == b'descriptor'",
+                "depfile = Path(arguments[4])",
+                "if not depfile.is_absolute():",
+                "    depfile = Path.cwd() / depfile",
+                "depfile.parent.mkdir(parents=True, exist_ok=True)",
+                "depfile.write_text('dependency.pb: input.proto\\n', encoding='utf-8')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    real_reader = _write_python_command_wrapper(
+        tools_directory / "real-reader", fake_reader_script
+    )
+    reader = _write_overlap_detecting_dependency_reader_wrapper(
+        tools_directory / "reader", real_reader, state_directory
+    )
+
+    runner = _write_synchronized_build_runner(tmp_path / "build_runner.py")
+    gate = tmp_path / "start-scans"
+    processes: list[subprocess.Popen[str]] = []
+    for worker in range(2):
+        ready = tmp_path / f"worker-{worker}.ready"
+        processes.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    str(runner),
+                    str(ready),
+                    str(gate),
+                    cmake,
+                    f"-DPROTOC_EXECUTABLE={protoc}",
+                    "-DARGUMENT_FILE=arguments.rsp",
+                    f"-DLOCK_FILE={tmp_path / 'locks' / 'dependency.lock'}",
+                    "-DPROTO_FILE=demo.proto",
+                    f"-DSCAN_WORKING_DIRECTORY={working_directory}",
+                    f"-DDEPENDENCY_READER={reader}",
+                    "-DDEPENDENCY_DESCRIPTOR=CMakeFiles/dependency.pb",
+                    "-DDEPENDENCY_DEPFILE=CMakeFiles/dependency.d",
+                    "-DDEPENDENCY_DEPFILE_TARGET=CMakeFiles/dependency.pb",
+                    "-DDEPENDENCY_FILE_FORMAT=--ninja",
+                    "-P",
+                    str(scan_script),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        )
+
+    ready_paths = [tmp_path / f"worker-{worker}.ready" for worker in range(2)]
+    deadline = time.monotonic() + 30.0
+    while not all(path.is_file() for path in ready_paths):
+        if any(process.poll() is not None for process in processes):
+            pytest.fail(
+                "a synchronized dependency scan exited before reaching the gate"
+            )
+        if time.monotonic() >= deadline:
+            pytest.fail("timed out waiting for synchronized dependency scans")
+        time.sleep(0.01)
+    gate.write_text("start\n", encoding="utf-8")
+
+    outputs: list[str] = []
+    try:
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=60)
+            outputs.append(stdout + stderr)
+            assert process.returncode == 0, stdout + stderr
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert not list(state_directory.glob("overlap-*")), "\n".join(outputs)
+    assert len(list(state_directory.glob("attempt-dependency-*"))) == 2
+    assert len(list(state_directory.glob("complete-dependency-*"))) == 2
+    assert len(list(state_directory.glob("attempt-reader-*"))) == 2
+    assert len(list(state_directory.glob("complete-reader-*"))) == 2
+    assert not list(state_directory.glob("active-*"))
+    assert descriptor.read_bytes() == b"descriptor"
+    assert depfile.read_text(encoding="utf-8") == "dependency.pb: input.proto\n"
 
 
 def _touch_newer_than(path: Path, output: Path) -> None:
@@ -855,9 +1142,11 @@ def _assert_no_managed_environment_transaction_leftovers(
     leftovers = [
         candidate
         for candidate in environment_root.iterdir()
-        if candidate.is_dir()
-        and (
-            candidate.name.endswith(".staging") or candidate.name.endswith(".previous")
+        if (
+            candidate.name.endswith(".staging")
+            or candidate.name.endswith(".previous")
+            or ".protocyte-managed-environment-" in candidate.name
+            or ".protocyte-cleanup-managed-environment-" in candidate.name
         )
     ]
     assert not leftovers, leftovers
@@ -1137,6 +1426,8 @@ def test_source_codegen_with_explicit_plugin_does_not_discover_python(
                 "set(CMAKE_DISABLE_FIND_PACKAGE_Protobuf TRUE)",
                 f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
                 f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "_protocyte_prepare_plugin()",
+                'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE "${PROTOCYTE_PLUGIN_EXECUTABLE}")',
                 f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
                 f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
                 "protocyte_generate(",
@@ -1159,6 +1450,9 @@ def test_source_codegen_with_explicit_plugin_does_not_discover_python(
     )
     configure_scan_count = len(import_scan_log.read_text(encoding="utf-8").splitlines())
     assert configure_scan_count > 0
+    build_graph = (build_dir / "build.ninja").read_text(encoding="utf-8")
+    assert "MANAGED_DEPENDENCY_READER=FALSE" in build_graph
+    assert "PROTOCYTE_MANAGED_PLUGIN=FALSE" in build_graph
     build_command = ["cmake", "--build", str(build_dir), "--target", "demo_codegen"]
     subprocess.run(build_command, check=True, env=plugin_environment)
     first_build_scan_count = len(
@@ -1324,7 +1618,14 @@ def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> 
     ).read_text(encoding="utf-8")
 
     assert '"-DARGUMENT_FILE=${protocyte_response_file_relative}"' in generation_command
+    assert (
+        '"-DLOCK_DIRECTORY_IDENTITY_SHA256=${protocyte_lock_directory_identity_hash}"'
+        in generation_command
+    )
     assert '"@${ARGUMENT_FILE}"' in generation_script
+    assert (
+        generation_script.count("_protocyte_validate_generation_lock_namespace()") == 2
+    )
     assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in generation_command
     assert (
         '"-DSOURCE_DIRECTORY_HEX=${protocyte_source_directory_hex}"'
@@ -2995,6 +3296,8 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert any(prefix.rglob("protocyteConfig.cmake"))
     assert any(prefix.rglob("ProtocyteDependencyScan.cmake"))
     assert any(prefix.rglob("ProtocyteGenerate.cmake"))
+    assert any(prefix.rglob("ProtocyteManagedEnvironment.py"))
+    assert any(prefix.rglob("owned_transactions.py"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
 
 
@@ -4060,6 +4363,68 @@ def test_source_import_preflight_preserves_semicolon_paths_in_closure(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_relocated_install_provisions_managed_python_environment(
+    tmp_path: Path,
+) -> None:
+    _build_dir, prefix = _configure_fetchcontent_install_fixture(
+        tmp_path,
+        protocyte_install=True,
+    )
+    relocated_prefix = tmp_path / "relocated-prefix"
+    prefix.replace(relocated_prefix)
+    source_dir = tmp_path / "installed-consumer"
+    build_dir = tmp_path / "installed-consumer-build"
+    environment_root = tmp_path / "installed-managed-environments"
+    source_dir.mkdir()
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_installed_managed_environment LANGUAGES NONE)",
+                f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
+                f'set(PROTOCYTE_PYTHON_ENV_ROOT "{environment_root.as_posix()}")',
+                "find_package(protocyte CONFIG REQUIRED)",
+                "_protocyte_prepare_plugin()",
+                "_protocyte_get_internal(managed_plugin PLUGIN_EXECUTABLE)",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-plugin.txt" "${managed_plugin}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configured = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(source_dir),
+            "-B",
+            str(build_dir),
+            f"-DCMAKE_PREFIX_PATH={relocated_prefix}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    plugin = Path(
+        (build_dir / "managed-plugin.txt").read_text(encoding="utf-8").strip()
+    )
+    assert plugin.is_file()
+    assert (
+        subprocess.run(
+            [str(plugin), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == __version__
+    )
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
 
 
 @pytest.mark.parametrize("library_mode", ["source", "descriptor-set"])
@@ -9510,7 +9875,13 @@ def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
     protoc = _write_overlap_detecting_protoc_wrapper(
         tools_dir / "protoc", real_protoc, state_dir
     )
-    plugin = _write_python_plugin_wrapper(tools_dir / "protoc-gen-protocyte", repo_root)
+    plugin = _write_overlap_detecting_dependency_reader_wrapper(
+        tools_dir / "protoc-gen-protocyte",
+        _write_python_plugin_wrapper(
+            tools_dir / "real-protoc-gen-protocyte", repo_root
+        ),
+        state_dir,
+    )
 
     (source_dir / "CMakeLists.txt").write_text(
         "\n".join(
@@ -9600,6 +9971,8 @@ def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
     assert not list(state_dir.glob("overlap-*")), "\n".join(build_outputs)
     assert len(list(state_dir.glob("attempt-dependency-*"))) == 2
     assert len(list(state_dir.glob("complete-dependency-*"))) == 2
+    assert len(list(state_dir.glob("attempt-reader-*"))) == 2
+    assert len(list(state_dir.glob("complete-reader-*"))) == 2
     assert len(list(state_dir.glob("attempt-generation-*"))) == 2
     assert len(list(state_dir.glob("complete-generation-*"))) == 2
     assert not list(state_dir.glob("active-*"))
@@ -9640,6 +10013,67 @@ def _filesystem_identity_hash(path: Path) -> str:
 
 def _build_tree_owner_hash(build_directory: Path) -> str:
     return _filesystem_identity_hash(build_directory)
+
+
+def _owner_transaction_record(
+    root_owner_record: Path, transaction_id: str, state: str
+) -> Path:
+    return root_owner_record.parent / (
+        f"{root_owner_record.name}.{transaction_id}.{state}"
+    )
+
+
+def _committed_owner_build_hash(owner_record: Path, root_owner_record: Path) -> str:
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in owner_record.read_text(encoding="utf-8").splitlines()
+    )
+    assert len(owner_fields["build-tree-sha256"]) == 64
+    if owner_fields["version"] == "1":
+        assert set(owner_fields) == {"version", "build-tree-sha256"}
+        return owner_fields["build-tree-sha256"]
+
+    assert owner_fields["version"] == "2"
+    assert set(owner_fields) == {
+        "version",
+        "build-tree-sha256",
+        "transaction-sha256",
+    }
+    transaction_id = owner_fields["transaction-sha256"]
+    assert len(transaction_id) == 64
+    committed = _owner_transaction_record(
+        root_owner_record, transaction_id, "committed"
+    )
+    committed_bytes = committed.read_bytes()
+    assert hashlib.sha256(committed_bytes).hexdigest() == transaction_id
+    manifest_lines = committed_bytes.decode("utf-8").splitlines()
+    manifest_fields = dict(line.split("=", maxsplit=1) for line in manifest_lines[:4])
+    assert list(manifest_fields) == [
+        "version",
+        "nonce",
+        "build-tree-sha256",
+        "claims-sha256",
+    ]
+    assert manifest_fields["version"] == "1"
+    assert len(manifest_fields["nonce"]) == 64
+    assert len(manifest_fields["claims-sha256"]) == 64
+    assert manifest_fields["build-tree-sha256"] == owner_fields["build-tree-sha256"]
+    claim_ids = [line.removeprefix("claim-sha256=") for line in manifest_lines[4:]]
+    assert claim_ids
+    assert all(
+        line == f"claim-sha256={claim_id}"
+        for line, claim_id in zip(manifest_lines[4:], claim_ids, strict=True)
+    )
+    assert claim_ids == sorted(set(claim_ids))
+    assert (
+        hashlib.sha256(";".join(claim_ids).encode()).hexdigest()
+        == manifest_fields["claims-sha256"]
+    )
+    owner_identity = owner_record.resolve().as_posix()
+    if os.name == "nt":
+        owner_identity = owner_identity.lower()
+    assert hashlib.sha256(owner_identity.encode()).hexdigest() in claim_ids
+    return owner_fields["build-tree-sha256"]
 
 
 def _output_owner_record_path(source_dir: Path, output_path: Path) -> Path:
@@ -9683,6 +10117,7 @@ def _write_out_dir_owner_project(
     target_count: int = 1,
     proto_names: tuple[str, ...] | None = None,
     runtime_prefix: str | None = None,
+    output_lock_root: Path | None = None,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -9753,11 +10188,12 @@ def _write_out_dir_owner_project(
             encoding="utf-8",
         )
         fake_protoc.chmod(0o755)
+    resolved_output_lock_root = output_lock_root or source_dir.parent / "output-locks"
     lines = [
         "cmake_minimum_required(VERSION 3.24)",
         "project(out_dir_ownership LANGUAGES NONE)",
         f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
-        f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{(source_dir.parent / "output-locks").as_posix()}")',
+        f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{resolved_output_lock_root.as_posix()}")',
         "function(_protocyte_setup_codegen_internal fetch_missing_import_sources)",
         "endfunction()",
         'set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}")',
@@ -9825,6 +10261,149 @@ def _build_out_dir_owner_project(
     )
 
 
+def _make_fake_protoc_fail_in_build(
+    source_dir: Path,
+    build_dir: Path,
+    *,
+    ready_path: Path | None = None,
+    release_path: Path | None = None,
+) -> None:
+    fake_protoc_script = source_dir / "fake-protoc.py"
+    failure_lines = [
+        f"if Path.cwd().resolve() == Path({str(build_dir)!r}).resolve():",
+    ]
+    if ready_path is not None:
+        assert release_path is not None
+        failure_lines.extend(
+            [
+                f"    Path({str(ready_path)!r}).write_text('ready\\n', encoding='utf-8')",
+                "    deadline = time.monotonic() + 30.0",
+                f"    while not Path({str(release_path)!r}).exists():",
+                "        if time.monotonic() >= deadline:",
+                "            raise SystemExit(92)",
+                "        time.sleep(0.01)",
+            ]
+        )
+    else:
+        assert release_path is None
+    failure_lines.extend(
+        [
+            "    print('simulated protoc failure', file=sys.stderr)",
+            "    raise SystemExit(23)",
+            "",
+        ]
+    )
+    original = fake_protoc_script.read_text(encoding="utf-8")
+    instrumented = original.replace("import sys\n", "import sys\nimport time\n")
+    instrumented = instrumented.replace(
+        "for proto_name, paths in outputs.items():",
+        "\n".join(failure_lines) + "for proto_name, paths in outputs.items():",
+    )
+    fake_protoc_script.write_text(instrumented, encoding="utf-8")
+
+
+def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
+    repo_root = Path(__file__).resolve().parents[1]
+    script_dir.mkdir()
+    shutil.copy2(
+        repo_root / "cmake" / "ProtocyteOutputSafety.cmake",
+        script_dir / "ProtocyteOutputSafety.cmake",
+    )
+    generation_source = (repo_root / "cmake" / "ProtocyteGenerate.cmake").read_text(
+        encoding="utf-8"
+    )
+    staging_anchor = '        file(WRITE "${owner_staging}" "${transaction_owner}")\n'
+    staging_instrumentation = (
+        "        if(\n"
+        "            DEFINED PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
+        "            AND owner_stage_index EQUAL PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
+        "        )\n"
+        '            file(MAKE_DIRECTORY "${owner_staging}")\n'
+        "        endif()\n" + staging_anchor
+    )
+    assert generation_source.count(staging_anchor) == 1
+    generation_source = generation_source.replace(
+        staging_anchor, staging_instrumentation
+    )
+
+    publication_anchor = (
+        '        list(APPEND published_owner_markers "${owner_marker}")\n'
+    )
+    publication_instrumentation = (
+        publication_anchor
+        + '        math(EXPR published_owner_count "${owner_marker_index} + 1")\n'
+        + "        if(\n"
+        + "            DEFINED PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS\n"
+        + "            AND published_owner_count EQUAL PROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS\n"
+        + "        )\n"
+        + '            message(FATAL_ERROR "injected ownership publication termination")\n'
+        + "        endif()\n"
+    )
+    assert generation_source.count(publication_anchor) == 1
+    generation_source = generation_source.replace(
+        publication_anchor, publication_instrumentation
+    )
+    instrumented_script = script_dir / "ProtocyteGenerate.cmake"
+    instrumented_script.write_text(generation_source, encoding="utf-8")
+    return instrumented_script
+
+
+def _run_direct_owner_generation(
+    source_dir: Path,
+    build_dir: Path,
+    output_directory: Path,
+    generation_script: Path,
+    *extra_arguments: str,
+) -> subprocess.CompletedProcess[str]:
+    build_dir.mkdir()
+    argument_file = build_dir / "arguments.rsp"
+    argument_file.write_text("", encoding="utf-8")
+    generated_outputs = (
+        output_directory / "demo_0.protocyte.hpp",
+        output_directory / "demo_0.protocyte.cpp",
+    )
+    output_keys = sorted(_filesystem_identity_hash(path) for path in generated_outputs)
+    lock_manifest = build_dir / "locks.list"
+    lock_manifest.write_text("\n".join(output_keys) + "\n", encoding="utf-8")
+    ownership_manifest = build_dir / "ownership-manifest"
+    ownership_manifest.mkdir()
+    (ownership_manifest / "output-root.path").write_text(
+        output_directory.as_posix(), encoding="utf-8"
+    )
+    for output_path in generated_outputs:
+        output_key = _filesystem_identity_hash(output_path)
+        (ownership_manifest / f"{output_key}.path").write_text(
+            output_path.as_posix(), encoding="utf-8"
+        )
+    owner_marker, owner_lock = _out_dir_owner_record_paths(output_directory)
+    fake_protoc = source_dir / ("fake-protoc.cmd" if os.name == "nt" else "fake-protoc")
+    return subprocess.run(
+        [
+            "cmake",
+            f"-DPROTOC_EXECUTABLE={fake_protoc}",
+            f"-DARGUMENT_FILE={argument_file}",
+            "-DGENERATION_TARGET=interrupted_codegen",
+            f"-DGENERATION_WORKING_DIRECTORY={build_dir}",
+            f"-DLOCK_DIRECTORY={source_dir.parent / 'output-locks'}",
+            "-DLOCK_DIRECTORY_IDENTITY_SHA256="
+            f"{_filesystem_identity_hash(source_dir.parent / 'output-locks')}",
+            f"-DLOCK_MANIFEST={lock_manifest}",
+            f"-DOUTPUT_DIRECTORY={output_directory}",
+            f"-DOUT_DIR_OWNER_MARKER={owner_marker}",
+            f"-DOUT_DIR_OWNER_LOCK={owner_lock}",
+            f"-DBUILD_OWNER_HASH={_build_tree_owner_hash(build_dir)}",
+            f"-DOWNERSHIP_MANIFEST_DIR={ownership_manifest}",
+            "-DSOURCE_DIRECTORY_HEX=00",
+            *extra_arguments,
+            "-P",
+            str(generation_script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _out_dir_snapshot(output_directory: Path) -> dict[str, bytes]:
     return {
         path.relative_to(output_directory).as_posix(): path.read_bytes()
@@ -9855,8 +10434,8 @@ def test_out_dir_owner_allows_same_build_tree_targets_and_configurations(
     for target in ("generated_0", "generated_1"):
         built = _build_out_dir_owner_project(build_dir, target)
         assert built.returncode == 0, built.stdout + built.stderr
-    assert marker.read_text(encoding="utf-8") == (
-        f"version=1\nbuild-tree-sha256={_build_tree_owner_hash(build_dir)}\n"
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(build_dir)
     )
     assert lock.is_file()
 
@@ -9890,6 +10469,195 @@ def test_second_build_tree_rejects_shared_out_dir_without_mutation(
     assert "No generated output was changed" in output
     assert marker.read_bytes() == marker_before
     assert _out_dir_snapshot(output_directory) == outputs_before
+
+
+def test_alternate_lock_root_after_cache_deletion_cannot_reclaim_out_dir_owner(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    first_build_dir = tmp_path / "build-first"
+    second_build_dir = tmp_path / "build-second"
+    output_directory = tmp_path / "generated"
+    first_lock_root = tmp_path / "output-locks-first"
+    second_lock_root = tmp_path / "output-locks-second"
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        output_lock_root=first_lock_root,
+    )
+
+    configured = _configure_out_dir_owner_project(source_dir, first_build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    built = _build_out_dir_owner_project(first_build_dir)
+    assert built.returncode == 0, built.stdout + built.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in marker.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        marker, owner_fields["transaction-sha256"], "committed"
+    )
+    marker_before = marker.read_bytes()
+    witness_before = witness.read_bytes()
+    outputs_before = _out_dir_snapshot(output_directory)
+    shutil.rmtree(first_lock_root)
+
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        output_lock_root=second_lock_root,
+    )
+    contender = _configure_out_dir_owner_project(source_dir, second_build_dir)
+
+    assert contender.returncode != 0
+    output = " ".join((contender.stdout + contender.stderr).split())
+    assert "owned by a different or deleted CMake build tree" in output
+    assert marker.read_bytes() == marker_before
+    assert witness.read_bytes() == witness_before
+    assert _out_dir_snapshot(output_directory) == outputs_before
+    assert not first_lock_root.exists()
+    assert not list(second_lock_root.glob("*.owner"))
+
+
+def test_missing_transaction_witness_is_not_treated_as_interrupted_publication(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    first_build_dir = tmp_path / "build-first"
+    contender_build_dir = tmp_path / "build-contender"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    _write_out_dir_owner_project(source_dir, output_directory)
+
+    configured = _configure_out_dir_owner_project(source_dir, first_build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    built = _build_out_dir_owner_project(first_build_dir)
+    assert built.returncode == 0, built.stdout + built.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in marker.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        marker, owner_fields["transaction-sha256"], "committed"
+    )
+    owner_records = [marker, *lock_root.glob("*.owner")]
+    owner_records_before = {path: path.read_bytes() for path in owner_records}
+    outputs_before = _out_dir_snapshot(output_directory)
+    witness.unlink()
+
+    contender = _configure_out_dir_owner_project(source_dir, contender_build_dir)
+
+    assert contender.returncode != 0
+    output = " ".join((contender.stdout + contender.stderr).split()).replace("\\", "/")
+    assert "missing or unverifiable transaction witness" in output
+    assert any(path.as_posix() in output for path in owner_records if path != marker)
+    assert witness.as_posix() in output
+    assert "Choose disjoint generated outputs" in output
+    assert "after confirming no build uses the output" in output
+    assert {path: path.read_bytes() for path in owner_records} == owner_records_before
+    assert _out_dir_snapshot(output_directory) == outputs_before
+
+
+def test_output_lock_root_rejects_symbolic_link_or_junction_alias(
+    tmp_path: Path,
+) -> None:
+    physical_lock_root = tmp_path / "physical-output-locks"
+    linked_lock_root = tmp_path / "linked-output-locks"
+    physical_lock_root.mkdir()
+    _create_generated_output_directory_link(linked_lock_root, physical_lock_root)
+    try:
+        result = _configure_cmake_snippet(
+            tmp_path,
+            "\n".join(
+                [
+                    f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{linked_lock_root.as_posix()}")',
+                    "_protocyte_shared_output_lock_directory(lock_directory)",
+                ]
+            ),
+        )
+
+        assert result.returncode != 0
+        output = " ".join((result.stdout + result.stderr).split())
+        assert "must not contain symbolic-link or junction components" in output
+    finally:
+        if linked_lock_root.exists():
+            linked_lock_root.unlink()
+
+
+def test_build_rejects_output_lock_root_replaced_by_junction_after_configure(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    displaced_lock_root = tmp_path / "configured-output-locks"
+    redirected_lock_root = tmp_path / "redirected-output-locks"
+    _write_out_dir_owner_project(
+        source_dir,
+        output_directory,
+        output_lock_root=lock_root,
+    )
+    configured = _configure_out_dir_owner_project(source_dir, build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+
+    lock_root.rename(displaced_lock_root)
+    redirected_lock_root.mkdir()
+    _create_generated_output_directory_link(lock_root, redirected_lock_root)
+    try:
+        built = _build_out_dir_owner_project(build_dir)
+
+        assert built.returncode != 0
+        output = " ".join((built.stdout + built.stderr).split()).replace("\\", "/")
+        assert "now contains a symbolic-link or junction component" in output
+        assert lock_root.as_posix() in output
+        assert "reconfigure before building" in output
+        marker, _ = _out_dir_owner_record_paths(output_directory)
+        assert not marker.exists()
+        assert not list(redirected_lock_root.iterdir())
+        assert not list(displaced_lock_root.glob("*.owner"))
+        assert not any(output_directory.rglob("*"))
+    finally:
+        if lock_root.exists():
+            lock_root.unlink()
+
+
+def test_nested_configure_graph_rejects_split_output_lock_namespaces(
+    tmp_path: Path,
+) -> None:
+    first_lock_root = tmp_path / "output-locks-first"
+    second_lock_root = tmp_path / "output-locks-second"
+    first_lock_root.mkdir()
+    second_lock_root.mkdir()
+
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{first_lock_root.as_posix()}")',
+                "_protocyte_shared_output_lock_directory(parent_lock_directory)",
+                "add_subdirectory(child)",
+            ]
+        ),
+        files={
+            "child/CMakeLists.txt": "\n".join(
+                [
+                    f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{second_lock_root.as_posix()}")',
+                    "_protocyte_shared_output_lock_directory(child_lock_directory)",
+                    "",
+                ]
+            )
+        },
+    )
+
+    assert result.returncode != 0
+    output = " ".join((result.stdout + result.stderr).split()).replace("\\", "/")
+    assert "same canonical output-lock namespace" in output
+    assert first_lock_root.as_posix() in output
+    assert second_lock_root.as_posix() in output
+    assert "Set PROTOCYTE_OUTPUT_LOCK_ROOT once" in output
 
 
 def test_deleted_build_tree_does_not_release_out_dir_ownership(tmp_path: Path) -> None:
@@ -9940,8 +10708,8 @@ def test_manual_owner_cleanup_allows_deliberate_out_dir_transfer(
     assert second_build.returncode == 0, second_build.stdout + second_build.stderr
     second_owner = marker.read_text(encoding="utf-8")
     assert second_owner != first_owner
-    assert second_owner == (
-        f"version=1\nbuild-tree-sha256={_build_tree_owner_hash(second_build_dir)}\n"
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(second_build_dir)
     )
 
 
@@ -10014,12 +10782,18 @@ def test_out_dir_owner_record_contains_no_private_path(tmp_path: Path) -> None:
     assert len(owner_records) == 3
     for owner_record in owner_records:
         payload = owner_record.read_text(encoding="utf-8")
-        assert payload == (
-            f"version=1\nbuild-tree-sha256={_build_tree_owner_hash(build_dir)}\n"
+        assert _committed_owner_build_hash(owner_record, marker) == (
+            _build_tree_owner_hash(build_dir)
         )
         assert str(tmp_path).lower() not in payload.lower()
         assert build_dir.name not in payload
         assert output_directory.name not in payload
+    transaction_records = list(marker.parent.glob(f"{marker.name}.*.committed"))
+    assert len(transaction_records) == 1
+    transaction_payload = transaction_records[0].read_text(encoding="utf-8")
+    assert str(tmp_path).lower() not in transaction_payload.lower()
+    assert build_dir.name not in transaction_payload
+    assert output_directory.name not in transaction_payload
 
 
 def test_failed_validation_does_not_poison_out_dir_ownership(tmp_path: Path) -> None:
@@ -10043,6 +10817,116 @@ def test_failed_validation_does_not_poison_out_dir_ownership(tmp_path: Path) -> 
     _write_out_dir_owner_project(source_dir, output_directory)
     corrected = _configure_out_dir_owner_project(source_dir, tmp_path / "good-build")
     assert corrected.returncode == 0, corrected.stdout + corrected.stderr
+
+
+def test_failed_first_generation_does_not_block_fresh_out_dir_owner(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    failed_build_dir = tmp_path / "failed-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    for build_dir in (failed_build_dir, fresh_build_dir):
+        configured = _configure_out_dir_owner_project(source_dir, build_dir)
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+    _make_fake_protoc_fail_in_build(source_dir, failed_build_dir)
+
+    failed = _build_out_dir_owner_project(failed_build_dir)
+
+    assert failed.returncode != 0
+    assert "simulated protoc failure" in failed.stdout + failed.stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+
+    recovered = _build_out_dir_owner_project(fresh_build_dir)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
+    assert (output_directory / "demo_0.protocyte.hpp").is_file()
+    assert (output_directory / "demo_0.protocyte.cpp").is_file()
+
+
+@pytest.mark.parametrize("published_owner_count", [1, 2, 3])
+def test_incomplete_owner_publication_is_recovered_after_each_step(
+    tmp_path: Path,
+    published_owner_count: int,
+) -> None:
+    source_dir = tmp_path / "project"
+    interrupted_build_dir = tmp_path / "interrupted-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    interrupted = _run_direct_owner_generation(
+        source_dir,
+        interrupted_build_dir,
+        output_directory,
+        instrumented_script,
+        f"-DPROTOCYTE_TEST_ABORT_AFTER_OWNER_PUBLICATIONS={published_owner_count}",
+    )
+
+    assert interrupted.returncode != 0
+    assert "injected ownership publication termination" in (
+        interrupted.stdout + interrupted.stderr
+    )
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert marker.is_file()
+    output_owners = list((tmp_path / "output-locks").glob("*.owner"))
+    assert len(output_owners) == published_owner_count - 1
+    assert not list(marker.parent.glob(f"{marker.name}.*.committed"))
+
+    configured = _configure_out_dir_owner_project(source_dir, fresh_build_dir)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    recovered = _build_out_dir_owner_project(fresh_build_dir)
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
+
+
+def test_later_owner_staging_write_failure_publishes_no_durable_claim(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    failed_build_dir = tmp_path / "failed-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    failed = _run_direct_owner_generation(
+        source_dir,
+        failed_build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX=3",
+    )
+
+    assert failed.returncode != 0
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert not marker.exists()
+    assert not list((tmp_path / "output-locks").glob("*.owner"))
+    assert not list(marker.parent.glob(f"{marker.name}.*.committed"))
+
+    configured = _configure_out_dir_owner_project(source_dir, fresh_build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    recovered = _build_out_dir_owner_project(fresh_build_dir)
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
 
 
 def test_nested_out_dirs_cannot_claim_the_same_generated_output(
@@ -10071,13 +10955,74 @@ def test_nested_out_dirs_cannot_claim_the_same_generated_output(
     first_build = _build_out_dir_owner_project(first_build_dir)
     assert first_build.returncode == 0, first_build.stdout + first_build.stderr
     before = _out_dir_snapshot(output_directory)
+    output_owner_records = list((tmp_path / "output-locks").glob("*.owner"))
+    assert len(output_owner_records) == 2
+    output_owner_payload = output_owner_records[0].read_text(encoding="utf-8")
+    output_owner_fields = dict(
+        line.split("=", maxsplit=1) for line in output_owner_payload.splitlines()
+    )
+    second_root_marker, _ = _out_dir_owner_record_paths(output_directory / "nested")
+    expected_witness = _owner_transaction_record(
+        second_root_marker,
+        output_owner_fields["transaction-sha256"],
+        "committed",
+    )
 
     second_build = _build_out_dir_owner_project(second_build_dir)
 
     assert second_build.returncode != 0
-    output = " ".join((second_build.stdout + second_build.stderr).split())
-    assert "Generated-output ownership belongs to a different build tree" in output
+    output = " ".join((second_build.stdout + second_build.stderr).split()).replace(
+        "\\", "/"
+    )
+    assert "missing or unverifiable transaction witness" in output
+    assert any(owner.as_posix() in output for owner in output_owner_records)
+    assert expected_witness.as_posix() in output
+    assert "will not reclaim the output automatically" in output
+    assert "Choose disjoint generated outputs" in output
+    assert "after confirming no build uses the output" in output
     assert _out_dir_snapshot(output_directory) == before
+
+
+def test_build_time_missing_root_witness_diagnostic_is_actionable(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    lock_root = tmp_path / "output-locks"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    configured = _configure_out_dir_owner_project(source_dir, build_dir)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    built = _build_out_dir_owner_project(build_dir)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    marker_before = marker.read_bytes()
+    owner_fields = dict(
+        line.split("=", maxsplit=1)
+        for line in marker.read_text(encoding="utf-8").splitlines()
+    )
+    witness = _owner_transaction_record(
+        marker, owner_fields["transaction-sha256"], "committed"
+    )
+    witness.unlink()
+    for output_owner in lock_root.glob("*.owner"):
+        output_owner.unlink()
+    (output_directory / "demo_0.protocyte.hpp").unlink()
+    outputs_before = _out_dir_snapshot(output_directory)
+
+    failed = _build_out_dir_owner_project(build_dir)
+
+    assert failed.returncode != 0
+    output = " ".join((failed.stdout + failed.stderr).split()).replace("\\", "/")
+    assert "OUT_DIR ownership record" in output
+    assert marker.as_posix() in output
+    assert witness.as_posix() in output
+    assert "will not reclaim the OUT_DIR automatically" in output
+    assert "choose a different OUT_DIR" in output
+    assert "after confirming no build uses the OUT_DIR" in output
+    assert marker.read_bytes() == marker_before
+    assert _out_dir_snapshot(output_directory) == outputs_before
 
 
 def test_transferred_out_dir_revokes_an_already_configured_build(
@@ -10539,11 +11484,78 @@ def test_concurrent_build_trees_atomically_race_for_out_dir_ownership(
 
     marker, lock = _out_dir_owner_record_paths(output_directory)
     winner = return_codes.index(0)
-    assert marker.read_text(encoding="utf-8") == (
-        "version=1\n"
-        f"build-tree-sha256={_build_tree_owner_hash(build_directories[winner])}\n"
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(build_directories[winner])
     )
     assert lock.is_file()
+
+
+def test_failed_generation_releases_waiting_out_dir_owner_contender(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "project"
+    failed_build_dir = tmp_path / "failed-build"
+    fresh_build_dir = tmp_path / "fresh-build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    for build_dir in (failed_build_dir, fresh_build_dir):
+        configured = _configure_out_dir_owner_project(source_dir, build_dir)
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+
+    ready = tmp_path / "failing-protoc-ready"
+    release = tmp_path / "release-failing-protoc"
+    _make_fake_protoc_fail_in_build(
+        source_dir,
+        failed_build_dir,
+        ready_path=ready,
+        release_path=release,
+    )
+    failed_process = subprocess.Popen(
+        ["cmake", "--build", str(failed_build_dir), "--target", "generated_0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    fresh_process: subprocess.Popen[str] | None = None
+    try:
+        deadline = time.monotonic() + 30.0
+        while not ready.is_file():
+            if failed_process.poll() is not None:
+                stdout, stderr = failed_process.communicate()
+                pytest.fail(
+                    "the failing generation exited before acquiring ownership locks:\n"
+                    + stdout
+                    + stderr
+                )
+            if time.monotonic() >= deadline:
+                pytest.fail("timed out waiting for the failing generation")
+            time.sleep(0.01)
+
+        fresh_process = subprocess.Popen(
+            ["cmake", "--build", str(fresh_build_dir), "--target", "generated_0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.1)
+        assert fresh_process.poll() is None
+        release.write_text("release\n", encoding="utf-8")
+
+        failed_stdout, failed_stderr = failed_process.communicate(timeout=120)
+        fresh_stdout, fresh_stderr = fresh_process.communicate(timeout=120)
+    finally:
+        for process in (failed_process, fresh_process):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+
+    assert failed_process.returncode != 0
+    assert "simulated protoc failure" in failed_stdout + failed_stderr
+    assert fresh_process.returncode == 0, fresh_stdout + fresh_stderr
+    marker, _ = _out_dir_owner_record_paths(output_directory)
+    assert _committed_owner_build_hash(marker, marker) == (
+        _build_tree_owner_hash(fresh_build_dir)
+    )
 
 
 def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
@@ -10611,6 +11623,8 @@ def test_generation_lock_wrapper_preserves_protoc_failure_diagnostics(
             "-DGENERATION_TARGET=failing_codegen",
             f"-DGENERATION_WORKING_DIRECTORY={tmp_path}",
             f"-DLOCK_DIRECTORY={lock_directory}",
+            "-DLOCK_DIRECTORY_IDENTITY_SHA256="
+            f"{_filesystem_identity_hash(lock_directory)}",
             f"-DLOCK_MANIFEST={lock_manifest}",
             f"-DOUTPUT_DIRECTORY={output_directory}",
             f"-DOUT_DIR_OWNER_MARKER={out_dir_owner_marker}",
@@ -11038,6 +12052,134 @@ def test_generate_descriptor_set_discover_skips_google_protobuf_files(
     headers = (build_dir / "headers.txt").read_text(encoding="utf-8")
     assert "generated/api/demo.protocyte.hpp" in headers
     assert "generated/google/protobuf/timestamp.protocyte.hpp" in headers
+
+
+@pytest.mark.parametrize(
+    ("capability", "expected_error"),
+    [
+        (
+            "group",
+            'field "google.protobuf.Unsupported.Payload" uses unsupported groups',
+        ),
+        ("edition", "protobuf Editions are not supported in v1"),
+        (
+            "proto3-extension",
+            'extension "google.protobuf.marker" extends unsupported proto3 target '
+            '".google.protobuf.Unsupported"',
+        ),
+        (
+            "internal-header",
+            '"protocyte/options.proto" cannot have a generated header because it '
+            "is reserved for Protocyte generator internals",
+        ),
+    ],
+)
+def test_descriptor_set_discover_reports_non_generatable_headers_at_configure_time(
+    tmp_path: Path,
+    capability: str,
+    expected_error: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    source_dir.mkdir()
+    descriptor_set = source_dir / "descriptor_set.pb"
+    file_set = descriptor_pb2.FileDescriptorSet()
+
+    if capability != "internal-header":
+        dependency = file_set.file.add()
+        dependency.name = "google/protobuf/unsupported.proto"
+        dependency.package = "google.protobuf"
+        dependency.syntax = "proto3"
+        unsupported = dependency.message_type.add()
+        unsupported.name = "Unsupported"
+        if capability == "group":
+            dependency.syntax = "proto2"
+            group = unsupported.field.add()
+            group.name = "Payload"
+            group.number = 1
+            group.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+            group.type = descriptor_pb2.FieldDescriptorProto.TYPE_GROUP
+        elif capability == "edition":
+            dependency.syntax = "editions"
+            dependency.edition = descriptor_pb2.EDITION_2023
+        else:
+            extension = dependency.extension.add()
+            extension.name = "marker"
+            extension.number = 1000
+            extension.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+            extension.type = descriptor_pb2.FieldDescriptorProto.TYPE_INT32
+            extension.extendee = ".google.protobuf.Unsupported"
+        bridge = file_set.file.add()
+        bridge.name = "google/protobuf/bridge.proto"
+        bridge.package = "google.protobuf"
+        bridge.syntax = "proto3"
+        bridge.dependency.append(dependency.name)
+        bridge.message_type.add().name = "Bridge"
+        root = file_set.file.add()
+        root.name = "api/request.proto"
+        root.package = "api"
+        root.syntax = "proto3"
+        root.dependency.append(bridge.name)
+        root.message_type.add().name = "Request"
+    else:
+        options = file_set.file.add()
+        options.name = "protocyte/options.proto"
+        options.package = "protocyte"
+        options.syntax = "proto3"
+        options.message_type.add().name = "ArrayOptions"
+        consumer = file_set.file.add()
+        consumer.name = "consumer.proto"
+        consumer.package = "demo"
+        consumer.syntax = "proto3"
+        consumer.dependency.append(options.name)
+        message = consumer.message_type.add()
+        message.name = "Consumer"
+        field = message.field.add()
+        field.name = "options"
+        field.number = 1
+        field.label = descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL
+        field.type = descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE
+        field.type_name = ".protocyte.ArrayOptions"
+    descriptor_set.write_bytes(file_set.SerializeToString())
+
+    protoc = source_dir / "tools" / "protoc"
+    plugin = _installed_protocyte_plugin()
+    protoc.parent.mkdir(parents=True, exist_ok=True)
+    protoc.write_text("", encoding="utf-8")
+    (source_dir / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(descriptor_set_capability_preflight LANGUAGES NONE)",
+                f'set(Python3_ROOT_DIR "{Path(sys.prefix).as_posix()}")',
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
+                "protocyte_generate(",
+                "    TARGET demo_codegen",
+                f'    DESCRIPTOR_SET "{descriptor_set.as_posix()}"',
+                '    OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"',
+                "    DISCOVER",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["cmake", "-S", str(source_dir), "-B", str(build_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    normalized_output = " ".join(output.split())
+    assert result.returncode != 0
+    assert "Failed to inspect descriptor set" in normalized_output
+    assert expected_error in normalized_output
 
 
 @pytest.mark.parametrize(
@@ -12231,16 +13373,33 @@ def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> N
 
 def test_cmake_constraints_pin_the_private_environment() -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    constraint_lines = [
-        line.strip()
-        for line in (repo_root / "protocyte-cmake-constraints.txt")
-        .read_text(encoding="utf-8")
-        .splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
-    constraints = dict(line.split("==", 1) for line in constraint_lines)
+    constraints_path = repo_root / "protocyte-cmake-constraints.txt"
+    constraint_lines = []
+    hashes: dict[str, list[str]] = {}
+    current_package: str | None = None
+    for raw_line in constraints_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("--hash="):
+            assert current_package is not None
+            hashes.setdefault(current_package, []).append(
+                line.removesuffix("\\").rstrip()
+            )
+            continue
+        package, version = line.removesuffix("\\").rstrip().split("==", 1)
+        constraint_lines.append((package, version))
+        current_package = package
+    constraints = dict(constraint_lines)
 
     assert set(constraints) == {"pip", "protobuf", "setuptools", "wheel"}
+    assert set(hashes) == set(constraints)
+    assert all(package_hashes for package_hashes in hashes.values())
+    assert all(
+        package_hash.startswith("--hash=sha256:") and len(package_hash) == 78
+        for package_hashes in hashes.values()
+        for package_hash in package_hashes
+    )
     locked_packages = tomllib.loads(
         (repo_root / "uv.lock").read_text(encoding="utf-8")
     )["package"]
@@ -12250,6 +13409,354 @@ def test_cmake_constraints_pin_the_private_environment() -> None:
         if package["name"] == "protobuf"
     )
     assert constraints["protobuf"] == locked_protobuf
+
+    functions = (repo_root / "cmake" / "ProtocyteFunctions.cmake").read_text(
+        encoding="utf-8"
+    )
+    assert "--unset=PIP_TARGET" in functions
+    assert "--unset=PIP_PREFIX" in functions
+    assert "--unset=PIP_ROOT" in functions
+    assert "--unset=PIP_USER" in functions
+    assert "--unset=PIP_PYTHON" in functions
+    assert "--unset=PIP_QUIET" in functions
+    assert "--unset=PIP_REQUIREMENT" in functions
+    assert "--unset=PIP_EDITABLE" in functions
+    assert "--unset=PIP_GROUP" in functions
+    assert "--unset=PIP_REQUIREMENTS_FROM_SCRIPT" in functions
+    assert "--unset=PYTHONUSERBASE" in functions
+    assert "--unset=PYTHONPATH" in functions
+    assert "--unset=PYTHONHOME" in functions
+    assert "PIP_ISOLATED=0" in functions
+    assert '"${python_executable}" -I -m pip install' in functions
+    assert 'for option in ("target", "prefix", "root"):' in functions
+    assert (
+        'for option in ("requirement", "editable", "group", "requirements-from-script"):'
+        in functions
+    )
+    assert 'configuration.get_value("global.python")' in functions
+    assert "--no-user" in functions
+    assert functions.count("_protocyte_run_managed_pip(") == 3
+    assert functions.count("_protocyte_check_managed_pip_configuration(") == 2
+    assert "--only-binary=:all:\n            --require-hashes" in functions
+    assert "--require-hashes\n            --requirement" in functions
+    assert '--no-deps\n            "${protocyte_staged_project}"' in functions
+    generation = (repo_root / "cmake" / "ProtocyteGenerate.cmake").read_text(
+        encoding="utf-8"
+    )
+    assert "if(PROTOCYTE_MANAGED_PLUGIN)" in generation
+    assert '"--unset=PYTHONPATH" "--unset=PYTHONHOME"' in generation
+
+
+def test_hash_locked_requirements_reject_same_version_different_bytes(
+    tmp_path: Path,
+) -> None:
+    package_name = "managed-hash-fixture"
+    package_version = "1.0"
+    wheel = tmp_path / "managed_hash_fixture-1.0-py3-none-any.whl"
+    wheel.write_bytes(b"same-version-but-untrusted-bytes")
+    requirements = tmp_path / "requirements.txt"
+    requirements.write_text(
+        f"{package_name}=={package_version} --hash=sha256:{'0' * 64}\n",
+        encoding="utf-8",
+    )
+    environment = tmp_path / "environment"
+    subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+    python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+    result = subprocess.run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "download",
+            "--no-deps",
+            "--no-index",
+            "--find-links",
+            str(tmp_path),
+            "--require-hashes",
+            "--requirement",
+            str(requirements),
+            "--dest",
+            str(tmp_path / "download"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "hashes" in output.casefold()
+    assert f"{'0' * 64}" in output
+    assert "got" in output.casefold()
+
+
+def test_managed_environment_rejects_wrong_hash_from_configured_index(
+    tmp_path: Path,
+) -> None:
+    index_root = tmp_path / "package-index"
+    package_directory = index_root / "pip"
+    package_directory.mkdir(parents=True)
+    wheel_name = "pip-26.0.1-py3-none-any.whl"
+    (package_directory / wheel_name).write_bytes(b"malicious-same-version-pip-wheel")
+    (package_directory / "index.html").write_text(
+        f'<a href="{wheel_name}">{wheel_name}</a>\n', encoding="utf-8"
+    )
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PIP_INDEX_URL": index_root.as_uri(),
+            "PIP_EXTRA_INDEX_URL": "",
+            "PIP_NO_CACHE_DIR": "1",
+        }
+    )
+
+    configured = _configure_managed_environment(source_dir, build_dir, env=environment)
+
+    output = configured.stdout + configured.stderr
+    assert configured.returncode != 0
+    assert "hashes from the requirements file" in output.casefold()
+    assert "pip-26.0.1-py3-none-any.whl" in output
+    assert not environment_root.exists() or not any(
+        child.is_dir() and (child / ".protocyte-ready").is_file()
+        for child in environment_root.iterdir()
+    )
+
+
+def _write_pip_requirement_injection_project(project: Path, sentinel: Path) -> None:
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools"]\n'
+        'build-backend = "setuptools.build_meta"\n',
+        encoding="utf-8",
+    )
+    (project / "setup.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "from setuptools import setup\n"
+        "Path(os.environ['PROTOCYTE_TEST_INJECTION_SENTINEL']).write_text(\n"
+        "    'source-build-ran\\n', encoding='utf-8'\n"
+        ")\n"
+        "setup(name='protocyte-pip-injection', version='1.0', py_modules=['injected'])\n",
+        encoding="utf-8",
+    )
+    (project / "injected.py").write_text("value = 1\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("settings_source", ["environment", "config-file"])
+@pytest.mark.parametrize("input_kind", ["requirement", "editable"])
+def test_managed_environment_rejects_additive_pip_install_inputs(
+    tmp_path: Path,
+    settings_source: str,
+    input_kind: str,
+) -> None:
+    injection_project = tmp_path / "injected-project"
+    sentinel = tmp_path / "injected-source-build.txt"
+    _write_pip_requirement_injection_project(injection_project, sentinel)
+    if input_kind == "requirement":
+        injection_input = tmp_path / "injected-requirements.txt"
+        injection_input.write_text(f"{injection_project}\n", encoding="utf-8")
+    else:
+        injection_input = injection_project
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    environment = os.environ.copy()
+    environment["PROTOCYTE_TEST_INJECTION_SENTINEL"] = str(sentinel)
+    if settings_source == "environment":
+        environment[f"PIP_{input_kind.upper()}"] = str(injection_input)
+    else:
+        config_file = tmp_path / "pip.ini"
+        config_file.write_text(
+            f"[install]\n{input_kind} = {injection_input}\n",
+            encoding="utf-8",
+        )
+        environment["PIP_CONFIG_FILE"] = str(config_file)
+
+    configured = _configure_managed_environment(source_dir, build_dir, env=environment)
+
+    if settings_source == "environment":
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        environment_directory = _published_managed_environment(environment_root)
+        python, _plugin = _managed_environment_executables(environment_directory)
+        installed = subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import importlib.util; print(importlib.util.find_spec('injected'))",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert installed.stdout.strip() == "None"
+    else:
+        assert configured.returncode != 0
+        assert f"install.{input_kind}" in (configured.stdout + configured.stderr)
+        assert not environment_root.exists() or not any(
+            child.is_dir() and (child / ".protocyte-ready").is_file()
+            for child in environment_root.iterdir()
+        )
+    assert not sentinel.exists()
+
+
+def test_managed_environment_ignores_pip26_script_requirements_from_environment(
+    tmp_path: Path,
+) -> None:
+    injection_project = tmp_path / "injected-project"
+    sentinel = tmp_path / "injected-source-build.txt"
+    _write_pip_requirement_injection_project(injection_project, sentinel)
+    script = tmp_path / "injected-requirements.py"
+    script.write_text(
+        "# /// script\n"
+        "# dependencies = [\n"
+        f'#   "protocyte-pip-injection @ {injection_project.as_uri()}",\n'
+        "# ]\n"
+        "# ///\n",
+        encoding="utf-8",
+    )
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PIP_REQUIREMENTS_FROM_SCRIPT": str(script),
+            "PROTOCYTE_TEST_INJECTION_SENTINEL": str(sentinel),
+        }
+    )
+
+    configured = _configure_managed_environment(source_dir, build_dir, env=environment)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    environment_directory = _published_managed_environment(environment_root)
+    python, _plugin = _managed_environment_executables(environment_directory)
+    installed = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import importlib.util; print(importlib.util.find_spec('injected'))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert installed.stdout.strip() == "None"
+    assert not sentinel.exists()
+
+    # This pip 26 control proves the inline script is a real additive input:
+    # pip prepares the injected local source even with --dry-run. The managed
+    # configure above must never reach it.
+    control_environment = environment.copy()
+    control_environment.pop("PIP_REQUIREMENTS_FROM_SCRIPT")
+    control = subprocess.run(
+        [
+            str(python),
+            "-I",
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--no-deps",
+            "--no-build-isolation",
+            "--requirements-from-script",
+            str(script),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=control_environment,
+    )
+    assert control.returncode == 0, control.stdout + control.stderr
+    assert sentinel.read_text(encoding="utf-8") == "source-build-ran\n"
+
+
+@pytest.mark.parametrize("settings_source", ["environment", "config-file"])
+def test_managed_environment_confines_pip_destination_settings(
+    tmp_path: Path,
+    settings_source: str,
+) -> None:
+    destination_names = ("target", "prefix", "root", "user")
+    destinations = {
+        name: tmp_path / "outside-managed-environment" / name
+        for name in destination_names
+    }
+    sentinels = {}
+    for name, destination in destinations.items():
+        destination.mkdir(parents=True)
+        sentinel = destination / "keep.txt"
+        sentinel.write_text("user-owned\n", encoding="utf-8")
+        sentinels[name] = sentinel
+
+    source_dir = tmp_path / "consumer"
+    environment_root = tmp_path / "managed-environments"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    shadow_modules = tmp_path / "shadow-modules"
+    shadow_package = shadow_modules / "protocyte"
+    shadow_package.mkdir(parents=True)
+    (shadow_package / "__init__.py").write_text("\n", encoding="utf-8")
+    (shadow_package / "main.py").write_text(
+        "raise RuntimeError('ambient PYTHONPATH was imported')\n",
+        encoding="utf-8",
+    )
+    configure_cwd = tmp_path / "configure-cwd"
+    configure_cwd.mkdir()
+    environment = os.environ.copy()
+    if settings_source == "environment":
+        environment.update(
+            {
+                "PIP_TARGET": str(destinations["target"]),
+                "PIP_PREFIX": str(destinations["prefix"]),
+                "PIP_ROOT": str(destinations["root"]),
+                "PIP_USER": "1",
+                "PIP_PYTHON": str(destinations["user"] / "python.exe"),
+                "PIP_ISOLATED": "1",
+                "PYTHONUSERBASE": str(destinations["user"]),
+                "PYTHONPATH": str(shadow_modules),
+            }
+        )
+    else:
+        config_file = tmp_path / "pip.ini"
+        config_file.write_text(
+            "[global]\n"
+            f"target = {destinations['target']}\n"
+            f"prefix = {destinations['prefix']}\n"
+            f"root = {destinations['root']}\n"
+            f"python = {destinations['user'] / 'python.exe'}\n"
+            "user = true\n",
+            encoding="utf-8",
+        )
+        environment["PIP_CONFIG_FILE"] = str(config_file)
+        environment["PYTHONUSERBASE"] = str(destinations["user"])
+
+    configured = _configure_managed_environment(
+        source_dir,
+        build_dir,
+        env=environment,
+        cwd=configure_cwd,
+    )
+
+    if settings_source == "environment":
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        _published_managed_environment(environment_root)
+    else:
+        assert configured.returncode != 0
+        output = configured.stdout + configured.stderr
+        assert "effective pip configuration" in output
+        assert "global.python" in output
+        assert str(destinations["target"]) not in output
+        assert not environment_root.exists() or not any(
+            child.is_dir() and (child / ".protocyte-ready").is_file()
+            for child in environment_root.iterdir()
+        )
+    for name, destination in destinations.items():
+        assert list(destination.iterdir()) == [sentinels[name]], name
+    assert not (configure_cwd / "Lib").exists()
+    assert not (configure_cwd / "Scripts").exists()
 
 
 def test_relative_managed_environment_root_is_canonical_and_confined(
@@ -12570,6 +14077,138 @@ def test_managed_environment_reuses_valid_install_and_repairs_mutated_version(
         == __version__
     )
     _assert_no_managed_environment_transaction_leftovers(environment_root)
+
+
+def _run_managed_environment_transaction(
+    action: str,
+    destination: Path,
+    fingerprint: str,
+    transaction: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    helper = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteManagedEnvironment.py"
+    )
+    command = [
+        sys.executable,
+        str(helper),
+        action,
+        "--destination",
+        str(destination),
+        "--fingerprint",
+        fingerprint,
+    ]
+    if transaction is not None:
+        command.extend(("--transaction", str(transaction)))
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def test_managed_environment_leaves_legacy_previous_lookalike_untouched(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    lookalike = environment_root / f".{environment.name}.previous"
+    lookalike.mkdir()
+    sentinel = lookalike / "keep.txt"
+    sentinel.write_text("user-owned\n", encoding="utf-8")
+
+    incremental = _configure_managed_environment(source_dir, build_dir)
+
+    assert incremental.returncode == 0, incremental.stdout + incremental.stderr
+    assert sentinel.read_text(encoding="utf-8") == "user-owned\n"
+
+
+def test_managed_environment_ignores_unowned_predictable_transaction_lookalike(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    lookalike = environment_root / (
+        f".{environment.name}.protocyte-transaction-{'f' * 32}"
+    )
+    lookalike.mkdir()
+    owner = lookalike / ".protocyte-managed-environment.owner"
+    owner.write_text("not an ownership record\n", encoding="utf-8")
+
+    retry = _configure_managed_environment(source_dir, build_dir)
+
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    assert owner.read_text(encoding="utf-8") == "not an ownership record\n"
+    assert (environment / ".protocyte-ready").is_file()
+
+
+def test_managed_environment_recovers_an_identity_bound_interrupted_repair(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    fingerprint = (environment / ".protocyte-ready").read_text(encoding="utf-8").strip()
+    created = _run_managed_environment_transaction("create", environment, fingerprint)
+    assert created.returncode == 0, created.stdout + created.stderr
+    transaction = Path(created.stdout.strip())
+    backed_up = _run_managed_environment_transaction(
+        "backup", environment, fingerprint, transaction
+    )
+    assert backed_up.returncode == 0, backed_up.stdout + backed_up.stderr
+    assert not environment.exists()
+
+    recovered = _configure_managed_environment(source_dir, build_dir)
+
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert (environment / ".protocyte-ready").read_text(encoding="utf-8").strip() == (
+        fingerprint
+    )
+    assert not transaction.exists()
+    _assert_no_managed_environment_transaction_leftovers(environment_root)
+
+
+def test_managed_environment_refuses_a_replaced_identity_bound_backup(
+    tmp_path: Path,
+) -> None:
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "project"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    initial = _configure_managed_environment(source_dir, build_dir)
+    assert initial.returncode == 0, initial.stdout + initial.stderr
+    environment = _published_managed_environment(environment_root)
+    fingerprint = (environment / ".protocyte-ready").read_text(encoding="utf-8").strip()
+    created = _run_managed_environment_transaction("create", environment, fingerprint)
+    assert created.returncode == 0, created.stdout + created.stderr
+    transaction = Path(created.stdout.strip())
+    backed_up = _run_managed_environment_transaction(
+        "backup", environment, fingerprint, transaction
+    )
+    assert backed_up.returncode == 0, backed_up.stdout + backed_up.stderr
+    previous = transaction / "previous"
+    preserved_backup = tmp_path / "preserved-backup"
+    previous.replace(preserved_backup)
+    previous.mkdir()
+    (previous / ".protocyte-ready").write_text(f"{fingerprint}\n", encoding="utf-8")
+
+    recovered = _configure_managed_environment(source_dir, build_dir)
+
+    assert recovered.returncode != 0
+    assert "Failed to recover Protocyte's managed Python environment transaction" in (
+        recovered.stdout + recovered.stderr
+    )
+    assert (preserved_backup / ".protocyte-ready").read_text(
+        encoding="utf-8"
+    ).strip() == fingerprint
+    assert (previous / ".protocyte-ready").read_text(encoding="utf-8").strip() == (
+        fingerprint
+    )
 
 
 def test_cmake_fingerprint_inputs_trigger_automatic_reconfiguration(

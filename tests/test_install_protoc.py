@@ -79,6 +79,58 @@ def test_default_transaction_state_directory_is_per_user_and_private(
         assert stat.S_IMODE(state_directory.stat().st_mode) == 0o700
 
 
+def test_default_state_root_uses_canonical_trusted_temp_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_alias = tmp_path / "platform-temp-alias"
+    canonical_temp = tmp_path / "canonical-platform-temp"
+    canonical_temp.mkdir()
+    original_resolve = Path.resolve
+
+    def resolve_temp_alias(path: Path, *, strict: bool = False) -> Path:
+        if path == temp_alias:
+            assert strict
+            return canonical_temp
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.delenv(owned_transactions._STATE_DIRECTORY_ENV, raising=False)
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(temp_alias),
+    )
+    monkeypatch.setattr(Path, "resolve", resolve_temp_alias)
+
+    state_directory = owned_transactions._absolute_state_directory(None)
+
+    assert state_directory.parent == canonical_temp
+    assert not temp_alias.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX platform temp symlink check")
+def test_default_state_root_accepts_symlinked_platform_temp_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_temp = tmp_path / "canonical-platform-temp"
+    canonical_temp.mkdir()
+    temp_alias = tmp_path / "platform-temp-alias"
+    temp_alias.symlink_to(canonical_temp, target_is_directory=True)
+    monkeypatch.delenv(owned_transactions._STATE_DIRECTORY_ENV, raising=False)
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(temp_alias),
+    )
+
+    state_directory = owned_transactions._state_directory()
+
+    assert state_directory.parent == canonical_temp
+    assert state_directory.is_dir()
+    assert stat.S_IMODE(state_directory.stat().st_mode) == 0o700
+
+
 def test_transaction_state_metadata_is_private_and_redacts_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -190,6 +242,26 @@ def test_transaction_state_directory_rejects_links(
         owned_transactions._state_directory()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink check")
+def test_transaction_state_directory_rejects_linked_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    linked_ancestor = tmp_path / "linked-ancestor"
+    linked_ancestor.symlink_to(target, target_is_directory=True)
+    state_directory = linked_ancestor / "state"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+
+    with pytest.raises(RuntimeError, match="linked transaction state ancestor"):
+        owned_transactions._state_directory()
+    assert not (target / "state").exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory junction check")
 def test_windows_transaction_state_directory_rejects_junctions(
     tmp_path: Path,
@@ -224,6 +296,296 @@ def test_windows_transaction_state_directory_rejects_junctions(
             owned_transactions._state_directory()
     finally:
         state_directory.rmdir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction check")
+def test_windows_transaction_state_directory_rejects_junction_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "junction-target"
+    target.mkdir()
+    linked_ancestor = tmp_path / "junction-ancestor"
+    result = subprocess.run(
+        [
+            "cmd.exe",
+            "/d",
+            "/c",
+            "mklink",
+            "/J",
+            linked_ancestor.name,
+            target.name,
+        ],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(linked_ancestor / "state"),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="linked transaction state ancestor"):
+            owned_transactions._state_directory()
+        assert not (target / "state").exists()
+    finally:
+        linked_ancestor.rmdir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows directory junction check")
+def test_windows_registry_open_keeps_validated_state_root_pinned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    detached_state = tmp_path / "detached-state"
+    redirect_target = tmp_path / "redirect-target"
+    redirect_target.mkdir()
+    destination = tmp_path / "protoc"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(state_directory),
+    )
+    original_open_state_file = owned_transactions._open_state_file
+    swap_attempted = False
+    swap_blocked = False
+
+    def attempt_swap_before_registry_open(path: Path, flags: int):
+        nonlocal swap_attempted, swap_blocked
+        if (
+            not swap_attempted
+            and path == state_directory / owned_transactions._REGISTRY_LOCK_NAME
+        ):
+            swap_attempted = True
+            try:
+                state_directory.rename(detached_state)
+            except OSError:
+                swap_blocked = True
+            else:
+                result = subprocess.run(
+                    [
+                        "cmd.exe",
+                        "/d",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        state_directory.name,
+                        redirect_target.name,
+                    ],
+                    cwd=tmp_path,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                assert result.returncode == 0, result.stdout + result.stderr
+        return original_open_state_file(path, flags)
+
+    monkeypatch.setattr(
+        owned_transactions,
+        "_open_state_file",
+        attempt_swap_before_registry_open,
+    )
+    try:
+        with install_protoc.locked_destination(destination):
+            pass
+
+        assert swap_attempted
+        assert swap_blocked
+        assert not (redirect_target / owned_transactions._REGISTRY_LOCK_NAME).exists()
+    finally:
+        if detached_state.exists():
+            state_directory.rmdir()
+            detached_state.rename(state_directory)
+
+
+def test_relative_transaction_state_directory_reports_each_legacy_absolute_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_temporary_root = tmp_path / "first-temporary-root"
+    second_temporary_root = tmp_path / "second-temporary-root"
+    first_working_directory = tmp_path / "first-working-directory"
+    second_working_directory = tmp_path / "second-working-directory"
+    first_working_directory.mkdir()
+    second_working_directory.mkdir()
+    monkeypatch.setenv(owned_transactions._STATE_DIRECTORY_ENV, "shared-state")
+
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(first_temporary_root),
+    )
+    monkeypatch.chdir(first_working_directory)
+    with pytest.raises(RuntimeError, match="must be an absolute path") as first_error:
+        owned_transactions._state_directory()
+
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(second_temporary_root),
+    )
+    with pytest.raises(RuntimeError, match="must be an absolute path") as second_error:
+        owned_transactions._state_directory()
+
+    monkeypatch.chdir(second_working_directory)
+    with pytest.raises(RuntimeError, match="must be an absolute path") as third_error:
+        owned_transactions._state_directory()
+
+    first_legacy_root = first_working_directory / "shared-state"
+    second_legacy_root = second_working_directory / "shared-state"
+    assert str(first_error.value) == str(second_error.value)
+    assert str(first_legacy_root) in str(first_error.value)
+    assert str(second_legacy_root) in str(third_error.value)
+    assert "existing v7 state" in str(first_error.value)
+    assert not (first_working_directory / "shared-state").exists()
+    assert not (second_working_directory / "shared-state").exists()
+    assert not first_temporary_root.exists()
+    assert not second_temporary_root.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX legacy-state symlink check")
+def test_relative_state_migration_reports_canonical_posix_symlink_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    working_directory = tmp_path / "working-directory"
+    working_directory.mkdir()
+    canonical_parent = tmp_path / "canonical-parent"
+    canonical_parent.mkdir()
+    linked_parent = working_directory / "linked-parent"
+    linked_parent.symlink_to(canonical_parent, target_is_directory=True)
+    canonical_state = canonical_parent / "state"
+    monkeypatch.chdir(working_directory)
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(Path("linked-parent") / "state"),
+    )
+
+    with pytest.raises(RuntimeError, match="must be an absolute path") as error:
+        owned_transactions._state_directory()
+
+    assert str(canonical_state) in str(error.value)
+    assert "canonical absolute target" in str(error.value)
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(canonical_state),
+    )
+    assert owned_transactions._state_directory() == canonical_state
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows legacy-state junction check")
+def test_relative_state_migration_reports_canonical_windows_junction_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    working_directory = tmp_path / "working-directory"
+    working_directory.mkdir()
+    canonical_parent = tmp_path / "canonical-parent"
+    canonical_parent.mkdir()
+    linked_parent = working_directory / "linked-parent"
+    result = subprocess.run(
+        [
+            "cmd.exe",
+            "/d",
+            "/c",
+            "mklink",
+            "/J",
+            linked_parent.name,
+            str(canonical_parent),
+        ],
+        cwd=working_directory,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    canonical_state = canonical_parent / "state"
+    monkeypatch.chdir(working_directory)
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(Path("linked-parent") / "state"),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="must be an absolute path") as error:
+            owned_transactions._state_directory()
+
+        assert str(canonical_state) in str(error.value)
+        assert "canonical absolute target" in str(error.value)
+        monkeypatch.setenv(
+            owned_transactions._STATE_DIRECTORY_ENV,
+            str(canonical_state),
+        )
+        assert owned_transactions._state_directory() == canonical_state
+    finally:
+        linked_parent.rmdir()
+
+
+def test_default_state_root_namespace_distinguishes_users(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        owned_transactions.tempfile,
+        "gettempdir",
+        lambda: str(tmp_path),
+    )
+    monkeypatch.setattr(owned_transactions, "_effective_user_id", lambda: 1001)
+    first_user_state = owned_transactions._absolute_state_directory(None)
+    monkeypatch.setattr(owned_transactions, "_effective_user_id", lambda: 1002)
+    second_user_state = owned_transactions._absolute_state_directory(None)
+
+    assert first_user_state.parent == tmp_path
+    assert second_user_state.parent == tmp_path
+    assert first_user_state.name.endswith("-uid-1001")
+    assert second_user_state.name.endswith("-uid-1002")
+    assert first_user_state != second_user_state
+
+
+def test_relative_v7_state_can_be_recovered_after_explicit_absolute_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    working_directory = tmp_path / "working-directory"
+    working_directory.mkdir()
+    legacy_state = working_directory / "shared-state"
+    destination = tmp_path / "protoc"
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(legacy_state),
+    )
+    owner = install_protoc._create_install_transaction(destination, "transaction")
+    (owner.path / "legacy").write_text("legacy\n", encoding="utf-8")
+    marker_path = owner.marker_path
+    owned_path = owner.path
+    owner.close(remove_marker=False)
+
+    monkeypatch.chdir(working_directory)
+    monkeypatch.setenv(owned_transactions._STATE_DIRECTORY_ENV, "shared-state")
+    with pytest.raises(RuntimeError, match="must be an absolute path") as error:
+        with install_protoc.locked_destination(destination):
+            pass
+
+    assert str(legacy_state) in str(error.value)
+    assert marker_path.is_file()
+    assert (owned_path / "legacy").read_text(encoding="utf-8") == "legacy\n"
+
+    monkeypatch.setenv(
+        owned_transactions._STATE_DIRECTORY_ENV,
+        str(legacy_state),
+    )
+    with install_protoc.locked_destination(destination):
+        install_protoc.recover_owned_siblings(
+            destination,
+            ("transaction",),
+            install_protoc._remove_path,
+        )
+
+    assert not marker_path.exists()
+    assert not owned_path.exists()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ownership check")
@@ -2287,6 +2649,98 @@ def test_replace_destination_restores_previous_if_staging_rename_fails(
         install_protoc.replace_destination(staging, destination)
 
     assert marker.read_text(encoding="utf-8") == "preserve"
+
+
+def test_replace_destination_retries_transient_windows_promotion_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = tmp_path / "transaction"
+    transaction.mkdir()
+    staging = transaction / "install"
+    staging.mkdir()
+    (staging / "new").write_text("new", encoding="utf-8")
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    (destination / "old").write_text("old", encoding="utf-8")
+    original_replace = Path.replace
+    promotion_attempts = 0
+    retry_delays: list[float] = []
+
+    def transient_windows_failure() -> PermissionError:
+        error = PermissionError(13, "Access is denied")
+        error.winerror = 5
+        return error
+
+    def retry_promotion(source: Path, target: Path) -> Path:
+        nonlocal promotion_attempts
+        if source == staging:
+            promotion_attempts += 1
+            if promotion_attempts < 3:
+                raise transient_windows_failure()
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", retry_promotion)
+    monkeypatch.setattr(
+        install_protoc,
+        "_is_transient_windows_promotion_error",
+        lambda error: getattr(error, "winerror", None) == 5,
+    )
+    monkeypatch.setattr(install_protoc.time, "sleep", retry_delays.append)
+
+    install_protoc.replace_destination(staging, destination)
+
+    assert promotion_attempts == 3
+    assert retry_delays == [0.05, 0.1]
+    assert (destination / "new").read_text(encoding="utf-8") == "new"
+    assert not (destination / "old").exists()
+
+
+def test_replace_destination_reports_exhausted_windows_promotion_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = tmp_path / "transaction"
+    transaction.mkdir()
+    staging = transaction / "install"
+    staging.mkdir()
+    (staging / "new").write_text("new", encoding="utf-8")
+    destination = tmp_path / "protoc"
+    destination.mkdir()
+    marker = destination / "known-good"
+    marker.write_text("preserve", encoding="utf-8")
+    original_replace = Path.replace
+    promotion_attempts = 0
+    retry_delays: list[float] = []
+
+    def exhausted_windows_failure() -> PermissionError:
+        error = PermissionError(13, "Access is denied")
+        error.winerror = 5
+        return error
+
+    def fail_every_promotion(source: Path, target: Path) -> Path:
+        nonlocal promotion_attempts
+        if source == staging:
+            promotion_attempts += 1
+            raise exhausted_windows_failure()
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_every_promotion)
+    monkeypatch.setattr(
+        install_protoc,
+        "_is_transient_windows_promotion_error",
+        lambda error: getattr(error, "winerror", None) == 5,
+    )
+    monkeypatch.setattr(install_protoc.time, "sleep", retry_delays.append)
+
+    with pytest.raises(PermissionError, match="Access is denied") as raised:
+        install_protoc.replace_destination(staging, destination)
+
+    assert promotion_attempts == install_protoc._WINDOWS_PROMOTION_RETRY_ATTEMPTS
+    assert retry_delays == [0.05, 0.1, 0.2, 0.4]
+    assert "retried the Windows protoc promotion" in "\n".join(raised.value.__notes__)
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert (staging / "new").read_text(encoding="utf-8") == "new"
 
 
 @pytest.mark.parametrize("promoted_new_install", [False, True])

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+import ctypes
+from ctypes import wintypes
 from dataclasses import dataclass, field
 import hashlib
+import json
+import os
 from pathlib import Path
+import select
 import shutil
+import signal
 import subprocess
+import sys
 import threading
+import time
+from typing import BinaryIO
 
 from protocyte.errors import ProtocyteError
 from protocyte.model import (
@@ -21,6 +30,7 @@ from protocyte.model import (
     MessageModel,
     OneofModel,
     SourceDocumentation,
+    _cpp_string_literal,
     cpp_identifier,
     cpp_derivable_identifier,
     cpp_pascal_identifier,
@@ -106,88 +116,596 @@ class _FormatterOutputLimit(Exception):
     pass
 
 
+_FORMATTER_TEARDOWN_TIMEOUT_SECONDS = 0.5
+_FORMATTER_SUPERVISOR_STATUS_MAX_BYTES = 4096
+_FORMATTER_SUPERVISOR_PATH = Path(__file__).with_name("_formatter_supervisor.py")
+_WINDOWS_CREATE_SUSPENDED = 0x00000004
+_WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_WINDOWS_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+_WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+
+
+class _WindowsJobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("per_process_user_time_limit", wintypes.LARGE_INTEGER),
+        ("per_job_user_time_limit", wintypes.LARGE_INTEGER),
+        ("limit_flags", wintypes.DWORD),
+        ("minimum_working_set_size", ctypes.c_size_t),
+        ("maximum_working_set_size", ctypes.c_size_t),
+        ("active_process_limit", wintypes.DWORD),
+        ("affinity", ctypes.c_size_t),
+        ("priority_class", wintypes.DWORD),
+        ("scheduling_class", wintypes.DWORD),
+    ]
+
+
+class _WindowsIoCounters(ctypes.Structure):
+    _fields_ = [
+        ("read_operation_count", ctypes.c_ulonglong),
+        ("write_operation_count", ctypes.c_ulonglong),
+        ("other_operation_count", ctypes.c_ulonglong),
+        ("read_transfer_count", ctypes.c_ulonglong),
+        ("write_transfer_count", ctypes.c_ulonglong),
+        ("other_transfer_count", ctypes.c_ulonglong),
+    ]
+
+
+class _WindowsJobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("basic_limit_information", _WindowsJobBasicLimitInformation),
+        ("io_info", _WindowsIoCounters),
+        ("process_memory_limit", ctypes.c_size_t),
+        ("job_memory_limit", ctypes.c_size_t),
+        ("peak_process_memory_used", ctypes.c_size_t),
+        ("peak_job_memory_used", ctypes.c_size_t),
+    ]
+
+
+class _WindowsJobBasicAccountingInformation(ctypes.Structure):
+    _fields_ = [
+        ("total_user_time", wintypes.LARGE_INTEGER),
+        ("total_kernel_time", wintypes.LARGE_INTEGER),
+        ("this_period_total_user_time", wintypes.LARGE_INTEGER),
+        ("this_period_total_kernel_time", wintypes.LARGE_INTEGER),
+        ("total_page_fault_count", wintypes.DWORD),
+        ("total_processes", wintypes.DWORD),
+        ("active_processes", wintypes.DWORD),
+        ("total_terminated_processes", wintypes.DWORD),
+    ]
+
+
+def _windows_kernel32():
+    return ctypes.WinDLL("kernel32", use_last_error=True)
+
+
+def _raise_windows_error() -> None:
+    raise ctypes.WinError(ctypes.get_last_error())
+
+
+class _WindowsFormatterJob:
+    def __init__(self, handle: int) -> None:
+        self._handle: int | None = handle
+
+    @classmethod
+    def create(cls) -> _WindowsFormatterJob:
+        kernel32 = _windows_kernel32()
+        create_job = kernel32.CreateJobObjectW
+        create_job.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        create_job.restype = wintypes.HANDLE
+        handle = create_job(None, None)
+        if not handle:
+            _raise_windows_error()
+
+        information = _WindowsJobExtendedLimitInformation()
+        information.basic_limit_information.limit_flags = (
+            _WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        set_information = kernel32.SetInformationJobObject
+        set_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        )
+        set_information.restype = wintypes.BOOL
+        if not set_information(
+            handle,
+            _WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        ):
+            error = ctypes.WinError(ctypes.get_last_error())
+            kernel32.CloseHandle(handle)
+            raise error
+        return cls(handle)
+
+    def assign(self, process: subprocess.Popen[bytes]) -> None:
+        if self._handle is None:
+            raise OSError("formatter job is already closed")
+        process_handle = getattr(process, "_handle", None)
+        if process_handle is None:
+            raise OSError("formatter process handle is unavailable")
+
+        kernel32 = _windows_kernel32()
+        assign_process = kernel32.AssignProcessToJobObject
+        assign_process.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        assign_process.restype = wintypes.BOOL
+        if not assign_process(self._handle, int(process_handle)):
+            _raise_windows_error()
+
+    def has_active_processes(self) -> bool:
+        if self._handle is None:
+            return False
+        information = _WindowsJobBasicAccountingInformation()
+        kernel32 = _windows_kernel32()
+        query_information = kernel32.QueryInformationJobObject
+        query_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+        )
+        query_information.restype = wintypes.BOOL
+        if not query_information(
+            self._handle,
+            _WINDOWS_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+            None,
+        ):
+            _raise_windows_error()
+        return information.active_processes != 0
+
+    def close(self) -> None:
+        if self._handle is None:
+            return
+        handle = self._handle
+        self._handle = None
+        kernel32 = _windows_kernel32()
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+        if not close_handle(handle):
+            _raise_windows_error()
+
+
+# POSIX has no portable Job Object equivalent. A retained supervisor pins the
+# fresh formatter process-group identity until its status is reported and every
+# grouped process is killed. A trusted formatter that deliberately creates
+# another session or process group is outside this containment contract.
+@dataclass(frozen=True)
+class _PosixFormatterGroup:
+    process_group_id: int
+    status_stream: BinaryIO
+
+    def wait_for_formatter_exit(
+        self,
+        command: list[str],
+        timeout_seconds: float | None,
+    ) -> int:
+        deadline = (
+            None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        )
+        content = bytearray()
+        while b"\n" not in content:
+            remaining = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
+            if remaining == 0:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                readable, _, _ = select.select(
+                    (self.status_stream,),
+                    (),
+                    (),
+                    remaining,
+                )
+            except InterruptedError:
+                continue
+            if not readable:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                chunk = os.read(self.status_stream.fileno(), 1024)
+            except InterruptedError:
+                continue
+            if not chunk:
+                raise OSError("formatter supervisor exited without reporting status")
+            content.extend(chunk)
+            if len(content) > _FORMATTER_SUPERVISOR_STATUS_MAX_BYTES:
+                raise OSError("formatter supervisor reported an oversized status")
+
+        line, _, remainder = content.partition(b"\n")
+        if remainder:
+            raise OSError("formatter supervisor reported trailing status data")
+        try:
+            payload = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OSError("formatter supervisor reported an invalid status") from exc
+
+        if isinstance(payload, dict) and set(payload) == {"returncode"}:
+            returncode = payload["returncode"]
+            if isinstance(returncode, int) and not isinstance(returncode, bool):
+                return returncode
+            raise OSError("formatter supervisor reported an invalid return code")
+
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            raise OSError("formatter supervisor reported an invalid status")
+        error_number = error.get("errno")
+        message = error.get("message")
+        filename = error.get("filename")
+        if not isinstance(message, str):
+            raise OSError("formatter supervisor reported an invalid launch error")
+        if error_number is None:
+            raise OSError(message)
+        if not isinstance(error_number, int) or isinstance(error_number, bool):
+            raise OSError("formatter supervisor reported an invalid launch errno")
+        if filename is not None and not isinstance(filename, str):
+            raise OSError("formatter supervisor reported an invalid launch filename")
+        raise OSError(error_number, message, filename)
+
+    def close(self) -> None:
+        self.status_stream.close()
+
+
+def _resume_windows_formatter_process(process: subprocess.Popen[bytes]) -> None:
+    process_handle = getattr(process, "_handle", None)
+    if process_handle is None:
+        raise OSError("formatter process handle is unavailable")
+
+    # Popen closes the primary thread handle, so resume via its retained process
+    # handle instead of rediscovering a thread by a potentially reused PID.
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    resume_process = ntdll.NtResumeProcess
+    resume_process.argtypes = (wintypes.HANDLE,)
+    resume_process.restype = wintypes.LONG
+    status = resume_process(int(process_handle))
+    if status < 0:
+        raise OSError(
+            f"could not resume the suspended formatter process: NTSTATUS 0x{status & 0xFFFFFFFF:08X}"
+        )
+
+
+def _formatter_popen_kwargs(
+    status_write_fd: int | None = None,
+) -> dict[str, object]:
+    if os.name == "nt":
+        return {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
+            | _WINDOWS_CREATE_SUSPENDED
+        }
+    kwargs: dict[str, object] = {"start_new_session": True}
+    if status_write_fd is not None:
+        kwargs["pass_fds"] = (status_write_fd,)
+    return kwargs
+
+
+def _formatter_supervisor_command(
+    command: list[str],
+    status_write_fd: int,
+) -> list[str]:
+    return [
+        sys.executable,
+        str(_FORMATTER_SUPERVISOR_PATH),
+        str(status_write_fd),
+        *command,
+    ]
+
+
+def _start_formatter_process(
+    command: list[str],
+) -> tuple[
+    subprocess.Popen[bytes],
+    _WindowsFormatterJob | _PosixFormatterGroup,
+]:
+    containment: _WindowsFormatterJob | _PosixFormatterGroup
+    windows_job = _WindowsFormatterJob.create() if os.name == "nt" else None
+    status_read_fd: int | None = None
+    status_write_fd: int | None = None
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        launch_command = command
+        if windows_job is None:
+            status_read_fd, status_write_fd = os.pipe()
+            launch_command = _formatter_supervisor_command(command, status_write_fd)
+        process = subprocess.Popen(
+            launch_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_formatter_popen_kwargs(status_write_fd),
+        )
+        if windows_job is not None:
+            windows_job.assign(process)
+            _resume_windows_formatter_process(process)
+            containment = windows_job
+        else:
+            assert status_read_fd is not None
+            assert status_write_fd is not None
+            os.close(status_write_fd)
+            status_write_fd = None
+            status_stream = os.fdopen(status_read_fd, "rb", buffering=0)
+            status_read_fd = None
+            containment = _PosixFormatterGroup(process.pid, status_stream)
+        return process, containment
+    except BaseException:
+        for descriptor in (status_read_fd, status_write_fd):
+            if descriptor is None:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if windows_job is not None:
+            try:
+                windows_job.close()
+            except OSError:
+                pass
+        if process is not None:
+            if windows_job is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+            try:
+                process.kill()
+            except OSError:
+                pass
+            _wait_for_formatter_termination(process)
+        raise
+
+
+def _terminate_formatter_process_tree(
+    process: subprocess.Popen[bytes],
+    containment: _WindowsFormatterJob | _PosixFormatterGroup,
+) -> None:
+    if isinstance(containment, _WindowsFormatterJob):
+        try:
+            containment.close()
+        except OSError:
+            pass
+    else:
+        try:
+            os.killpg(containment.process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+
+    try:
+        process.kill()
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _wait_for_formatter_termination(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.wait(timeout=_FORMATTER_TEARDOWN_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            process.wait(timeout=_FORMATTER_TEARDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _join_formatter_threads(threads: tuple[threading.Thread, ...]) -> bool:
+    deadline = time.monotonic() + _FORMATTER_TEARDOWN_TIMEOUT_SECONDS
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=remaining)
+    return any(thread.is_alive() for thread in threads)
+
+
+def _close_formatter_streams(streams: Iterable[BinaryIO | None]) -> None:
+    for stream in streams:
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _cleanup_formatter_setup_failure(
+    process: subprocess.Popen[bytes],
+    job: _WindowsFormatterJob | _PosixFormatterGroup,
+    started_threads: list[threading.Thread],
+    worker_streams: list[tuple[threading.Thread, BinaryIO]],
+) -> None:
+    _terminate_formatter_process_tree(process, job)
+    _wait_for_formatter_termination(process)
+
+    started_ids = {id(thread) for thread in started_threads}
+    started_stream_ids = {
+        id(stream) for thread, stream in worker_streams if id(thread) in started_ids
+    }
+    process_streams = (process.stdin, process.stdout, process.stderr)
+    _close_formatter_streams(
+        stream
+        for stream in process_streams
+        if stream is not None and id(stream) not in started_stream_ids
+    )
+    _join_formatter_threads(tuple(started_threads))
+    _close_formatter_streams(process_streams)
+    if job is not None:
+        try:
+            job.close()
+        except OSError:
+            pass
+
+
 def _run_formatter_bounded(
     command: list[str],
     content: str,
     *,
     timeout_seconds: float | None,
-    max_output_bytes: int,
+    max_output_bytes: int | None,
 ) -> _FormatterResult:
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert process.stdin is not None
-    assert process.stdout is not None
-    assert process.stderr is not None
-
-    output_lock = threading.Lock()
-    output_size = 0
-    output_limit_reached = threading.Event()
-    stdout_chunks: list[bytes] = []
-    stderr_chunks: list[bytes] = []
-    io_errors: list[OSError] = []
-
-    def read_stream(stream, chunks: list[bytes]) -> None:
-        nonlocal output_size
-        try:
-            while chunk := stream.read(64 * 1024):
-                with output_lock:
-                    if output_size + len(chunk) > max_output_bytes:
-                        output_limit_reached.set()
-                    else:
-                        output_size += len(chunk)
-                        chunks.append(chunk)
-                if output_limit_reached.is_set():
-                    process.kill()
-                    return
-        except OSError as exc:
-            if not output_limit_reached.is_set():
-                io_errors.append(exc)
-        finally:
-            stream.close()
-
-    def write_input() -> None:
-        try:
-            process.stdin.write(content.encode("utf-8"))
-        except (BrokenPipeError, OSError):
-            pass
-        finally:
-            process.stdin.close()
-
-    stdout_reader = threading.Thread(
-        target=read_stream,
-        args=(process.stdout, stdout_chunks),
-        name="protocyte-formatter-stdout",
-    )
-    stderr_reader = threading.Thread(
-        target=read_stream,
-        args=(process.stderr, stderr_chunks),
-        name="protocyte-formatter-stderr",
-    )
-    stdin_writer = threading.Thread(
-        target=write_input,
-        name="protocyte-formatter-stdin",
-    )
-    stdout_reader.start()
-    stderr_reader.start()
-    stdin_writer.start()
-
+    process, job = _start_formatter_process(command)
+    started_threads: list[threading.Thread] = []
+    worker_streams: list[tuple[threading.Thread, BinaryIO]] = []
     try:
-        returncode = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        output_lock = threading.Lock()
+        output_size = 0
+        output_limit_reached = threading.Event()
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        io_errors: list[OSError] = []
+        termination_lock = threading.Lock()
+        termination_requested = False
+
+        def terminate_process_tree() -> None:
+            nonlocal termination_requested
+            with termination_lock:
+                if termination_requested:
+                    return
+                termination_requested = True
+            _terminate_formatter_process_tree(process, job)
+
+        def read_stream(stream, chunks: list[bytes]) -> None:
+            nonlocal output_size
+            try:
+                while chunk := stream.read(64 * 1024):
+                    with output_lock:
+                        if (
+                            max_output_bytes is not None
+                            and output_size + len(chunk) > max_output_bytes
+                        ):
+                            output_limit_reached.set()
+                        else:
+                            output_size += len(chunk)
+                            chunks.append(chunk)
+                    if output_limit_reached.is_set():
+                        terminate_process_tree()
+                        return
+            except OSError as exc:
+                if not output_limit_reached.is_set():
+                    io_errors.append(exc)
+            finally:
+                stream.close()
+
+        def write_input() -> None:
+            try:
+                process.stdin.write(content.encode("utf-8"))
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+            finally:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+
+        worker_streams = [
+            (
+                threading.Thread(
+                    target=read_stream,
+                    args=(process.stdout, stdout_chunks),
+                    name="protocyte-formatter-stdout",
+                    daemon=True,
+                ),
+                process.stdout,
+            ),
+            (
+                threading.Thread(
+                    target=read_stream,
+                    args=(process.stderr, stderr_chunks),
+                    name="protocyte-formatter-stderr",
+                    daemon=True,
+                ),
+                process.stderr,
+            ),
+            (
+                threading.Thread(
+                    target=write_input,
+                    name="protocyte-formatter-stdin",
+                    daemon=True,
+                ),
+                process.stdin,
+            ),
+        ]
+        for thread, _stream in worker_streams:
+            thread.start()
+            started_threads.append(thread)
+    except BaseException:
+        _cleanup_formatter_setup_failure(process, job, started_threads, worker_streams)
         raise
+
+    stdout_reader, stderr_reader, stdin_writer = (
+        thread for thread, _stream in worker_streams
+    )
+
+    timeout: subprocess.TimeoutExpired | None = None
+    formatter_error: OSError | None = None
+    descendant_error: str | None = None
+    returncode = 0
+    try:
+        if isinstance(job, _PosixFormatterGroup):
+            try:
+                returncode = job.wait_for_formatter_exit(command, timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                timeout = exc
+            except OSError as exc:
+                if not output_limit_reached.is_set():
+                    formatter_error = exc
+            finally:
+                # The live supervisor still owns the original PGID here, so it
+                # cannot be reused between status receipt and group teardown.
+                terminate_process_tree()
+                _wait_for_formatter_termination(process)
+        else:
+            try:
+                returncode = process.wait(timeout=timeout_seconds)
+                try:
+                    if job.has_active_processes():
+                        descendant_error = "formatter exited while descendant processes remained active"
+                except OSError as exc:
+                    descendant_error = (
+                        f"failed to verify formatter containment state: {exc}"
+                    )
+            except subprocess.TimeoutExpired as exc:
+                timeout = exc
+                terminate_process_tree()
+                _wait_for_formatter_termination(process)
     finally:
-        stdin_writer.join()
-        stdout_reader.join()
-        stderr_reader.join()
+        threads = (stdin_writer, stdout_reader, stderr_reader)
+        if descendant_error is not None:
+            terminate_process_tree()
+            _wait_for_formatter_termination(process)
+        if _join_formatter_threads(threads):
+            if timeout is None and not output_limit_reached.is_set():
+                descendant_error = (
+                    descendant_error
+                    or "formatter exited while descendants kept its output pipes open"
+                )
+            terminate_process_tree()
+            _wait_for_formatter_termination(process)
+            _join_formatter_threads(threads)
+        job.close()
+
+    if timeout is not None:
+        timeout.output = b"".join(stdout_chunks)
+        timeout.stderr = b"".join(stderr_chunks)
+        raise timeout
 
     if output_limit_reached.is_set():
         raise _FormatterOutputLimit
+    if formatter_error is not None:
+        raise formatter_error
+    if descendant_error is not None:
+        detail = b"".join(stderr_chunks).decode("utf-8", errors="replace").strip()
+        suffix = f": {detail}" if detail else ""
+        raise OSError(f"{descendant_error}{suffix}")
     if io_errors:
         raise io_errors[0]
     return _FormatterResult(
@@ -374,8 +892,12 @@ def generate_outputs(
                 f"descriptor file {file_model.name!r}",
                 name,
             )
-        outputs[header_name] = generate_header(file_model, options, output_budget=output_budget)
-        outputs[source_name] = generate_source(file_model, options, output_budget=output_budget)
+        outputs[header_name] = generate_header(
+            file_model, options, output_budget=output_budget
+        )
+        outputs[source_name] = generate_source(
+            file_model, options, output_budget=output_budget
+        )
     if not format_outputs:
         if options.formatting_required:
             raise ProtocyteError(
@@ -425,14 +947,13 @@ def _format_cpp_outputs(
                 f"--assume-filename={assume_filename}",
             ]
             remaining = formatted_budget.remaining()
-            if remaining is None:
+            if remaining is None and timeout_seconds is None:
                 result = subprocess.run(
                     command,
                     input=content,
                     text=True,
                     capture_output=True,
                     check=False,
-                    timeout=timeout_seconds,
                 )
             else:
                 result = _run_formatter_bounded(
@@ -442,8 +963,13 @@ def _format_cpp_outputs(
                     max_output_bytes=remaining,
                 )
         except subprocess.TimeoutExpired as exc:
+            stderr = exc.stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            detail = stderr.strip() if isinstance(stderr, str) else ""
+            suffix = f": {detail}" if detail else ""
             raise ProtocyteError(
-                f"clang-format timed out for {name} after {timeout_seconds} seconds"
+                f"clang-format timed out for {name} after {timeout_seconds} seconds{suffix}"
             ) from exc
         except _FormatterOutputLimit as exc:
             raise ProtocyteError(
@@ -658,9 +1184,7 @@ def _build_message_cpp_name_registry(
     return registry
 
 
-def _allocate_internal_cpp_identifier(
-    preferred: str, unavailable: set[str]
-) -> str:
+def _allocate_internal_cpp_identifier(preferred: str, unavailable: set[str]) -> str:
     if preferred not in unavailable:
         return preferred
     base = f"Protocyte{preferred}"
@@ -1104,7 +1628,8 @@ def generate_source(
             with w.indent():
                 for item in message.fields:
                     w.line(
-                        f'{{"{_escape(item.name)}", {item.number}u, "{item.kind}", '
+                        f"{{{_cpp_string_literal(item.name.encode('utf-8'))}, {item.number}u, "
+                        f'"{item.kind}", '
                         f"::protocyte::ReflectionFieldLabel::{_reflection_label(item)}, "
                         f"{_cpp_bool(item.has_explicit_presence)}, {_cpp_bool(item.packed)}}},"
                     )
@@ -1116,9 +1641,7 @@ def generate_source(
     return w.render()
 
 
-def _emit_enums(
-    w: CppWriter, file_model: FileModel, options: GeneratorOptions
-) -> None:
+def _emit_enums(w: CppWriter, file_model: FileModel, options: GeneratorOptions) -> None:
     enums = list(file_model.enums)
     for message in _walk_messages(file_model.messages):
         enums.extend(message.nested_enums)
@@ -1202,9 +1725,7 @@ def _emit_message(
                 nested_config_name = _allocate_internal_cpp_identifier(
                     "NestedConfig", {alias_name}
                 )
-                w.line(
-                    f"template <typename {nested_config_name} = {config_cpp_name}>"
-                )
+                w.line(f"template <typename {nested_config_name} = {config_cpp_name}>")
                 alias_deprecated = " [[deprecated]]" if nested.deprecated else ""
                 w.line(
                     f"using {alias_name}{alias_deprecated} = "
@@ -1316,10 +1837,10 @@ def _emit_message(
 
 def _emit_deprecated_diagnostic_push(w: CppWriter) -> None:
     w.line("#if defined(__clang__)")
-    w.line('#pragma clang diagnostic push')
+    w.line("#pragma clang diagnostic push")
     w.line('#pragma clang diagnostic ignored "-Wdeprecated-declarations"')
     w.line("#elif defined(__GNUC__)")
-    w.line('#pragma GCC diagnostic push')
+    w.line("#pragma GCC diagnostic push")
     w.line('#pragma GCC diagnostic ignored "-Wdeprecated-declarations"')
     w.line("#elif defined(_MSC_VER)")
     w.line("#pragma warning(push)")
@@ -1535,7 +2056,9 @@ def _emit_clone_api(
             )
         w.line("}")
         w.line("reset_for_reuse_(staging_message, *ctx_);")
-        w.line("if (const auto st = staging_message.copy_from_in_place_(source); !st) {")
+        w.line(
+            "if (const auto st = staging_message.copy_from_in_place_(source); !st) {"
+        )
         with w.indent():
             w.line("reset_for_reuse_(staging_message, *ctx_);")
             w.line("return st;")
@@ -1553,9 +2076,7 @@ def _emit_clone_api(
         w.line("return ::protocyte::move(output);")
     w.line("}")
     w.line()
-    w.line(
-        f"::protocyte::Status clone({message.cpp_name}& output) const noexcept {{"
-    )
+    w.line(f"::protocyte::Status clone({message.cpp_name}& output) const noexcept {{")
     with w.indent():
         w.line("if (this == &output) { return {}; }")
         w.line("Context* const output_ctx = output.context();")
@@ -2132,7 +2653,9 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
         )
     _emit_field_api_annotations(w, item, options)
-    w.line(f"void set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;")
+    w.line(
+        f"void set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;"
+    )
     if item.proto3_optional:
         w.line(f"has_{item.cpp_name}_ = true;")
     w.line("}")
@@ -2312,8 +2835,12 @@ def _emit_wire_api(
     )
     with w.indent():
         w.line("const auto checked_input = ::protocyte::checked_span_of(input);")
-        w.line("if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }")
-        w.line("::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};")
+        w.line(
+            "if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }"
+        )
+        w.line(
+            "::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};"
+        )
         w.line("return parse(ctx, reader);")
     w.line("}")
     w.line()
@@ -2338,7 +2865,9 @@ def _emit_wire_api(
         w.line(
             f"::protocyte::ParseBudgetReader<{reader_cpp_name}> budget_reader{{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries}};"
         )
-        w.line("if (const auto st = merge_fields_from(budget_reader); !st) { return st; }")
+        w.line(
+            "if (const auto st = merge_fields_from(budget_reader); !st) { return st; }"
+        )
         w.line(
             "if (budget_reader.limit_reached()) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position()); }"
         )
@@ -2711,7 +3240,9 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                     )
                     w.line("break;")
                 else:
-                    w.line("if (const auto st = reader.can_read(*len); !st) { return st; }")
+                    w.line(
+                        "if (const auto st = reader.can_read(*len); !st) { return st; }"
+                    )
                     if width is not None:
                         w.line(f"if (*len % {width} != 0u) {{")
                         with w.indent():
@@ -2754,9 +3285,7 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                         _emit_prepare_repeated_values_commit(
                             w, item, packed_values_name
                         )
-                        merged_unknown_name = (
-                            f"merged_{item.cpp_name}_unknown_fields"
-                        )
+                        merged_unknown_name = f"merged_{item.cpp_name}_unknown_fields"
                         w.line(
                             f"::protocyte::UnknownFieldStorage<{item.config_cpp_name}> {merged_unknown_name}{{ctx_}};"
                         )
@@ -2881,9 +3410,7 @@ def _emit_prepare_repeated_values_commit(
     w.line(
         f"const auto {prepared_size_name} = ::protocyte::checked_add({_member(item)}.size(), {source}.size());"
     )
-    w.line(
-        f"if (!{prepared_size_name}) {{ return {prepared_size_name}.status(); }}"
-    )
+    w.line(f"if (!{prepared_size_name}) {{ return {prepared_size_name}.status(); }}")
     if item.repeated_array:
         w.line(f"if (*{prepared_size_name} > {_array_max_literal(item)}) {{")
         with w.indent():
@@ -3067,16 +3594,12 @@ def _emit_read_single_value(
     if item.oneof_name:
         value_name = f"{item.cpp_name}_value"
         w.line(f"{_field_type(item, options)} {value_name}{{}};")
-        accepted = _emit_read_scalar(
-            w, item, reader, value_name, options, checked=True
-        )
+        accepted = _emit_read_scalar(w, item, reader, value_name, options, checked=True)
         if accepted is not None:
             w.line(f"if (!{accepted}) {{ break; }}")
         _emit_commit_oneof_value(w, item, value_name, options)
         return
-    accepted = _emit_read_scalar(
-        w, item, reader, _member(item), options, checked=True
-    )
+    accepted = _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
     if accepted is not None:
         w.line(f"if (!{accepted}) {{ break; }}")
     if _has_presence_flag(item):
@@ -3164,9 +3687,7 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
         )
         w.line("if (!entry) { return entry.status(); }")
         w.line("auto& entry_reader = entry->reader();")
-        w.line(
-            f"if (const auto st = {parse_name}(entry_reader); !st) {{ return st; }}"
-        )
+        w.line(f"if (const auto st = {parse_name}(entry_reader); !st) {{ return st; }}")
         w.line("if (const auto st = entry->finish(); !st) { return st; }")
         w.line("if (!entry_is_unknown) {")
         with w.indent():
@@ -3318,9 +3839,7 @@ def _emit_read_scalar(
         accepted_name = f"{item.cpp_name}_accepted"
         w.line(f"const auto {raw_name} = ::protocyte::read_varint({reader});")
         w.line(f"if (!{raw_name}) {{ return {raw_name}.status(); }}")
-        w.line(
-            f"const auto {value_name} = static_cast<::protocyte::i32>(*{raw_name});"
-        )
+        w.line(f"const auto {value_name} = static_cast<::protocyte::i32>(*{raw_name});")
         w.line(f"bool {accepted_name}{{true}};")
         condition = _closed_enum_invalid_condition(item, value_name)
         assert condition is not None
@@ -3665,9 +4184,7 @@ def _emit_size_result_update(
                 w,
                 total_name,
                 f"::protocyte::add_size({total_name}, *{size_name})",
-                error_return=_size_error_return(
-                    "st_size", result, error_field_number
-                ),
+                error_return=_size_error_return("st_size", result, error_field_number),
                 error_field_number=error_field_number,
             )
         return
@@ -4268,10 +4785,6 @@ def _close_namespace(w: CppWriter, parts: list[str]) -> None:
     if parts:
         w.line()
         w.line(f"}}  // namespace {'::'.join(parts)}")
-
-
-def _escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _cpp_bool(value: bool) -> str:
