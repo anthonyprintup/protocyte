@@ -2759,6 +2759,112 @@ TEST_CASE("Runtime containers preserve aliased insertion arguments", "[smoke][ru
         }
     };
 
+    struct CopyableMoveTracked {
+        int value {};
+
+        explicit CopyableMoveTracked(const int initial_value = 0) noexcept: value {initial_value} {}
+        CopyableMoveTracked(const CopyableMoveTracked &) noexcept = default;
+        CopyableMoveTracked(CopyableMoveTracked &&other) noexcept: value {other.value} { other.value = -1; }
+        CopyableMoveTracked &operator=(const CopyableMoveTracked &) noexcept = default;
+        CopyableMoveTracked &operator=(CopyableMoveTracked &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+
+        bool operator==(const CopyableMoveTracked other) const noexcept { return value == other.value; }
+    };
+
+    struct MovePoisoningPart {
+        int value {};
+
+        explicit MovePoisoningPart(const int initial_value = 0) noexcept: value {initial_value} {}
+        MovePoisoningPart(const MovePoisoningPart &) noexcept = default;
+        MovePoisoningPart(MovePoisoningPart &&other) noexcept: value {other.value} { other.value = -1; }
+        MovePoisoningPart &operator=(const MovePoisoningPart &) noexcept = default;
+        MovePoisoningPart &operator=(MovePoisoningPart &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+
+        MovePoisoningPart *operator&() = delete;
+        const MovePoisoningPart *operator&() const = delete;
+    };
+
+    struct MemberCompositeKey {
+        int identity {};
+        MovePoisoningPart part {};
+
+        MemberCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            identity {initial_identity}, part {initial_part} {}
+        MemberCompositeKey(const MemberCompositeKey &) noexcept = default;
+        MemberCompositeKey(MemberCompositeKey &&other) noexcept:
+            identity {other.identity}, part {protocyte::move(other.part)} {}
+        MemberCompositeKey &operator=(const MemberCompositeKey &) noexcept = default;
+        MemberCompositeKey &operator=(MemberCompositeKey &&other) noexcept {
+            identity = other.identity;
+            part = protocyte::move(other.part);
+            return *this;
+        }
+
+        bool operator==(const MemberCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    struct BaseCompositeKey: MovePoisoningPart {
+        int identity {};
+
+        BaseCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            MovePoisoningPart {initial_part}, identity {initial_identity} {}
+        BaseCompositeKey(const BaseCompositeKey &) noexcept = default;
+        BaseCompositeKey(BaseCompositeKey &&other) noexcept:
+            MovePoisoningPart {protocyte::move(other)}, identity {other.identity} {}
+        BaseCompositeKey &operator=(const BaseCompositeKey &) noexcept = default;
+        BaseCompositeKey &operator=(BaseCompositeKey &&other) noexcept {
+            static_cast<MovePoisoningPart &>(*this) = protocyte::move(other);
+            identity = other.identity;
+            return *this;
+        }
+
+        BaseCompositeKey *operator&() noexcept { return this; }
+        const BaseCompositeKey *operator&() const noexcept { return this; }
+        bool operator==(const BaseCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    struct UncopyablePart {
+        int value {};
+
+        explicit UncopyablePart(const int initial_value = 0) noexcept: value {initial_value} {}
+        UncopyablePart(const UncopyablePart &) = delete;
+        UncopyablePart(UncopyablePart &&other) noexcept: value {other.value} { other.value = -1; }
+        UncopyablePart &operator=(const UncopyablePart &) = delete;
+        UncopyablePart &operator=(UncopyablePart &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+    };
+
+    struct UncopyableCompositeKey {
+        int identity {};
+        UncopyablePart part {};
+
+        UncopyableCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            identity {initial_identity}, part {initial_part} {}
+        UncopyableCompositeKey(const UncopyableCompositeKey &other) noexcept:
+            identity {other.identity}, part {other.part.value} {}
+        UncopyableCompositeKey(UncopyableCompositeKey &&other) noexcept:
+            identity {other.identity}, part {protocyte::move(other.part)} {}
+        UncopyableCompositeKey &operator=(const UncopyableCompositeKey &) = delete;
+        UncopyableCompositeKey &operator=(UncopyableCompositeKey &&other) noexcept {
+            identity = other.identity;
+            part = protocyte::move(other.part);
+            return *this;
+        }
+
+        bool operator==(const UncopyableCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
     const auto free_retained_allocations = [](RetainedAllocationProbe &probe) noexcept {
         for (size_t index {}; index < probe.count; ++index) { free(probe.pointers[index]); }
     };
@@ -2868,6 +2974,70 @@ TEST_CASE("Runtime containers preserve aliased insertion arguments", "[smoke][ru
         require_success(values.insert_or_assign(rvalue_entry.key, protocyte::move(rvalue_entry.value)));
         REQUIRE(values.size() == 1u);
         CHECK((*values.begin()).value.value == 41);
+    }
+
+    SECTION("HashMap replacement stages a same-subobject mapped key before moving it") {
+        auto ctx = make_context();
+        Config::Map<CopyableMoveTracked, CopyableMoveTracked> values(&ctx);
+        require_success(values.insert_or_assign(CopyableMoveTracked {41}, CopyableMoveTracked {7}));
+
+        auto source = *values.begin();
+        require_success(values.insert_or_assign(source.key, source.key));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.value == 41);
+        CHECK((*values.begin()).value.value == 41);
+
+        CopyableMoveTracked equivalent_key {41};
+        const auto replacement_source = *values.begin();
+        require_success(values.insert_or_assign(equivalent_key, replacement_source.key));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.value == 41);
+        CHECK((*values.begin()).value.value == 41);
+        CHECK(equivalent_key.value == 41);
+    }
+
+    SECTION("HashMap replacement stages member and base subobject mapped arguments") {
+        auto ctx = make_context();
+
+        Config::Map<MemberCompositeKey, MovePoisoningPart> member_values(&ctx);
+        require_success(member_values.insert_or_assign(MemberCompositeKey {7, 41}, MovePoisoningPart {99}));
+        const auto member_source = *member_values.begin();
+        require_success(member_values.insert_or_assign(member_source.key, member_source.key.part));
+        REQUIRE(member_values.size() == 1u);
+        CHECK((*member_values.begin()).key.identity == 7);
+        CHECK((*member_values.begin()).key.part.value == 41);
+        CHECK((*member_values.begin()).value.value == 41);
+
+        auto &member_rvalue = const_cast<MovePoisoningPart &>(member_source.key.part);
+        require_success(member_values.insert_or_assign(member_source.key, protocyte::move(member_rvalue)));
+        REQUIRE(member_values.size() == 1u);
+        CHECK((*member_values.begin()).key.part.value == 41);
+        CHECK((*member_values.begin()).value.value == 41);
+
+        Config::Map<BaseCompositeKey, MovePoisoningPart> base_values(&ctx);
+        require_success(base_values.insert_or_assign(BaseCompositeKey {8, 51}, MovePoisoningPart {99}));
+        const auto base_source = *base_values.begin();
+        const auto &base_subobject = static_cast<const MovePoisoningPart &>(base_source.key);
+        require_success(base_values.insert_or_assign(base_source.key, base_subobject));
+        REQUIRE(base_values.size() == 1u);
+        CHECK((*base_values.begin()).key.identity == 8);
+        CHECK(static_cast<const MovePoisoningPart &>((*base_values.begin()).key).value == 51);
+        CHECK((*base_values.begin()).value.value == 51);
+    }
+
+    SECTION("HashMap rejects a noncopyable overlapping rvalue before replacement") {
+        auto ctx = make_context();
+        Config::Map<UncopyableCompositeKey, UncopyablePart> values(&ctx);
+        require_success(values.insert_or_assign(UncopyableCompositeKey {9, 61}, UncopyablePart {99}));
+
+        const auto source = *values.begin();
+        auto &overlapping_part = const_cast<UncopyablePart &>(source.key.part);
+        require_failure(values.insert_or_assign(source.key, protocyte::move(overlapping_part)),
+                        protocyte::ErrorCode::invalid_argument);
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.identity == 9);
+        CHECK((*values.begin()).key.part.value == 61);
+        CHECK((*values.begin()).value.value == 99);
     }
 
     SECTION("HashMap copies an aliased lvalue before a colliding rehash") {
@@ -3138,7 +3308,7 @@ TEST_CASE("HashMap deep-copies noncopyable String lvalue arguments transactional
         CHECK(contains(values, "rehash-seed", "seed-value"));
     }
 
-    SECTION("failed lvalue copy leaves a same-bucket aliased source and map unchanged") {
+    SECTION("failed overlapping rvalue copy leaves the map and source unchanged") {
         auto ctx = make_context();
         StringMap values(&ctx);
         String key(&ctx);
@@ -3150,8 +3320,10 @@ TEST_CASE("HashMap deep-copies noncopyable String lvalue arguments transactional
         auto source = *values.begin();
         FailingAllocationProbe failure_probe {.successful_calls_before_failure = 1u};
         ctx.allocator = protocyte::Allocator {&failure_probe, fail_after_allocations, smoke_deallocate};
+        auto &overlapping_key = const_cast<String &>(source.key);
 
-        require_failure(values.insert_or_assign(source.key, source.value), protocyte::ErrorCode::no_memory);
+        require_failure(values.insert_or_assign(source.key, protocyte::move(overlapping_key)),
+                        protocyte::ErrorCode::no_memory);
         REQUIRE(values.size() == 1u);
         CHECK(contains(values, "stable-key", "stable-value"));
         CHECK(view_equal(source.key.view(), std::string_view {"stable-key"}));
