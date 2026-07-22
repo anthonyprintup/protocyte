@@ -3160,6 +3160,117 @@ TEST_CASE("HashMap deep-copies noncopyable String lvalue arguments transactional
     }
 }
 
+TEST_CASE("Sequence containers deep-copy noncopyable String lvalues transactionally", "[smoke][runtime][sequence]") {
+    using String = Config::String;
+
+    const auto assign_text = [](String &out, const std::string_view text) {
+        require_success(out.assign(protocyte::Span<const char> {text.data(), text.size()}));
+    };
+
+    SECTION("Vector clones lvalues into its context before self-aliasing growth") {
+        auto source_ctx = make_context();
+        String source(&source_ctx);
+        assign_text(source, "vector-lvalue");
+
+        auto destination_ctx = make_context();
+        Config::Vector<String> values(&destination_ctx);
+        require_success(values.push_back(source));
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+
+        source.clear();
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+
+        require_success(values.push_back(values[0]));
+        REQUIRE(values.size() == 2u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(values[1].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+        CHECK(view_equal(values[1].view(), std::string_view {"vector-lvalue"}));
+    }
+
+    SECTION("fixed Array clones lvalues into its context before self-aliasing insertion") {
+        auto source_ctx = make_context();
+        String source(&source_ctx);
+        assign_text(source, "array-lvalue");
+
+        auto destination_ctx = make_context();
+        protocyte::Array<String, 2u> values(&destination_ctx);
+        require_success(values.push_back(source));
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+
+        source.clear();
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+
+        require_success(values.push_back(values[0]));
+        REQUIRE(values.size() == 2u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(values[1].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+        CHECK(view_equal(values[1].view(), std::string_view {"array-lvalue"}));
+    }
+
+    SECTION("Vector leaves an aliased lvalue unchanged when cloning or growth fails") {
+        auto ctx = make_context();
+        Config::Vector<String> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "vector-stable");
+        require_success(values.push_back(source));
+        const auto baseline_allocation = ctx.total_allocated_bytes;
+
+        FailingAllocationProbe clone_failure {};
+        ctx.allocator = protocyte::Allocator {&clone_failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(clone_failure.calls == 1u);
+
+        FailingAllocationProbe growth_failure {.successful_calls_before_failure = 1u};
+        ctx.allocator = protocyte::Allocator {&growth_failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(growth_failure.calls == 2u);
+    }
+
+    SECTION("fixed Array leaves an aliased lvalue unchanged when cloning fails") {
+        auto ctx = make_context();
+        protocyte::Array<String, 2u> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "array-stable");
+        require_success(values.push_back(source));
+        const auto baseline_allocation = ctx.total_allocated_bytes;
+
+        FailingAllocationProbe failure {};
+        ctx.allocator = protocyte::Allocator {&failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(failure.calls == 1u);
+    }
+
+    SECTION("fixed Array reports full capacity without cloning") {
+        auto ctx = make_context();
+        protocyte::Array<String, 1u> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "array-full");
+        require_success(values.push_back(source));
+
+        FailingAllocationProbe failure {};
+        ctx.allocator = protocyte::Allocator {&failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(source), protocyte::ErrorCode::count_limit);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-full"}));
+        CHECK(failure.calls == 0u);
+    }
+}
+
 TEST_CASE("Runtime context rebinding preserves allocator ownership", "[smoke][runtime][allocator][bind]") {
     SECTION("unallocated vectors can bind and live vectors reject context changes") {
         auto first_ctx = make_context();
