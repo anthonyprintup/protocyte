@@ -190,6 +190,41 @@ def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
         assert "build/quickstart-venv/bin/protoc-gen-protocyte --version" in job
 
 
+def test_macos_find_package_uses_a_read_only_installed_prefix_and_managed_plugin() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    job = _job_named(ci, "find-package-macos")
+    steps = _steps_by_name(job)
+
+    assert "runs-on: macos-latest" in job
+    checkout = steps["Check out repository"]
+    assert "ref: ${{ inputs.checkout_ref || github.sha }}" in checkout
+    protoc = steps["Install prebuilt protoc"]
+    assert "id: protoc" in protoc
+    assert 'python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"' in protoc
+    install = steps["Configure protocyte install tree"]
+    assert "cmake -S . -B build/protocyte-install" in install
+    assert "-DCMAKE_BUILD_TYPE=Release" in install
+    assert "chmod -R a-w build/protocyte-prefix" in steps[
+        "Make installed prefix read-only"
+    ]
+    configure = steps["Configure find_package integration test"]
+    assert "cmake -S tests/find_package -B tests/find_package/build" in configure
+    assert "-DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix" in configure
+    assert "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}" in configure
+    assert "PROTOCYTE_PLUGIN_EXECUTABLE" not in configure
+    assert "cmake --build tests/find_package/build" in steps[
+        "Build find_package integration test"
+    ]
+    assert "ctest --test-dir tests/find_package/build --output-on-failure" in steps[
+        "Run find_package integration test"
+    ]
+    prefix_guard = steps["Verify provisioning did not modify the installed prefix"]
+    assert "share/protocyte/python/build" in prefix_guard
+    assert "share/protocyte/python/src/protocyte.egg-info" in prefix_guard
+
+
 def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
