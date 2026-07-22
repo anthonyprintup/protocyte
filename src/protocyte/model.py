@@ -32,10 +32,16 @@ from protocyte.descriptor_set import (
 from protocyte.errors import ProtocyteError
 from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_extension
 from protocyte.names import (
+    CppNameKind,
+    EmittedNameAllocator,
+    EmittedNameMember,
+    EmittedNameRequest,
+    EmittedNameScope,
+    PROTOCYTE_RUNTIME_CPP_SYMBOLS,
     cpp_derivable_identifier,
+    cpp_emitted_derivable_identifier,
     cpp_identifier,
     cpp_pascal_identifier,
-    normalized_cpp_identifier,
 )
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
@@ -89,11 +95,6 @@ _MAP_KEY_TYPES = frozenset(
         FieldDescriptorProto.TYPE_BOOL,
         FieldDescriptorProto.TYPE_STRING,
     }
-)
-
-
-_CPP_NAME_COLLISION_CONTEXT = (
-    "after C++ identifier normalization and reserved-name escaping"
 )
 
 
@@ -583,9 +584,7 @@ def _source_documentation(location) -> SourceDocumentation:
         location.trailing_comments,
     ]
     normalized = [
-        fragment
-        for part in parts
-        if (fragment := _normalize_source_comment(part))
+        fragment for part in parts if (fragment := _normalize_source_comment(part))
     ]
     return SourceDocumentation("\n\n".join(normalized))
 
@@ -607,6 +606,7 @@ class EnumValueModel:
     cpp_name: str
     number: int
     deprecated: bool
+    emitted_names: dict[str, str] = field(default_factory=dict)
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -621,6 +621,9 @@ class EnumModel:
     closed: bool = False
     deprecated: bool = False
     parent: "MessageModel | None" = None
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    compatibility_aliases: list[str] = field(default_factory=list)
+    cpp_namespace: tuple[str, ...] = ()
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -629,6 +632,7 @@ class OneofModel:
     name: str
     cpp_name: str
     fields: list["FieldModel"] = field(default_factory=list)
+    emitted_names: dict[str, str] = field(default_factory=dict)
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -644,6 +648,7 @@ class ConstantModel:
     family: str = ""
     cpp_type: str = ""
     cpp_value: str = ""
+    emitted_names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -682,17 +687,15 @@ class FieldModel:
     writer_cpp_name: str = "Writer"
     value_cpp_name: str = "Value"
     generic_cpp_name: str = "T"
+    emitted_names: dict[str, str] = field(default_factory=dict)
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
     @property
     def has_explicit_presence(self) -> bool:
-        return (
-            not self.repeated
-            and (
-                self.explicit_presence
-                or self.oneof_name is not None
-                or self.kind == "message"
-            )
+        return not self.repeated and (
+            self.explicit_presence
+            or self.oneof_name is not None
+            or self.kind == "message"
         )
 
     @property
@@ -752,6 +755,9 @@ class MessageModel:
     nested_messages: list["MessageModel"] = field(default_factory=list)
     nested_enums: list[EnumModel] = field(default_factory=list)
     constants: list[ConstantModel] = field(default_factory=list)
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    compatibility_aliases: list[str] = field(default_factory=list)
+    cpp_namespace: tuple[str, ...] = ()
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -765,6 +771,7 @@ class FileModel:
     messages: list[MessageModel] = field(default_factory=list)
     enums: list[EnumModel] = field(default_factory=list)
     dependencies: set[str] = field(default_factory=set)
+    cpp_namespace: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -1316,8 +1323,7 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         file_model.constants = _build_file_constants(file_model, custom_options)
         _validate_package_constant_collisions(file_model)
 
-    _validate_enum_value_collisions(enums.values())
-    _validate_type_cpp_name_collisions(files)
+    _allocate_namespace_cpp_names(files, enums.values())
 
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
@@ -1329,6 +1335,8 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
                 custom_options,
                 source_documentation[message.file_name],
             )
+
+    _allocate_message_cpp_names(files)
 
     _validate_package_constant_namespace(files)
     _resolve_constants_and_arrays(files, messages)
@@ -1894,9 +1902,7 @@ def _validate_reserved_fields(
                 f"{owner_full_name}: duplicate reserved field name {name!r}"
             )
         if name in field_names:
-            raise ProtocyteError(
-                f"{owner_full_name}.{name}: field name is reserved"
-            )
+            raise ProtocyteError(f"{owner_full_name}.{name}: field name is reserved")
         reserved_names.add(name)
 
     ranges: list[tuple[int, int]] = []
@@ -1946,9 +1952,7 @@ def _sort_ranges_and_find_overlap(
     previous = ordered[0]
     for current in ordered[1:]:
         overlaps = (
-            current[0] <= previous[1]
-            if end_inclusive
-            else current[0] < previous[1]
+            current[0] <= previous[1] if end_inclusive else current[0] < previous[1]
         )
         if overlaps:
             return ordered, (previous, current)
@@ -2086,7 +2090,7 @@ def _build_enum(
     descriptor_path: tuple[int, ...],
     documentation: _SourceDocumentationIndex,
 ) -> EnumModel:
-    cpp_name = cpp_pascal_identifier(enum.name)
+    cpp_name = cpp_identifier(enum.name)
     if parent is not None:
         cpp_name = _join_cpp_type_identifiers(parent.cpp_name, cpp_name)
     values = [
@@ -2125,7 +2129,7 @@ def _build_message_skeleton(
     descriptor_path: tuple[int, ...],
     documentation: _SourceDocumentationIndex,
 ) -> MessageModel:
-    cpp_name = cpp_pascal_identifier(message.name)
+    cpp_name = cpp_identifier(message.name)
     if parent is not None:
         cpp_name = _join_cpp_type_identifiers(parent.cpp_name, cpp_name)
     model = MessageModel(
@@ -2222,10 +2226,514 @@ def _fill_message_details(
     message.oneofs = [
         oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields
     ]
-    _validate_oneof_collisions(message)
-    _validate_nested_alias_collisions(message)
     _validate_constant_collisions(message)
-    _validate_field_collisions(message)
+
+
+_MESSAGE_PUBLIC_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("create", "fn/1/static"),
+    ("context", "fn/0/const"),
+    ("unknown_fields", "fn/0/const"),
+    ("unknown_field_count", "fn/0/const"),
+    ("unknown_field_bytes", "fn/0/const"),
+    ("clear_unknown_fields", "fn/0"),
+    ("mutable_unknown_fields", "fn/0"),
+    ("copy_from", "fn/1"),
+    ("clone", "fn/0/const"),
+    ("parse", "fn/2/static"),
+    ("merge_from", "fn/1"),
+    ("merge_fields_from", "fn/1"),
+    ("serialize", "fn/1/const"),
+    ("encoded_size", "fn/0/const"),
+    ("validate", "fn/0/const"),
+)
+
+_MESSAGE_PRIVATE_FUNCTIONS = (
+    "copy_from_in_place_",
+    "reset_for_reuse_",
+    "merge_field_from_",
+    "destroy_at_",
+)
+
+_FIELD_IMPLEMENTATION_NAME_TEMPLATES: tuple[tuple[str, str], ...] = (
+    ("ensured", "ensured_{name}"),
+    ("entry", "{name}_entry"),
+    ("value", "{name}_value"),
+    ("packed_values", "packed_{name}_values"),
+    ("packed_unknown_fields", "packed_{name}_unknown_fields"),
+    ("packed_reserve", "packed_reserve_{name}"),
+    ("merged_unknown_fields", "merged_{name}_unknown_fields"),
+    ("committed", "{name}_committed"),
+    ("parse_entry", "parse_{name}_entry"),
+    ("staged_entry", "staged_{name}_entry"),
+    ("decoded_raw", "decoded_{name}_raw"),
+    ("decoded", "decoded_{name}"),
+    ("accepted", "{name}_accepted"),
+    ("packed_size", "packed_size_{name}"),
+    ("packed_value", "packed_value_{name}"),
+    ("field_size", "field_size_{name}"),
+)
+
+
+def _allocate_message_cpp_names(files: dict[str, FileModel]) -> None:
+    allocator = EmittedNameAllocator()
+    for file_model in files.values():
+        for message in _walk_messages(file_model.messages):
+            if not message.is_map_entry:
+                _allocate_message_class_names(allocator, message)
+
+
+def _allocate_message_class_names(
+    allocator: EmittedNameAllocator, message: MessageModel
+) -> None:
+    scope = allocator.scope(f"message:{message.full_name}")
+    scope.reserve(
+        message.cpp_name,
+        owner=f"{message.full_name}:injected-class-name",
+        kind=CppNameKind.TYPE,
+    )
+    scope.reserve(
+        "Context",
+        owner=f"{message.full_name}:context-alias",
+        kind=CppNameKind.TYPE_ALIAS,
+    )
+    message.emitted_names["context_alias"] = "Context"
+    if message.fields:
+        scope.reserve(
+            "FieldNumber",
+            owner=f"{message.full_name}:field-number-type",
+            kind=CppNameKind.TYPE,
+        )
+        message.emitted_names["field_number_type"] = "FieldNumber"
+    for name, signature in _MESSAGE_PUBLIC_FUNCTIONS:
+        scope.reserve(
+            name,
+            owner=f"{message.full_name}:public:{name}",
+            kind=CppNameKind.PUBLIC_FUNCTION,
+            signature=signature,
+        )
+        message.emitted_names[name] = name
+
+    requests: list[EmittedNameRequest] = []
+    for enum in message.nested_enums:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"nested-enum:{enum.full_name}",
+                preferred=cpp_identifier(enum.name),
+                members=(EmittedNameMember(kind=CppNameKind.TYPE_ALIAS),),
+                priority=20,
+            )
+        )
+    for nested in message.nested_messages:
+        if nested.is_map_entry:
+            continue
+        requests.append(
+            EmittedNameRequest(
+                owner=f"nested-message:{nested.full_name}",
+                preferred=cpp_identifier(nested.name),
+                members=(EmittedNameMember(kind=CppNameKind.TYPE_ALIAS),),
+                priority=20,
+            )
+        )
+    for constant in message.constants:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"constant:{constant.full_name}",
+                preferred=constant.cpp_name,
+                members=(EmittedNameMember(kind=CppNameKind.CONSTANT),),
+                priority=30,
+            )
+        )
+    for item in message.fields:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"field:{message.full_name}.{item.name}",
+                preferred=item.cpp_name,
+                members=tuple(member for _, member in _field_public_name_members(item)),
+                priority=10,
+            )
+        )
+
+    allocated = scope.allocate(requests)
+    for enum in message.nested_enums:
+        enum.emitted_names["alias"] = allocated[f"nested-enum:{enum.full_name}"]
+    for nested in message.nested_messages:
+        if not nested.is_map_entry:
+            nested.emitted_names["alias"] = allocated[
+                f"nested-message:{nested.full_name}"
+            ]
+    for constant in message.constants:
+        constant.cpp_name = allocated[f"constant:{constant.full_name}"]
+        constant.emitted_names["declaration"] = constant.cpp_name
+    for item in message.fields:
+        stem = allocated[f"field:{message.full_name}.{item.name}"]
+        item.cpp_name = stem
+        item.emitted_names.update(
+            {
+                key: member.render(stem)
+                for key, member in _field_public_name_members(item)
+            }
+        )
+        item.emitted_names["number"] = stem
+
+    _allocate_nested_compatibility_aliases(scope, message)
+    _allocate_message_oneof_names(scope, message)
+    _allocate_message_private_names(scope, message)
+    _allocate_message_implementation_names(allocator, message)
+    _allocate_message_template_names(scope, message)
+
+
+def _field_public_name_members(
+    item: FieldModel,
+) -> tuple[tuple[str, EmittedNameMember], ...]:
+    members: list[tuple[str, EmittedNameMember]] = [
+        (
+            "accessor",
+            EmittedNameMember(kind=CppNameKind.FIELD_ACCESSOR, signature="fn/0/const"),
+        )
+    ]
+
+    def function(key: str, template: str, signature: str) -> None:
+        members.append(
+            (
+                key,
+                EmittedNameMember(
+                    template=template,
+                    kind=CppNameKind.FIELD_ACCESSOR,
+                    signature=signature,
+                ),
+            )
+        )
+
+    if item.oneof_name is not None:
+        function("has", "has_{name}", "fn/0/const")
+        if item.kind == "message":
+            function("ensure", "ensure_{name}", "fn/0")
+        elif item.kind == "enum":
+            function("raw_accessor", "{name}_raw", "fn/0/const")
+            function("raw_setter", "set_{name}_raw", "fn/1")
+            function("setter", "set_{name}", "fn/1")
+        else:
+            function("setter", "set_{name}", "fn/1")
+        return tuple(members)
+
+    function("clear", "clear_{name}", "fn/0")
+    if item.repeated or item.kind == "map":
+        function("mutable", "mutable_{name}", "fn/0")
+    elif item.kind == "message":
+        function("has", "has_{name}", "fn/0/const")
+        function("ensure", "ensure_{name}", "fn/0")
+    elif item.fixed_bytes:
+        function("has", "has_{name}", "fn/0/const")
+        function("mutable", "mutable_{name}", "fn/0")
+        function("resize_overwrite", "resize_{name}_for_overwrite", "fn/1")
+        function("setter", "set_{name}", "fn/1")
+    elif item.kind == "bytes" and item.array_enabled:
+        function("size", "{name}_size", "fn/0/const")
+        function("max_size", "{name}_max_size", "fn/0/const")
+        function("resize", "resize_{name}", "fn/1")
+        function("resize_overwrite", "resize_{name}_for_overwrite", "fn/1")
+        function("mutable", "mutable_{name}", "fn/0")
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    elif item.kind in {"string", "bytes"}:
+        function("mutable", "mutable_{name}", "fn/0")
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    elif item.kind == "enum":
+        function("raw_accessor", "{name}_raw", "fn/0/const")
+        function("raw_setter", "set_{name}_raw", "fn/1")
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    else:
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    return tuple(members)
+
+
+def _allocate_message_oneof_names(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    requests: list[EmittedNameRequest] = []
+    for oneof in message.oneofs:
+        lower = cpp_derivable_identifier(oneof.name)
+        requests.extend(
+            (
+                EmittedNameRequest(
+                    owner=f"oneof-case-type:{message.full_name}.{oneof.name}",
+                    preferred=f"{oneof.cpp_name}Case",
+                    members=(EmittedNameMember(kind=CppNameKind.ONEOF_CASE_TYPE),),
+                ),
+                EmittedNameRequest(
+                    owner=f"oneof-api:{message.full_name}.{oneof.name}",
+                    preferred=lower,
+                    members=(
+                        EmittedNameMember(
+                            template="{name}_case",
+                            kind=CppNameKind.PUBLIC_FUNCTION,
+                            signature="fn/0/const",
+                        ),
+                        EmittedNameMember(
+                            template="clear_{name}",
+                            kind=CppNameKind.PUBLIC_FUNCTION,
+                            signature="fn/0",
+                        ),
+                    ),
+                ),
+            )
+        )
+    allocated = scope.allocate(requests)
+    for oneof in message.oneofs:
+        case_owner = f"oneof-case-type:{message.full_name}.{oneof.name}"
+        api_owner = f"oneof-api:{message.full_name}.{oneof.name}"
+        oneof.emitted_names["case_type"] = allocated[case_owner]
+        stem = allocated[api_owner]
+        oneof.emitted_names["case_accessor"] = f"{stem}_case"
+        oneof.emitted_names["clear"] = f"clear_{stem}"
+
+        case_scope = EmittedNameAllocator().scope(
+            f"oneof-case:{message.full_name}.{oneof.name}"
+        )
+        case_scope.reserve(
+            "none",
+            owner=f"{message.full_name}.{oneof.name}:none",
+            kind=CppNameKind.ONEOF_CASE_VALUE,
+        )
+        case_requests = [
+            EmittedNameRequest(
+                owner=f"oneof-value:{message.full_name}.{item.name}",
+                preferred=item.cpp_name,
+                members=(EmittedNameMember(kind=CppNameKind.ONEOF_CASE_VALUE),),
+            )
+            for item in oneof.fields
+        ]
+        case_allocated = case_scope.allocate(case_requests)
+        for item in oneof.fields:
+            item.emitted_names["oneof_case"] = case_allocated[
+                f"oneof-value:{message.full_name}.{item.name}"
+            ]
+
+
+def _allocate_message_private_names(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    requests: list[EmittedNameRequest] = [
+        EmittedNameRequest(
+            owner=f"private:{message.full_name}:context-storage",
+            preferred="ctx_",
+            members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+        ),
+        EmittedNameRequest(
+            owner=f"private:{message.full_name}:unknown-storage",
+            preferred="unknown_fields_",
+            members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+        ),
+    ]
+    for name in _MESSAGE_PRIVATE_FUNCTIONS:
+        if name == "destroy_at_" and not message.oneofs:
+            continue
+        requests.append(
+            EmittedNameRequest(
+                owner=f"private:{message.full_name}:function:{name}",
+                preferred=name,
+                members=(
+                    EmittedNameMember(
+                        kind=CppNameKind.IMPLEMENTATION, signature=f"private:{name}"
+                    ),
+                ),
+            )
+        )
+    for item in message.fields:
+        if item.oneof_name is not None:
+            continue
+        requests.append(
+            EmittedNameRequest(
+                owner=f"private:{message.full_name}:field:{item.name}:storage",
+                preferred=f"{item.cpp_name}_",
+                members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+            )
+        )
+        if item.has_explicit_presence and item.kind != "message":
+            requests.append(
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:field:{item.name}:presence",
+                    preferred=f"has_{item.cpp_name}_",
+                    members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+                )
+            )
+    for oneof in message.oneofs:
+        lower = cpp_derivable_identifier(oneof.name)
+        requests.extend(
+            (
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:oneof:{oneof.name}:case",
+                    preferred=f"{lower}_case_",
+                    members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+                ),
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:oneof:{oneof.name}:type",
+                    preferred=f"{oneof.cpp_name}Storage",
+                    members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                ),
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:oneof:{oneof.name}:storage",
+                    preferred=f"{lower}_",
+                    members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+                ),
+            )
+        )
+    allocated = scope.allocate(requests)
+    message.emitted_names["context_storage"] = allocated[
+        f"private:{message.full_name}:context-storage"
+    ]
+    message.emitted_names["unknown_storage"] = allocated[
+        f"private:{message.full_name}:unknown-storage"
+    ]
+    for name in _MESSAGE_PRIVATE_FUNCTIONS:
+        owner = f"private:{message.full_name}:function:{name}"
+        if owner in allocated:
+            message.emitted_names[name] = allocated[owner]
+    for item in message.fields:
+        if item.oneof_name is not None:
+            continue
+        item.emitted_names["storage"] = allocated[
+            f"private:{message.full_name}:field:{item.name}:storage"
+        ]
+        presence_owner = f"private:{message.full_name}:field:{item.name}:presence"
+        if presence_owner in allocated:
+            item.emitted_names["presence_storage"] = allocated[presence_owner]
+    for oneof in message.oneofs:
+        prefix = f"private:{message.full_name}:oneof:{oneof.name}"
+        oneof.emitted_names["case_storage"] = allocated[f"{prefix}:case"]
+        oneof.emitted_names["storage_type"] = allocated[f"{prefix}:type"]
+        oneof.emitted_names["storage"] = allocated[f"{prefix}:storage"]
+        union_scope = EmittedNameAllocator().scope(
+            f"oneof-storage:{message.full_name}.{oneof.name}"
+        )
+        union_allocated = union_scope.allocate(
+            EmittedNameRequest(
+                owner=f"oneof-storage:{message.full_name}.{item.name}",
+                preferred=f"{item.cpp_name}_",
+                members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+            )
+            for item in oneof.fields
+        )
+        for item in oneof.fields:
+            item.emitted_names["oneof_storage"] = union_allocated[
+                f"oneof-storage:{message.full_name}.{item.name}"
+            ]
+            item.emitted_names["oneof_case_type"] = oneof.emitted_names["case_type"]
+            item.emitted_names["oneof_case_storage"] = oneof.emitted_names[
+                "case_storage"
+            ]
+            item.emitted_names["oneof_container"] = oneof.emitted_names["storage"]
+            item.emitted_names["oneof_clear"] = oneof.emitted_names["clear"]
+    for item in message.fields:
+        _assign_message_private_names_to_field(item, message)
+
+
+def _assign_message_private_names_to_field(
+    item: FieldModel, message: MessageModel
+) -> None:
+    item.emitted_names["context_storage"] = message.emitted_names["context_storage"]
+    item.emitted_names["unknown_storage"] = message.emitted_names["unknown_storage"]
+    for name in _MESSAGE_PRIVATE_FUNCTIONS:
+        if name in message.emitted_names:
+            item.emitted_names[name] = message.emitted_names[name]
+    if item.map_key is not None:
+        _assign_message_private_names_to_field(item.map_key, message)
+    if item.map_value is not None:
+        _assign_message_private_names_to_field(item.map_value, message)
+
+
+def _allocate_message_implementation_names(
+    allocator: EmittedNameAllocator, message: MessageModel
+) -> None:
+    scope = allocator.scope(f"implementation:{message.full_name}")
+    requests: list[EmittedNameRequest] = []
+    for item in message.fields:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"implementation:{message.full_name}.{item.name}",
+                preferred=cpp_emitted_derivable_identifier(item.cpp_name),
+                members=tuple(
+                    EmittedNameMember(
+                        template=template, kind=CppNameKind.IMPLEMENTATION
+                    )
+                    for _, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+                ),
+            )
+        )
+    allocated = scope.allocate(requests)
+    for item in message.fields:
+        stem = allocated[f"implementation:{message.full_name}.{item.name}"]
+        item.emitted_names.update(
+            {
+                f"implementation:{key}": template.format(name=stem)
+                for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+            }
+        )
+
+
+def _allocate_message_template_names(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    requests = [
+        EmittedNameRequest(
+            owner=f"template:{message.full_name}:{preferred}",
+            preferred=preferred,
+            members=(EmittedNameMember(kind=CppNameKind.IMPLEMENTATION),),
+        )
+        for preferred in ("Config", "Reader", "Writer", "Value", "T")
+    ]
+    allocated = scope.allocate(requests)
+    message.config_cpp_name = allocated[f"template:{message.full_name}:Config"]
+    message.reader_cpp_name = allocated[f"template:{message.full_name}:Reader"]
+    message.writer_cpp_name = allocated[f"template:{message.full_name}:Writer"]
+    message.value_cpp_name = allocated[f"template:{message.full_name}:Value"]
+    message.generic_cpp_name = allocated[f"template:{message.full_name}:T"]
+    for item in message.fields:
+        _assign_field_internal_cpp_names_from_model(item, message)
+
+
+def _allocate_nested_compatibility_aliases(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    nested_types: list[MessageModel | EnumModel] = [
+        *message.nested_enums,
+        *(nested for nested in message.nested_messages if not nested.is_map_entry),
+    ]
+    aliases = [cpp_pascal_identifier(nested.name) for nested in nested_types]
+    counts = {alias: aliases.count(alias) for alias in set(aliases)}
+    for nested, alias in sorted(
+        zip(nested_types, aliases, strict=True), key=lambda item: item[0].full_name
+    ):
+        canonical = nested.emitted_names.get("alias", cpp_identifier(nested.name))
+        if alias == canonical or counts[alias] != 1 or alias in scope.uses:
+            continue
+        scope.reserve(
+            alias,
+            owner=f"compatibility-alias:{nested.full_name}",
+            kind=CppNameKind.TYPE_ALIAS,
+        )
+        nested.emitted_names["compatibility_alias"] = alias
+
+
+def _assign_field_internal_cpp_names_from_model(
+    item: FieldModel, message: MessageModel
+) -> None:
+    item.config_cpp_name = message.config_cpp_name
+    item.reader_cpp_name = message.reader_cpp_name
+    item.writer_cpp_name = message.writer_cpp_name
+    item.value_cpp_name = message.value_cpp_name
+    item.generic_cpp_name = message.generic_cpp_name
+    if item.map_key is not None:
+        _assign_field_internal_cpp_names_from_model(item.map_key, message)
+    if item.map_value is not None:
+        _assign_field_internal_cpp_names_from_model(item.map_value, message)
 
 
 def _build_file_constants(
@@ -2256,10 +2764,6 @@ def _build_raw_constants(
     for raw in raw_constants:
         if not raw.name:
             raise ProtocyteError(f"{owner}: constant name must not be empty")
-        if normalized_cpp_identifier(raw.name) == "_" and raw.name != "_":
-            raise ProtocyteError(
-                f"{owner}.{raw.name}: constant name is not a valid C++ identifier"
-            )
         if raw.kind is None or (raw.literal is None) == (raw.expr is None):
             raise ProtocyteError(
                 f"{owner}.{raw.name}: exactly one typed constant value must be set"
@@ -2279,7 +2783,6 @@ def _build_raw_constants(
 
 def _validate_constant_collisions(message: MessageModel) -> None:
     seen_names: set[str] = set()
-    seen_cpp_names: dict[str, str] = {}
 
     for constant in message.constants:
         if constant.name in seen_names:
@@ -2287,187 +2790,167 @@ def _validate_constant_collisions(message: MessageModel) -> None:
                 f"{message.full_name}.{constant.name}: constant cannot be redefined"
             )
         seen_names.add(constant.name)
-        if not constant.cpp_name or constant.cpp_name == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{constant.name}: constant name is not a valid C++ identifier"
-            )
-        if constant.cpp_name in seen_cpp_names:
-            first = seen_cpp_names[constant.cpp_name]
-            raise ProtocyteError(
-                f"{message.full_name}.{constant.name}: constant collides with {first!r} "
-                f"{_CPP_NAME_COLLISION_CONTEXT}"
-            )
-        seen_cpp_names[constant.cpp_name] = constant.name
 
 
 def _validate_package_constant_collisions(file_model: FileModel) -> None:
     seen_names: set[str] = set()
-    seen_cpp_names: dict[str, str] = {}
     for constant in file_model.constants:
         if constant.name in seen_names:
             raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
         seen_names.add(constant.name)
-        if not constant.cpp_name or constant.cpp_name == "_":
-            raise ProtocyteError(
-                f"{constant.full_name}: constant name is not a valid C++ identifier"
-            )
-        if constant.cpp_name in seen_cpp_names:
-            first = seen_cpp_names[constant.cpp_name]
-            raise ProtocyteError(
-                f"{constant.full_name}: constant collides with {first!r} "
-                f"{_CPP_NAME_COLLISION_CONTEXT}"
-            )
-        seen_cpp_names[constant.cpp_name] = constant.name
 
 
 def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
-    top_level_cpp_names: dict[tuple[str, ...], set[str]] = {}
-    for file_model in files.values():
-        package_key = _cpp_package_key(file_model.package)
-        reserved = top_level_cpp_names.setdefault(package_key, {"protocyte_reflection"})
-        reserved.update(_file_type_cpp_names(file_model))
-
     seen_names: dict[tuple[str, ...], set[str]] = {}
-    seen_cpp_names: dict[tuple[str, ...], dict[str, str]] = {}
     for file_model in files.values():
         package_key = _cpp_package_key(file_model.package)
         names = seen_names.setdefault(package_key, set())
-        cpp_names = seen_cpp_names.setdefault(package_key, {})
-        reserved = top_level_cpp_names[package_key]
         for constant in file_model.constants:
             if constant.name in names:
                 raise ProtocyteError(
                     f"{constant.full_name}: constant cannot be redefined"
                 )
             names.add(constant.name)
-            if constant.cpp_name in cpp_names:
-                first = cpp_names[constant.cpp_name]
-                raise ProtocyteError(
-                    f"{constant.full_name}: constant collides with {first!r} "
-                    f"{_CPP_NAME_COLLISION_CONTEXT}"
-                )
-            if constant.cpp_name in reserved:
-                raise ProtocyteError(
-                    f"{constant.full_name}: constant collides with generated API"
-                )
-            cpp_names[constant.cpp_name] = constant.full_name
 
 
-def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
-    for enum in enums:
-        seen_cpp_names: dict[str, str] = {}
-        for value in enum.values:
-            if not value.cpp_name or value.cpp_name == "_":
-                raise ProtocyteError(
-                    f"{enum.full_name}.{value.name}: enum value name is not a valid C++ identifier"
-                )
-            if value.cpp_name in seen_cpp_names:
-                first = seen_cpp_names[value.cpp_name]
-                raise ProtocyteError(
-                    f"{enum.full_name}.{value.name}: enum value collides with {first!r} "
-                    f"{_CPP_NAME_COLLISION_CONTEXT}"
-                )
-            seen_cpp_names[value.cpp_name] = value.name
-
-
-def _validate_type_cpp_name_collisions(files: dict[str, FileModel]) -> None:
-    seen_cpp_names: dict[tuple[str, ...], dict[str, str]] = {}
-    for file_model in files.values():
-        package_names = seen_cpp_names.setdefault(
-            _cpp_package_key(file_model.package), {}
-        )
-        for full_name, cpp_name in _file_type_cpp_items(file_model):
-            _reserve_type_cpp_name(package_names, full_name, cpp_name)
-
-
-def _file_type_cpp_names(file_model: FileModel) -> set[str]:
-    return {cpp_name for _, cpp_name in _file_type_cpp_items(file_model)}
-
-
-def _file_type_cpp_items(file_model: FileModel) -> Iterable[tuple[str, str]]:
-    for enum in file_model.enums:
-        yield enum.full_name, enum.cpp_name
-    for message in _walk_messages(file_model.messages):
-        if not message.is_map_entry:
-            yield message.full_name, message.cpp_name
-        for enum in message.nested_enums:
-            yield enum.full_name, enum.cpp_name
-
-
-def _reserve_type_cpp_name(
-    seen_cpp_names: dict[str, str], full_name: str, cpp_name: str
+def _allocate_namespace_cpp_names(
+    files: dict[str, FileModel], enums: Iterable[EnumModel]
 ) -> None:
-    if not cpp_name or cpp_name == "_":
-        raise ProtocyteError(f"{full_name}: type name is not a valid C++ identifier")
-    if cpp_name in seen_cpp_names:
-        first = seen_cpp_names[cpp_name]
-        raise ProtocyteError(
-            f"{full_name}: type collides with {first!r} {_CPP_NAME_COLLISION_CONTEXT}"
+    allocator = EmittedNameAllocator()
+    type_owners: dict[str, MessageModel | EnumModel] = {}
+    constant_owners: dict[str, ConstantModel] = {}
+    scopes: dict[tuple[str, ...], EmittedNameScope] = {}
+    requests: dict[tuple[str, ...], list[EmittedNameRequest]] = {}
+
+    for file_model in files.values():
+        package_key = _cpp_package_key(file_model.package)
+        scope = scopes.get(package_key)
+        if scope is None:
+            scope = allocator.scope(f"namespace:{'::'.join(package_key) or '<global>'}")
+            scopes[package_key] = scope
+            scope.reserve(
+                "protocyte_reflection",
+                owner=f"namespace:{file_model.package}:reflection",
+                kind=CppNameKind.NAMESPACE,
+            )
+            if package_key == ("protocyte",):
+                for runtime_name in sorted(PROTOCYTE_RUNTIME_CPP_SYMBOLS):
+                    scope.reserve(
+                        runtime_name,
+                        owner=f"runtime:{runtime_name}",
+                        kind=CppNameKind.TYPE,
+                    )
+        package_requests = requests.setdefault(package_key, [])
+        for enum in file_model.enums:
+            owner = f"type:{enum.full_name}"
+            type_owners[owner] = enum
+            package_requests.append(
+                EmittedNameRequest(
+                    owner=owner,
+                    preferred=enum.cpp_name,
+                    members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                    hash_fallback=True,
+                )
+            )
+        for message in _walk_messages(file_model.messages):
+            if message.is_map_entry:
+                pass
+            else:
+                owner = f"type:{message.full_name}"
+                type_owners[owner] = message
+                package_requests.append(
+                    EmittedNameRequest(
+                        owner=owner,
+                        preferred=message.cpp_name,
+                        members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                        hash_fallback=True,
+                    )
+                )
+            for enum in message.nested_enums:
+                owner = f"type:{enum.full_name}"
+                type_owners[owner] = enum
+                package_requests.append(
+                    EmittedNameRequest(
+                        owner=owner,
+                        preferred=enum.cpp_name,
+                        members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                        hash_fallback=True,
+                    )
+                )
+        for constant in file_model.constants:
+            owner = f"constant:{constant.full_name}"
+            constant_owners[owner] = constant
+            package_requests.append(
+                EmittedNameRequest(
+                    owner=owner,
+                    preferred=constant.cpp_name,
+                    members=(EmittedNameMember(kind=CppNameKind.CONSTANT),),
+                )
+            )
+
+    for package_key, package_requests in requests.items():
+        allocated = scopes[package_key].allocate(package_requests)
+        for owner, cpp_name in allocated.items():
+            if owner in type_owners:
+                type_owners[owner].cpp_name = cpp_name
+            else:
+                constant = constant_owners[owner]
+                constant.cpp_name = cpp_name
+                constant.emitted_names["declaration"] = cpp_name
+
+    compatibility_candidates: list[
+        tuple[tuple[str, ...], str, MessageModel | EnumModel]
+    ] = []
+    for model in type_owners.values():
+        legacy = _legacy_cpp_type_name(model)
+        if legacy != model.cpp_name:
+            compatibility_candidates.append(
+                (_cpp_package_key(model.package), legacy, model)
+            )
+    alias_counts: dict[tuple[tuple[str, ...], str], int] = {}
+    for package_key, alias, _ in compatibility_candidates:
+        key = (package_key, alias)
+        alias_counts[key] = alias_counts.get(key, 0) + 1
+    for package_key, alias, model in sorted(
+        compatibility_candidates, key=lambda item: item[2].full_name
+    ):
+        if alias_counts[(package_key, alias)] != 1:
+            continue
+        scope = scopes[package_key]
+        if alias in scope.uses:
+            continue
+        scope.reserve(
+            alias,
+            owner=f"compatibility-alias:{model.full_name}",
+            kind=CppNameKind.TYPE_ALIAS,
         )
-    seen_cpp_names[cpp_name] = full_name
+        model.compatibility_aliases.append(alias)
 
-
-def _validate_nested_alias_collisions(message: MessageModel) -> None:
-    seen_cpp_names: dict[str, str] = {}
-    for name, cpp_name in _nested_alias_cpp_items(message):
-        if not cpp_name or cpp_name == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{name}: nested type alias is not a valid C++ identifier"
+    for enum in enums:
+        scope = allocator.scope(f"enum:{enum.full_name}")
+        value_requests = [
+            EmittedNameRequest(
+                owner=f"enum-value:{enum.full_name}.{value.name}",
+                preferred=value.cpp_name,
+                members=(EmittedNameMember(kind=CppNameKind.ENUM_VALUE),),
             )
-        if cpp_name in seen_cpp_names:
-            first = seen_cpp_names[cpp_name]
-            raise ProtocyteError(
-                f"{message.full_name}.{name}: nested type alias collides with {first!r} "
-                f"{_CPP_NAME_COLLISION_CONTEXT}"
-            )
-        seen_cpp_names[cpp_name] = name
+            for value in enum.values
+        ]
+        allocated = scope.allocate(value_requests)
+        for value in enum.values:
+            value.cpp_name = allocated[f"enum-value:{enum.full_name}.{value.name}"]
+            value.emitted_names["declaration"] = value.cpp_name
 
 
-def _validate_oneof_collisions(message: MessageModel) -> None:
-    if message.is_map_entry:
-        return
-    seen_cpp_names: dict[str, str] = {}
-
-    for oneof in message.oneofs:
-        lower = cpp_derivable_identifier(oneof.name)
-        if not lower or lower == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier"
-            )
-        if lower in seen_cpp_names:
-            first = seen_cpp_names[lower]
-            raise ProtocyteError(
-                f"{message.full_name}.{oneof.name}: oneof collides with {first!r} "
-                f"{_CPP_NAME_COLLISION_CONTEXT}"
-            )
-        seen_cpp_names[lower] = oneof.name
-
-
-def _nested_alias_cpp_items(message: MessageModel) -> Iterable[tuple[str, str]]:
-    for enum in message.nested_enums:
-        yield enum.name, cpp_identifier(enum.name)
-    for nested in message.nested_messages:
-        if not nested.is_map_entry:
-            yield nested.name, cpp_identifier(nested.name)
-
-
-def _validate_field_collisions(message: MessageModel) -> None:
-    if message.is_map_entry:
-        return
-    seen_cpp_names: dict[str, str] = {}
-
-    for field_model in message.fields:
-        if not field_model.cpp_name or field_model.cpp_name == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{field_model.name}: field name is not a valid C++ identifier"
-            )
-        if field_model.cpp_name in seen_cpp_names:
-            first = seen_cpp_names[field_model.cpp_name]
-            raise ProtocyteError(
-                f"{message.full_name}.{field_model.name}: field collides with {first!r} "
-                f"{_CPP_NAME_COLLISION_CONTEXT}"
-            )
-        seen_cpp_names[field_model.cpp_name] = field_model.name
+def _legacy_cpp_type_name(model: MessageModel | EnumModel) -> str:
+    path = model.full_name
+    if model.package:
+        path = path.removeprefix(f"{model.package}.")
+    parts = path.split(".")
+    cpp_name = cpp_pascal_identifier(parts[0])
+    for part in parts[1:]:
+        cpp_name = _join_cpp_type_identifiers(cpp_name, cpp_pascal_identifier(part))
+    return cpp_name
 
 
 def _cpp_package_key(package: str) -> tuple[str, ...]:

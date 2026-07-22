@@ -5677,7 +5677,7 @@ def test_model_decodes_constants_and_array_options() -> None:
     assert nested_fields["payload"].array_cpp_max == "16u"
 
 
-def test_rejects_field_cpp_name_collisions() -> None:
+def test_allocates_distinct_field_cpp_names() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("field_collision.proto")
     file = request.proto_file.add()
@@ -5694,11 +5694,15 @@ def test_rejects_field_cpp_name_collisions() -> None:
         field.type = F.TYPE_INT32
 
     response = generate_response(request)
+    model = build_model(request)
 
-    assert (
-        "field collides with 'class' after C++ identifier normalization"
-        in response.error
-    )
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    fields = model.messages["demo.Broken"].fields
+    assert fields[0].cpp_name == "class_protocyte"
+    assert fields[1].cpp_name == "class_protocyte_"
+    assert f"{fields[0].cpp_name}() const noexcept" in header
+    assert f"{fields[1].cpp_name}() const noexcept" in header
 
 
 def test_field_collision_checks_only_emitted_accessors() -> None:
@@ -5735,7 +5739,7 @@ def test_field_collision_checks_only_emitted_accessors() -> None:
     assert "void set_set_values(const ::protocyte::i32 value) noexcept" in header
 
 
-def test_rejects_top_level_cpp_type_name_collisions() -> None:
+def test_preserves_case_for_top_level_cpp_type_names() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("type_collision.proto")
     file = request.proto_file.add()
@@ -5748,11 +5752,13 @@ def test_rejects_top_level_cpp_type_name_collisions() -> None:
 
     response = generate_response(request)
 
-    assert "type collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "struct foo;" in header
+    assert "struct Foo;" in header
 
 
-def test_rejects_enum_value_cpp_name_collisions() -> None:
+def test_enum_value_keyword_escape_is_injective() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("enum_value_collision.proto")
     file = request.proto_file.add()
@@ -5768,11 +5774,13 @@ def test_rejects_enum_value_cpp_name_collisions() -> None:
 
     response = generate_response(request)
 
-    assert "enum value collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "class_ = 0," in header
+    assert "protocyte_escaped_636c6173735f = 1," in header
 
 
-def test_rejects_cpp_namespace_type_collisions() -> None:
+def test_cpp_namespace_keyword_escape_is_injective() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     for proto_name, package in (("and.proto", "and"), ("and_.proto", "and_")):
         request.file_to_generate.append(proto_name)
@@ -5785,8 +5793,12 @@ def test_rejects_cpp_namespace_type_collisions() -> None:
 
     response = generate_response(request)
 
-    assert "type collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    headers = "\n".join(
+        item.content for item in response.file if item.name.endswith(".hpp")
+    )
+    assert "namespace and_ {" in headers
+    assert "namespace protocyte_escaped_616e645f {" in headers
 
 
 @pytest.mark.parametrize(
@@ -5797,7 +5809,7 @@ def test_rejects_cpp_namespace_type_collisions() -> None:
         ("package_constant", "package constant"),
     ],
 )
-def test_rejects_generated_symbol_collisions_with_child_package_namespace(
+def test_remaps_child_package_namespace_colliding_with_generated_symbol(
     symbol_kind: str, expected_kind: str
 ) -> None:
     request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
@@ -5835,13 +5847,14 @@ def test_rejects_generated_symbol_collisions_with_child_package_namespace(
 
     response = generate_response(request)
 
-    assert not response.file
-    assert f"foo.Bar: generated {expected_kind} 'Bar'" in response.error
-    assert "collides with generated namespace ::foo::Bar" in response.error
-    assert "child_package.proto" in response.error
+    del expected_kind
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "::foo::Bar_protocyte_" in header
+    assert "::Payload<Config>" in header
 
 
-def test_namespace_scope_validation_uses_normalized_names_with_prefixes() -> None:
+def test_namespace_scope_preserves_case_with_prefixes() -> None:
     request = plugin_pb2.CodeGeneratorRequest(
         parameter="format=off,namespace_prefix=project::wire"
     )
@@ -5867,10 +5880,11 @@ def test_namespace_scope_validation_uses_normalized_names_with_prefixes() -> Non
 
     response = generate_response(request)
 
-    assert not response.file
-    assert "foo.class" in response.error
-    assert "generated type 'Class_'" in response.error
-    assert "::project::wire::foo::Class_" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "struct class_;" in header
+    assert "::project::wire::foo::Class_protocyte_" in header
+    assert "::Payload<Config>" in header
 
 
 def test_rejects_reflection_symbol_collision_with_child_package_namespace() -> None:
@@ -5972,8 +5986,8 @@ def test_namespace_scope_validation_allows_distinct_symbols_and_packages() -> No
         ("_Upper", "protocyte_escaped_5f5570706572"),
         ("trailing_", "trailing_"),
         ("_", "protocyte_escaped_5f"),
-        ("", "protocyte_escaped_5f"),
-        ("1", "protocyte_escaped_5f"),
+        ("", "protocyte_escaped_"),
+        ("1", "protocyte_escaped_31"),
     ],
 )
 def test_cpp_identifier_escapes_problematic_cpp_spellings(
@@ -6009,7 +6023,7 @@ def test_cpp_derivable_identifier_avoids_reserved_derived_names(
     "symbol_kind",
     ["constant", "enum_value", "field", "nested_type", "oneof", "package", "type"],
 )
-def test_rejects_reserved_cpp_identifier_escape_collisions(
+def test_reserved_cpp_identifier_escape_is_injective(
     symbol_kind: str,
 ) -> None:
     reserved = "__LINE__"
@@ -6078,13 +6092,8 @@ def test_rejects_reserved_cpp_identifier_escape_collisions(
 
     response = generate_response(request)
 
-    assert not response.file
-    assert reserved in response.error
-    assert escaped in response.error
-    assert (
-        "after C++ identifier normalization and reserved-name escaping"
-        in response.error
-    )
+    assert not response.error
+    assert response.file
 
 
 def test_generated_include_guards_are_unique_for_normalized_path_collisions() -> None:
@@ -6182,8 +6191,8 @@ def test_nested_aliases_use_cpp_identifiers() -> None:
     assert not response.error
     files = {item.name: item.content for item in response.file}
     header = files["nested_alias.protocyte.hpp"]
-    assert "using enum_ = HasNested_Enum_;" in header
-    assert "using class_ = HasNested_Class_<NestedConfig>;" in header
+    assert "using enum_ = HasNested_enum_;" in header
+    assert "using class_ = HasNested_class_<NestedConfig>;" in header
     assert "using enum = " not in header
     assert "using class = " not in header
 
@@ -7797,10 +7806,12 @@ def test_rejects_internal_typed_constant_literal_overflow_and_array_exclusivity(
         )
 
 
-def test_rejects_invalid_constant_cpp_identifier() -> None:
+def test_encodes_invalid_constant_cpp_identifier() -> None:
     response = generate_response(_invalid_cpp_identifier_request())
 
-    assert "constant name is not a valid C++ identifier" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "protocyte_escaped_31 {1}" in header
 
 
 def test_generated_header_copies_oneof_state() -> None:
@@ -8194,7 +8205,7 @@ def test_rejects_invalid_array_targets_and_constant_cycles() -> None:
     assert "cycle detected" in cycle_response.error
 
 
-def test_rejects_constant_name_collisions() -> None:
+def test_allocates_constant_name_collisions() -> None:
     duplicate_response = generate_response(
         _constant_collision_request(
             "duplicate.proto", [("dup", "i32", 1), ("dup", "i32", 2)]
@@ -8213,12 +8224,27 @@ def test_rejects_constant_name_collisions() -> None:
     )
 
     assert "constant cannot be redefined" in duplicate_response.error
-    assert (
-        "after C++ identifier normalization and reserved-name escaping"
-        in normalized_response.error
+    for response in (
+        normalized_response,
+        reserved_response,
+        validate_reserved_response,
+    ):
+        assert not response.error
+    normalized_header = next(
+        item.content for item in normalized_response.file if item.name.endswith(".hpp")
     )
-    assert "collides with generated API" in reserved_response.error
-    assert "collides with generated API" in validate_reserved_response.error
+    assert "protocyte_escaped_6361702d76616c7565" in normalized_header
+    assert "cap_value" in normalized_header
+    reserved_header = next(
+        item.content for item in reserved_response.file if item.name.endswith(".hpp")
+    )
+    validate_header = next(
+        item.content
+        for item in validate_reserved_response.file
+        if item.name.endswith(".hpp")
+    )
+    assert "create_ {1}" in reserved_header
+    assert "validate_ {1}" in validate_header
 
 
 def test_generated_header_emits_tagged_union_oneofs() -> None:
@@ -8323,31 +8349,25 @@ def test_generated_header_suffixes_shadow_prone_oneof_storage() -> None:
     )
 
 
-def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
+def test_model_stores_allocated_names_by_emitted_scope() -> None:
     model = build_model(_oneof_request())
-    registry = protocyte_cpp._build_message_cpp_name_registry(
-        model.messages["demo.Carrier"], protocyte_cpp.GeneratorOptions()
-    )
+    message = model.messages["demo.Carrier"]
+    oneof = message.oneofs[0]
+    text = oneof.fields[0]
 
-    class_scope = registry.scope("demo.Carrier")
-    choice_scope = registry.scope("demo.Carrier::ChoiceStorage")
-    choice_case_scope = registry.scope("demo.Carrier::ChoiceCase")
-    field_number_scope = registry.scope("demo.Carrier::FieldNumber")
-
-    assert class_scope.owner("ctx_") == "generated context storage"
-    assert class_scope.owner("unknown_fields_") == "generated unknown field storage"
-    assert class_scope.owner("serialize") == "generated serialize function"
-    assert class_scope.owner("serialize_to") is None
-    assert class_scope.owner("merge_field_from_") == "generated merge field helper"
-    assert class_scope.owner("merge_fields_from") == "generated merge fields helper"
-    assert class_scope.owner("choice_") == "oneof choice storage"
-    assert class_scope.owner("choice_case_") == "oneof choice case storage"
-    assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
-    assert class_scope.owner("text_") is None
-    assert choice_scope.owner("text_") == "oneof field text storage"
-    assert choice_case_scope.owner("none") == "oneof choice empty case"
-    assert choice_case_scope.owner("text") == "oneof field text case"
-    assert field_number_scope.owner("text") == "field text number"
+    assert message.emitted_names["context_storage"] == "ctx_"
+    assert message.emitted_names["unknown_storage"] == "unknown_fields_"
+    assert message.emitted_names["merge_field_from_"] == "merge_field_from_"
+    assert oneof.emitted_names == {
+        "case_type": "ChoiceCase",
+        "case_accessor": "choice_case",
+        "clear": "clear_choice",
+        "case_storage": "choice_case_",
+        "storage_type": "ChoiceStorage",
+        "storage": "choice_",
+    }
+    assert text.emitted_names["oneof_case"] == "text"
+    assert text.emitted_names["oneof_storage"] == "text_"
 
 
 def test_generated_internal_template_names_do_not_shadow_legal_message_names() -> None:
@@ -8377,21 +8397,21 @@ def test_generated_internal_template_names_do_not_shadow_legal_message_names() -
 
     assert not response.error
     header = next(item.content for item in response.file if item.name.endswith(".hpp"))
-    assert "template <typename ProtocyteConfig = ::protocyte::DefaultConfig>" in header
+    assert "template <typename Config_ = ::protocyte::DefaultConfig>" in header
     assert "struct Config;" in header
-    assert "typename ProtocyteConfig::String text_;" in header
-    assert "template <::protocyte::ReaderLike ProtocyteReader>" in header
+    assert "typename Config_::String text_;" in header
+    assert "template <::protocyte::ReaderLike Reader_>" in header
     assert "struct Reader" in header
-    assert "template <::protocyte::WriterLike ProtocyteWriter>" in header
+    assert "template <::protocyte::WriterLike Writer_>" in header
     assert "struct Writer" in header
-    assert "template<class ProtocyteValue>" in header
+    assert "template<class Value_>" in header
     assert "struct Value" in header
-    assert "template <typename ProtocyteT>" in header
+    assert "template <typename T_>" in header
     assert "struct T" in header
 
 
 @pytest.mark.parametrize("collision_kind", ["field", "nested_message", "nested_enum"])
-def test_rejects_injected_class_name_collisions(collision_kind: str) -> None:
+def test_allocates_injected_class_name_collisions(collision_kind: str) -> None:
     file = descriptor_pb2.FileDescriptorProto(
         name="injected_name.proto", package="demo", syntax="proto3"
     )
@@ -8411,8 +8431,9 @@ def test_rejects_injected_class_name_collisions(collision_kind: str) -> None:
 
     response = generate_response(request)
 
-    assert "injected-class-name" in response.error
-    assert "Payload" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "Payload_" in header
 
 
 def test_allows_serialize_to_field_after_span_overload_rename() -> None:
@@ -8432,7 +8453,7 @@ def test_allows_serialize_to_field_after_span_overload_rename() -> None:
 
 
 @pytest.mark.parametrize("nested_name", ["merge_field_from_", "merge_fields_from"])
-def test_rejects_nested_messages_that_collide_with_generated_merge_helpers(
+def test_allocates_nested_messages_that_collide_with_generated_merge_helpers(
     nested_name: str,
 ) -> None:
     file = descriptor_pb2.FileDescriptorProto(
@@ -8447,20 +8468,14 @@ def test_rejects_nested_messages_that_collide_with_generated_merge_helpers(
 
     response = generate_response(request)
 
-    assert response.error == (
-        f"demo.Container.{nested_name}: nested type alias collides with generated API"
-    )
-
-
-def test_cpp_function_registry_rejects_parameters_that_shadow_visible_storage() -> None:
-    function_scope = protocyte_cpp._CppFunctionScope(
-        "demo.Message::set_flag", visible_storage={"value"}
-    )
-
-    with pytest.raises(
-        ProtocyteError, match="parameter 'value' shadows visible generated storage"
-    ):
-        function_scope.parameter("value")
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    if nested_name == "merge_field_from_":
+        assert "using merge_field_from_ = " in header
+        assert "merge_field_from_protocyte(" in header
+    else:
+        assert "using merge_fields_from_ = " in header
+        assert "merge_fields_from(" in header
 
 
 def test_generated_header_uses_normalized_oneof_case_type() -> None:
@@ -8482,37 +8497,40 @@ def test_generated_header_uses_normalized_oneof_case_type() -> None:
     assert "AndCase" not in header
 
 
-def test_rejects_oneof_cpp_name_collisions() -> None:
+def test_allocates_oneof_cpp_name_collisions() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_collision.proto")
     request.proto_file.append(_oneof_collision_file())
 
     response = generate_response(request)
 
-    assert "oneof collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    assert response.file
 
 
 @pytest.mark.parametrize("oneof_name", ["ctx", "context", "destroy_at"])
-def test_rejects_oneof_fixed_generated_name_collisions(oneof_name: str) -> None:
+def test_allocates_oneof_fixed_generated_name_collisions(oneof_name: str) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_internal_collision.proto")
     request.proto_file.append(_oneof_internal_collision_file(oneof_name))
 
     response = generate_response(request)
 
-    assert "oneof collides with generated API" in response.error
+    assert not response.error
+    assert response.file
 
 
 @pytest.mark.parametrize("field_name", ["none"])
-def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
+def test_allocates_oneof_generated_member_collisions(field_name: str) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_member_collision.proto")
     request.proto_file.append(_oneof_member_collision_file(field_name))
 
     response = generate_response(request)
 
-    assert "field collides with generated API" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "none_ = " in header
 
 
 @pytest.mark.parametrize(
@@ -8522,7 +8540,7 @@ def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
         ("choice", "choice"),
     ],
 )
-def test_rejects_field_backing_member_collisions_with_oneof_storage(
+def test_allocates_field_backing_member_collisions_with_oneof_storage(
     oneof_name: str, field_name: str
 ) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
@@ -8531,17 +8549,19 @@ def test_rejects_field_backing_member_collisions_with_oneof_storage(
 
     response = generate_response(request)
 
-    assert "field collides with generated API" in response.error
+    assert not response.error
+    assert response.file
 
 
-def test_rejects_presence_flag_collisions_with_oneof_storage() -> None:
+def test_allocates_presence_flag_collisions_with_oneof_storage() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("presence_flag_collision.proto")
     request.proto_file.append(_presence_flag_collision_file())
 
     response = generate_response(request)
 
-    assert "field collides with generated API" in response.error
+    assert not response.error
+    assert response.file
 
 
 def test_generated_header_parses_bounded_oneof_bytes() -> None:
@@ -8756,7 +8776,7 @@ def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
         ("demo", "format=off,namespace_prefix=protocyte::generated"),
     ],
 )
-def test_rejects_generation_into_runtime_owned_namespace(
+def test_allows_generation_into_runtime_owned_namespace(
     package: str, parameter: str
 ) -> None:
     file = descriptor_pb2.FileDescriptorProto(
@@ -8769,10 +8789,11 @@ def test_rejects_generation_into_runtime_owned_namespace(
 
     response = generate_response(request)
 
-    assert "runtime-owned ::protocyte namespace" in response.error
-    assert "namespace_prefix" in response.error
-    assert "my_project::wire" in response.error
-    assert not response.file
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "namespace protocyte" in header
+    if package == "protocyte":
+        assert "Status_protocyte_" in header
 
 
 def test_packaged_options_proto_is_the_only_repo_copy() -> None:

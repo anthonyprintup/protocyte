@@ -21,6 +21,7 @@ CORPUS_FILES = (
     "consumer.proto",
     "std.proto",
     "protocyte.proto",
+    "protocyte_user.proto",
     "prefix.proto",
 )
 
@@ -79,7 +80,9 @@ def _compile_and_run(tmp_path: Path, source: str) -> None:
         pytest.skip("a C++20 compiler is required for bad-identifier validation")
     main = tmp_path / "main.cpp"
     main.write_text(source, encoding="utf-8")
-    executable = tmp_path / ("bad-identifiers.exe" if os.name == "nt" else "bad-identifiers")
+    executable = tmp_path / (
+        "bad-identifiers.exe" if os.name == "nt" else "bad-identifiers"
+    )
     generated_sources = sorted(str(path) for path in tmp_path.rglob("*.protocyte.cpp"))
     subprocess.run(
         [
@@ -123,8 +126,17 @@ def test_bad_identifier_corpus_builds_model_and_generates(tmp_path: Path) -> Non
 
     assert model.messages["compat.bad.foo"].cpp_name == "foo"
     assert model.messages["compat.bad.Foo"].cpp_name == "Foo"
+    assert model.messages["protocyte.Result"].cpp_name.startswith("Result_protocyte_")
+    assert model.messages["protocyte.read_varint"].cpp_name.startswith(
+        "read_varint_protocyte_"
+    )
     assert not response.error
     assert response.file
+    files = {item.name: item.content for item in response.file}
+    types_header = files["types.protocyte.hpp"]
+    assert "using Payload = payload<Config>;" in types_header
+    assert "using Foo = foo<Config>;" not in types_header
+    assert "using Serialize = Container_serialize<CompatibilityConfig>;" in types_header
 
 
 def test_bad_identifier_corpus_compiles_and_runs(tmp_path: Path) -> None:
@@ -135,10 +147,11 @@ def test_bad_identifier_corpus_compiles_and_runs(tmp_path: Path) -> None:
     assert "namespace protocyte {" in files["protocyte.protocyte.hpp"]
     _compile_and_run(
         tmp_path,
-        r'''
+        r"""
 #include "bad_identifiers.protocyte.hpp"
 #include "consumer.protocyte.hpp"
 #include "protocyte.protocyte.hpp"
+#include "protocyte_user.protocyte.hpp"
 #include "std.protocyte.hpp"
 
 int main() {
@@ -167,13 +180,15 @@ int main() {
     auto upper = ::compat::bad::Foo<>::create(ctx);
     auto standard = ::std::Payload<>::create(ctx);
     auto runtime_namespace = ::protocyte::Payload<>::create(ctx);
+    auto runtime_child_namespace = ::protocyte::user::Payload<>::create(ctx);
     (void)lower;
     (void)upper;
     (void)standard;
     (void)runtime_namespace;
+    (void)runtime_child_namespace;
     return 0;
 }
-''',
+""",
     )
 
 
@@ -188,7 +203,7 @@ def test_std_namespace_prefix_generates_and_compiles(tmp_path: Path) -> None:
     assert "namespace std::prefixed {" in files["prefix.protocyte.hpp"]
     _compile_and_run(
         tmp_path,
-        r'''
+        r"""
 #include "prefix.protocyte.hpp"
 
 int main() {
@@ -198,5 +213,43 @@ int main() {
     (void)value;
     return 0;
 }
-''',
+""",
+    )
+
+
+@pytest.mark.parametrize("prefix", ["protocyte", "protocyte::generated"])
+def test_protocyte_namespace_prefix_generates(tmp_path: Path, prefix: str) -> None:
+    request = _descriptor_request(
+        tmp_path,
+        files=("prefix.proto",),
+        parameter=f"format=off,runtime=emit,namespace_prefix={prefix}",
+    )
+
+    files = _generated_files(tmp_path, request)
+
+    assert f"namespace {prefix}::prefixed {{" in files["prefix.protocyte.hpp"]
+    _compile_and_run(
+        tmp_path,
+        f"""#include "prefix.protocyte.hpp"
+int main() {{
+    auto ctx = ::protocyte::DefaultConfig::Context{{
+        ::protocyte::hosted_allocator(), ::protocyte::Limits{{}}}};
+    auto value = ::{prefix}::prefixed::Payload<>::create(ctx);
+    (void)value;
+    return 0;
+}}
+""",
+    )
+
+
+def test_runtime_type_package_component_is_remapped(tmp_path: Path) -> None:
+    request = _descriptor_request(tmp_path, files=("runtime_child.proto",))
+
+    files = _generated_files(tmp_path, request)
+
+    header = files["runtime_child.protocyte.hpp"]
+    assert "namespace protocyte::Span_protocyte_" in header
+    _compile_and_run(
+        tmp_path,
+        '#include "runtime_child.protocyte.hpp"\nint main() { return 0; }\n',
     )

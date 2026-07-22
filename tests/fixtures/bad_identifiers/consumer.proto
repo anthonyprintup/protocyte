@@ -4,6 +4,7 @@ package compat.consumer;
 
 import "bad_identifiers.proto";
 import "types.proto";
+import "protocyte.proto";
 
 message References {
   compat.bad.foo lower = 1;
@@ -20,4 +21,7 @@ message References {
   compat.bad._Private private_type = 12;
   compat.bad.proto__reserved reserved_type = 13;
   compat.bad.HelperFields helper = 14;
+  protocyte.Span runtime_span = 15;
+  protocyte.Result runtime_result = 16;
+  protocyte.read_varint runtime_function = 17;
 }

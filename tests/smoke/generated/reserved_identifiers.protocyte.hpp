@@ -14,92 +14,107 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 #if PROTOCYTE_ENABLE_REFLECTION
     namespace protocyte_reflection {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765_fields;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> Protocyte_escaped_5f5f4c494e455f5f_fields;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Class_Struct_fields_;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Class_fields_;
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> protocyte_escaped_5f5f4c494e455f5f_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> class_struct_fields_;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> class_protocyte_bae1d4f6754b_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Config_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Reader_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> MergeHelperNeighbors_fields;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_field_from_fields;
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_fields_from_fields_;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_merge_field_from_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_merge_fields_from_fields_;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> LegacyPayload_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> DeprecationCarrier_fields;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
-    enum struct Protocyte_escaped_5f5f46494c455f5f : ::protocyte::i32 {
+    enum struct protocyte_escaped_5f5f46494c455f5f : ::protocyte::i32 {
         protocyte_escaped_5f5570706572 = 0,
         protocyte_escaped_76616c75655f5f676170 = 1,
     };
+    using Protocyte_escaped_5f5f46494c455f5f = protocyte_escaped_5f5f46494c455f5f;
 
     enum struct [[deprecated]] LegacyMode : ::protocyte::i32 {
         LEGACY_MODE_UNSPECIFIED = 0,
     };
 
-    enum struct Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_5f4e6573746564456e756d : ::protocyte::i32 {
+    enum struct protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d : ::protocyte::i32 {
         protocyte_escaped_5f5f535444435f5f = 0,
         enum_trailing_ = 1,
     };
+    using Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_5f4e6573746564456e756d =
+        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
 
-    enum struct Class_KeywordValues : ::protocyte::i32 {
+    enum struct class_KeywordValues : ::protocyte::i32 {
         class_ = 0,
     };
+    using Class_KeywordValues = class_KeywordValues;
 
     inline constexpr ::protocyte::i32 protocyte_escaped_5f5f444154455f5f {7};
     inline constexpr ::protocyte::i32 class_ {8};
 
     template<typename Config = ::protocyte::DefaultConfig>
-    struct Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765;
-    template<typename Config = ::protocyte::DefaultConfig> struct Protocyte_escaped_5f5f4c494e455f5f;
-    template<typename Config = ::protocyte::DefaultConfig> struct Class_Struct_;
-    template<typename Config = ::protocyte::DefaultConfig> struct Class_;
-    template<typename ProtocyteConfig = ::protocyte::DefaultConfig> struct Config;
+    struct protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765;
+    template<typename Config = ::protocyte::DefaultConfig> struct protocyte_escaped_5f5f4c494e455f5f;
+    template<typename Config = ::protocyte::DefaultConfig> struct class_struct_;
+    template<typename Config = ::protocyte::DefaultConfig> struct class_protocyte_bae1d4f6754b;
+    template<typename Config_ = ::protocyte::DefaultConfig> struct Config;
     template<typename Config = ::protocyte::DefaultConfig> struct Reader;
     template<typename Config = ::protocyte::DefaultConfig> struct MergeHelperNeighbors;
-    template<typename Config = ::protocyte::DefaultConfig> struct MergeHelperNeighbors_Merge_field_from;
-    template<typename Config = ::protocyte::DefaultConfig> struct MergeHelperNeighbors_Merge_fields_from_;
+    template<typename Config = ::protocyte::DefaultConfig> struct MergeHelperNeighbors_merge_field_from;
+    template<typename Config = ::protocyte::DefaultConfig> struct MergeHelperNeighbors_merge_fields_from_;
     template<typename Config = ::protocyte::DefaultConfig> struct [[deprecated]] LegacyPayload;
     template<typename Config = ::protocyte::DefaultConfig> struct DeprecationCarrier;
+    template<typename Config = ::protocyte::DefaultConfig>
+    using Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 =
+        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config>;
+    template<typename Config = ::protocyte::DefaultConfig> using Protocyte_escaped_5f5f4c494e455f5f =
+        protocyte_escaped_5f5f4c494e455f5f<Config>;
+    template<typename Config = ::protocyte::DefaultConfig> using Class_Struct_ = class_struct_<Config>;
+    template<typename Config = ::protocyte::DefaultConfig> using Class_ = class_protocyte_bae1d4f6754b<Config>;
+    template<typename Config = ::protocyte::DefaultConfig> using MergeHelperNeighbors_Merge_field_from =
+        MergeHelperNeighbors_merge_field_from<Config>;
+    template<typename Config = ::protocyte::DefaultConfig> using MergeHelperNeighbors_Merge_fields_from_ =
+        MergeHelperNeighbors_merge_fields_from_<Config>;
 
     template<typename Config>
-    struct Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 {
+    struct protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 {
         using Context = typename Config::Context;
         enum struct FieldNumber : ::protocyte::u32 {
             protocyte_escaped_5f496e6e6572 = 1u,
         };
 
-        explicit Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765(
+        explicit protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765(
             Context &ctx) noexcept:
             ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
-        static Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765
+        static protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765
         create(Context &ctx) noexcept {
-            return Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 {ctx};
+            return protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 {ctx};
         }
         Context *context() const noexcept { return ctx_; }
-        Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765(
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &&) noexcept = default;
-        Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &operator=(
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &&) noexcept = default;
-        Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765(
-            const Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &) = delete;
-        Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &
-        operator=(const Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &) = delete;
+        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765(
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &&) noexcept = default;
+        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &operator=(
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &&) noexcept = default;
+        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765(
+            const protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &) = delete;
+        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &
+        operator=(const protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &) = delete;
 
         ::protocyte::Status
-        copy_from(const Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765
+        copy_from(const protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765
                       &source) noexcept {
             if (this == &source) {
                 return {};
             }
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 staging_message {*ctx_};
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 staging_message {*ctx_};
             return copy_from(source, staging_message);
         }
 
         ::protocyte::Status
-        copy_from(const Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &source,
-                  Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765
+        copy_from(const protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &source,
+                  protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765
                       &staging_message) noexcept {
             if (this == &source) {
                 return {};
@@ -116,17 +131,17 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        ::protocyte::Result<Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765>
+        ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765>
         clone() const noexcept {
             auto output =
-                Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765::create(*ctx_);
+                protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765::create(*ctx_);
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        ::protocyte::Status clone(Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765
+        ::protocyte::Status clone(protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765
                                       &output) const noexcept {
             if (this == &output) {
                 return {};
@@ -142,14 +157,14 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
     protected:
         static void
-        reset_for_reuse_(Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &value,
+        reset_for_reuse_(protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &value,
                          Context &ctx) noexcept {
-            value.~Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765();
-            new (&value) Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 {ctx};
+            value.~protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765();
+            new (&value) protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 {ctx};
         }
 
         ::protocyte::Status
-        copy_from_in_place_(const Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765
+        copy_from_in_place_(const protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765
                                 &source) noexcept {
             set_protocyte_escaped_5f496e6e6572(source.protocyte_escaped_5f496e6e6572());
             if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
@@ -187,17 +202,17 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         constexpr void clear_protocyte_escaped_5f496e6e6572() noexcept { protocyte_escaped_5f496e6e6572_ = {}; }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Result<Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765>
+        static ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765>
         parse(Context &ctx, Reader &reader) noexcept {
             auto output =
-                Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765::create(ctx);
+                protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        static ::protocyte::Result<Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765>
+        static ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
             const auto checked_input = ::protocyte::checked_span_of(input);
             if (!checked_input) {
@@ -209,7 +224,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         template<::protocyte::ReaderLike Reader> static ::protocyte::Status
         parse(Reader &reader,
-              Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 &output) noexcept {
+              protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -356,12 +371,16 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         ::protocyte::i32 protocyte_escaped_5f496e6e6572_ {};
     };
 
-    template<typename Config> struct Protocyte_escaped_5f5f4c494e455f5f {
+    template<typename Config> struct protocyte_escaped_5f5f4c494e455f5f {
         using Context = typename Config::Context;
         using protocyte_escaped_5f4e6573746564456e756d =
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_5f4e6573746564456e756d;
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
+        using Protocyte_escaped_5f4e6573746564456e756d =
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
         template<typename NestedConfig = Config> using protocyte_escaped_4e65737465645f5f4d657373616765 =
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765<NestedConfig>;
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<NestedConfig>;
+        template<typename CompatibilityConfig = Config> using Protocyte_escaped_4e65737465645f5f4d657373616765 =
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<CompatibilityConfig>;
 
         static constexpr ::protocyte::i32 protocyte_escaped_5f5f54494d455f5f {9};
 
@@ -381,13 +400,13 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             protocyte_escaped_5f = 7u,
         };
 
-        explicit Protocyte_escaped_5f5f4c494e455f5f(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+        explicit protocyte_escaped_5f5f4c494e455f5f(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
-        static Protocyte_escaped_5f5f4c494e455f5f create(Context &ctx) noexcept {
-            return Protocyte_escaped_5f5f4c494e455f5f {ctx};
+        static protocyte_escaped_5f5f4c494e455f5f create(Context &ctx) noexcept {
+            return protocyte_escaped_5f5f4c494e455f5f {ctx};
         }
         Context *context() const noexcept { return ctx_; }
-        Protocyte_escaped_5f5f4c494e455f5f(Protocyte_escaped_5f5f4c494e455f5f &&other) noexcept:
+        protocyte_escaped_5f5f4c494e455f5f(protocyte_escaped_5f5f4c494e455f5f &&other) noexcept:
             ctx_ {other.ctx_},
             unknown_fields_ {::protocyte::move(other.unknown_fields_)},
             protocyte_escaped_5f5570706572_ {other.protocyte_escaped_5f5570706572_},
@@ -418,7 +437,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             }
             other.clear_protocyte_escaped_5f43686f696365();
         }
-        Protocyte_escaped_5f5f4c494e455f5f &operator=(Protocyte_escaped_5f5f4c494e455f5f &&other) noexcept {
+        protocyte_escaped_5f5f4c494e455f5f &operator=(protocyte_escaped_5f5f4c494e455f5f &&other) noexcept {
             if (this == &other) {
                 return *this;
             }
@@ -454,22 +473,22 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             other.clear_protocyte_escaped_5f43686f696365();
             return *this;
         }
-        ~Protocyte_escaped_5f5f4c494e455f5f() noexcept { clear_protocyte_escaped_5f43686f696365(); }
-        Protocyte_escaped_5f5f4c494e455f5f(const Protocyte_escaped_5f5f4c494e455f5f &) = delete;
-        Protocyte_escaped_5f5f4c494e455f5f &operator=(const Protocyte_escaped_5f5f4c494e455f5f &) = delete;
+        ~protocyte_escaped_5f5f4c494e455f5f() noexcept { clear_protocyte_escaped_5f43686f696365(); }
+        protocyte_escaped_5f5f4c494e455f5f(const protocyte_escaped_5f5f4c494e455f5f &) = delete;
+        protocyte_escaped_5f5f4c494e455f5f &operator=(const protocyte_escaped_5f5f4c494e455f5f &) = delete;
 
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
-        ::protocyte::Status copy_from(const Protocyte_escaped_5f5f4c494e455f5f &source) noexcept {
+        ::protocyte::Status copy_from(const protocyte_escaped_5f5f4c494e455f5f &source) noexcept {
             if (this == &source) {
                 return {};
             }
-            Protocyte_escaped_5f5f4c494e455f5f staging_message {*ctx_};
+            protocyte_escaped_5f5f4c494e455f5f staging_message {*ctx_};
             return copy_from(source, staging_message);
         }
 
-        ::protocyte::Status copy_from(const Protocyte_escaped_5f5f4c494e455f5f &source,
-                                      Protocyte_escaped_5f5f4c494e455f5f &staging_message) noexcept {
+        ::protocyte::Status copy_from(const protocyte_escaped_5f5f4c494e455f5f &source,
+                                      protocyte_escaped_5f5f4c494e455f5f &staging_message) noexcept {
             if (this == &source) {
                 return {};
             }
@@ -485,15 +504,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        ::protocyte::Result<Protocyte_escaped_5f5f4c494e455f5f> clone() const noexcept {
-            auto output = Protocyte_escaped_5f5f4c494e455f5f::create(*ctx_);
+        ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f> clone() const noexcept {
+            auto output = protocyte_escaped_5f5f4c494e455f5f::create(*ctx_);
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        ::protocyte::Status clone(Protocyte_escaped_5f5f4c494e455f5f &output) const noexcept {
+        ::protocyte::Status clone(protocyte_escaped_5f5f4c494e455f5f &output) const noexcept {
             if (this == &output) {
                 return {};
             }
@@ -507,12 +526,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
     protected:
-        static void reset_for_reuse_(Protocyte_escaped_5f5f4c494e455f5f &value, Context &ctx) noexcept {
-            value.~Protocyte_escaped_5f5f4c494e455f5f();
-            new (&value) Protocyte_escaped_5f5f4c494e455f5f {ctx};
+        static void reset_for_reuse_(protocyte_escaped_5f5f4c494e455f5f &value, Context &ctx) noexcept {
+            value.~protocyte_escaped_5f5f4c494e455f5f();
+            new (&value) protocyte_escaped_5f5f4c494e455f5f {ctx};
         }
 
-        ::protocyte::Status copy_from_in_place_(const Protocyte_escaped_5f5f4c494e455f5f &source) noexcept {
+        ::protocyte::Status copy_from_in_place_(const protocyte_escaped_5f5f4c494e455f5f &source) noexcept {
             set_protocyte_escaped_5f5570706572(source.protocyte_escaped_5f5570706572());
             set_trailing_protocyte(source.trailing_protocyte());
             if (const auto st = set_protocyte_escaped_656e756d5f5f76616c7565_raw(
@@ -680,10 +699,10 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return protocyte_escaped_656e756d5f5f76616c7565_;
         }
         constexpr ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-            Protocyte_escaped_5f5f46494c455f5f
+            protocyte_escaped_5f5f46494c455f5f
             protocyte_escaped_656e756d5f5f76616c7565() const noexcept {
             return static_cast<::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-                                   Protocyte_escaped_5f5f46494c455f5f>(protocyte_escaped_656e756d5f5f76616c7565_);
+                                   protocyte_escaped_5f5f46494c455f5f>(protocyte_escaped_656e756d5f5f76616c7565_);
         }
         ::protocyte::Status set_protocyte_escaped_656e756d5f5f76616c7565_raw(const ::protocyte::i32 value) noexcept {
             protocyte_escaped_656e756d5f5f76616c7565_ = value;
@@ -691,7 +710,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
         ::protocyte::Status set_protocyte_escaped_656e756d5f5f76616c7565(
             const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-                Protocyte_escaped_5f5f46494c455f5f value) noexcept {
+                protocyte_escaped_5f5f46494c455f5f value) noexcept {
             return set_protocyte_escaped_656e756d5f5f76616c7565_raw(static_cast<::protocyte::i32>(value));
         }
         constexpr void clear_protocyte_escaped_656e756d5f5f76616c7565() noexcept {
@@ -700,13 +719,13 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         bool has_class_protocyte() const noexcept { return class_protocyte_.has_value(); }
         const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765<Config> *
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config> *
             class_protocyte() const noexcept {
             return has_class_protocyte() ? class_protocyte_.operator->() : nullptr;
         }
         ::protocyte::Result<
             ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-                Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765<Config> &>
+                protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config> &>
         ensure_class_protocyte() noexcept {
             if (class_protocyte_.has_value()) {
                 return *class_protocyte_;
@@ -724,15 +743,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         constexpr void clear_protocyte_escaped_5f() noexcept { protocyte_escaped_5f_ = {}; }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Result<Protocyte_escaped_5f5f4c494e455f5f> parse(Context &ctx, Reader &reader) noexcept {
-            auto output = Protocyte_escaped_5f5f4c494e455f5f::create(ctx);
+        static ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = protocyte_escaped_5f5f4c494e455f5f::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        static ::protocyte::Result<Protocyte_escaped_5f5f4c494e455f5f>
+        static ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
             const auto checked_input = ::protocyte::checked_span_of(input);
             if (!checked_input) {
@@ -743,7 +762,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Status parse(Reader &reader, Protocyte_escaped_5f5f4c494e455f5f &output) noexcept {
+        static ::protocyte::Status parse(Reader &reader, protocyte_escaped_5f5f4c494e455f5f &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -922,7 +941,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
                                                        field_number);
                     }
                     ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-                        Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765<Config>
+                        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config>
                             class_protocyte_value {*ctx_};
                     if (class_protocyte_.has_value()) {
                         if (const auto st = class_protocyte_value.copy_from(*class_protocyte_); !st) {
@@ -1217,35 +1236,35 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         ::protocyte::i32 protocyte_escaped_656e756d5f5f76616c7565_ {};
         typename Config::template Optional<
             ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
-                Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765<Config>>
+                protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config>>
             class_protocyte_;
         ::protocyte::i32 protocyte_escaped_5f_ {};
     };
 
-    template<typename Config> struct Class_Struct_ {
+    template<typename Config> struct class_struct_ {
         using Context = typename Config::Context;
         enum struct FieldNumber : ::protocyte::u32 {
             value = 1u,
         };
 
-        explicit Class_Struct_(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+        explicit class_struct_(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
-        static Class_Struct_ create(Context &ctx) noexcept { return Class_Struct_ {ctx}; }
+        static class_struct_ create(Context &ctx) noexcept { return class_struct_ {ctx}; }
         Context *context() const noexcept { return ctx_; }
-        Class_Struct_(Class_Struct_ &&) noexcept = default;
-        Class_Struct_ &operator=(Class_Struct_ &&) noexcept = default;
-        Class_Struct_(const Class_Struct_ &) = delete;
-        Class_Struct_ &operator=(const Class_Struct_ &) = delete;
+        class_struct_(class_struct_ &&) noexcept = default;
+        class_struct_ &operator=(class_struct_ &&) noexcept = default;
+        class_struct_(const class_struct_ &) = delete;
+        class_struct_ &operator=(const class_struct_ &) = delete;
 
-        ::protocyte::Status copy_from(const Class_Struct_ &source) noexcept {
+        ::protocyte::Status copy_from(const class_struct_ &source) noexcept {
             if (this == &source) {
                 return {};
             }
-            Class_Struct_ staging_message {*ctx_};
+            class_struct_ staging_message {*ctx_};
             return copy_from(source, staging_message);
         }
 
-        ::protocyte::Status copy_from(const Class_Struct_ &source, Class_Struct_ &staging_message) noexcept {
+        ::protocyte::Status copy_from(const class_struct_ &source, class_struct_ &staging_message) noexcept {
             if (this == &source) {
                 return {};
             }
@@ -1261,15 +1280,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        ::protocyte::Result<Class_Struct_> clone() const noexcept {
-            auto output = Class_Struct_::create(*ctx_);
+        ::protocyte::Result<class_struct_> clone() const noexcept {
+            auto output = class_struct_::create(*ctx_);
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        ::protocyte::Status clone(Class_Struct_ &output) const noexcept {
+        ::protocyte::Status clone(class_struct_ &output) const noexcept {
             if (this == &output) {
                 return {};
             }
@@ -1283,12 +1302,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
     protected:
-        static void reset_for_reuse_(Class_Struct_ &value, Context &ctx) noexcept {
-            value.~Class_Struct_();
-            new (&value) Class_Struct_ {ctx};
+        static void reset_for_reuse_(class_struct_ &value, Context &ctx) noexcept {
+            value.~class_struct_();
+            new (&value) class_struct_ {ctx};
         }
 
-        ::protocyte::Status copy_from_in_place_(const Class_Struct_ &source) noexcept {
+        ::protocyte::Status copy_from_in_place_(const class_struct_ &source) noexcept {
             set_value(source.value());
             if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
                 if (const auto st =
@@ -1321,15 +1340,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         constexpr void clear_value() noexcept { value_ = {}; }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Result<Class_Struct_> parse(Context &ctx, Reader &reader) noexcept {
-            auto output = Class_Struct_::create(ctx);
+        static ::protocyte::Result<class_struct_> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = class_struct_::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        static ::protocyte::Result<Class_Struct_> parse(Context &ctx,
+        static ::protocyte::Result<class_struct_> parse(Context &ctx,
                                                         ::protocyte::Span<const ::protocyte::u8> input) noexcept {
             const auto checked_input = ::protocyte::checked_span_of(input);
             if (!checked_input) {
@@ -1340,7 +1359,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Status parse(Reader &reader, Class_Struct_ &output) noexcept {
+        static ::protocyte::Status parse(Reader &reader, class_struct_ &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -1483,10 +1502,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         ::protocyte::i32 value_ {};
     };
 
-    template<typename Config> struct Class_ {
+    template<typename Config> struct class_protocyte_bae1d4f6754b {
         using Context = typename Config::Context;
-        using KeywordValues = Class_KeywordValues;
-        template<typename NestedConfig = Config> using struct_ = Class_Struct_<NestedConfig>;
+        using KeywordValues = class_KeywordValues;
+        template<typename NestedConfig = Config> using struct_ = class_struct_<NestedConfig>;
+        template<typename CompatibilityConfig = Config> using Struct_ = class_struct_<CompatibilityConfig>;
 
         enum struct And_Case : ::protocyte::u32 {
             none = 0u,
@@ -1498,11 +1518,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             nested = 2u,
         };
 
-        explicit Class_(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+        explicit class_protocyte_bae1d4f6754b(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
-        static Class_ create(Context &ctx) noexcept { return Class_ {ctx}; }
+        static class_protocyte_bae1d4f6754b create(Context &ctx) noexcept { return class_protocyte_bae1d4f6754b {ctx}; }
         Context *context() const noexcept { return ctx_; }
-        Class_(Class_ &&other) noexcept:
+        class_protocyte_bae1d4f6754b(class_protocyte_bae1d4f6754b &&other) noexcept:
             ctx_ {other.ctx_},
             unknown_fields_ {::protocyte::move(other.unknown_fields_)},
             nested_ {::protocyte::move(other.nested_)} {
@@ -1519,7 +1539,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             }
             other.clear_and_protocyte();
         }
-        Class_ &operator=(Class_ &&other) noexcept {
+        class_protocyte_bae1d4f6754b &operator=(class_protocyte_bae1d4f6754b &&other) noexcept {
             if (this == &other) {
                 return *this;
             }
@@ -1541,21 +1561,22 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             other.clear_and_protocyte();
             return *this;
         }
-        ~Class_() noexcept { clear_and_protocyte(); }
-        Class_(const Class_ &) = delete;
-        Class_ &operator=(const Class_ &) = delete;
+        ~class_protocyte_bae1d4f6754b() noexcept { clear_and_protocyte(); }
+        class_protocyte_bae1d4f6754b(const class_protocyte_bae1d4f6754b &) = delete;
+        class_protocyte_bae1d4f6754b &operator=(const class_protocyte_bae1d4f6754b &) = delete;
 
         template<typename T> static void destroy_at_(T *value) noexcept { value->~T(); }
 
-        ::protocyte::Status copy_from(const Class_ &source) noexcept {
+        ::protocyte::Status copy_from(const class_protocyte_bae1d4f6754b &source) noexcept {
             if (this == &source) {
                 return {};
             }
-            Class_ staging_message {*ctx_};
+            class_protocyte_bae1d4f6754b staging_message {*ctx_};
             return copy_from(source, staging_message);
         }
 
-        ::protocyte::Status copy_from(const Class_ &source, Class_ &staging_message) noexcept {
+        ::protocyte::Status copy_from(const class_protocyte_bae1d4f6754b &source,
+                                      class_protocyte_bae1d4f6754b &staging_message) noexcept {
             if (this == &source) {
                 return {};
             }
@@ -1571,15 +1592,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        ::protocyte::Result<Class_> clone() const noexcept {
-            auto output = Class_::create(*ctx_);
+        ::protocyte::Result<class_protocyte_bae1d4f6754b> clone() const noexcept {
+            auto output = class_protocyte_bae1d4f6754b::create(*ctx_);
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        ::protocyte::Status clone(Class_ &output) const noexcept {
+        ::protocyte::Status clone(class_protocyte_bae1d4f6754b &output) const noexcept {
             if (this == &output) {
                 return {};
             }
@@ -1593,12 +1614,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
     protected:
-        static void reset_for_reuse_(Class_ &value, Context &ctx) noexcept {
-            value.~Class_();
-            new (&value) Class_ {ctx};
+        static void reset_for_reuse_(class_protocyte_bae1d4f6754b &value, Context &ctx) noexcept {
+            value.~class_protocyte_bae1d4f6754b();
+            new (&value) class_protocyte_bae1d4f6754b {ctx};
         }
 
-        ::protocyte::Status copy_from_in_place_(const Class_ &source) noexcept {
+        ::protocyte::Status copy_from_in_place_(const class_protocyte_bae1d4f6754b &source) noexcept {
             if (source.has_nested()) {
                 const auto ensured_nested = ensure_nested();
                 if (!ensured_nested) {
@@ -1671,12 +1692,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
         bool has_nested() const noexcept { return nested_.has_value(); }
-        const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::Class_Struct_<Config> *
+        const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::class_struct_<Config> *
         nested() const noexcept {
             return has_nested() ? nested_.operator->() : nullptr;
         }
         ::protocyte::Result<
-            ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::Class_Struct_<Config> &>
+            ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::class_struct_<Config> &>
         ensure_nested() noexcept {
             if (nested_.has_value()) {
                 return *nested_;
@@ -1690,16 +1711,16 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         void clear_nested() noexcept { nested_.reset(); }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Result<Class_> parse(Context &ctx, Reader &reader) noexcept {
-            auto output = Class_::create(ctx);
+        static ::protocyte::Result<class_protocyte_bae1d4f6754b> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = class_protocyte_bae1d4f6754b::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        static ::protocyte::Result<Class_> parse(Context &ctx,
-                                                 ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+        static ::protocyte::Result<class_protocyte_bae1d4f6754b>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
             const auto checked_input = ::protocyte::checked_span_of(input);
             if (!checked_input) {
                 return ::protocyte::unexpected(checked_input.error());
@@ -1709,7 +1730,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Status parse(Reader &reader, Class_ &output) noexcept {
+        static ::protocyte::Status parse(Reader &reader, class_protocyte_bae1d4f6754b &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -1785,7 +1806,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
                         return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, reader.position(),
                                                        field_number);
                     }
-                    ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::Class_Struct_<Config>
+                    ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::class_struct_<Config>
                         nested_value {*ctx_};
                     if (nested_.has_value()) {
                         if (const auto st = nested_value.copy_from(*nested_); !st) {
@@ -1927,12 +1948,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             ::protocyte::i32 value_;
         } and_protocyte_;
         typename Config::template Optional<
-            ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::Class_Struct_<Config>>
+            ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::class_struct_<Config>>
             nested_;
     };
 
-    template<typename ProtocyteConfig> struct Config {
-        using Context = typename ProtocyteConfig::Context;
+    template<typename Config_> struct Config {
+        using Context = typename Config_::Context;
         enum struct FieldNumber : ::protocyte::u32 {
             text = 1u,
         };
@@ -2001,7 +2022,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = set_text(source.text()); !st) {
                 return st;
             }
-            if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config_>) {
                 if (const auto st =
                         unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
                     !st) {
@@ -2021,14 +2042,14 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return unknown_fields_.bytes();
         }
         void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
-        ::protocyte::MutableUnknownFieldSet<ProtocyteConfig> mutable_unknown_fields() noexcept
-            requires(::protocyte::preserve_unknown_fields_v<ProtocyteConfig>)
+        ::protocyte::MutableUnknownFieldSet<Config_> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config_>)
         {
-            return ::protocyte::MutableUnknownFieldSet<ProtocyteConfig> {*ctx_, unknown_fields_};
+            return ::protocyte::MutableUnknownFieldSet<Config_> {*ctx_, unknown_fields_};
         }
 
         ::protocyte::StringView text() const noexcept { return text_.view(); }
-        typename ProtocyteConfig::String &mutable_text() noexcept { return text_; }
+        typename Config_::String &mutable_text() noexcept { return text_; }
         template<class Value>::protocyte::Status set_text(const Value &value) noexcept
             requires(::protocyte::ByteSpanSource<Value> && !::protocyte::TextSource<Value>)
         {
@@ -2036,7 +2057,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (!view) {
                 return ::protocyte::with_field(view.status(), static_cast<::protocyte::u32>(FieldNumber::text));
             }
-            typename ProtocyteConfig::String temp {ctx_};
+            typename Config_::String temp {ctx_};
             if (const auto st = temp.assign(*view); !st) {
                 return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::text));
             }
@@ -2050,7 +2071,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (!view) {
                 return ::protocyte::with_field(view.status(), static_cast<::protocyte::u32>(FieldNumber::text));
             }
-            typename ProtocyteConfig::String temp {ctx_};
+            typename Config_::String temp {ctx_};
             if (const auto st = temp.assign(*view); !st) {
                 return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::text));
             }
@@ -2108,38 +2129,37 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             switch (static_cast<FieldNumber>(field_number)) {
                 case FieldNumber::text: {
                     if (wire_type != ::protocyte::WireType::LEN) {
-                        if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
-                            if (const auto st = ::protocyte::read_unknown_field<ProtocyteConfig>(
-                                    *ctx_, reader, wire_type, field_number, unknown_fields_);
+                        if constexpr (::protocyte::preserve_unknown_fields_v<Config_>) {
+                            if (const auto st = ::protocyte::read_unknown_field<Config_>(*ctx_, reader, wire_type,
+                                                                                         field_number, unknown_fields_);
                                 !st) {
                                 return st;
                             }
                         } else {
                             if (const auto st =
-                                    ::protocyte::skip_field<ProtocyteConfig>(*ctx_, reader, wire_type, field_number);
+                                    ::protocyte::skip_field<Config_>(*ctx_, reader, wire_type, field_number);
                                 !st) {
                                 return st;
                             }
                         }
                         break;
                     }
-                    if (const auto st = ::protocyte::read_string_field<ProtocyteConfig>(*ctx_, reader, wire_type,
-                                                                                        field_number, text_);
+                    if (const auto st =
+                            ::protocyte::read_string_field<Config_>(*ctx_, reader, wire_type, field_number, text_);
                         !st) {
                         return st;
                     }
                     break;
                 }
                 default: {
-                    if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
-                        if (const auto st = ::protocyte::read_unknown_field<ProtocyteConfig>(
-                                *ctx_, reader, wire_type, field_number, unknown_fields_);
+                    if constexpr (::protocyte::preserve_unknown_fields_v<Config_>) {
+                        if (const auto st = ::protocyte::read_unknown_field<Config_>(*ctx_, reader, wire_type,
+                                                                                     field_number, unknown_fields_);
                             !st) {
                             return st;
                         }
                     } else {
-                        if (const auto st =
-                                ::protocyte::skip_field<ProtocyteConfig>(*ctx_, reader, wire_type, field_number);
+                        if (const auto st = ::protocyte::skip_field<Config_>(*ctx_, reader, wire_type, field_number);
                             !st) {
                             return st;
                         }
@@ -2179,7 +2199,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
                     return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::text));
                 }
             }
-            if constexpr (::protocyte::preserve_unknown_fields_v<ProtocyteConfig>) {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config_>) {
                 const auto unknown_bytes = unknown_fields_.bytes();
                 if (!unknown_bytes.empty()) {
                     if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
@@ -2229,8 +2249,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
     protected:
         Context *ctx_;
-        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<ProtocyteConfig> unknown_fields_;
-        typename ProtocyteConfig::String text_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config_> unknown_fields_;
+        typename Config_::String text_;
     };
 
     template<typename Config> struct Reader {
@@ -2322,8 +2342,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
         }
 
-        template<::protocyte::ReaderLike ProtocyteReader>
-        static ::protocyte::Result<Reader> parse(Context &ctx, ProtocyteReader &reader) noexcept {
+        template<::protocyte::ReaderLike Reader_>
+        static ::protocyte::Result<Reader> parse(Context &ctx, Reader_ &reader) noexcept {
             auto output = Reader::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
@@ -2341,8 +2361,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return parse(ctx, reader);
         }
 
-        template<::protocyte::ReaderLike ProtocyteReader>
-        static ::protocyte::Status parse(ProtocyteReader &reader, Reader &output) noexcept {
+        template<::protocyte::ReaderLike Reader_>
+        static ::protocyte::Status parse(Reader_ &reader, Reader &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -2352,9 +2372,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        template<::protocyte::ReaderLike ProtocyteReader>
-        ::protocyte::Status merge_from(ProtocyteReader &reader) noexcept {
-            ::protocyte::ParseBudgetReader<ProtocyteReader> budget_reader {
+        template<::protocyte::ReaderLike Reader_>::protocyte::Status merge_from(Reader_ &reader) noexcept {
+            ::protocyte::ParseBudgetReader<Reader_> budget_reader {
                 reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
             if (const auto st = merge_fields_from(budget_reader); !st) {
                 return st;
@@ -2366,8 +2385,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
     private:
-        template<typename ProtocyteReader>
-        ::protocyte::Status merge_field_from_(ProtocyteReader &reader, const ::protocyte::u32 field_number,
+        template<typename Reader_>
+        ::protocyte::Status merge_field_from_(Reader_ &reader, const ::protocyte::u32 field_number,
                                               const ::protocyte::WireType wire_type) noexcept {
             if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
                 if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type, field_number,
@@ -2386,7 +2405,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
     protected:
         friend class ::protocyte::MessageParseAccess;
 
-        template<typename ProtocyteReader>::protocyte::Status merge_fields_from(ProtocyteReader &reader) noexcept {
+        template<typename Reader_>::protocyte::Status merge_fields_from(Reader_ &reader) noexcept {
             while (!reader.eof()) {
                 const auto tag = ::protocyte::read_tag(reader);
                 if (!tag) {
@@ -2442,9 +2461,13 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
     template<typename Config> struct MergeHelperNeighbors {
         using Context = typename Config::Context;
         template<typename NestedConfig = Config> using merge_field_from =
-            MergeHelperNeighbors_Merge_field_from<NestedConfig>;
+            MergeHelperNeighbors_merge_field_from<NestedConfig>;
+        template<typename CompatibilityConfig = Config> using Merge_field_from =
+            MergeHelperNeighbors_merge_field_from<CompatibilityConfig>;
         template<typename NestedConfig = Config> using merge_fields_from_ =
-            MergeHelperNeighbors_Merge_fields_from_<NestedConfig>;
+            MergeHelperNeighbors_merge_fields_from_<NestedConfig>;
+        template<typename CompatibilityConfig = Config> using Merge_fields_from_ =
+            MergeHelperNeighbors_merge_fields_from_<CompatibilityConfig>;
 
         explicit MergeHelperNeighbors(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
@@ -2650,33 +2673,33 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
     };
 
-    template<typename Config> struct MergeHelperNeighbors_Merge_field_from {
+    template<typename Config> struct MergeHelperNeighbors_merge_field_from {
         using Context = typename Config::Context;
         enum struct FieldNumber : ::protocyte::u32 {
             value = 1u,
         };
 
-        explicit MergeHelperNeighbors_Merge_field_from(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+        explicit MergeHelperNeighbors_merge_field_from(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
-        static MergeHelperNeighbors_Merge_field_from create(Context &ctx) noexcept {
-            return MergeHelperNeighbors_Merge_field_from {ctx};
+        static MergeHelperNeighbors_merge_field_from create(Context &ctx) noexcept {
+            return MergeHelperNeighbors_merge_field_from {ctx};
         }
         Context *context() const noexcept { return ctx_; }
-        MergeHelperNeighbors_Merge_field_from(MergeHelperNeighbors_Merge_field_from &&) noexcept = default;
-        MergeHelperNeighbors_Merge_field_from &operator=(MergeHelperNeighbors_Merge_field_from &&) noexcept = default;
-        MergeHelperNeighbors_Merge_field_from(const MergeHelperNeighbors_Merge_field_from &) = delete;
-        MergeHelperNeighbors_Merge_field_from &operator=(const MergeHelperNeighbors_Merge_field_from &) = delete;
+        MergeHelperNeighbors_merge_field_from(MergeHelperNeighbors_merge_field_from &&) noexcept = default;
+        MergeHelperNeighbors_merge_field_from &operator=(MergeHelperNeighbors_merge_field_from &&) noexcept = default;
+        MergeHelperNeighbors_merge_field_from(const MergeHelperNeighbors_merge_field_from &) = delete;
+        MergeHelperNeighbors_merge_field_from &operator=(const MergeHelperNeighbors_merge_field_from &) = delete;
 
-        ::protocyte::Status copy_from(const MergeHelperNeighbors_Merge_field_from &source) noexcept {
+        ::protocyte::Status copy_from(const MergeHelperNeighbors_merge_field_from &source) noexcept {
             if (this == &source) {
                 return {};
             }
-            MergeHelperNeighbors_Merge_field_from staging_message {*ctx_};
+            MergeHelperNeighbors_merge_field_from staging_message {*ctx_};
             return copy_from(source, staging_message);
         }
 
-        ::protocyte::Status copy_from(const MergeHelperNeighbors_Merge_field_from &source,
-                                      MergeHelperNeighbors_Merge_field_from &staging_message) noexcept {
+        ::protocyte::Status copy_from(const MergeHelperNeighbors_merge_field_from &source,
+                                      MergeHelperNeighbors_merge_field_from &staging_message) noexcept {
             if (this == &source) {
                 return {};
             }
@@ -2692,15 +2715,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        ::protocyte::Result<MergeHelperNeighbors_Merge_field_from> clone() const noexcept {
-            auto output = MergeHelperNeighbors_Merge_field_from::create(*ctx_);
+        ::protocyte::Result<MergeHelperNeighbors_merge_field_from> clone() const noexcept {
+            auto output = MergeHelperNeighbors_merge_field_from::create(*ctx_);
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        ::protocyte::Status clone(MergeHelperNeighbors_Merge_field_from &output) const noexcept {
+        ::protocyte::Status clone(MergeHelperNeighbors_merge_field_from &output) const noexcept {
             if (this == &output) {
                 return {};
             }
@@ -2714,12 +2737,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
     protected:
-        static void reset_for_reuse_(MergeHelperNeighbors_Merge_field_from &value, Context &ctx) noexcept {
-            value.~MergeHelperNeighbors_Merge_field_from();
-            new (&value) MergeHelperNeighbors_Merge_field_from {ctx};
+        static void reset_for_reuse_(MergeHelperNeighbors_merge_field_from &value, Context &ctx) noexcept {
+            value.~MergeHelperNeighbors_merge_field_from();
+            new (&value) MergeHelperNeighbors_merge_field_from {ctx};
         }
 
-        ::protocyte::Status copy_from_in_place_(const MergeHelperNeighbors_Merge_field_from &source) noexcept {
+        ::protocyte::Status copy_from_in_place_(const MergeHelperNeighbors_merge_field_from &source) noexcept {
             set_value(source.value());
             if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
                 if (const auto st =
@@ -2752,15 +2775,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         constexpr void clear_value() noexcept { value_ = {}; }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Result<MergeHelperNeighbors_Merge_field_from> parse(Context &ctx, Reader &reader) noexcept {
-            auto output = MergeHelperNeighbors_Merge_field_from::create(ctx);
+        static ::protocyte::Result<MergeHelperNeighbors_merge_field_from> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = MergeHelperNeighbors_merge_field_from::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        static ::protocyte::Result<MergeHelperNeighbors_Merge_field_from>
+        static ::protocyte::Result<MergeHelperNeighbors_merge_field_from>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
             const auto checked_input = ::protocyte::checked_span_of(input);
             if (!checked_input) {
@@ -2771,7 +2794,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Status parse(Reader &reader, MergeHelperNeighbors_Merge_field_from &output) noexcept {
+        static ::protocyte::Status parse(Reader &reader, MergeHelperNeighbors_merge_field_from &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {
@@ -2916,34 +2939,34 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         ::protocyte::i32 value_ {};
     };
 
-    template<typename Config> struct MergeHelperNeighbors_Merge_fields_from_ {
+    template<typename Config> struct MergeHelperNeighbors_merge_fields_from_ {
         using Context = typename Config::Context;
         enum struct FieldNumber : ::protocyte::u32 {
             value = 1u,
         };
 
-        explicit MergeHelperNeighbors_Merge_fields_from_(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+        explicit MergeHelperNeighbors_merge_fields_from_(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
-        static MergeHelperNeighbors_Merge_fields_from_ create(Context &ctx) noexcept {
-            return MergeHelperNeighbors_Merge_fields_from_ {ctx};
+        static MergeHelperNeighbors_merge_fields_from_ create(Context &ctx) noexcept {
+            return MergeHelperNeighbors_merge_fields_from_ {ctx};
         }
         Context *context() const noexcept { return ctx_; }
-        MergeHelperNeighbors_Merge_fields_from_(MergeHelperNeighbors_Merge_fields_from_ &&) noexcept = default;
-        MergeHelperNeighbors_Merge_fields_from_ &
-        operator=(MergeHelperNeighbors_Merge_fields_from_ &&) noexcept = default;
-        MergeHelperNeighbors_Merge_fields_from_(const MergeHelperNeighbors_Merge_fields_from_ &) = delete;
-        MergeHelperNeighbors_Merge_fields_from_ &operator=(const MergeHelperNeighbors_Merge_fields_from_ &) = delete;
+        MergeHelperNeighbors_merge_fields_from_(MergeHelperNeighbors_merge_fields_from_ &&) noexcept = default;
+        MergeHelperNeighbors_merge_fields_from_ &
+        operator=(MergeHelperNeighbors_merge_fields_from_ &&) noexcept = default;
+        MergeHelperNeighbors_merge_fields_from_(const MergeHelperNeighbors_merge_fields_from_ &) = delete;
+        MergeHelperNeighbors_merge_fields_from_ &operator=(const MergeHelperNeighbors_merge_fields_from_ &) = delete;
 
-        ::protocyte::Status copy_from(const MergeHelperNeighbors_Merge_fields_from_ &source) noexcept {
+        ::protocyte::Status copy_from(const MergeHelperNeighbors_merge_fields_from_ &source) noexcept {
             if (this == &source) {
                 return {};
             }
-            MergeHelperNeighbors_Merge_fields_from_ staging_message {*ctx_};
+            MergeHelperNeighbors_merge_fields_from_ staging_message {*ctx_};
             return copy_from(source, staging_message);
         }
 
-        ::protocyte::Status copy_from(const MergeHelperNeighbors_Merge_fields_from_ &source,
-                                      MergeHelperNeighbors_Merge_fields_from_ &staging_message) noexcept {
+        ::protocyte::Status copy_from(const MergeHelperNeighbors_merge_fields_from_ &source,
+                                      MergeHelperNeighbors_merge_fields_from_ &staging_message) noexcept {
             if (this == &source) {
                 return {};
             }
@@ -2959,15 +2982,15 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             return {};
         }
 
-        ::protocyte::Result<MergeHelperNeighbors_Merge_fields_from_> clone() const noexcept {
-            auto output = MergeHelperNeighbors_Merge_fields_from_::create(*ctx_);
+        ::protocyte::Result<MergeHelperNeighbors_merge_fields_from_> clone() const noexcept {
+            auto output = MergeHelperNeighbors_merge_fields_from_::create(*ctx_);
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        ::protocyte::Status clone(MergeHelperNeighbors_Merge_fields_from_ &output) const noexcept {
+        ::protocyte::Status clone(MergeHelperNeighbors_merge_fields_from_ &output) const noexcept {
             if (this == &output) {
                 return {};
             }
@@ -2981,12 +3004,12 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
     protected:
-        static void reset_for_reuse_(MergeHelperNeighbors_Merge_fields_from_ &value, Context &ctx) noexcept {
-            value.~MergeHelperNeighbors_Merge_fields_from_();
-            new (&value) MergeHelperNeighbors_Merge_fields_from_ {ctx};
+        static void reset_for_reuse_(MergeHelperNeighbors_merge_fields_from_ &value, Context &ctx) noexcept {
+            value.~MergeHelperNeighbors_merge_fields_from_();
+            new (&value) MergeHelperNeighbors_merge_fields_from_ {ctx};
         }
 
-        ::protocyte::Status copy_from_in_place_(const MergeHelperNeighbors_Merge_fields_from_ &source) noexcept {
+        ::protocyte::Status copy_from_in_place_(const MergeHelperNeighbors_merge_fields_from_ &source) noexcept {
             set_value(source.value());
             if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
                 if (const auto st =
@@ -3018,16 +3041,16 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         void set_value(const ::protocyte::i32 value) noexcept { value_ = value; }
         constexpr void clear_value() noexcept { value_ = {}; }
 
-        template<::protocyte::ReaderLike Reader> static ::protocyte::Result<MergeHelperNeighbors_Merge_fields_from_>
+        template<::protocyte::ReaderLike Reader> static ::protocyte::Result<MergeHelperNeighbors_merge_fields_from_>
         parse(Context &ctx, Reader &reader) noexcept {
-            auto output = MergeHelperNeighbors_Merge_fields_from_::create(ctx);
+            auto output = MergeHelperNeighbors_merge_fields_from_::create(ctx);
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
             return ::protocyte::move(output);
         }
 
-        static ::protocyte::Result<MergeHelperNeighbors_Merge_fields_from_>
+        static ::protocyte::Result<MergeHelperNeighbors_merge_fields_from_>
         parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
             const auto checked_input = ::protocyte::checked_span_of(input);
             if (!checked_input) {
@@ -3038,7 +3061,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
 
         template<::protocyte::ReaderLike Reader>
-        static ::protocyte::Status parse(Reader &reader, MergeHelperNeighbors_Merge_fields_from_ &output) noexcept {
+        static ::protocyte::Status parse(Reader &reader, MergeHelperNeighbors_merge_fields_from_ &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {

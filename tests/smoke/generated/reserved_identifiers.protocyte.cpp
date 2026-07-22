@@ -5,11 +5,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
     namespace protocyte_reflection {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1>
-            Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765_fields {{
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765_fields {{
                 {"_Inner", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
             }};
 
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> Protocyte_escaped_5f5f4c494e455f5f_fields {{
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 7> protocyte_escaped_5f5f4c494e455f5f_fields {{
             {"__FILE__", 1u, "string", ::protocyte::ReflectionFieldLabel::optional, true, false},
             {"value__gap", 2u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
             {"_Upper", 3u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
@@ -19,11 +19,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             {"_", 7u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> Class_Struct_fields_ {{
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> class_struct_fields_ {{
             {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Class_fields_ {{
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> class_protocyte_bae1d4f6754b_fields {{
             {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
             {"nested", 2u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
@@ -36,11 +36,11 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
 
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> MergeHelperNeighbors_fields {{}};
 
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_field_from_fields {{
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_merge_field_from_fields {{
             {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
-        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_Merge_fields_from_fields_ {{
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_merge_fields_from_fields_ {{
             {"value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
