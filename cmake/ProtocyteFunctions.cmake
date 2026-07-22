@@ -5140,12 +5140,6 @@ function(protocyte_generate)
         list(APPEND protocyte_input_depends "${protocyte_descriptor_set}")
     endif()
 
-    if(encoded_generator_parameter STREQUAL "")
-        set(protocyte_out_arg "--protocyte_out=${PROTOCYTE_OUT_DIR}")
-    else()
-        set(protocyte_out_arg "--protocyte_out=${encoded_generator_parameter}:${PROTOCYTE_OUT_DIR}")
-    endif()
-
     set(protocyte_command_outputs "${protocyte_outputs}")
     _protocyte_preflight_output_ownership(
         protocyte_out_dir_owner_marker
@@ -5160,6 +5154,39 @@ function(protocyte_generate)
         "${PROTOCYTE_OUT_DIR}"
         protocyte_command_outputs
     )
+    # Generate into an unclaimed sibling tree first.  It deliberately sits
+    # outside OUT_DIR: a protobuf path is user-controlled and could otherwise
+    # collide with an internal staging path beneath the generated root.
+    # ProtocyteGenerate.cmake validates this path again under the output locks
+    # and publishes expected files only after protoc and ownership publication
+    # both succeed.
+    # A stable, target-specific name also lets a retry safely discard only an
+    # interrupted attempt's private staging tree.
+    string(
+        SHA256
+        protocyte_generation_staging_key
+        "generation-staging|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+    )
+    cmake_path(GET PROTOCYTE_OUT_DIR PARENT_PATH protocyte_out_dir_parent)
+    set(
+        protocyte_generation_staging_directory
+        "${protocyte_out_dir_parent}/.protocyte-generation-staging-${protocyte_generation_staging_key}"
+    )
+    set(
+        protocyte_generation_staged_output_directory
+        "${protocyte_generation_staging_directory}/generated"
+    )
+    if(encoded_generator_parameter STREQUAL "")
+        set(
+            protocyte_staging_out_arg
+            "--protocyte_out=${protocyte_generation_staged_output_directory}"
+        )
+    else()
+        set(
+            protocyte_staging_out_arg
+            "--protocyte_out=${encoded_generator_parameter}:${protocyte_generation_staged_output_directory}"
+        )
+    endif()
     set(protocyte_response_content "")
     if(NOT "${protoc_descriptor_argument}" STREQUAL "")
         _protocyte_append_protoc_response_argument(
@@ -5180,7 +5207,7 @@ function(protocyte_generate)
     )
     _protocyte_append_protoc_response_argument(
         protocyte_response_content
-        "${protocyte_out_arg}"
+        "${protocyte_staging_out_arg}"
     )
     foreach(proto_file IN LISTS normalized_proto_files)
         if(protocyte_has_DESCRIPTOR_SET)
@@ -5200,7 +5227,7 @@ function(protocyte_generate)
     _protocyte_write_protoc_response_file(
         protocyte_response_file
         protocyte_response_file_relative
-        "generation|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+        "generation-staging|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
         "${protocyte_response_content}"
     )
     set(protocyte_generation_lock_keys)
@@ -5243,6 +5270,7 @@ function(protocyte_generate)
             "-DLOCK_DIRECTORY_IDENTITY_SHA256=${protocyte_lock_directory_identity_hash}"
             "-DLOCK_MANIFEST=${protocyte_generation_lock_manifest}"
             "-DOUTPUT_DIRECTORY=${PROTOCYTE_OUT_DIR}"
+            "-DSTAGING_OUTPUT_DIRECTORY=${protocyte_generation_staging_directory}"
             "-DOUT_DIR_OWNER_MARKER=${protocyte_out_dir_owner_marker}"
             "-DOUT_DIR_OWNER_LOCK=${protocyte_out_dir_owner_lock}"
             "-DBUILD_OWNER_HASH=${protocyte_build_tree_owner_hash}"
