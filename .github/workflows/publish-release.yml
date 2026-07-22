@@ -161,7 +161,7 @@ jobs:
       checkout_ref: ${{ needs.validate-tag.outputs.target }}
 
   build-release:
-    name: Build And Test Release Artifacts
+    name: Build And Upload Release Artifacts
     needs:
       - validate-tag
       - release-gate
@@ -203,6 +203,52 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Prepare hash-locked release build tools
+        shell: bash
+        run: |
+          tools_root="$PWD/staging/release-tools"
+          constraints="$PWD/protocyte-cmake-constraints.txt"
+          cmake_constraints="$PWD/.github/release-cmake-constraints.txt"
+          tool_wheelhouse="$tools_root/wheelhouse"
+
+          locked_cmake_version="$(
+            sed -nE 's/^cmake==([^[:space:]\\]+).*/\1/p' "$cmake_constraints"
+          )"
+          if [[ "$locked_cmake_version" != "$CMAKE_VERSION" ]]; then
+            echo "Release CMake lock version $locked_cmake_version does not match $CMAKE_VERSION." >&2
+            exit 1
+          fi
+
+          bootstrap_python="$tools_root/bootstrap-venv/bin/python"
+          uv venv "$tools_root/bootstrap-venv" --python 3.12
+          uv pip install \
+            --python "$bootstrap_python" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints" \
+            --dest "$tool_wheelhouse"
+
+          uv venv "$tools_root/cmake-venv" --python 3.12
+          uv pip install \
+            --python "$tools_root/cmake-venv/bin/python" \
+            --no-index \
+            --find-links "$tool_wheelhouse" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints"
+          echo "RELEASE_CMAKE=$tools_root/cmake-venv/bin/cmake" >> "$GITHUB_ENV"
+          echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
+          chmod -R a-w "$tool_wheelhouse"
+
       - name: Build and normalize plugin packages twice
         shell: bash
         run: |
@@ -211,11 +257,16 @@ jobs:
             output_dir="staging/reproducibility/${build}/dist"
             mkdir -p "$source_dir"
             git archive HEAD | tar -x -C "$source_dir"
-            uv build "$source_dir" --out-dir "$output_dir"
-            uv run python .github/scripts/reproducible_archive.py \
+            uv build "$source_dir" \
+              --out-dir "$output_dir" \
+              --python "$PWD/staging/release-tools/bootstrap-venv/bin/python" \
+              --no-build-isolation \
+              --no-index \
+              --offline
+            "$PWD/.venv/bin/python" .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" normalize zip \
               "$output_dir/${{ needs.validate-tag.outputs.wheel_name }}"
-            uv run python .github/scripts/reproducible_archive.py \
+            "$PWD/.venv/bin/python" .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" normalize tar-gz \
               "$output_dir/${{ needs.validate-tag.outputs.sdist_name }}"
           done
@@ -244,11 +295,11 @@ jobs:
             build_root="staging/reproducibility/${build}"
             source_dir="${build_root}/source"
             prefix_dir="${build_root}/${prefix_name}"
-            uvx --from "cmake==$CMAKE_VERSION" cmake \
+            "$RELEASE_CMAKE" \
               -S "$source_dir" -B "${build_root}/cmake-build"
-            uvx --from "cmake==$CMAKE_VERSION" cmake \
+            "$RELEASE_CMAKE" \
               --install "${build_root}/cmake-build" --prefix "$prefix_dir"
-            uv run python .github/scripts/reproducible_archive.py \
+            "$PWD/.venv/bin/python" .github/scripts/reproducible_archive.py \
               --epoch "$SOURCE_DATE_EPOCH" pack-tar-gz "$prefix_dir" \
               "${build_root}/${{ needs.validate-tag.outputs.archive_name }}"
           done
@@ -259,40 +310,6 @@ jobs:
           cp \
             "staging/reproducibility/first/${{ needs.validate-tag.outputs.archive_name }}" \
             "staging/${{ needs.validate-tag.outputs.archive_name }}"
-
-      - name: Test exact wheel artifact
-        shell: bash
-        run: |
-          python="staging/release-tests/wheel-venv/bin/python"
-          uv venv "staging/release-tests/wheel-venv" --python 3.12
-          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.wheel_name }}"
-          "$python" -m protocyte --help
-          "$python" -m protocyte --version
-          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --help
-          "staging/release-tests/wheel-venv/bin/protoc-gen-protocyte" --version
-
-      - name: Test exact source artifact
-        shell: bash
-        run: |
-          python="staging/release-tests/sdist-venv/bin/python"
-          uv venv "staging/release-tests/sdist-venv" --python 3.12
-          uv pip install --python "$python" "dist/${{ needs.validate-tag.outputs.sdist_name }}"
-          "$python" -m protocyte --help
-          "$python" -m protocyte --version
-          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --help
-          "staging/release-tests/sdist-venv/bin/protoc-gen-protocyte" --version
-
-      - name: Test exact CMake prefix artifact
-        shell: bash
-        run: |
-          mkdir -p staging/release-tests/cmake-prefix
-          python -m tarfile -e \
-            "staging/${{ needs.validate-tag.outputs.archive_name }}" \
-            staging/release-tests/cmake-prefix
-          uvx --from "cmake==$CMAKE_VERSION" cmake \
-            -S tests/release_cmake_consumer \
-            -B staging/release-tests/cmake-build \
-            -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix"
 
       - name: Stage exact publication handoff
         shell: bash
@@ -333,6 +350,308 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  smoke-python-artifacts:
+    name: Smoke ${{ matrix.artifact_kind }} Artifact
+    needs:
+      - validate-tag
+      - build-release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        artifact_kind:
+          - wheel
+          - sdist
+    env:
+      CMAKE_VERSION: "4.3.2"
+      LC_ALL: C.UTF-8
+      UV_PYTHON: "3.12.9"
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate-tag.outputs.target }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12.9"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          version: "0.11.7"
+
+      - name: Install prebuilt protoc for release artifact test
+        id: release-protoc
+        run: python .github/scripts/install_protoc.py --dest "$RUNNER_TEMP/protoc"
+
+      - name: Prepare hash-locked release smoke tools and environment
+        shell: bash
+        run: |
+          tools_root="$PWD/staging/release-tools"
+          smoke_root="$PWD/staging/release-tests/${{ matrix.artifact_kind }}"
+          constraints="$PWD/protocyte-cmake-constraints.txt"
+          cmake_constraints="$PWD/.github/release-cmake-constraints.txt"
+          wheelhouse="$PWD/staging/release-tests/wheelhouse"
+          tool_wheelhouse="$tools_root/wheelhouse"
+
+          locked_cmake_version="$(
+            sed -nE 's/^cmake==([^[:space:]\\]+).*/\1/p' "$cmake_constraints"
+          )"
+          if [[ "$locked_cmake_version" != "$CMAKE_VERSION" ]]; then
+            echo "Release CMake lock version $locked_cmake_version does not match $CMAKE_VERSION." >&2
+            exit 1
+          fi
+
+          bootstrap_python="$tools_root/bootstrap-venv/bin/python"
+          uv venv "$tools_root/bootstrap-venv" --python 3.12
+          uv pip install \
+            --python "$bootstrap_python" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints" \
+            --dest "$wheelhouse"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints" \
+            --dest "$tool_wheelhouse"
+
+          uv venv "$tools_root/cmake-venv" --python 3.12
+          uv pip install \
+            --python "$tools_root/cmake-venv/bin/python" \
+            --no-index \
+            --find-links "$tool_wheelhouse" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints"
+          echo "RELEASE_CMAKE=$tools_root/cmake-venv/bin/cmake" >> "$GITHUB_ENV"
+          echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
+
+          artifact_python="$smoke_root/venv/bin/python"
+          uv venv "$smoke_root/venv" --python 3.12
+          uv pip install \
+            --python "$artifact_python" \
+            --no-index \
+            --find-links "$wheelhouse" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints"
+          chmod -R a-w "$wheelhouse" "$tool_wheelhouse"
+
+      - name: Download and verify exact immutable release handoff
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
+          ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
+          EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
+          WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
+        run: |
+          python -I .github/scripts/download_release_handoff.py \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$EXPECTED_ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" \
+            --head-sha "$GITHUB_SHA" \
+            --destination "$RUNNER_TEMP/release-handoff" \
+            --wheel "$WHEEL_NAME" \
+            --sdist "$SDIST_NAME" \
+            --archive "$ARCHIVE_NAME"
+
+      - name: Test exact Python artifact
+        shell: bash
+        env:
+          SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
+          WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
+        run: |
+          case "${{ matrix.artifact_kind }}" in
+            wheel) artifact_name="$WHEEL_NAME" ;;
+            sdist) artifact_name="$SDIST_NAME" ;;
+            *) echo "Unexpected artifact kind." >&2; exit 1 ;;
+          esac
+          python .github/scripts/test_release_plugin_artifact.py \
+            --artifact "$RUNNER_TEMP/release-handoff/$artifact_name" \
+            --cmake "$RELEASE_CMAKE" \
+            --ctest "$RELEASE_CTEST" \
+            --protoc "${{ steps.release-protoc.outputs.protoc }}" \
+            --test-root "staging/release-tests/${{ matrix.artifact_kind }}"
+
+  smoke-cmake-prefix:
+    name: Smoke CMake Prefix Artifact
+    needs:
+      - validate-tag
+      - build-release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CMAKE_VERSION: "4.3.2"
+      LC_ALL: C.UTF-8
+      UV_PYTHON: "3.12.9"
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate-tag.outputs.target }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12.9"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          version: "0.11.7"
+
+      - name: Install prebuilt protoc for release artifact test
+        id: release-protoc
+        run: python .github/scripts/install_protoc.py --dest "$RUNNER_TEMP/protoc"
+
+      - name: Prepare hash-locked release smoke tools and wheelhouse
+        shell: bash
+        run: |
+          tools_root="$PWD/staging/release-tools"
+          constraints="$PWD/protocyte-cmake-constraints.txt"
+          cmake_constraints="$PWD/.github/release-cmake-constraints.txt"
+          wheelhouse="$PWD/staging/release-tests/wheelhouse"
+          tool_wheelhouse="$tools_root/wheelhouse"
+
+          locked_cmake_version="$(
+            sed -nE 's/^cmake==([^[:space:]\\]+).*/\1/p' "$cmake_constraints"
+          )"
+          if [[ "$locked_cmake_version" != "$CMAKE_VERSION" ]]; then
+            echo "Release CMake lock version $locked_cmake_version does not match $CMAKE_VERSION." >&2
+            exit 1
+          fi
+
+          bootstrap_python="$tools_root/bootstrap-venv/bin/python"
+          uv venv "$tools_root/bootstrap-venv" --python 3.12
+          uv pip install \
+            --python "$bootstrap_python" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$constraints" \
+            --dest "$wheelhouse"
+          "$bootstrap_python" -I -m pip --isolated download \
+            --disable-pip-version-check \
+            --no-input \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints" \
+            --dest "$tool_wheelhouse"
+
+          uv venv "$tools_root/cmake-venv" --python 3.12
+          uv pip install \
+            --python "$tools_root/cmake-venv/bin/python" \
+            --no-index \
+            --find-links "$tool_wheelhouse" \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --requirement "$cmake_constraints"
+          echo "RELEASE_CMAKE=$tools_root/cmake-venv/bin/cmake" >> "$GITHUB_ENV"
+          echo "RELEASE_CTEST=$tools_root/cmake-venv/bin/ctest" >> "$GITHUB_ENV"
+          chmod -R a-w "$wheelhouse" "$tool_wheelhouse"
+
+      - name: Download and verify exact immutable release handoff
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
+          ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
+          EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
+          WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
+        run: |
+          python -I .github/scripts/download_release_handoff.py \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$EXPECTED_ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" \
+            --head-sha "$GITHUB_SHA" \
+            --destination "$RUNNER_TEMP/release-handoff" \
+            --wheel "$WHEEL_NAME" \
+            --sdist "$SDIST_NAME" \
+            --archive "$ARCHIVE_NAME"
+
+      - name: Test exact CMake prefix artifact
+        shell: bash
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_FIND_LINKS: ${{ github.workspace }}/staging/release-tests/wheelhouse
+          PIP_NO_INDEX: "1"
+          UV_NO_INDEX: "1"
+          UV_OFFLINE: "1"
+        run: |
+          clean_environment=(
+            env -i
+            "HOME=$HOME"
+            "PATH=$PATH"
+            "LANG=$LANG"
+            "LC_ALL=$LC_ALL"
+            "TMPDIR=${TMPDIR:-$RUNNER_TEMP}"
+            "PIP_CONFIG_FILE=$PIP_CONFIG_FILE"
+            "PIP_FIND_LINKS=$PIP_FIND_LINKS"
+            "PIP_NO_INDEX=$PIP_NO_INDEX"
+            "UV_NO_INDEX=$UV_NO_INDEX"
+            "UV_OFFLINE=$UV_OFFLINE"
+          )
+          mkdir -p staging/release-tests/cmake-prefix
+          python -m tarfile -e \
+            "$RUNNER_TEMP/release-handoff/${{ needs.validate-tag.outputs.archive_name }}" \
+            staging/release-tests/cmake-prefix
+          "${clean_environment[@]}" "$RELEASE_CMAKE" \
+            -S tests/find_package \
+            -B staging/release-tests/cmake-build \
+            -DCMAKE_PREFIX_PATH="$PWD/staging/release-tests/cmake-prefix/protocyte-${{ needs.validate-tag.outputs.version }}-cmake-prefix" \
+            "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.release-protoc.outputs.protoc }}"
+          "${clean_environment[@]}" "$RELEASE_CMAKE" \
+            --build staging/release-tests/cmake-build
+          "${clean_environment[@]}" "$RELEASE_CTEST" \
+            --test-dir staging/release-tests/cmake-build --output-on-failure
+
   publish:
     name: Publish Immutable Release
     needs:
@@ -340,6 +659,8 @@ jobs:
       - release-policy
       - release-gate
       - build-release
+      - smoke-python-artifacts
+      - smoke-cmake-prefix
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -355,155 +676,29 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Bind and download immutable release handoff
+      - name: Download and verify exact immutable release handoff
         shell: bash
         env:
+          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           ARTIFACT_ID: ${{ needs.build-release.outputs.artifact_id }}
           EXPECTED_ARTIFACT_DIGEST: ${{ needs.build-release.outputs.artifact_digest }}
           EXPECTED_ARTIFACT_NAME: protocyte-release-${{ github.run_id }}-${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
-            echo "The build job returned an invalid artifact ID." >&2
-            exit 1
-          fi
-
-          expected_digest="${EXPECTED_ARTIFACT_DIGEST#sha256:}"
-          if [[ ! "$expected_digest" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "The build job returned an invalid artifact digest." >&2
-            exit 1
-          fi
-
-          metadata="$RUNNER_TEMP/release-artifact.json"
-          status="$(
-            curl --disable --silent --show-error --max-redirs 0 \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --output "$metadata" \
-              --write-out "%{http_code}" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
-          )"
-          if [[ "$status" =~ ^30[0-9]$ ]]; then
-            echo "Authenticated GitHub API requests must not follow redirects." >&2
-            exit 1
-          fi
-          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "GitHub artifact metadata request failed with HTTP status $status." >&2
-            exit 1
-          fi
-
-          actual_id="$(jq -r '.id // empty' "$metadata")"
-          actual_name="$(jq -r '.name // empty' "$metadata")"
-          actual_digest="$(jq -r '.digest // empty' "$metadata")"
-          actual_digest="${actual_digest#sha256:}"
-          workflow_run_id="$(jq -r '.workflow_run.id // empty' "$metadata")"
-          workflow_head_sha="$(jq -r '.workflow_run.head_sha // empty' "$metadata")"
-          expired="$(jq -r '.expired | tostring' "$metadata")"
-
-          if [[ "$actual_id" != "$ARTIFACT_ID" || \
-                "$actual_name" != "$EXPECTED_ARTIFACT_NAME" || \
-                "$actual_digest" != "$expected_digest" || \
-                "$workflow_run_id" != "$GITHUB_RUN_ID" || \
-                "$workflow_head_sha" != "$GITHUB_SHA" || \
-                "$expired" != "false" ]]; then
-            echo "The release artifact does not match this workflow run." >&2
-            exit 1
-          fi
-
-          archive="$RUNNER_TEMP/release-handoff.zip"
-          redirect_headers="$RUNNER_TEMP/release-handoff-redirect.headers"
-          status="$(
-            curl --disable --silent --show-error --max-redirs 0 \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              --dump-header "$redirect_headers" \
-              --output /dev/null \
-              --write-out "%{http_code}" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip"
-          )"
-          if [[ ! "$status" =~ ^30(1|2|3|7|8)$ ]]; then
-            echo "GitHub artifact download did not return an expected redirect." >&2
-            exit 1
-          fi
-          redirect_url="$(python -I .github/scripts/parse_release_redirect.py "$redirect_headers")"
-          status="$(
-            curl --disable --silent --show-error --location --max-redirs 3 \
-              --proto '=https' --proto-redir '=https' \
-              --output "$archive" \
-              --write-out "%{http_code}" \
-              "$redirect_url"
-          )"
-          if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
-            echo "GitHub artifact download failed with HTTP status $status." >&2
-            exit 1
-          fi
-          downloaded_digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
-          if [[ "$downloaded_digest" != "$expected_digest" ]]; then
-            echo "The downloaded release artifact failed SHA-256 verification." >&2
-            exit 1
-          fi
-
-      - name: Extract and verify exact release handoff
-        shell: bash
-        env:
-          ARCHIVE_NAME: ${{ needs.validate-tag.outputs.archive_name }}
           SDIST_NAME: ${{ needs.validate-tag.outputs.sdist_name }}
           WHEEL_NAME: ${{ needs.validate-tag.outputs.wheel_name }}
         run: |
-          handoff="$RUNNER_TEMP/release-handoff"
-          python -I - \
-            "$RUNNER_TEMP/release-handoff.zip" \
-            "$handoff" \
-            SHA256SUMS \
-            "$WHEEL_NAME" \
-            "$SDIST_NAME" \
-            "$ARCHIVE_NAME" <<'PY'
-          from pathlib import Path, PurePosixPath
-          import shutil
-          import stat
-          import sys
-          import zipfile
-
-          archive = Path(sys.argv[1])
-          destination = Path(sys.argv[2])
-          expected = set(sys.argv[3:])
-          if len(expected) != 4:
-              raise SystemExit("release handoff names must be unique")
-
-          with zipfile.ZipFile(archive) as artifact:
-              entries = artifact.infolist()
-              names = [entry.filename for entry in entries]
-              if len(names) != len(expected) or set(names) != expected:
-                  raise SystemExit("release handoff contains an unexpected file set")
-              for entry in entries:
-                  path = PurePosixPath(entry.filename)
-                  mode = entry.external_attr >> 16
-                  if (
-                      entry.is_dir()
-                      or path.is_absolute()
-                      or len(path.parts) != 1
-                      or path.name != entry.filename
-                      or stat.S_ISLNK(mode)
-                  ):
-                      raise SystemExit("release handoff contains an unsafe entry")
-
-              destination.mkdir(mode=0o700, parents=False, exist_ok=False)
-              for entry in entries:
-                  with artifact.open(entry) as source, (
-                      destination / entry.filename
-                  ).open("xb") as target:
-                      shutil.copyfileobj(source, target)
-          PY
-
-          (
-            cd "$handoff"
-            sha256sum "$WHEEL_NAME" "$SDIST_NAME" "$ARCHIVE_NAME" \
-              > "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"
-            sha256sum --check --strict SHA256SUMS
-          )
+          python -I .github/scripts/download_release_handoff.py \
+            --api-url "$GITHUB_API_URL" \
+            --repository "$GITHUB_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" \
+            --artifact-name "$EXPECTED_ARTIFACT_NAME" \
+            --artifact-digest "$EXPECTED_ARTIFACT_DIGEST" \
+            --run-id "$GITHUB_RUN_ID" \
+            --head-sha "$GITHUB_SHA" \
+            --destination "$RUNNER_TEMP/release-handoff" \
+            --wheel "$WHEEL_NAME" \
+            --sdist "$SDIST_NAME" \
+            --archive "$ARCHIVE_NAME"
 
       - name: Create, verify, and publish immutable GitHub release
         env:
