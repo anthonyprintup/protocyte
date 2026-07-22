@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import ast
 import math
+import re
 import struct
 import warnings
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
+from decimal import Decimal, InvalidOperation
+from typing import Callable, Iterable, NoReturn
 
 from google.protobuf import (
     descriptor_pb2,
@@ -270,6 +272,17 @@ _SCALAR_CAST_KINDS = {
 }
 _MAX_EXPRESSION_NESTING = 32
 _MAX_CONSTANT_DEPENDENCY_DEPTH = 32
+_MAX_FLOATING_DEFAULT_TEXT_LENGTH = 62
+_FINITE_FLOATING_DEFAULT_RE = re.compile(
+    r"(?P<sign>[+-]?)(?P<significand>[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
+    r"(?:[eE][+-]?[0-9]+)?",
+    re.ASCII,
+)
+_NONFINITE_FLOATING_DEFAULT_RE = re.compile(
+    r"(?P<sign>[+-]?)(?:(?P<infinity>inf(?:inity)?)|nan(?:\([A-Za-z0-9_]*\))?)",
+    re.ASCII | re.IGNORECASE,
+)
+_MIN_NORMAL_F64 = float.fromhex("0x1.0p-1022")
 
 INTEGER_CONSTANT_KINDS = {
     FieldDescriptorProto.TYPE_INT32: CONSTANT_KIND_INT32,
@@ -2884,21 +2897,142 @@ def _integer_default_cpp(value: str, kind: str, label: str) -> str:
 
 
 def _floating_default_cpp(value: str, cpp_type: str, label: str) -> str:
-    if value == "inf":
-        return f"::std::numeric_limits<{cpp_type}>::infinity()"
-    if value == "-inf":
-        return f"-::std::numeric_limits<{cpp_type}>::infinity()"
-    if value == "nan":
+    field_type = (
+        FieldDescriptorProto.TYPE_FLOAT
+        if cpp_type == "::protocyte::f32"
+        else FieldDescriptorProto.TYPE_DOUBLE
+    )
+    numeric = _parse_protobuf_floating_default(value, field_type, label)
+    if math.isinf(numeric):
+        infinity = f"::std::numeric_limits<{cpp_type}>::infinity()"
+        return f"-{infinity}" if numeric < 0 else infinity
+    if math.isnan(numeric):
         return f"::std::numeric_limits<{cpp_type}>::quiet_NaN()"
-    try:
-        numeric = float(value)
-    except ValueError as exc:
-        raise ProtocyteError(
-            f"{label}: invalid floating-point default value {value!r}"
-        ) from exc
-    if cpp_type == "::protocyte::f32":
+    if field_type == FieldDescriptorProto.TYPE_FLOAT:
         return _cpp_constant_value(CONSTANT_KIND_FLOAT, numeric)
     return _cpp_constant_value(CONSTANT_KIND_DOUBLE, numeric)
+
+
+def _parse_protobuf_floating_default(value: str, field_type: int, label: str) -> float:
+    if len(value) > _MAX_FLOATING_DEFAULT_TEXT_LENGTH:
+        _raise_invalid_floating_default(value, label)
+    nonfinite = _NONFINITE_FLOATING_DEFAULT_RE.fullmatch(value)
+    if nonfinite is not None:
+        if nonfinite.group("infinity") is not None:
+            return -math.inf if nonfinite.group("sign") == "-" else math.inf
+        return math.nan
+
+    finite = _FINITE_FLOATING_DEFAULT_RE.fullmatch(value)
+    if finite is None:
+        _raise_invalid_floating_default(value, label)
+    # Protobuf accepts signed zero regardless of exponent size.  Recognize it
+    # before Decimal, whose implementation-specific exponent limit would
+    # otherwise reject a valid zero such as ``0e999...``.
+    significand_digits = finite.group("significand").replace(".", "")
+    if not significand_digits.strip("0"):
+        negative = finite.group("sign") == "-"
+        if field_type == FieldDescriptorProto.TYPE_FLOAT:
+            return _f32_from_bits(0x80000000 if negative else 0)
+        return -0.0 if negative else 0.0
+    try:
+        exact = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        _raise_invalid_floating_default(value, label, exc)
+    if field_type == FieldDescriptorProto.TYPE_FLOAT:
+        return _protobuf_f32(exact, value, label)
+    try:
+        numeric = float(exact)
+    except (OverflowError, ValueError) as exc:
+        _raise_invalid_floating_default(value, label, exc)
+    if not math.isfinite(numeric) or (
+        not exact.is_zero() and abs(numeric) < _MIN_NORMAL_F64
+    ):
+        _raise_invalid_floating_default(value, label)
+    return numeric
+
+
+def _protobuf_f32(exact: Decimal, value: str, label: str) -> float:
+    """Round descriptor text directly to IEEE-754 binary32.
+
+    FieldDescriptorProto.default_value carries the original source text.  In
+    particular, a hand-built CodeGeneratorRequest has not necessarily passed
+    through protoc's binary64 parser, so converting through Python float would
+    introduce a second rounding step and can choose the wrong binary32 value.
+    """
+    sign_bit = 0x80000000 if exact.is_signed() else 0
+    if exact.is_zero():
+        return _f32_from_bits(sign_bit)
+
+    magnitude = exact.copy_abs()
+    if magnitude.adjusted() < -38 or magnitude.adjusted() > 38:
+        _raise_invalid_floating_default(value, label)
+    numerator, denominator = magnitude.as_integer_ratio()
+    exponent = _rational_floor_log2(numerator, denominator)
+
+    if exponent < -126:
+        significand = _round_ratio_to_integer(numerator, denominator, 149)
+        if significand < 1 << 23:
+            _raise_invalid_floating_default(value, label)
+        exponent = -126
+    else:
+        if exponent > 127:
+            _raise_invalid_floating_default(value, label)
+        significand = _round_ratio_to_integer(numerator, denominator, 23 - exponent)
+        if significand == 1 << 24:
+            significand >>= 1
+            exponent += 1
+            if exponent > 127:
+                _raise_invalid_floating_default(value, label)
+
+    exponent_bits = (exponent + 127) << 23
+    fraction_bits = significand - (1 << 23)
+    return _f32_from_bits(sign_bit | exponent_bits | fraction_bits)
+
+
+def _rational_floor_log2(numerator: int, denominator: int) -> int:
+    exponent = numerator.bit_length() - denominator.bit_length()
+    if exponent >= 0:
+        if numerator < denominator << exponent:
+            exponent -= 1
+    elif numerator << -exponent < denominator:
+        exponent -= 1
+    return exponent
+
+
+def _round_ratio_to_integer(numerator: int, denominator: int, binary_shift: int) -> int:
+    if binary_shift >= 0:
+        numerator <<= binary_shift
+    else:
+        denominator <<= -binary_shift
+    quotient, remainder = divmod(numerator, denominator)
+    doubled_remainder = remainder << 1
+    if doubled_remainder > denominator or (
+        doubled_remainder == denominator and quotient & 1
+    ):
+        quotient += 1
+    return quotient
+
+
+def _f32_from_bits(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+def _raise_invalid_floating_default(
+    value: str, label: str, cause: Exception | None = None
+) -> NoReturn:
+    error = ProtocyteError(
+        f"{label}: invalid floating-point default value "
+        f"{_render_floating_default(value)}"
+    )
+    if cause is None:
+        raise error
+    raise error from cause
+
+
+def _render_floating_default(value: str) -> str:
+    if len(value) <= _MAX_FLOATING_DEFAULT_TEXT_LENGTH:
+        return repr(value)
+    return f"{value[:48]!r}... ({len(value)} characters)"
 
 
 def _is_packed(proto: descriptor_pb2.FieldDescriptorProto, file_syntax: str) -> bool:

@@ -4,6 +4,7 @@ from io import BytesIO
 import math
 import os
 from pathlib import Path
+from shutil import which as find_executable
 import struct
 import subprocess
 import sys
@@ -39,6 +40,7 @@ from protocyte.model import (
     _coerce_expression_value,
     _coerce_literal,
     _is_packed,
+    _parse_protobuf_floating_default,
     build_model,
     cpp_derivable_identifier,
     cpp_identifier,
@@ -2958,6 +2960,472 @@ def test_proto2_default_semantics_follow_protobuf_spec() -> None:
     assert fields["implicit_choices"].default_cpp is None
     assert fields["required_int32"].required
     assert fields["required_int32"].default_cpp == "17"
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value", "expected_cpp"),
+    [
+        (
+            F.TYPE_FLOAT,
+            "inf",
+            "::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "+Infinity",
+            "::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "INF",
+            "::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "-Infinity",
+            "-::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "-inf",
+            "-::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "nan",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "NaN",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "-NaN",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "nan(1)",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "NAN(payload_1)",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "nan()",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+    ],
+)
+def test_proto2_nonfinite_defaults_accept_protobuf_supported_spellings(
+    field_type: int, default_value: str, expected_cpp: str
+) -> None:
+    request = _proto2_floating_default_request(field_type, default_value)
+
+    model = build_model(request)
+    field = model.messages["defaults.FloatingDefault"].fields[0]
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert field.default_cpp == expected_cpp
+    assert not response.error
+    assert expected_cpp in files["floating_default.protocyte.hpp"]
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value", "expected_cpp"),
+    [
+        (F.TYPE_FLOAT, "-0", "-0.0f"),
+        (F.TYPE_DOUBLE, "+0.0", "0.0"),
+        (F.TYPE_FLOAT, "1.00000001", "1.0f"),
+        (F.TYPE_FLOAT, "1.1754943508222875e-38", "1.17549435e-38f"),
+        (F.TYPE_FLOAT, "3.4028234663852886e38", "3.40282347e+38f"),
+        (F.TYPE_FLOAT, "3.4028235e38", "3.40282347e+38f"),
+        (F.TYPE_FLOAT, "3.4028235677973366e38", "3.40282347e+38f"),
+        (F.TYPE_DOUBLE, "2.2250738585072014e-308", "2.2250738585072014e-308"),
+        (F.TYPE_DOUBLE, "1.7976931348623157e308", "1.7976931348623157e+308"),
+        (F.TYPE_DOUBLE, "1.7976931348623158e308", "1.7976931348623157e+308"),
+    ],
+)
+def test_proto2_finite_floating_defaults_apply_ieee_rounding_and_boundaries(
+    field_type: int, default_value: str, expected_cpp: str
+) -> None:
+    request = _proto2_floating_default_request(field_type, default_value)
+
+    model = build_model(request)
+    field = model.messages["defaults.FloatingDefault"].fields[0]
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert field.default_cpp == expected_cpp
+    assert not response.error
+    assert expected_cpp in files["floating_default.protocyte.hpp"]
+
+
+@pytest.mark.parametrize(
+    ("default_value", "expected_bits"),
+    [
+        ("1.0000000596046447753906249", 0x3F800000),
+        ("1.000000059604644775390625", 0x3F800000),
+        ("1.0000000596046447753906251", 0x3F800001),
+        ("1.0000000596046448031468009", 0x3F800001),
+        ("1.17549428075736429173E-38", 0x00800000),
+        ("340282356779733661637539395458142568447", 0x7F7FFFFF),
+    ],
+)
+def test_proto2_f32_defaults_round_directly_from_original_decimal_text(
+    default_value: str, expected_bits: int
+) -> None:
+    parsed = _parse_protobuf_floating_default(
+        default_value, F.TYPE_FLOAT, "defaults.FloatingDefault.value"
+    )
+
+    assert struct.unpack("<I", struct.pack("<f", parsed))[0] == expected_bits
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value", "value_format", "bits_format", "expected_bits"),
+    [
+        (F.TYPE_FLOAT, "0e" + "9" * 60, "<f", "<I", 0),
+        (F.TYPE_FLOAT, "0e-" + "9" * 59, "<f", "<I", 0),
+        (F.TYPE_FLOAT, "-0e+" + "9" * 58, "<f", "<I", 0x80000000),
+        (F.TYPE_FLOAT, "0.0e" + "9" * 58, "<f", "<I", 0),
+        (F.TYPE_DOUBLE, "0e" + "9" * 60, "<d", "<Q", 0),
+        (F.TYPE_DOUBLE, "0e-" + "9" * 59, "<d", "<Q", 0),
+        (F.TYPE_DOUBLE, "-0e+" + "9" * 58, "<d", "<Q", 0x8000000000000000),
+        (F.TYPE_DOUBLE, "0.0e" + "9" * 58, "<d", "<Q", 0),
+    ],
+)
+def test_proto2_huge_exponent_zero_defaults_preserve_signed_zero(
+    field_type: int,
+    default_value: str,
+    value_format: str,
+    bits_format: str,
+    expected_bits: int,
+) -> None:
+    parsed = _parse_protobuf_floating_default(
+        default_value, field_type, "defaults.FloatingDefault.value"
+    )
+
+    assert len(default_value) == 62
+    assert struct.unpack(bits_format, struct.pack(value_format, parsed))[0] == expected_bits
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value"),
+    [
+        (F.TYPE_FLOAT, "1e999"),
+        (F.TYPE_FLOAT, "3.5e38"),
+        (F.TYPE_FLOAT, "3.402823567797337e38"),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568448"),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568449"),
+        (F.TYPE_FLOAT, "1.1754942106924411e-38"),
+        (F.TYPE_FLOAT, "1.17549428075736429172E-38"),
+        (F.TYPE_FLOAT, "1.17549428075736425910E-38"),
+        (F.TYPE_FLOAT, "1e-45"),
+        (F.TYPE_DOUBLE, "1e999"),
+        (F.TYPE_DOUBLE, "1.7976931348623159e308"),
+        (F.TYPE_DOUBLE, "2.2250738585072009e-308"),
+        (F.TYPE_DOUBLE, "4.9406564584124654e-324"),
+        (F.TYPE_DOUBLE, "1e-999"),
+        (F.TYPE_DOUBLE, ""),
+        (F.TYPE_DOUBLE, "1e"),
+        (F.TYPE_DOUBLE, " 1"),
+        (F.TYPE_DOUBLE, "1 "),
+        (F.TYPE_DOUBLE, "0x1p0"),
+        (F.TYPE_DOUBLE, "nan("),
+        (F.TYPE_DOUBLE, "infinity!"),
+        (F.TYPE_FLOAT, "1e" + "9" * 60),
+        (F.TYPE_FLOAT, "1e-" + "9" * 59),
+        (F.TYPE_FLOAT, "-1e+" + "9" * 58),
+        (F.TYPE_FLOAT, "1.0e" + "9" * 58),
+        (F.TYPE_DOUBLE, "1e" + "9" * 60),
+        (F.TYPE_DOUBLE, "1e-" + "9" * 59),
+        (F.TYPE_DOUBLE, "-1e+" + "9" * 58),
+        (F.TYPE_DOUBLE, "1.0e" + "9" * 58),
+    ],
+)
+def test_rejects_proto2_floating_defaults_outside_range_or_grammar(
+    field_type: int, default_value: str
+) -> None:
+    response = generate_response(
+        _proto2_floating_default_request(field_type, default_value)
+    )
+
+    assert (
+        "defaults.FloatingDefault.value: invalid floating-point default value "
+        f"{default_value!r}" in response.error
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_type", "maximum", "overlong"),
+    [
+        (F.TYPE_FLOAT, "1." + "0" * 60, "1." + "0" * 61),
+        (F.TYPE_DOUBLE, "1." + "0" * 60, "1." + "0" * 61),
+        (F.TYPE_FLOAT, "nan(" + "x" * 57 + ")", "nan(" + "x" * 58 + ")"),
+        (F.TYPE_DOUBLE, "nan(" + "x" * 57 + ")", "nan(" + "x" * 58 + ")"),
+    ],
+)
+def test_proto2_floating_default_text_has_a_backend_independent_bound(
+    field_type: int, maximum: str, overlong: str
+) -> None:
+
+    accepted = generate_response(_proto2_floating_default_request(field_type, maximum))
+    rejected = generate_response(_proto2_floating_default_request(field_type, overlong))
+
+    assert len(maximum) == 62
+    assert not accepted.error
+    assert len(overlong) == 63
+    assert "invalid floating-point default value" in rejected.error
+    assert "(63 characters)" in rejected.error
+    assert overlong not in rejected.error
+    assert len(rejected.error) < 200
+
+
+def test_proto2_floating_defaults_match_upb_descriptor_validation() -> None:
+    cases = [
+        (F.TYPE_FLOAT, "1.0000000596046447753906249", 0x3F800000),
+        (F.TYPE_FLOAT, "1.000000059604644775390625", 0x3F800000),
+        (F.TYPE_FLOAT, "1.0000000596046447753906251", 0x3F800001),
+        (F.TYPE_FLOAT, "1.0000000596046448031468009", 0x3F800001),
+        (F.TYPE_FLOAT, "1.17549428075736429172E-38", None),
+        (F.TYPE_FLOAT, "1.17549428075736429173E-38", 0x00800000),
+        (F.TYPE_FLOAT, "1.17549428075736425910E-38", None),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568447", 0x7F7FFFFF),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568448", None),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568449", None),
+        (F.TYPE_FLOAT, "0e" + "9" * 60, 0),
+        (F.TYPE_FLOAT, "-0e+" + "9" * 58, 0x80000000),
+        (F.TYPE_FLOAT, "1e" + "9" * 60, None),
+        (F.TYPE_DOUBLE, "0.0e" + "9" * 58, 0),
+        (F.TYPE_DOUBLE, "-0e+" + "9" * 58, 0x8000000000000000),
+        (F.TYPE_DOUBLE, "1.0e" + "9" * 58, None),
+    ]
+    script = f"""
+import struct
+from google.protobuf import descriptor_pb2, descriptor_pool
+from protocyte.errors import ProtocyteError
+from protocyte.model import _parse_protobuf_floating_default
+
+F = descriptor_pb2.FieldDescriptorProto
+for field_type, default_value, expected_bits in {cases!r}:
+    file = descriptor_pb2.FileDescriptorProto(name="upb.proto", syntax="proto2")
+    message = file.message_type.add(name="FloatingDefault")
+    message.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=field_type,
+        default_value=default_value,
+    )
+    pool = descriptor_pool.DescriptorPool()
+    if expected_bits is None:
+        try:
+            pool.Add(file)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError(f"upb accepted {{default_value}}")
+        try:
+            _parse_protobuf_floating_default(
+                default_value, field_type, "FloatingDefault.value"
+            )
+        except ProtocyteError:
+            continue
+        raise AssertionError(f"Protocyte accepted {{default_value}}")
+    pool.Add(file)
+    upb_default = pool.FindMessageTypeByName(
+        "FloatingDefault"
+    ).fields_by_name["value"].default_value
+    protocyte_default = _parse_protobuf_floating_default(
+        default_value, field_type, "FloatingDefault.value"
+    )
+    value_format = "<f" if field_type == F.TYPE_FLOAT else "<d"
+    bits_format = "<I" if field_type == F.TYPE_FLOAT else "<Q"
+    assert struct.unpack(bits_format, struct.pack(value_format, upb_default))[0] == expected_bits
+    assert struct.unpack(bits_format, struct.pack(value_format, protocyte_default))[0] == expected_bits
+"""
+    environment = os.environ.copy()
+    environment["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "upb"
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parent.parent,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_proto2_floating_default_parser_accepts_protoc_descriptor_text(
+    tmp_path: Path,
+) -> None:
+    configured_protoc = os.environ.get("PROTOCYTE_CI_PROTOC_EXECUTABLE")
+    protoc = configured_protoc or find_executable("protoc")
+    if protoc is None:
+        pytest.skip("protoc is required for descriptor-text differential testing")
+
+    source = tmp_path / "floating_defaults.proto"
+    descriptor_set = tmp_path / "floating_defaults.pb"
+    source.write_text(
+        'syntax = "proto2";\n'
+        "message FloatingDefaults {\n"
+        "  optional float ordinary_below = 1 "
+        "[default = 1.0000000596046447753906249];\n"
+        "  optional float ordinary_above = 2 "
+        "[default = 1.0000000596046447753906251];\n"
+        "  optional float minimum_normal = 3 "
+        "[default = 1.17549428075736429173E-38];\n"
+        "  optional float maximum_finite = 4 "
+        "[default = 340282356779733661637539395458142568447];\n"
+        "  optional double minimum_double = 5 "
+        "[default = 2.2250738585072014e-308];\n"
+        "  optional double maximum_double = 6 "
+        "[default = 1.7976931348623158e308];\n"
+        "  optional float positive_infinity = 7 [default = inf];\n"
+        "  optional double not_a_number = 8 [default = nan];\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            protoc,
+            f"--proto_path={tmp_path}",
+            f"--descriptor_set_out={descriptor_set}",
+            source.name,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    descriptors = descriptor_pb2.FileDescriptorSet.FromString(
+        descriptor_set.read_bytes()
+    )
+    fields = {field.name: field for field in descriptors.file[0].message_type[0].field}
+    expected_f32_bits = {
+        "ordinary_below": 0x3F800000,
+        # protoc has already passed this source literal through binary64 and
+        # canonicalized the descriptor text to "1".  Directly constructed
+        # FieldDescriptorProto values retain their original text and are
+        # intentionally rounded without that lossy intermediate; the focused
+        # direct-text test above covers that distinct contract.
+        "ordinary_above": 0x3F800000,
+        "minimum_normal": 0x00800000,
+        "maximum_finite": 0x7F7FFFFF,
+    }
+    assert fields["ordinary_above"].default_value == "1"
+    for name, expected_bits in expected_f32_bits.items():
+        parsed = _parse_protobuf_floating_default(
+            fields[name].default_value, F.TYPE_FLOAT, f"FloatingDefaults.{name}"
+        )
+        assert struct.unpack("<I", struct.pack("<f", parsed))[0] == expected_bits
+    assert _parse_protobuf_floating_default(
+        fields["minimum_double"].default_value,
+        F.TYPE_DOUBLE,
+        "FloatingDefaults.minimum_double",
+    ) == float.fromhex("0x1.0p-1022")
+    assert _parse_protobuf_floating_default(
+        fields["maximum_double"].default_value,
+        F.TYPE_DOUBLE,
+        "FloatingDefaults.maximum_double",
+    ) == float.fromhex("0x1.fffffffffffffp+1023")
+    assert math.isinf(
+        _parse_protobuf_floating_default(
+            fields["positive_infinity"].default_value,
+            F.TYPE_FLOAT,
+            "FloatingDefaults.positive_infinity",
+        )
+    )
+    assert math.isnan(
+        _parse_protobuf_floating_default(
+            fields["not_a_number"].default_value,
+            F.TYPE_DOUBLE,
+            "FloatingDefaults.not_a_number",
+        )
+    )
+
+
+def test_proto2_floating_default_regressions_pass_with_python_backend() -> None:
+    environment = os.environ.copy()
+    environment["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(Path(__file__)),
+            "-q",
+            "-k",
+            "proto2_nonfinite_defaults or "
+            "proto2_finite_floating_defaults or "
+            "proto2_f32_defaults_round_directly or "
+            "proto2_huge_exponent_zero_defaults or "
+            "proto2_floating_default_text_has_a_backend_independent_bound or "
+            "rejects_proto2_floating_defaults_outside_range_or_grammar",
+        ],
+        cwd=Path(__file__).parent.parent,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_proto2_floating_default_cpp_expressions_compile() -> None:
+    compiler = find_executable("clang++") or find_executable("g++")
+    if compiler is None:
+        pytest.skip("clang++ or g++ is required for C++ literal validation")
+
+    cases = [
+        (F.TYPE_FLOAT, "-0"),
+        (F.TYPE_FLOAT, "1.0000000596046448031468009"),
+        (F.TYPE_FLOAT, "1.1754943508222875e-38"),
+        (F.TYPE_FLOAT, "1.17549428075736429173E-38"),
+        (F.TYPE_FLOAT, "3.4028235677973366e38"),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568447"),
+        (F.TYPE_DOUBLE, "2.2250738585072014e-308"),
+        (F.TYPE_DOUBLE, "1.7976931348623158e308"),
+        (F.TYPE_DOUBLE, "nan(1)"),
+    ]
+    expressions = [
+        build_model(_proto2_floating_default_request(field_type, default_value))
+        .messages["defaults.FloatingDefault"]
+        .fields[0]
+        .default_cpp
+        for field_type, default_value in cases
+    ]
+    declarations = "\n".join(
+        f"auto floating_default_{index} = {expression};"
+        for index, expression in enumerate(expressions)
+    )
+    source = (
+        "#include <limits>\n"
+        "namespace protocyte { using f32 = float; using f64 = double; }\n"
+        f"{declarations}\n"
+    )
+
+    result = subprocess.run(
+        [compiler, "-x", "c++", "-std=c++20", "-fsyntax-only", "-"],
+        input=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_empty_syntax_default_semantics_follow_proto2_spec() -> None:
@@ -9355,6 +9823,27 @@ def _proto2_request() -> plugin_pb2.CodeGeneratorRequest:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("legacy.proto")
     request.proto_file.append(_proto2_file())
+    return request
+
+
+def _proto2_floating_default_request(
+    field_type: int, default_value: str
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("floating_default.proto")
+    file = request.proto_file.add()
+    file.name = "floating_default.proto"
+    file.package = "defaults"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "FloatingDefault"
+    message.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=field_type,
+        default_value=default_value,
+    )
     return request
 
 
