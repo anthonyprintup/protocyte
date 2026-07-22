@@ -24,4 +24,10 @@ message References {
   protocyte.Span runtime_span = 15;
   protocyte.Result runtime_result = 16;
   protocyte.read_varint runtime_function = 17;
+  compat.bad.config lowercase_config = 18;
+  compat.bad.Container.NestedConfig nested_config = 19;
+  compat.bad.Container.compatibilityConfig nested_compatibility_config = 20;
+  compat.bad.ImplementationNames implementation_names = 21;
+  compat.bad.state lower_enum_type = 22;
+  compat.bad.State upper_enum_type = 23;
 }

@@ -1251,7 +1251,11 @@ class _ExprParser:
             )
 
 
-def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> DescriptorModel:
+def build_model(
+    request: descriptor_pb2.FileDescriptorSet | object,
+    *,
+    namespace_prefix: str | None = None,
+) -> DescriptorModel:
     """Build a resolved model from a CodeGeneratorRequest-like object."""
     files_by_name = _index_request_files(request.proto_file)
     file_to_generate = list(request.file_to_generate)
@@ -1323,7 +1327,9 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
         file_model.constants = _build_file_constants(file_model, custom_options)
         _validate_package_constant_collisions(file_model)
 
-    _allocate_namespace_cpp_names(files, enums.values())
+    _allocate_namespace_cpp_names(
+        files, enums.values(), namespace_prefix=namespace_prefix
+    )
 
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
@@ -2376,6 +2382,7 @@ def _allocate_message_class_names(
         item.emitted_names["number"] = stem
 
     _allocate_nested_compatibility_aliases(scope, message)
+    _allocate_nested_alias_template_names(message)
     _allocate_message_oneof_names(scope, message)
     _allocate_message_private_names(scope, message)
     _allocate_message_implementation_names(allocator, message)
@@ -2722,6 +2729,44 @@ def _allocate_nested_compatibility_aliases(
         nested.emitted_names["compatibility_alias"] = alias
 
 
+def _allocate_nested_alias_template_names(message: MessageModel) -> None:
+    for nested in message.nested_messages:
+        if nested.is_map_entry:
+            continue
+        alias = nested.emitted_names["alias"]
+        nested.emitted_names["alias_config"] = _allocate_alias_template_parameter(
+            label=f"nested-alias-template:{nested.full_name}",
+            alias=alias,
+            preferred="NestedConfig",
+        )
+        compatibility_alias = nested.emitted_names.get("compatibility_alias")
+        if compatibility_alias is not None:
+            nested.emitted_names["compatibility_alias_config"] = (
+                _allocate_alias_template_parameter(
+                    label=f"nested-compatibility-alias-template:{nested.full_name}",
+                    alias=compatibility_alias,
+                    preferred="CompatibilityConfig",
+                )
+            )
+
+
+def _allocate_alias_template_parameter(
+    *, label: str, alias: str, preferred: str
+) -> str:
+    owner = f"{label}:parameter"
+    scope = EmittedNameAllocator().scope(label)
+    scope.reserve(alias, owner=f"{label}:alias", kind=CppNameKind.TYPE_ALIAS)
+    return scope.allocate(
+        (
+            EmittedNameRequest(
+                owner=owner,
+                preferred=preferred,
+                members=(EmittedNameMember(kind=CppNameKind.IMPLEMENTATION),),
+            ),
+        )
+    )[owner]
+
+
 def _assign_field_internal_cpp_names_from_model(
     item: FieldModel, message: MessageModel
 ) -> None:
@@ -2814,7 +2859,10 @@ def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
 
 
 def _allocate_namespace_cpp_names(
-    files: dict[str, FileModel], enums: Iterable[EnumModel]
+    files: dict[str, FileModel],
+    enums: Iterable[EnumModel],
+    *,
+    namespace_prefix: str | None,
 ) -> None:
     allocator = EmittedNameAllocator()
     type_owners: dict[str, MessageModel | EnumModel] = {}
@@ -2823,7 +2871,7 @@ def _allocate_namespace_cpp_names(
     requests: dict[tuple[str, ...], list[EmittedNameRequest]] = {}
 
     for file_model in files.values():
-        package_key = _cpp_package_key(file_model.package)
+        package_key = _cpp_symbol_scope_key(file_model.package, namespace_prefix)
         scope = scopes.get(package_key)
         if scope is None:
             scope = allocator.scope(f"namespace:{'::'.join(package_key) or '<global>'}")
@@ -2905,7 +2953,7 @@ def _allocate_namespace_cpp_names(
         legacy = _legacy_cpp_type_name(model)
         if legacy != model.cpp_name:
             compatibility_candidates.append(
-                (_cpp_package_key(model.package), legacy, model)
+                (_cpp_symbol_scope_key(model.package, namespace_prefix), legacy, model)
             )
     alias_counts: dict[tuple[tuple[str, ...], str], int] = {}
     for package_key, alias, _ in compatibility_candidates:
@@ -2925,6 +2973,14 @@ def _allocate_namespace_cpp_names(
             kind=CppNameKind.TYPE_ALIAS,
         )
         model.compatibility_aliases.append(alias)
+        if isinstance(model, MessageModel):
+            model.emitted_names[f"compatibility_alias_config:{alias}"] = (
+                _allocate_alias_template_parameter(
+                    label=f"compatibility-alias-template:{model.full_name}",
+                    alias=alias,
+                    preferred="Config",
+                )
+            )
 
     for enum in enums:
         scope = allocator.scope(f"enum:{enum.full_name}")
@@ -2957,6 +3013,13 @@ def _cpp_package_key(package: str) -> tuple[str, ...]:
     if not package:
         return ()
     return tuple(cpp_identifier(part) for part in package.split("."))
+
+
+def _cpp_symbol_scope_key(
+    package: str, namespace_prefix: str | None
+) -> tuple[str, ...]:
+    parts = tuple(namespace_prefix.split("::")) if namespace_prefix else ()
+    return (*parts, *_cpp_package_key(package))
 
 
 def _build_field(

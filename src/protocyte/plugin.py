@@ -98,7 +98,10 @@ def generate_response(
                 "clang_format and clang_format_config are disabled by the generator policy"
             )
         phase = "building the descriptor model"
-        model = build_model(request)
+        if not options.namespace_prefix:
+            model = build_model(request)
+        else:
+            model = build_model(request, namespace_prefix=options.namespace_prefix)
         phase = "generating C++ outputs"
         formatter_timeout_seconds = (
             options.formatter_timeout_seconds

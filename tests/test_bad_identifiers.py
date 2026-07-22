@@ -23,6 +23,7 @@ CORPUS_FILES = (
     "protocyte.proto",
     "protocyte_user.proto",
     "prefix.proto",
+    "prefix_root.proto",
 )
 
 
@@ -84,10 +85,16 @@ def _compile_and_run(tmp_path: Path, source: str) -> None:
         "bad-identifiers.exe" if os.name == "nt" else "bad-identifiers"
     )
     generated_sources = sorted(str(path) for path in tmp_path.rglob("*.protocyte.cpp"))
+    warning_args = (
+        ["-Werror", "-Wreserved-identifier"]
+        if "clang" in Path(compiler).name.lower()
+        else []
+    )
     subprocess.run(
         [
             compiler,
             "-std=c++20",
+            *warning_args,
             "-DPROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1",
             "-I",
             str(tmp_path),
@@ -126,6 +133,8 @@ def test_bad_identifier_corpus_builds_model_and_generates(tmp_path: Path) -> Non
 
     assert model.messages["compat.bad.foo"].cpp_name == "foo"
     assert model.messages["compat.bad.Foo"].cpp_name == "Foo"
+    assert model.enums["compat.bad.state"].cpp_name == "state"
+    assert model.enums["compat.bad.State"].cpp_name == "State"
     assert model.messages["protocyte.Result"].cpp_name.startswith("Result_protocyte_")
     assert model.messages["protocyte.read_varint"].cpp_name.startswith(
         "read_varint_protocyte_"
@@ -137,6 +146,12 @@ def test_bad_identifier_corpus_builds_model_and_generates(tmp_path: Path) -> Non
     assert "using Payload = payload<Config>;" in types_header
     assert "using Foo = foo<Config>;" not in types_header
     assert "using Serialize = Container_serialize<CompatibilityConfig>;" in types_header
+    assert "using Config = config<Config_>;" in types_header
+    assert "using NestedConfig = Container_NestedConfig<NestedConfig_>;" in types_header
+    assert (
+        "using CompatibilityConfig = "
+        "Container_compatibilityConfig<CompatibilityConfig_>;"
+    ) in types_header
 
 
 def test_bad_identifier_corpus_compiles_and_runs(tmp_path: Path) -> None:
@@ -239,6 +254,51 @@ int main() {{
     return 0;
 }}
 """,
+    )
+
+
+def test_protocyte_namespace_prefix_remaps_runtime_symbol_collisions(
+    tmp_path: Path,
+) -> None:
+    request = _descriptor_request(
+        tmp_path,
+        files=("prefix_root.proto",),
+        parameter="format=off,runtime=emit,namespace_prefix=protocyte",
+    )
+
+    model = build_model(request, namespace_prefix="protocyte")
+    files = _generated_files(tmp_path, request)
+    header = files["prefix_root.protocyte.hpp"]
+
+    assert model.messages["Span"].cpp_name.startswith("Span_protocyte_")
+    assert "namespace protocyte {" in header
+    assert "struct Span_protocyte_" in header
+    assert "struct Result_protocyte_" in header
+    assert "struct read_varint_protocyte_" in header
+    _compile_and_run(
+        tmp_path,
+        '#include "prefix_root.protocyte.hpp"\nint main() { return 0; }\n',
+    )
+
+
+def test_namespace_prefix_avoids_unnecessary_runtime_symbol_remapping(
+    tmp_path: Path,
+) -> None:
+    request = _descriptor_request(
+        tmp_path,
+        files=("protocyte.proto",),
+        parameter="format=off,runtime=emit,namespace_prefix=project",
+    )
+
+    files = _generated_files(tmp_path, request)
+    header = files["protocyte.protocyte.hpp"]
+
+    assert "namespace project::protocyte {" in header
+    assert "struct Span;" in header
+    assert "Span_protocyte_" not in header
+    _compile_and_run(
+        tmp_path,
+        '#include "protocyte.protocyte.hpp"\nint main() { return 0; }\n',
     )
 
 

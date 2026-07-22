@@ -1329,18 +1329,6 @@ def _walk_generated_messages(messages: list[MessageModel]) -> Iterator[MessageMo
         yield from _walk_generated_messages(message.nested_messages)
 
 
-def _allocate_internal_cpp_identifier(preferred: str, unavailable: set[str]) -> str:
-    if preferred not in unavailable:
-        return preferred
-    base = f"Protocyte{preferred}"
-    candidate = base
-    suffix = 2
-    while candidate in unavailable:
-        candidate = f"{base}{suffix}"
-        suffix += 1
-    return candidate
-
-
 def _reflection_name(message: MessageModel) -> str:
     return _cpp_suffix_identifier(message.cpp_name, "fields")
 
@@ -1436,8 +1424,11 @@ def generate_header(
         w.line(f"struct{deprecated} {message.cpp_name};")
     for message in ordered_messages:
         for alias in message.compatibility_aliases:
-            w.line("template <typename Config = ::protocyte::DefaultConfig>")
-            w.line(f"using {alias} = {message.cpp_name}<Config>;")
+            alias_config = message.emitted_names[f"compatibility_alias_config:{alias}"]
+            w.line(
+                f"template <typename {alias_config} = ::protocyte::DefaultConfig>"
+            )
+            w.line(f"using {alias} = {message.cpp_name}<{alias_config}>;")
     w.line()
     for index, message in enumerate(ordered_messages):
         _emit_message(w, message, options)
@@ -1581,9 +1572,7 @@ def _emit_message(
                 alias_name = nested.emitted_names.get(
                     "alias", cpp_identifier(nested.name)
                 )
-                nested_config_name = _allocate_internal_cpp_identifier(
-                    "NestedConfig", {alias_name}
-                )
+                nested_config_name = nested.emitted_names["alias_config"]
                 w.line(f"template <typename {nested_config_name} = {config_cpp_name}>")
                 alias_deprecated = " [[deprecated]]" if nested.deprecated else ""
                 w.line(
@@ -1592,12 +1581,15 @@ def _emit_message(
                 )
                 compatibility_alias = nested.emitted_names.get("compatibility_alias")
                 if compatibility_alias is not None:
+                    compatibility_config = nested.emitted_names[
+                        "compatibility_alias_config"
+                    ]
                     w.line(
-                        f"template <typename CompatibilityConfig = {config_cpp_name}>"
+                        f"template <typename {compatibility_config} = {config_cpp_name}>"
                     )
                     w.line(
                         f"using {compatibility_alias}{alias_deprecated} = "
-                        f"{nested.cpp_name}<CompatibilityConfig>;"
+                        f"{nested.cpp_name}<{compatibility_config}>;"
                     )
         if message.nested_enums or message.nested_messages:
             w.line()

@@ -7,6 +7,15 @@ package compat.bad;
 message foo {}
 message Foo {}
 message payload {}
+message config {}
+
+enum state {
+  STATE_UNSPECIFIED = 0;
+}
+
+enum State {
+  STATE_CAP_UNSPECIFIED = 0;
+}
 
 message Container {
   message serialize {}
@@ -16,6 +25,8 @@ message Container {
   message validate {}
   message copy_from {}
   message std {}
+  message NestedConfig {}
+  message compatibilityConfig {}
 
   enum while {
     default = 0;
