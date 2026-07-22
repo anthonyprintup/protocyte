@@ -523,6 +523,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
           path: ${{ runner.temp }}/release-handoff
+          merge-multiple: true
 
       - name: Verify exact release handoff contents
         shell: bash
@@ -719,6 +720,7 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ github.run_id }}
           path: ${{ runner.temp }}/release-handoff
+          merge-multiple: true
 
       - name: Verify exact release handoff contents
         shell: bash

@@ -529,6 +529,7 @@ def test_release_artifact_smoke_is_hash_locked_offline_and_integrity_bound() -> 
         )
         assert "run-id: ${{ github.run_id }}" in download
         assert "path: ${{ runner.temp }}/release-handoff" in download
+        assert "merge-multiple: true" in download
         assert "unexpected file set" in integrity
         assert 'cmp SHA256SUMS "$RUNNER_TEMP/recomputed-SHA256SUMS"' in integrity
         assert "sha256sum --check --strict SHA256SUMS" in integrity
