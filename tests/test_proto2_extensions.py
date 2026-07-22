@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +19,10 @@ def test_rejects_selected_message_scoped_extension_declaration() -> None:
 
     with pytest.raises(
         ProtocyteError,
-        match=r"nested_extensions\.proto: message demo\.Parent: extension declarations are not supported",
+        match=re.escape(
+            'target file "nested_extensions.proto": message "demo.Parent": '
+            "extension declarations are not supported"
+        ),
     ):
         build_model(_request(file, selected=["nested_extensions.proto"]))
 
@@ -28,7 +32,10 @@ def test_rejects_selected_deeply_nested_message_scoped_extension_declaration() -
 
     with pytest.raises(
         ProtocyteError,
-        match=r"deep_extensions\.proto: message demo\.Outer\.Inner: extension declarations are not supported",
+        match=re.escape(
+            'target file "deep_extensions.proto": message "demo.Outer.Inner": '
+            "extension declarations are not supported"
+        ),
     ):
         build_model(_request(file, selected=["deep_extensions.proto"]))
 
@@ -53,9 +60,9 @@ def test_descriptor_set_request_rejects_selected_message_scoped_extension_declar
 
     response = generate_response(request)
 
-    assert (
-        "nested_extensions.proto: message demo.Parent: extension declarations are not supported"
-        in response.error
+    assert response.error == (
+        'target file "nested_extensions.proto": message "demo.Parent": '
+        "extension declarations are not supported"
     )
 
 

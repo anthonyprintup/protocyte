@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -56,9 +57,10 @@ def test_rejects_proto3_non_option_top_level_extensions() -> None:
 
     with pytest.raises(
         ProtocyteError,
-        match=(
-            r"example/options\.proto: extension example\.options\.ordinary_extension "
-            r"extends unsupported proto3 target \.example\.options\.AccessPolicy"
+        match=re.escape(
+            'target file "example/options.proto": extension '
+            '"example.options.ordinary_extension" extends unsupported proto3 target '
+            '".example.options.AccessPolicy"'
         ),
     ):
         build_model(_request(file, selected=["example/options.proto"]))
@@ -70,9 +72,11 @@ def test_rejects_unselected_proto3_non_option_extension_dependency() -> None:
 
     with pytest.raises(
         ProtocyteError,
-        match=(
-            r"example/options\.proto: extension example\.options\.ordinary_extension "
-            r"extends unsupported proto3 target \.example\.options\.AccessPolicy"
+        match=re.escape(
+            'target file "example/api.proto" imports unsupported descriptor '
+            '"example/options.proto" through "example/api.proto" -> '
+            '"example/options.proto": extension "example.options.ordinary_extension" '
+            'extends unsupported proto3 target ".example.options.AccessPolicy"'
         ),
     ):
         build_model(_request(options_file, consumer_file, selected=["example/api.proto"]))
@@ -91,9 +95,10 @@ def test_rejects_proto3_nested_non_option_extensions() -> None:
 
     with pytest.raises(
         ProtocyteError,
-        match=(
-            r"nested_options\.proto: extension example\.options\.Holder\.nested_extension "
-            r"extends unsupported proto3 target \.example\.options\.AccessPolicy"
+        match=re.escape(
+            'target file "nested_options.proto": extension '
+            '"example.options.Holder.nested_extension" extends unsupported proto3 target '
+            '".example.options.AccessPolicy"'
         ),
     ):
         build_model(_request(file, selected=["nested_options.proto"]))
