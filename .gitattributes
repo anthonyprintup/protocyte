@@ -1,1 +1,2 @@
 .githooks/* text eol=lf
+tests/smoke/generated/** text eol=lf

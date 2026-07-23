@@ -11,6 +11,37 @@ from google.protobuf import descriptor_pb2
 from tests.smoke.tools import generate_checked_outputs
 
 
+def test_checked_smoke_cli_parses_arguments_before_resolving_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_resolved() -> str:
+        pytest.fail(
+            "smoke generation tools must not be resolved while parsing arguments"
+        )
+
+    monkeypatch.setattr(
+        generate_checked_outputs,
+        "_resolve_smoke_clang_format",
+        fail_if_resolved,
+    )
+
+    with pytest.raises(SystemExit) as help_exit:
+        generate_checked_outputs.main(["--help"])
+    assert help_exit.value.code == 0
+
+    with pytest.raises(SystemExit) as invalid_exit:
+        generate_checked_outputs.main(["--definitely-invalid"])
+    assert invalid_exit.value.code == 2
+
+
+def test_checked_smoke_outputs_have_a_canonical_lf_checkout_policy() -> None:
+    attributes = (generate_checked_outputs.ROOT / ".gitattributes").read_text(
+        encoding="utf-8"
+    )
+
+    assert "tests/smoke/generated/** text eol=lf" in attributes.splitlines()
+
+
 def test_canonical_smoke_specs_reference_repository_proto_sources() -> None:
     checked_sources = {
         path.name

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shutil
@@ -83,7 +84,16 @@ GENERATION_SPECS = (
 )
 
 
-def main() -> int:
+def main(args: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Regenerate Protocyte's canonical checked smoke-test outputs.",
+        epilog=(
+            "The required tool paths can be set with PROTOCYTE_SMOKE_PROTOC, "
+            "PROTOCYTE_SMOKE_PLUGIN, and PROTOCYTE_SMOKE_CLANG_FORMAT."
+        ),
+    )
+    parser.parse_args(args)
+
     try:
         clang_format = _resolve_smoke_clang_format()
         clang_format_config = _resolve_smoke_clang_format_config()
