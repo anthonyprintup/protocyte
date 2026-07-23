@@ -24,6 +24,8 @@ CORPUS_FILES = (
     "protocyte_user.proto",
     "prefix.proto",
     "prefix_root.proto",
+    "standalone_lower.proto",
+    "standalone_upper.proto",
 )
 
 
@@ -143,15 +145,98 @@ def test_bad_identifier_corpus_builds_model_and_generates(tmp_path: Path) -> Non
     assert response.file
     files = {item.name: item.content for item in response.file}
     types_header = files["types.protocyte.hpp"]
-    assert "using Payload = payload<Config>;" in types_header
-    assert "using Foo = foo<Config>;" not in types_header
-    assert "using Serialize = Container_serialize<CompatibilityConfig>;" in types_header
-    assert "using Config = config<Config_>;" in types_header
-    assert "using NestedConfig = Container_NestedConfig<NestedConfig_>;" in types_header
+    assert "using Payload = payload<" not in types_header
+    assert "using Foo = foo<" not in types_header
+    assert "using Serialize = Container_serialize<" not in types_header
+    assert "using Config = config<" not in types_header
     assert (
-        "using CompatibilityConfig = "
-        "Container_compatibilityConfig<CompatibilityConfig_>;"
-    ) in types_header
+        "using CompatibilityConfig = Container_compatibilityConfig<" not in types_header
+    )
+
+
+def test_separately_generated_case_distinct_types_compile_together(
+    tmp_path: Path,
+) -> None:
+    for name in ("standalone_lower.proto", "standalone_upper.proto"):
+        request = _descriptor_request(tmp_path, files=(name,))
+        files = _generated_files(tmp_path, request)
+        header = files[f"{Path(name).stem}.protocyte.hpp"]
+        assert "using Foo = foo<" not in header
+        assert "using State = state;" not in header
+
+    _compile_and_run(
+        tmp_path,
+        r"""
+#include "standalone_lower.protocyte.hpp"
+#include "standalone_upper.protocyte.hpp"
+
+int main() {
+    auto ctx = ::protocyte::DefaultConfig::Context{
+        ::protocyte::hosted_allocator(), ::protocyte::Limits{}};
+    auto lower = ::separate::collision::foo<>::create(ctx);
+    auto upper = ::separate::collision::Foo<>::create(ctx);
+    (void)lower;
+    (void)upper;
+    return 0;
+}
+""",
+    )
+
+
+def test_same_file_flattened_type_collision_is_stable_and_compiles(
+    tmp_path: Path,
+) -> None:
+    def request_with_order(order: tuple[str, ...]) -> plugin_pb2.CodeGeneratorRequest:
+        file = descriptor_pb2.FileDescriptorProto(
+            name="same_file_flattened.proto",
+            package="same_file",
+            syntax="proto3",
+        )
+        for declaration in order:
+            if declaration == "flat":
+                file.message_type.add(name="A_B")
+            else:
+                outer = file.message_type.add(name="A")
+                outer.nested_type.add(name="B")
+        return plugin_pb2.CodeGeneratorRequest(
+            file_to_generate=[file.name],
+            parameter="format=off,runtime=emit",
+            proto_file=[file],
+        )
+
+    request = request_with_order(("flat", "nested"))
+    reversed_request = request_with_order(("nested", "flat"))
+    model = build_model(request)
+    reversed_model = build_model(reversed_request)
+    names = {
+        full_name: model.messages[full_name].cpp_name
+        for full_name in ("same_file.A_B", "same_file.A.B")
+    }
+
+    assert names == {
+        full_name: reversed_model.messages[full_name].cpp_name for full_name in names
+    }
+    assert len(set(names.values())) == 2
+    assert "A_B" in names.values()
+    assert any(name.startswith("A_B_protocyte_") for name in names.values())
+
+    _generated_files(tmp_path, request)
+    _compile_and_run(
+        tmp_path,
+        f"""
+#include "same_file_flattened.protocyte.hpp"
+
+int main() {{
+    auto ctx = ::protocyte::DefaultConfig::Context{{
+        ::protocyte::hosted_allocator(), ::protocyte::Limits{{}}}};
+    auto flat = ::same_file::{names["same_file.A_B"]}<>::create(ctx);
+    auto nested = ::same_file::{names["same_file.A.B"]}<>::create(ctx);
+    (void)flat;
+    (void)nested;
+    return 0;
+}}
+""",
+    )
 
 
 def test_bad_identifier_corpus_compiles_and_runs(tmp_path: Path) -> None:

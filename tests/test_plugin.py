@@ -42,6 +42,7 @@ from protocyte.model import (
     _coerce_literal,
     _is_packed,
     _parse_protobuf_floating_default,
+    _validate_message_cpp_name_allocations,
     build_model,
     cpp_derivable_identifier,
     cpp_identifier,
@@ -4850,7 +4851,7 @@ def test_generator_policy_source_metadata_exact_boundary_preserves_documentation
     assert not rejected.file
 
 
-def test_legacy_descriptor_node_limit_also_bounds_source_metadata() -> None:
+def test_descriptor_node_limit_also_bounds_source_metadata_by_default() -> None:
     request = _basic_request(parameter="format=off")
     _add_source_documentation(
         request.proto_file[0],
@@ -5809,7 +5810,7 @@ def test_cpp_namespace_keyword_escape_is_injective() -> None:
         ("package_constant", "package constant"),
     ],
 )
-def test_remaps_child_package_namespace_colliding_with_generated_symbol(
+def test_rejects_child_package_namespace_colliding_with_generated_symbol(
     symbol_kind: str, expected_kind: str
 ) -> None:
     request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
@@ -5847,11 +5848,14 @@ def test_remaps_child_package_namespace_colliding_with_generated_symbol(
 
     response = generate_response(request)
 
-    del expected_kind
-    assert not response.error
-    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
-    assert "::foo::Bar_protocyte_" in header
-    assert "::Payload<Config>" in header
+    assert not response.file
+    assert (
+        f"foo.Bar: generated {expected_kind} 'Bar' collides with generated "
+        "namespace ::foo::Bar" in response.error
+    )
+    assert "protoc may accept this schema" in response.error
+    assert "compilation may fail" in response.error
+    assert "separately generated headers must agree on their spelling" in response.error
 
 
 def test_namespace_scope_preserves_case_with_prefixes() -> None:
@@ -5883,7 +5887,8 @@ def test_namespace_scope_preserves_case_with_prefixes() -> None:
     assert not response.error
     header = next(item.content for item in response.file if item.name.endswith(".hpp"))
     assert "struct class_;" in header
-    assert "::project::wire::foo::Class_protocyte_" in header
+    assert "::project::wire::foo::Class_" in header
+    assert "::project::wire::foo::Class_protocyte_" not in header
     assert "::Payload<Config>" in header
 
 
@@ -5951,6 +5956,86 @@ def test_namespace_scope_validation_ignores_unused_and_custom_option_imports() -
     header = next(file.content for file in response.file if file.name.endswith(".hpp"))
     assert '"unused.protocyte.hpp"' not in header
     assert '"custom_options.protocyte.hpp"' not in header
+
+
+def test_unused_import_cannot_change_generated_type_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("selected.proto")
+    selected = request.proto_file.add(
+        name="selected.proto", package="p", syntax="proto3"
+    )
+    selected.message_type.add(name="A_B")
+
+    baseline = generate_response(request)
+
+    selected.dependency.append("unused.proto")
+    unused = request.proto_file.add(name="unused.proto", package="p", syntax="proto3")
+    outer = unused.message_type.add(name="A")
+    outer.nested_type.add(name="B")
+
+    with_unused_import = generate_response(request)
+
+    assert not baseline.error
+    assert not with_unused_import.error
+    assert [(file.name, file.content) for file in with_unused_import.file] == [
+        (file.name, file.content) for file in baseline.file
+    ]
+
+
+def test_rejects_cross_file_generated_type_name_collision() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("selected.proto")
+    selected = request.proto_file.add(
+        name="selected.proto", package="p", syntax="proto3"
+    )
+    selected.dependency.append("dependency.proto")
+    selected.message_type.add(name="A_B")
+    consumer = selected.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".p.A.B",
+    )
+
+    dependency = request.proto_file.add(
+        name="dependency.proto", package="p", syntax="proto3"
+    )
+    outer = dependency.message_type.add(name="A")
+    outer.nested_type.add(name="B")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "p.A.B: generated type 'A_B' collides with generated type 'p.A_B' "
+        "in namespace ::p" in response.error
+    )
+    assert "protoc may accept this schema" in response.error
+    assert "compilation may fail" in response.error
+    assert "separately generated headers must agree on their spelling" in response.error
+
+
+def test_unused_import_cannot_change_generated_namespace_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("child.proto")
+    child = request.proto_file.add(name="child.proto", package="a.B", syntax="proto3")
+    child.message_type.add(name="C")
+
+    baseline = generate_response(request)
+
+    child.dependency.append("unused.proto")
+    unused = request.proto_file.add(name="unused.proto", package="a", syntax="proto3")
+    unused.message_type.add(name="B")
+
+    with_unused_import = generate_response(request)
+
+    assert not baseline.error
+    assert not with_unused_import.error
+    assert [(file.name, file.content) for file in with_unused_import.file] == [
+        (file.name, file.content) for file in baseline.file
+    ]
 
 
 def test_namespace_scope_validation_allows_distinct_symbols_and_packages() -> None:
@@ -8368,6 +8453,61 @@ def test_model_stores_allocated_names_by_emitted_scope() -> None:
     }
     assert text.emitted_names["oneof_case"] == "text"
     assert text.emitted_names["oneof_storage"] == "text_"
+
+
+def test_model_rejects_missing_allocated_cpp_name() -> None:
+    model = build_model(_oneof_request())
+    message = model.messages["demo.Carrier"]
+    text = message.oneofs[0].fields[0]
+    del text.emitted_names["setter"]
+
+    with pytest.raises(
+        AssertionError,
+        match=r"demo\.Carrier\.text: missing allocated C\+\+ names: setter",
+    ):
+        _validate_message_cpp_name_allocations(message)
+
+
+def test_model_allocates_names_for_synthetic_map_fields() -> None:
+    model = build_model(_basic_request(parameter="format=off"))
+    message = model.messages["demo.Sample"]
+    items = next(item for item in message.fields if item.name == "items")
+    assert items.map_key is not None
+    assert items.map_value is not None
+
+    assert items.map_key.emitted_names["implementation:decoded"] == "decoded_key"
+    assert items.map_key.emitted_names["storage"] == "key_"
+    assert items.map_value.emitted_names["implementation:decoded"] == "decoded_value"
+    assert items.map_value.emitted_names["storage"] == "value_"
+
+
+def test_header_emission_requires_an_allocated_cpp_namespace() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("runtime_namespace.proto")
+    file = request.proto_file.add(
+        name="runtime_namespace.proto",
+        package="protocyte.Span",
+        syntax="proto3",
+    )
+    file.message_type.add(name="Payload")
+
+    model = build_model(request)
+    file_model = model.files["runtime_namespace.proto"]
+    assert file_model.cpp_namespace is None
+
+    with pytest.raises(
+        AssertionError,
+        match="runtime_namespace.proto: missing allocated C\\+\\+ namespace spelling",
+    ):
+        protocyte_cpp.generate_header(
+            file_model,
+            protocyte_cpp.GeneratorOptions(format_mode="off"),
+        )
+
+    response = generate_response(request)
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "namespace protocyte::Span_protocyte_" in header
 
 
 def test_generated_internal_template_names_do_not_shadow_legal_message_names() -> None:

@@ -3445,8 +3445,6 @@ namespace protocyte {
         usize size() const noexcept { return bytes_.size(); }
         bool empty() const noexcept { return bytes_.empty(); }
         void clear() noexcept { bytes_.clear(); }
-        // Keep compatibility with custom vectors whose legacy bind hook returns
-        // void while making every context change conditional on unowned storage.
         Status bind(Context *ctx) noexcept {
             if (ctx_ == ctx) {
                 return {};
@@ -3454,12 +3452,8 @@ namespace protocyte {
             if (bytes_.data() != nullptr) {
                 return protocyte::unexpected(ErrorCode::invalid_argument, {});
             }
-            if constexpr (::std::same_as<decltype(bytes_.bind(ctx)), void>) {
-                bytes_.bind(ctx);
-            } else {
-                if (const auto st = bytes_.bind(ctx); !st) {
-                    return st;
-                }
+            if (const auto st = bytes_.bind(ctx); !st) {
+                return st;
             }
             ctx_ = ctx;
             return {};

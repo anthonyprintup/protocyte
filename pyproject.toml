@@ -31,6 +31,10 @@ protocyte = ["proto/**/*.proto"]
 "protocyte.runtime" = ["*.hpp"]
 
 [tool.pytest.ini_options]
+addopts = '-m "not cmake_integration"'
+markers = [
+    "cmake_integration: slow tests that configure or build temporary CMake projects",
+]
 testpaths = ["tests"]
 norecursedirs = [
     ".git",

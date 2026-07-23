@@ -622,8 +622,7 @@ class EnumModel:
     deprecated: bool = False
     parent: "MessageModel | None" = None
     emitted_names: dict[str, str] = field(default_factory=dict)
-    compatibility_aliases: list[str] = field(default_factory=list)
-    cpp_namespace: tuple[str, ...] = ()
+    cpp_namespace: tuple[str, ...] | None = None
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -756,8 +755,7 @@ class MessageModel:
     nested_enums: list[EnumModel] = field(default_factory=list)
     constants: list[ConstantModel] = field(default_factory=list)
     emitted_names: dict[str, str] = field(default_factory=dict)
-    compatibility_aliases: list[str] = field(default_factory=list)
-    cpp_namespace: tuple[str, ...] = ()
+    cpp_namespace: tuple[str, ...] | None = None
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
@@ -771,7 +769,7 @@ class FileModel:
     messages: list[MessageModel] = field(default_factory=list)
     enums: list[EnumModel] = field(default_factory=list)
     dependencies: set[str] = field(default_factory=set)
-    cpp_namespace: tuple[str, ...] = ()
+    cpp_namespace: tuple[str, ...] | None = None
 
 
 @dataclass(slots=True)
@@ -784,6 +782,31 @@ class DescriptorModel:
     def generated_files(self) -> Iterable[FileModel]:
         for name in self.file_to_generate:
             yield self.files[name]
+
+    def generated_header_files(self) -> Iterable[FileModel]:
+        """Yield generated files and every generated header they include.
+
+        A CodeGeneratorRequest can carry descriptors used only to decode custom
+        options. Such descriptors do not contribute C++ declarations unless a
+        generated field type makes its header part of the include closure.
+        """
+        included: set[str] = set()
+        pending = list(self.file_to_generate)
+        while pending:
+            file_name = pending.pop()
+            if file_name in included:
+                continue
+            included.add(file_name)
+            file_model = self.files[file_name]
+            for message in _walk_messages(file_model.messages):
+                for field_model in message.fields:
+                    for dependency in _field_dependencies(field_model):
+                        if dependency != file_name:
+                            pending.append(dependency)
+
+        for file_name, file_model in self.files.items():
+            if file_name in included:
+                yield file_model
 
 
 @dataclass(slots=True)
@@ -1327,10 +1350,6 @@ def build_model(
         file_model.constants = _build_file_constants(file_model, custom_options)
         _validate_package_constant_collisions(file_model)
 
-    _allocate_namespace_cpp_names(
-        files, enums.values(), namespace_prefix=namespace_prefix
-    )
-
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
             _fill_message_details(
@@ -1342,6 +1361,24 @@ def build_model(
                 source_documentation[message.file_name],
             )
 
+    model = DescriptorModel(
+        files=files,
+        file_to_generate=file_to_generate,
+        messages=messages,
+        enums=enums,
+    )
+    generated_header_files = {
+        file_model.name: file_model for file_model in model.generated_header_files()
+    }
+    generated_header_enums = (
+        enum for enum in enums.values() if enum.file_name in generated_header_files
+    )
+    _allocate_namespace_cpp_names(
+        generated_header_files,
+        generated_header_enums,
+        namespace_prefix=namespace_prefix,
+    )
+
     _allocate_message_cpp_names(files)
 
     _validate_package_constant_namespace(files)
@@ -1349,12 +1386,7 @@ def build_model(
     _compute_file_dependencies(file_to_generate, files)
     _mark_recursive_boxes(messages)
 
-    return DescriptorModel(
-        files=files,
-        file_to_generate=file_to_generate,
-        messages=messages,
-        enums=enums,
-    )
+    return model
 
 
 def _index_request_files(
@@ -2381,12 +2413,12 @@ def _allocate_message_class_names(
         )
         item.emitted_names["number"] = stem
 
-    _allocate_nested_compatibility_aliases(scope, message)
     _allocate_nested_alias_template_names(message)
     _allocate_message_oneof_names(scope, message)
     _allocate_message_private_names(scope, message)
     _allocate_message_implementation_names(allocator, message)
     _allocate_message_template_names(scope, message)
+    _validate_message_cpp_name_allocations(message)
 
 
 def _field_public_name_members(
@@ -2459,6 +2491,102 @@ def _field_public_name_members(
         if item.proto3_optional:
             function("has", "has_{name}", "fn/0/const")
     return tuple(members)
+
+
+def _validate_message_cpp_name_allocations(message: MessageModel) -> None:
+    message_names = {
+        "context_alias",
+        "context_storage",
+        "unknown_storage",
+        *(name for name, _ in _MESSAGE_PUBLIC_FUNCTIONS),
+        *(
+            name
+            for name in _MESSAGE_PRIVATE_FUNCTIONS
+            if name != "destroy_at_" or message.oneofs
+        ),
+    }
+    if message.fields:
+        message_names.add("field_number_type")
+    _require_emitted_names(message.full_name, message.emitted_names, message_names)
+
+    for enum in message.nested_enums:
+        _require_emitted_names(enum.full_name, enum.emitted_names, {"alias"})
+    for nested in message.nested_messages:
+        if not nested.is_map_entry:
+            _require_emitted_names(
+                nested.full_name,
+                nested.emitted_names,
+                {"alias", "alias_config"},
+            )
+
+    private_names = {
+        "context_storage",
+        "unknown_storage",
+        *(
+            name
+            for name in _MESSAGE_PRIVATE_FUNCTIONS
+            if name != "destroy_at_" or message.oneofs
+        ),
+    }
+    implementation_names = {
+        f"implementation:{key}" for key, _ in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+    }
+    for item in message.fields:
+        field_names = {
+            "number",
+            *(key for key, _ in _field_public_name_members(item)),
+            *private_names,
+            *implementation_names,
+        }
+        if item.oneof_name is not None:
+            field_names.update(
+                {
+                    "oneof_case",
+                    "oneof_storage",
+                    "oneof_case_type",
+                    "oneof_case_storage",
+                    "oneof_container",
+                    "oneof_clear",
+                }
+            )
+        else:
+            field_names.add("storage")
+            if item.has_explicit_presence and item.kind != "message":
+                field_names.add("presence_storage")
+        _require_emitted_names(
+            f"{message.full_name}.{item.name}", item.emitted_names, field_names
+        )
+        for map_member in (item.map_key, item.map_value):
+            if map_member is not None:
+                _require_emitted_names(
+                    f"{message.full_name}.{item.name}.{map_member.name}",
+                    map_member.emitted_names,
+                    private_names | implementation_names | {"storage"},
+                )
+
+    for oneof in message.oneofs:
+        _require_emitted_names(
+            f"{message.full_name}.{oneof.name}",
+            oneof.emitted_names,
+            {
+                "case_type",
+                "case_accessor",
+                "clear",
+                "case_storage",
+                "storage_type",
+                "storage",
+            },
+        )
+
+
+def _require_emitted_names(
+    owner: str, emitted_names: dict[str, str], required: set[str]
+) -> None:
+    missing = sorted(required - emitted_names.keys())
+    if missing:
+        raise AssertionError(
+            f"{owner}: missing allocated C++ names: {', '.join(missing)}"
+        )
 
 
 def _allocate_message_oneof_names(
@@ -2662,9 +2790,10 @@ def _allocate_message_implementation_names(
     scope = allocator.scope(f"implementation:{message.full_name}")
     requests: list[EmittedNameRequest] = []
     for item in message.fields:
+        owner = f"implementation:{message.full_name}.{item.name}"
         requests.append(
             EmittedNameRequest(
-                owner=f"implementation:{message.full_name}.{item.name}",
+                owner=owner,
                 preferred=cpp_emitted_derivable_identifier(item.cpp_name),
                 members=tuple(
                     EmittedNameMember(
@@ -2676,13 +2805,53 @@ def _allocate_message_implementation_names(
         )
     allocated = scope.allocate(requests)
     for item in message.fields:
-        stem = allocated[f"implementation:{message.full_name}.{item.name}"]
+        owner = f"implementation:{message.full_name}.{item.name}"
+        stem = allocated[owner]
         item.emitted_names.update(
             {
                 f"implementation:{key}": template.format(name=stem)
                 for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
             }
         )
+        for map_member in (item.map_key, item.map_value):
+            if map_member is not None:
+                _allocate_map_member_implementation_names(
+                    allocator,
+                    message=message,
+                    map_field=item,
+                    map_member=map_member,
+                )
+
+
+def _allocate_map_member_implementation_names(
+    allocator: EmittedNameAllocator,
+    *,
+    message: MessageModel,
+    map_field: FieldModel,
+    map_member: FieldModel,
+) -> None:
+    owner = f"implementation:{message.full_name}.{map_field.name}.{map_member.name}"
+    scope = allocator.scope(owner)
+    members = tuple(
+        EmittedNameMember(template=template, kind=CppNameKind.IMPLEMENTATION)
+        for _, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+    ) + (EmittedNameMember(template="{name}_", kind=CppNameKind.IMPLEMENTATION),)
+    stem = scope.allocate(
+        (
+            EmittedNameRequest(
+                owner=owner,
+                preferred=cpp_emitted_derivable_identifier(map_member.cpp_name),
+                members=members,
+            ),
+        )
+    )[owner]
+    map_member.emitted_names.update(
+        {
+            f"implementation:{key}": template.format(name=stem)
+            for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+        }
+    )
+    map_member.emitted_names["storage"] = f"{stem}_"
 
 
 def _allocate_message_template_names(
@@ -2706,29 +2875,6 @@ def _allocate_message_template_names(
         _assign_field_internal_cpp_names_from_model(item, message)
 
 
-def _allocate_nested_compatibility_aliases(
-    scope: EmittedNameScope, message: MessageModel
-) -> None:
-    nested_types: list[MessageModel | EnumModel] = [
-        *message.nested_enums,
-        *(nested for nested in message.nested_messages if not nested.is_map_entry),
-    ]
-    aliases = [cpp_pascal_identifier(nested.name) for nested in nested_types]
-    counts = {alias: aliases.count(alias) for alias in set(aliases)}
-    for nested, alias in sorted(
-        zip(nested_types, aliases, strict=True), key=lambda item: item[0].full_name
-    ):
-        canonical = nested.emitted_names.get("alias", cpp_identifier(nested.name))
-        if alias == canonical or counts[alias] != 1 or alias in scope.uses:
-            continue
-        scope.reserve(
-            alias,
-            owner=f"compatibility-alias:{nested.full_name}",
-            kind=CppNameKind.TYPE_ALIAS,
-        )
-        nested.emitted_names["compatibility_alias"] = alias
-
-
 def _allocate_nested_alias_template_names(message: MessageModel) -> None:
     for nested in message.nested_messages:
         if nested.is_map_entry:
@@ -2739,15 +2885,6 @@ def _allocate_nested_alias_template_names(message: MessageModel) -> None:
             alias=alias,
             preferred="NestedConfig",
         )
-        compatibility_alias = nested.emitted_names.get("compatibility_alias")
-        if compatibility_alias is not None:
-            nested.emitted_names["compatibility_alias_config"] = (
-                _allocate_alias_template_parameter(
-                    label=f"nested-compatibility-alias-template:{nested.full_name}",
-                    alias=compatibility_alias,
-                    preferred="CompatibilityConfig",
-                )
-            )
 
 
 def _allocate_alias_template_parameter(
@@ -2867,32 +3004,17 @@ def _allocate_namespace_cpp_names(
     allocator = EmittedNameAllocator()
     type_owners: dict[str, MessageModel | EnumModel] = {}
     constant_owners: dict[str, ConstantModel] = {}
-    scopes: dict[tuple[str, ...], EmittedNameScope] = {}
-    requests: dict[tuple[str, ...], list[EmittedNameRequest]] = {}
+    requests: dict[tuple[str, ...], dict[str, list[EmittedNameRequest]]] = {}
 
     for file_model in files.values():
         package_key = _cpp_symbol_scope_key(file_model.package, namespace_prefix)
-        scope = scopes.get(package_key)
-        if scope is None:
-            scope = allocator.scope(f"namespace:{'::'.join(package_key) or '<global>'}")
-            scopes[package_key] = scope
-            scope.reserve(
-                "protocyte_reflection",
-                owner=f"namespace:{file_model.package}:reflection",
-                kind=CppNameKind.NAMESPACE,
-            )
-            if package_key == ("protocyte",):
-                for runtime_name in sorted(PROTOCYTE_RUNTIME_CPP_SYMBOLS):
-                    scope.reserve(
-                        runtime_name,
-                        owner=f"runtime:{runtime_name}",
-                        kind=CppNameKind.TYPE,
-                    )
-        package_requests = requests.setdefault(package_key, [])
+        file_requests = requests.setdefault(package_key, {}).setdefault(
+            file_model.name, []
+        )
         for enum in file_model.enums:
             owner = f"type:{enum.full_name}"
             type_owners[owner] = enum
-            package_requests.append(
+            file_requests.append(
                 EmittedNameRequest(
                     owner=owner,
                     preferred=enum.cpp_name,
@@ -2906,7 +3028,7 @@ def _allocate_namespace_cpp_names(
             else:
                 owner = f"type:{message.full_name}"
                 type_owners[owner] = message
-                package_requests.append(
+                file_requests.append(
                     EmittedNameRequest(
                         owner=owner,
                         preferred=message.cpp_name,
@@ -2917,7 +3039,7 @@ def _allocate_namespace_cpp_names(
             for enum in message.nested_enums:
                 owner = f"type:{enum.full_name}"
                 type_owners[owner] = enum
-                package_requests.append(
+                file_requests.append(
                     EmittedNameRequest(
                         owner=owner,
                         preferred=enum.cpp_name,
@@ -2928,7 +3050,7 @@ def _allocate_namespace_cpp_names(
         for constant in file_model.constants:
             owner = f"constant:{constant.full_name}"
             constant_owners[owner] = constant
-            package_requests.append(
+            file_requests.append(
                 EmittedNameRequest(
                     owner=owner,
                     preferred=constant.cpp_name,
@@ -2936,51 +3058,31 @@ def _allocate_namespace_cpp_names(
                 )
             )
 
-    for package_key, package_requests in requests.items():
-        allocated = scopes[package_key].allocate(package_requests)
-        for owner, cpp_name in allocated.items():
-            if owner in type_owners:
-                type_owners[owner].cpp_name = cpp_name
-            else:
-                constant = constant_owners[owner]
-                constant.cpp_name = cpp_name
-                constant.emitted_names["declaration"] = cpp_name
-
-    compatibility_candidates: list[
-        tuple[tuple[str, ...], str, MessageModel | EnumModel]
-    ] = []
-    for model in type_owners.values():
-        legacy = _legacy_cpp_type_name(model)
-        if legacy != model.cpp_name:
-            compatibility_candidates.append(
-                (_cpp_symbol_scope_key(model.package, namespace_prefix), legacy, model)
+    for package_key, package_files in requests.items():
+        for file_name, file_requests in package_files.items():
+            scope = allocator.scope(
+                f"namespace:{'::'.join(package_key) or '<global>'}:file:{file_name}"
             )
-    alias_counts: dict[tuple[tuple[str, ...], str], int] = {}
-    for package_key, alias, _ in compatibility_candidates:
-        key = (package_key, alias)
-        alias_counts[key] = alias_counts.get(key, 0) + 1
-    for package_key, alias, model in sorted(
-        compatibility_candidates, key=lambda item: item[2].full_name
-    ):
-        if alias_counts[(package_key, alias)] != 1:
-            continue
-        scope = scopes[package_key]
-        if alias in scope.uses:
-            continue
-        scope.reserve(
-            alias,
-            owner=f"compatibility-alias:{model.full_name}",
-            kind=CppNameKind.TYPE_ALIAS,
-        )
-        model.compatibility_aliases.append(alias)
-        if isinstance(model, MessageModel):
-            model.emitted_names[f"compatibility_alias_config:{alias}"] = (
-                _allocate_alias_template_parameter(
-                    label=f"compatibility-alias-template:{model.full_name}",
-                    alias=alias,
-                    preferred="Config",
-                )
+            scope.reserve(
+                "protocyte_reflection",
+                owner=f"namespace:{file_name}:reflection",
+                kind=CppNameKind.NAMESPACE,
             )
+            if package_key == ("protocyte",):
+                for runtime_name in sorted(PROTOCYTE_RUNTIME_CPP_SYMBOLS):
+                    scope.reserve(
+                        runtime_name,
+                        owner=f"runtime:{runtime_name}",
+                        kind=CppNameKind.TYPE,
+                    )
+            allocated = scope.allocate(file_requests)
+            for owner, cpp_name in allocated.items():
+                if owner in type_owners:
+                    type_owners[owner].cpp_name = cpp_name
+                else:
+                    constant = constant_owners[owner]
+                    constant.cpp_name = cpp_name
+                    constant.emitted_names["declaration"] = cpp_name
 
     for enum in enums:
         scope = allocator.scope(f"enum:{enum.full_name}")
@@ -2996,17 +3098,6 @@ def _allocate_namespace_cpp_names(
         for value in enum.values:
             value.cpp_name = allocated[f"enum-value:{enum.full_name}.{value.name}"]
             value.emitted_names["declaration"] = value.cpp_name
-
-
-def _legacy_cpp_type_name(model: MessageModel | EnumModel) -> str:
-    path = model.full_name
-    if model.package:
-        path = path.removeprefix(f"{model.package}.")
-    parts = path.split(".")
-    cpp_name = cpp_pascal_identifier(parts[0])
-    for part in parts[1:]:
-        cpp_name = _join_cpp_type_identifiers(cpp_name, cpp_pascal_identifier(part))
-    return cpp_name
 
 
 def _cpp_package_key(package: str) -> tuple[str, ...]:

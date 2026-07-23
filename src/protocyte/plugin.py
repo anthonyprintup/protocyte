@@ -20,13 +20,12 @@ from protocyte.parameters import parse_parameter
 class GeneratorPolicy:
     """Operator-controlled restrictions for embedding Protocyte with untrusted input.
 
-    ``max_descriptor_nodes`` preserves its declaration-node meaning.  Set
+    ``max_descriptor_nodes`` preserves its declaration-node meaning. Set
     ``max_descriptor_metadata_bytes`` to bound every serialized descriptor
     surface traversed before model construction, including source-code
     locations, paths, spans, comments, dependency strings, and unknown fields.
-    For backwards-compatible safe embedding, a configured
-    ``max_descriptor_nodes`` also supplies this metadata byte budget unless an
-    explicit ``max_descriptor_metadata_bytes`` overrides it.
+    When no explicit metadata limit is provided, ``max_descriptor_nodes`` also
+    supplies a conservative metadata-byte limit.
     """
 
     allow_formatter_parameters: bool = True
@@ -164,7 +163,6 @@ def _validate_request_policy(
 
 
 def _descriptor_metadata_limit(policy: GeneratorPolicy) -> int | None:
-    """Select the independent metadata budget with a safe legacy fallback."""
     if policy.max_descriptor_metadata_bytes is not None:
         return policy.max_descriptor_metadata_bytes
     return policy.max_descriptor_nodes
@@ -183,7 +181,7 @@ def _request_descriptor_complexity(
     max_descriptor_nodes: int | None,
     max_nesting_depth: int | None,
 ) -> tuple[int, int]:
-    """Return legacy declaration-node total and descriptor message depth."""
+    """Return the declaration-node total and descriptor message depth."""
     nodes = 0
     max_depth = 0
     for file in request.proto_file:

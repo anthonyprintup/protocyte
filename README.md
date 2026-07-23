@@ -159,6 +159,20 @@ Run the same complete check directly at any time:
 python .github/scripts/check_private_paths.py
 ```
 
+Run the default Python test suite with:
+
+```bash
+uv run pytest -q
+```
+
+The CMake integration matrix provisions and builds temporary projects, so it is
+excluded from the default run. Run it explicitly as a final verification step,
+or when CMake behavior changes:
+
+```bash
+uv run pytest -q -m cmake_integration
+```
+
 If the guard finds a private path, remove every reference, reflog entry, staged
 name, and staged file that retains it, then prune the offending unreachable
 object according to the repository's recovery policy. The guard intentionally
@@ -202,11 +216,15 @@ smaller while preserving protobuf wire behavior.
 - `protocyte.array` cannot be applied to map fields.
 - Services and methods are accepted in descriptor graphs but do not generate
   RPC stubs.
+- C++ name collisions between separately generated headers are rejected.
+  Protocyte remaps representable collisions among declarations within one
+  `.proto` file, but does not rename colliding cross-file types, package
+  constants, reflection symbols, or package namespaces because every generated
+  header must agree on imported symbol spelling.
 
 Protocyte is pre-1.0. Generated C++ APIs, runtime config requirements, plugin
-parameters, and CMake interfaces may change between releases without
-general migration shims beyond the identifier compatibility aliases documented
-below. Pin the intended Protocyte version and regenerate checked outputs when
+parameters, and CMake interfaces may change between releases without migration
+shims. Pin the intended Protocyte version and regenerate checked outputs when
 updating.
 
 ## Usage
@@ -1178,8 +1196,10 @@ Protocyte allocates emitted names by C++ scope and symbol kind. The allocation
 is deterministic, independent of descriptor declaration order, and shared by
 the model and emitter. Message and enum type names preserve descriptor case, so
 `message foo` and `message Foo` become distinct C++ types `foo` and `Foo`.
-Flattened nested types keep the existing `Parent_Child` form; a real collision
-receives a stable suffix derived from its full protobuf name.
+Flattened nested types keep the existing `Parent_Child` form. Within one
+`.proto` file, a real collision receives a stable suffix derived from its full
+protobuf name. Cross-file collisions are rejected as described under
+[Current Limits](#current-limits).
 
 C++ keywords retain the familiar trailing underscore for direct symbols
 (`message class` becomes `class_`). Field and oneof accessor stems keep the
@@ -1201,12 +1221,10 @@ cannot overload functions and receive deterministic escaped spellings instead.
 Generator-owned storage, oneof state, temporaries, and template parameters move
 around schema-owned names and are never emitted as reserved C++ identifiers.
 
-For a lone lowercase type, Protocyte also emits the previous Pascalized name as
-a compatibility alias when that alias is unambiguous. For example,
-`message payload` defines canonical `payload` plus alias `Payload`; if an actual
-`message Payload` exists, the alias is omitted. Automatic remapping is quiet;
-diagnostics are reserved for descriptor-invalid duplicates or constructs that
-cannot be represented in C++.
+Protocyte does not emit alternate spellings for source compatibility. For
+example, `message payload` defines only `payload`; it does not also define
+`Payload`. Automatic remapping is quiet; diagnostics are reserved for
+descriptor-invalid duplicates or constructs that cannot be represented in C++.
 
 Formatting uses `format=auto` by default. If `clang-format` is on `PATH`,
 protocyte uses it for generated C++ output. If it is unavailable and no
@@ -1320,10 +1338,10 @@ on the parsed request, so the transport must also cap bytes before parsing.
 `max_descriptor_nodes` retains its declaration-node accounting.
 `max_descriptor_metadata_bytes` bounds the complete serialized request before
 model construction, including source-code locations, paths, spans, comments,
-dependency strings, and unknown descriptor fields. If an existing policy sets
-`max_descriptor_nodes` but not `max_descriptor_metadata_bytes`, Protocyte uses
-the node limit as a conservative metadata-byte limit; set both explicitly to
-tune them independently. These Python API policy checks apply to
+dependency strings, and unknown descriptor fields. When
+`max_descriptor_metadata_bytes` is omitted, `max_descriptor_nodes` also supplies
+a conservative metadata-byte limit; set both explicitly to tune them
+independently. These Python API policy checks apply to
 `generate_response()`; the command-line plugin and descriptor-set inspection
 commands are intended for trusted local build input and should run with
 process-level resource limits when that assumption does not hold.

@@ -99,7 +99,7 @@ namespace {
             Vector(const Vector &) = delete;
             Vector &operator=(const Vector &) = delete;
 
-            void bind(Context *ctx) noexcept { static_cast<void>(inner_.bind(ctx)); }
+            protocyte::Status bind(Context *ctx) noexcept { return inner_.bind(ctx); }
             protocyte::usize size() const noexcept { return inner_.size(); }
             protocyte::usize capacity() const noexcept { return inner_.capacity(); }
             bool empty() const noexcept { return inner_.empty(); }

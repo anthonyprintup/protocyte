@@ -2,9 +2,9 @@
 
 namespace reserved_identifiers = ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f;
 
-using ReservedMessage = reserved_identifiers::Protocyte_escaped_5f5f4c494e455f5f<>;
-using ReservedEnum = reserved_identifiers::Protocyte_escaped_5f5f46494c455f5f;
-using KeywordMessage = reserved_identifiers::Class_<>;
+using ReservedMessage = reserved_identifiers::protocyte_escaped_5f5f4c494e455f5f<>;
+using ReservedEnum = reserved_identifiers::protocyte_escaped_5f5f46494c455f5f;
+using KeywordMessage = reserved_identifiers::class_protocyte_bae1d4f6754b<>;
 using ConfigMessage = reserved_identifiers::Config<>;
 using ReaderMessage = reserved_identifiers::Reader<>;
 using MergeHelperNeighbors = reserved_identifiers::MergeHelperNeighbors<>;

@@ -32,7 +32,6 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         protocyte_escaped_5f5570706572 = 0,
         protocyte_escaped_76616c75655f5f676170 = 1,
     };
-    using Protocyte_escaped_5f5f46494c455f5f = protocyte_escaped_5f5f46494c455f5f;
 
     enum struct [[deprecated]] LegacyMode : ::protocyte::i32 {
         LEGACY_MODE_UNSPECIFIED = 0,
@@ -42,13 +41,10 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         protocyte_escaped_5f5f535444435f5f = 0,
         enum_trailing_ = 1,
     };
-    using Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_5f4e6573746564456e756d =
-        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
 
     enum struct class_KeywordValues : ::protocyte::i32 {
         class_ = 0,
     };
-    using Class_KeywordValues = class_KeywordValues;
 
     inline constexpr ::protocyte::i32 protocyte_escaped_5f5f444154455f5f {7};
     inline constexpr ::protocyte::i32 class_ {8};
@@ -65,17 +61,6 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
     template<typename Config = ::protocyte::DefaultConfig> struct MergeHelperNeighbors_merge_fields_from_;
     template<typename Config = ::protocyte::DefaultConfig> struct [[deprecated]] LegacyPayload;
     template<typename Config = ::protocyte::DefaultConfig> struct DeprecationCarrier;
-    template<typename Config = ::protocyte::DefaultConfig>
-    using Protocyte_escaped_5f5f4c494e455f5f_Protocyte_escaped_4e65737465645f5f4d657373616765 =
-        protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config>;
-    template<typename Config = ::protocyte::DefaultConfig> using Protocyte_escaped_5f5f4c494e455f5f =
-        protocyte_escaped_5f5f4c494e455f5f<Config>;
-    template<typename Config = ::protocyte::DefaultConfig> using Class_Struct_ = class_struct_<Config>;
-    template<typename Config = ::protocyte::DefaultConfig> using Class_ = class_protocyte_bae1d4f6754b<Config>;
-    template<typename Config = ::protocyte::DefaultConfig> using MergeHelperNeighbors_Merge_field_from =
-        MergeHelperNeighbors_merge_field_from<Config>;
-    template<typename Config = ::protocyte::DefaultConfig> using MergeHelperNeighbors_Merge_fields_from_ =
-        MergeHelperNeighbors_merge_fields_from_<Config>;
 
     template<typename Config>
     struct protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765 {
@@ -375,12 +360,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         using Context = typename Config::Context;
         using protocyte_escaped_5f4e6573746564456e756d =
             protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
-        using Protocyte_escaped_5f4e6573746564456e756d =
-            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
         template<typename NestedConfig = Config> using protocyte_escaped_4e65737465645f5f4d657373616765 =
             protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<NestedConfig>;
-        template<typename CompatibilityConfig = Config> using Protocyte_escaped_4e65737465645f5f4d657373616765 =
-            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<CompatibilityConfig>;
 
         static constexpr ::protocyte::i32 protocyte_escaped_5f5f54494d455f5f {9};
 
@@ -1506,7 +1487,6 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         using Context = typename Config::Context;
         using KeywordValues = class_KeywordValues;
         template<typename NestedConfig = Config> using struct_ = class_struct_<NestedConfig>;
-        template<typename CompatibilityConfig = Config> using Struct_ = class_struct_<CompatibilityConfig>;
 
         enum struct And_Case : ::protocyte::u32 {
             none = 0u,
@@ -2462,12 +2442,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         using Context = typename Config::Context;
         template<typename NestedConfig = Config> using merge_field_from =
             MergeHelperNeighbors_merge_field_from<NestedConfig>;
-        template<typename CompatibilityConfig = Config> using Merge_field_from =
-            MergeHelperNeighbors_merge_field_from<CompatibilityConfig>;
         template<typename NestedConfig = Config> using merge_fields_from_ =
             MergeHelperNeighbors_merge_fields_from_<NestedConfig>;
-        template<typename CompatibilityConfig = Config> using Merge_fields_from_ =
-            MergeHelperNeighbors_merge_fields_from_<CompatibilityConfig>;
 
         explicit MergeHelperNeighbors(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
 
