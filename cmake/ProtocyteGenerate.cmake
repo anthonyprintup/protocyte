@@ -149,6 +149,24 @@ function(_protocyte_validate_generation_paths)
     endforeach()
 endfunction()
 
+
+function(_protocyte_validate_generation_output_path generation_output)
+    _protocyte_generated_output_root_is_safe(output_root_is_safe "${OUTPUT_DIRECTORY}")
+    _protocyte_generated_output_path_is_safe(
+        output_is_safe
+        "${generation_output}"
+        "${OUTPUT_DIRECTORY}"
+    )
+    if(NOT output_root_is_safe OR NOT output_is_safe)
+        message(
+            FATAL_ERROR
+            "Protocyte generated-output canonical containment check failed for target "
+            "'${GENERATION_TARGET}' during publication."
+        )
+    endif()
+endfunction()
+
+
 function(_protocyte_validate_generation_staging_directory)
     if(NOT IS_ABSOLUTE "${STAGING_OUTPUT_DIRECTORY}")
         message(
@@ -533,34 +551,79 @@ function(
         "version=2\nbuild-tree-sha256=${BUILD_OWNER_HASH}\ntransaction-sha256=${transaction_id}\n"
     )
 
-    set(staged_owner_markers)
-    set(owner_stage_index 0)
+    # A v2 owner record is identical for every claim in this transaction.
+    # Validate one template per filesystem namespace, then use atomic hard
+    # links for the individual claims.  This avoids 2N writes and reads for a
+    # large descriptor set while preserving the exact bytes and recoverable
+    # prepared-witness boundary.  Cross-volume/unavailable-link platforms
+    # retain the original staged-write fallback below.
+    _protocyte_generation_transaction_owner_templates(
+        root_owner_template lock_owner_template "${transaction_id}"
+    )
+    set(root_owner_template_needed FALSE)
+    set(lock_owner_template_needed FALSE)
     foreach(owner_marker IN LISTS owner_markers_to_publish)
-        math(EXPR owner_stage_index "${owner_stage_index} + 1")
-        set(owner_staging "${owner_marker}.${transaction_id}.tmp")
-        file(WRITE "${owner_staging}" "${transaction_owner}")
-        file(READ "${owner_staging}" observed_transaction_owner LIMIT 512)
+        _protocyte_normalized_path_identity(owner_marker_identity "${owner_marker}")
+        _protocyte_normalized_path_identity(root_owner_identity "${OUT_DIR_OWNER_MARKER}")
+        if(owner_marker_identity STREQUAL root_owner_identity)
+            set(root_owner_template_needed TRUE)
+        else()
+            set(lock_owner_template_needed TRUE)
+        endif()
+    endforeach()
+    foreach(owner_template IN ITEMS "${root_owner_template}" "${lock_owner_template}")
+        if(
+            (owner_template STREQUAL root_owner_template AND NOT root_owner_template_needed)
+            OR (owner_template STREQUAL lock_owner_template AND NOT lock_owner_template_needed)
+        )
+            continue()
+        endif()
+        file(WRITE "${owner_template}" "${transaction_owner}")
+        file(READ "${owner_template}" observed_transaction_owner LIMIT 512)
         if(NOT "${observed_transaction_owner}" STREQUAL "${transaction_owner}")
             message(
                 FATAL_ERROR
-                "Protocyte could not validate a staged ownership record for target "
+                "Protocyte could not validate a staged ownership template for target "
                 "'${GENERATION_TARGET}'. No durable ownership was published."
             )
         endif()
-        list(APPEND staged_owner_markers "${owner_staging}")
     endforeach()
-
     set(published_owner_markers)
     list(LENGTH owner_markers_to_publish owner_marker_count)
     math(EXPR last_owner_marker_index "${owner_marker_count} - 1")
     foreach(owner_marker_index RANGE 0 ${last_owner_marker_index})
         list(GET owner_markers_to_publish ${owner_marker_index} owner_marker)
-        list(GET staged_owner_markers ${owner_marker_index} owner_staging)
+        _protocyte_normalized_path_identity(owner_marker_identity "${owner_marker}")
+        _protocyte_normalized_path_identity(root_owner_identity "${OUT_DIR_OWNER_MARKER}")
+        if(owner_marker_identity STREQUAL root_owner_identity)
+            set(owner_template "${root_owner_template}")
+        else()
+            set(owner_template "${lock_owner_template}")
+        endif()
+        math(EXPR owner_stage_index "${owner_marker_index} + 1")
         file(
-            RENAME "${owner_staging}" "${owner_marker}"
-            NO_REPLACE
+            CREATE_LINK "${owner_template}" "${owner_marker}"
             RESULT owner_publish_result
         )
+        if(NOT "${owner_publish_result}" STREQUAL "0")
+            # Hard links are unavailable across volumes.  The fallback has
+            # the original write/read/atomic-rename proof obligations.
+            set(owner_staging "${owner_marker}.${transaction_id}.tmp")
+            file(WRITE "${owner_staging}" "${transaction_owner}")
+            file(READ "${owner_staging}" observed_transaction_owner LIMIT 512)
+            if(NOT "${observed_transaction_owner}" STREQUAL "${transaction_owner}")
+                message(
+                    FATAL_ERROR
+                    "Protocyte could not validate a staged ownership record for target "
+                    "'${GENERATION_TARGET}'. No durable ownership was published."
+                )
+            endif()
+            file(
+                RENAME "${owner_staging}" "${owner_marker}"
+                NO_REPLACE
+                RESULT owner_publish_result
+            )
+        endif()
         if(NOT "${owner_publish_result}" STREQUAL "0")
             _protocyte_recover_published_transaction_owners(
                 all_published_owners_recovered
@@ -600,6 +663,19 @@ function(
             FATAL_ERROR
             "Protocyte could not commit ownership for target "
             "'${GENERATION_TARGET}': ${transaction_publish_result}"
+        )
+    endif()
+    file(REMOVE "${root_owner_template}" "${lock_owner_template}")
+    if(
+        (root_owner_template_needed
+            AND (EXISTS "${root_owner_template}" OR IS_SYMLINK "${root_owner_template}"))
+        OR (lock_owner_template_needed
+            AND (EXISTS "${lock_owner_template}" OR IS_SYMLINK "${lock_owner_template}"))
+    )
+        message(
+            FATAL_ERROR
+            "Protocyte could not remove a committed ownership template for target "
+            "'${GENERATION_TARGET}'. Recovery will validate and remove it."
         )
     endif()
     set(${out_published_owner_markers} "${owner_markers_to_publish}" PARENT_SCOPE)
@@ -1007,30 +1083,9 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
             ${generation_output_index}
             "backup-pending"
         )
-        _protocyte_write_generation_transaction(
-            generation_transaction_written
-            generation_transaction_owner_markers
-            "${generation_ownership_state}"
-            "${generation_owner_transaction_id}"
-            "${generation_owner_witness_state}"
-            generation_owner_release_states
-            generation_initial_states
-            generation_operation_states
-            generation_recovery_states
-            generation_initial_hashes
-            generation_staged_hashes
-        )
-        if(NOT generation_transaction_written)
-            _protocyte_recover_generation_transaction(recovered_generation_transaction)
-            if(recovered_generation_transaction)
-                _protocyte_discard_generation_staging()
-            endif()
-            message(
-                FATAL_ERROR
-                "Protocyte could not persist backup intent for '${generation_output}' in target "
-                "'${GENERATION_TARGET}'."
-            )
-        endif()
+        # The v6 journal is an immutable hash-bound plan.  This rename is its
+        # durable backup progress record; recovery derives it from the exact
+        # output/backup topology instead of rewriting every output entry.
         cmake_path(GET backup_generation_output PARENT_PATH backup_output_parent)
         file(MAKE_DIRECTORY "${backup_output_parent}")
         file(
@@ -1056,37 +1111,13 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
             ${generation_output_index}
             "backed-up"
         )
-        _protocyte_write_generation_transaction(
-            generation_transaction_written
-            generation_transaction_owner_markers
-            "${generation_ownership_state}"
-            "${generation_owner_transaction_id}"
-            "${generation_owner_witness_state}"
-            generation_owner_release_states
-            generation_initial_states
-            generation_operation_states
-            generation_recovery_states
-            generation_initial_hashes
-            generation_staged_hashes
-        )
-        if(NOT generation_transaction_written)
-            _protocyte_recover_generation_transaction(recovered_generation_transaction)
-            if(recovered_generation_transaction)
-                _protocyte_discard_generation_staging()
-            endif()
-            message(
-                FATAL_ERROR
-                "Protocyte could not persist completed backup state for '${generation_output}' in target "
-                "'${GENERATION_TARGET}'."
-            )
-        endif()
     endif()
 endforeach()
 
 foreach(generation_output_index RANGE 0 ${last_generation_output_index})
     list(GET generation_outputs ${generation_output_index} generation_output)
     list(GET staged_generation_outputs ${generation_output_index} staged_generation_output)
-    _protocyte_validate_generation_paths()
+    _protocyte_validate_generation_output_path("${generation_output}")
     _protocyte_validate_generation_staging_directory()
     _protocyte_generated_output_path_is_safe(
         staged_output_is_safe
@@ -1111,30 +1142,8 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         ${generation_output_index}
         "publish-pending"
     )
-    _protocyte_write_generation_transaction(
-        generation_transaction_written
-        generation_transaction_owner_markers
-        "${generation_ownership_state}"
-        "${generation_owner_transaction_id}"
-        "${generation_owner_witness_state}"
-        generation_owner_release_states
-        generation_initial_states
-        generation_operation_states
-        generation_recovery_states
-        generation_initial_hashes
-        generation_staged_hashes
-    )
-    if(NOT generation_transaction_written)
-        _protocyte_recover_generation_transaction(recovered_generation_transaction)
-        if(recovered_generation_transaction)
-            _protocyte_discard_generation_staging()
-        endif()
-        message(
-            FATAL_ERROR
-            "Protocyte could not persist publication intent for '${generation_output}' in target "
-            "'${GENERATION_TARGET}'."
-        )
-    endif()
+    # The staged->output rename below is likewise sufficient, because the
+    # immutable plan records the only two accepted byte identities.
     file(
         RENAME "${staged_generation_output}" "${generation_output}"
         NO_REPLACE
@@ -1158,30 +1167,6 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         ${generation_output_index}
         "published"
     )
-    _protocyte_write_generation_transaction(
-        generation_transaction_written
-        generation_transaction_owner_markers
-        "${generation_ownership_state}"
-        "${generation_owner_transaction_id}"
-        "${generation_owner_witness_state}"
-        generation_owner_release_states
-        generation_initial_states
-        generation_operation_states
-        generation_recovery_states
-        generation_initial_hashes
-        generation_staged_hashes
-    )
-    if(NOT generation_transaction_written)
-        _protocyte_recover_generation_transaction(recovered_generation_transaction)
-        if(recovered_generation_transaction)
-            _protocyte_discard_generation_staging()
-        endif()
-        message(
-            FATAL_ERROR
-            "Protocyte could not persist completed publication state for '${generation_output}' in target "
-            "'${GENERATION_TARGET}'."
-        )
-    endif()
 endforeach()
 _protocyte_generation_transaction_paths(transaction_active transaction_committed)
 file(

@@ -72,7 +72,17 @@ function(
     )
         return()
     endif()
-    if(NOT (ownership_state STREQUAL "commit-pending" OR ownership_state STREQUAL "committed"))
+    # Version 6 deliberately keeps the output plan immutable.  Atomic renames
+    # and the hash-bound plan are the durable progress record; rewriting this
+    # whole record before and after each output made a large generation O(N^2).
+    if(
+        NOT (
+            ownership_state STREQUAL "commit-pending"
+            OR ownership_state STREQUAL "committed"
+            OR ownership_state STREQUAL "rollback-pending"
+            OR ownership_state STREQUAL "cleanup-pending"
+        )
+    )
         return()
     endif()
     string(LENGTH "${owner_transaction_id}" owner_transaction_id_length)
@@ -89,7 +99,6 @@ function(
         NOT (
             owner_witness_state STREQUAL "retained"
             OR owner_witness_state STREQUAL "planned"
-            OR owner_witness_state STREQUAL "remove-pending"
             OR owner_witness_state STREQUAL "removed"
         )
     )
@@ -103,9 +112,26 @@ function(
     string(SHA256 transaction_output_directory_hash "${transaction_output_directory_identity}")
     string(SHA256 transaction_staging_directory_hash "${transaction_staging_directory_identity}")
     string(SHA256 transaction_lock_directory_hash "${transaction_lock_directory_identity}")
+    # Build the owner-role map once.  This writer is intentionally called at
+    # most a handful of times, but the former nested scan still normalized N
+    # paths for every one of N owner records (and was the remaining 64-output
+    # bottleneck after output progress became immutable).
+    _protocyte_normalized_path_identity(root_owner_marker_identity "${OUT_DIR_OWNER_MARKER}")
+    string(SHA256 root_owner_marker_key "${root_owner_marker_identity}")
+    set(generation_transaction_owner_role_${root_owner_marker_key} "root")
+    foreach(output_lock_key IN LISTS output_lock_keys)
+        _protocyte_normalized_path_identity(
+            output_owner_marker_identity "${LOCK_DIRECTORY}/${output_lock_key}.owner"
+        )
+        string(SHA256 output_owner_marker_key "${output_owner_marker_identity}")
+        if(DEFINED generation_transaction_owner_role_${output_owner_marker_key})
+            return()
+        endif()
+        set(generation_transaction_owner_role_${output_owner_marker_key} "${output_lock_key}")
+    endforeach()
     set(
         transaction_content
-        "version=5\nbuild-tree-sha256=${BUILD_OWNER_HASH}\ntarget-sha256=${transaction_target_hash}\noutput-directory-sha256=${transaction_output_directory_hash}\nstaging-directory-sha256=${transaction_staging_directory_hash}\nlock-directory-sha256=${transaction_lock_directory_hash}\nownership-state=${ownership_state}\nowner-transaction-sha256=${owner_transaction_id}\nowner-witness-state=${owner_witness_state}\n"
+        "version=6\nprogress-model=filesystem-v1\nbuild-tree-sha256=${BUILD_OWNER_HASH}\ntarget-sha256=${transaction_target_hash}\noutput-directory-sha256=${transaction_output_directory_hash}\nstaging-directory-sha256=${transaction_staging_directory_hash}\nlock-directory-sha256=${transaction_lock_directory_hash}\nownership-state=${ownership_state}\nowner-transaction-sha256=${owner_transaction_id}\nowner-witness-state=${owner_witness_state}\n"
     )
     string(APPEND transaction_content "owner-count=${owner_marker_count}\n")
     if(owner_marker_count GREATER 0)
@@ -113,35 +139,15 @@ function(
         foreach(owner_index RANGE 0 ${last_owner_index})
             list(GET ${owner_markers_var} ${owner_index} owner_marker)
             list(GET ${owner_release_states_var} ${owner_index} owner_release_state)
-            if(
-                NOT (
-                    owner_release_state STREQUAL "unreleased"
-                    OR owner_release_state STREQUAL "release-pending"
-                    OR owner_release_state STREQUAL "released"
-                )
-            )
+            if(NOT owner_release_state STREQUAL "unreleased")
                 return()
             endif()
             _protocyte_normalized_path_identity(owner_marker_identity "${owner_marker}")
-            _protocyte_normalized_path_identity(root_owner_marker_identity "${OUT_DIR_OWNER_MARKER}")
-            if(owner_marker_identity STREQUAL root_owner_marker_identity)
-                set(owner_role "root")
-            else()
-                set(owner_role "")
-                foreach(output_lock_key IN LISTS output_lock_keys)
-                    _protocyte_normalized_path_identity(
-                        output_owner_marker_identity
-                        "${LOCK_DIRECTORY}/${output_lock_key}.owner"
-                    )
-                    if(owner_marker_identity STREQUAL output_owner_marker_identity)
-                        set(owner_role "${output_lock_key}")
-                        break()
-                    endif()
-                endforeach()
-                if(owner_role STREQUAL "")
-                    return()
-                endif()
+            string(SHA256 owner_marker_key "${owner_marker_identity}")
+            if(NOT DEFINED generation_transaction_owner_role_${owner_marker_key})
+                return()
             endif()
+            set(owner_role "${generation_transaction_owner_role_${owner_marker_key}}")
             string(APPEND transaction_content "owner-key=${owner_role}\n")
             string(APPEND transaction_content "owner-recovery=${owner_release_state}\n")
         endforeach()
@@ -158,20 +164,8 @@ function(
             list(GET ${staged_hashes_var} ${generation_output_index} staged_hash)
             if(
                 NOT (initial_state STREQUAL "prior" OR initial_state STREQUAL "absent")
-                OR NOT (
-                    operation_state STREQUAL "untouched"
-                    OR operation_state STREQUAL "backup-pending"
-                    OR operation_state STREQUAL "backed-up"
-                    OR operation_state STREQUAL "publish-pending"
-                    OR operation_state STREQUAL "published"
-                )
-                OR NOT (
-                    recovery_state STREQUAL "none"
-                    OR recovery_state STREQUAL "remove-pending"
-                    OR recovery_state STREQUAL "removed"
-                    OR recovery_state STREQUAL "restore-pending"
-                    OR recovery_state STREQUAL "restored"
-                )
+                OR NOT operation_state STREQUAL "untouched"
+                OR NOT recovery_state STREQUAL "none"
             )
                 return()
             endif()
@@ -284,19 +278,20 @@ function(
     endif()
     file(STRINGS "${transaction_record}" transaction_lines)
     list(LENGTH transaction_lines transaction_line_count)
-    if(transaction_line_count LESS 11)
+    if(transaction_line_count LESS 12)
         return()
     endif()
     list(GET transaction_lines 0 transaction_version)
-    list(GET transaction_lines 1 transaction_build_hash_line)
-    list(GET transaction_lines 2 transaction_target_hash_line)
-    list(GET transaction_lines 3 transaction_output_directory_hash_line)
-    list(GET transaction_lines 4 transaction_staging_directory_hash_line)
-    list(GET transaction_lines 5 transaction_lock_directory_hash_line)
-    list(GET transaction_lines 6 transaction_ownership_state_line)
-    list(GET transaction_lines 7 transaction_owner_id_line)
-    list(GET transaction_lines 8 transaction_owner_witness_line)
-    list(GET transaction_lines 9 transaction_owner_count_line)
+    list(GET transaction_lines 1 transaction_progress_model_line)
+    list(GET transaction_lines 2 transaction_build_hash_line)
+    list(GET transaction_lines 3 transaction_target_hash_line)
+    list(GET transaction_lines 4 transaction_output_directory_hash_line)
+    list(GET transaction_lines 5 transaction_staging_directory_hash_line)
+    list(GET transaction_lines 6 transaction_lock_directory_hash_line)
+    list(GET transaction_lines 7 transaction_ownership_state_line)
+    list(GET transaction_lines 8 transaction_owner_id_line)
+    list(GET transaction_lines 9 transaction_owner_witness_line)
+    list(GET transaction_lines 10 transaction_owner_count_line)
     _protocyte_normalized_path_identity(transaction_output_directory_identity "${OUTPUT_DIRECTORY}")
     _protocyte_normalized_path_identity(transaction_staging_directory_identity "${STAGING_OUTPUT_DIRECTORY}")
     _protocyte_normalized_path_identity(transaction_lock_directory_identity "${LOCK_DIRECTORY}")
@@ -305,15 +300,16 @@ function(
     string(SHA256 transaction_staging_directory_hash "${transaction_staging_directory_identity}")
     string(SHA256 transaction_lock_directory_hash "${transaction_lock_directory_identity}")
     if(
-        NOT transaction_version STREQUAL "version=5"
+        NOT transaction_version STREQUAL "version=6"
+        OR NOT transaction_progress_model_line STREQUAL "progress-model=filesystem-v1"
         OR NOT transaction_build_hash_line STREQUAL "build-tree-sha256=${BUILD_OWNER_HASH}"
         OR NOT transaction_target_hash_line STREQUAL "target-sha256=${transaction_target_hash}"
         OR NOT transaction_output_directory_hash_line STREQUAL "output-directory-sha256=${transaction_output_directory_hash}"
         OR NOT transaction_staging_directory_hash_line STREQUAL "staging-directory-sha256=${transaction_staging_directory_hash}"
         OR NOT transaction_lock_directory_hash_line STREQUAL "lock-directory-sha256=${transaction_lock_directory_hash}"
-        OR NOT transaction_ownership_state_line MATCHES "^ownership-state=(commit-pending|committed)$"
+        OR NOT transaction_ownership_state_line MATCHES "^ownership-state=(commit-pending|committed|rollback-pending|cleanup-pending)$"
         OR NOT transaction_owner_id_line MATCHES "^owner-transaction-sha256=([0-9a-f]*)$"
-        OR NOT transaction_owner_witness_line MATCHES "^owner-witness-state=(planned|retained|remove-pending|removed)$"
+        OR NOT transaction_owner_witness_line MATCHES "^owner-witness-state=(planned|retained|removed)$"
         OR NOT transaction_owner_count_line MATCHES "^owner-count=([0-9]+)$"
     )
         return()
@@ -337,7 +333,7 @@ function(
     if(transaction_owner_count GREATER maximum_transaction_owner_count)
         return()
     endif()
-    set(transaction_line_index 10)
+    set(transaction_line_index 11)
     set(transaction_owner_markers)
     set(transaction_owner_release_states)
     if(transaction_owner_count GREATER 0)
@@ -364,10 +360,7 @@ function(
                 return()
             endif()
             list(GET transaction_lines ${owner_recovery_line_index} owner_recovery_line)
-            if(
-                NOT owner_recovery_line MATCHES
-                "^owner-recovery=(unreleased|release-pending|released)$"
-            )
+            if(NOT owner_recovery_line STREQUAL "owner-recovery=unreleased")
                 return()
             endif()
             string(REPLACE ";" "\\;" owner_marker_list_element "${owner_marker}")
@@ -432,16 +425,10 @@ function(
             if(NOT transaction_staged_hash_length EQUAL 64)
                 return()
             endif()
-            if(
-                NOT transaction_state_line MATCHES
-                "^state=(untouched|backup-pending|backed-up|publish-pending|published)$"
-            )
+            if(NOT transaction_state_line STREQUAL "state=untouched")
                 return()
             endif()
-            if(
-                NOT transaction_recovery_line MATCHES
-                "^recovery=(none|remove-pending|removed|restore-pending|restored)$"
-            )
+            if(NOT transaction_recovery_line STREQUAL "recovery=none")
                 return()
             endif()
             string(LENGTH "${transaction_initial_hash}" transaction_initial_hash_length)
@@ -673,9 +660,606 @@ function(
     set(${out_matches} TRUE PARENT_SCOPE)
 endfunction()
 
-# The recovery journal is deliberately advanced before and after every recovery
-# mutation.  A process death therefore leaves either the pre-action or
-# post-action state, both of which the next invocation can converge safely.
+function(
+    _protocyte_recover_generation_transaction_v6
+    out_recovered
+    transaction_is_committed
+    transaction_ownership_state
+    transaction_owner_transaction_id
+    transaction_owner_witness_state
+    transaction_owner_markers_arg
+    transaction_initial_states_arg
+    transaction_initial_hashes_arg
+    transaction_staged_hashes_arg
+)
+    set(${out_recovered} FALSE PARENT_SCOPE)
+    set(static_owner_markers "${transaction_owner_markers_arg}")
+    set(static_initial_states "${transaction_initial_states_arg}")
+    set(static_initial_hashes "${transaction_initial_hashes_arg}")
+    set(static_staged_hashes "${transaction_staged_hashes_arg}")
+    list(LENGTH generation_outputs static_output_count)
+    list(LENGTH static_owner_markers static_owner_count)
+    list(LENGTH static_initial_states static_initial_count)
+    list(LENGTH static_initial_hashes static_initial_hash_count)
+    list(LENGTH static_staged_hashes static_staged_hash_count)
+    math(EXPR static_maximum_owner_count "${static_output_count} + 1")
+    if(
+        NOT static_initial_count EQUAL static_output_count
+        OR NOT static_initial_hash_count EQUAL static_output_count
+        OR NOT static_staged_hash_count EQUAL static_output_count
+        OR static_owner_count GREATER static_maximum_owner_count
+    )
+        return()
+    endif()
+    set(static_owner_release_states)
+    foreach(static_owner_marker IN LISTS static_owner_markers)
+        list(APPEND static_owner_release_states "unreleased")
+    endforeach()
+    set(static_operation_states)
+    set(static_recovery_states)
+    foreach(static_output IN LISTS generation_outputs)
+        list(APPEND static_operation_states "untouched")
+        list(APPEND static_recovery_states "none")
+    endforeach()
+    _protocyte_generation_transaction_paths(transaction_active transaction_committed)
+
+    # A committed rename is the single successful-publication commit point.
+    # Its plan remains useful only to attest every published byte before it is
+    # discarded; backup/staging cleanup is intentionally left to the caller.
+    if(transaction_is_committed)
+        if(NOT transaction_ownership_state STREQUAL "committed")
+            return()
+        endif()
+        if(static_output_count GREATER 0)
+            math(EXPR static_last_output_index "${static_output_count} - 1")
+            foreach(static_output_index RANGE 0 ${static_last_output_index})
+                list(GET generation_outputs ${static_output_index} static_output)
+                list(GET static_staged_hashes ${static_output_index} static_staged_hash)
+                _protocyte_generation_transaction_file_hash_matches(
+                    static_output_hash_matches "${static_output}" "${static_staged_hash}"
+                )
+                if(NOT static_output_hash_matches)
+                    return()
+                endif()
+            endforeach()
+        endif()
+        file(REMOVE "${transaction_committed}")
+        if(EXISTS "${transaction_committed}" OR IS_SYMLINK "${transaction_committed}")
+            return()
+        endif()
+        set(${out_recovered} TRUE PARENT_SCOPE)
+        return()
+    endif()
+
+    set(static_allowed_owner_markers "${OUT_DIR_OWNER_MARKER}")
+    foreach(static_output_lock_key IN LISTS output_lock_keys)
+        list(APPEND static_allowed_owner_markers "${LOCK_DIRECTORY}/${static_output_lock_key}.owner")
+    endforeach()
+    set(static_allowed_owner_keys)
+    foreach(static_allowed_owner_marker IN LISTS static_allowed_owner_markers)
+        _protocyte_normalized_path_identity(
+            static_allowed_owner_identity "${static_allowed_owner_marker}"
+        )
+        string(SHA256 static_allowed_owner_key "${static_allowed_owner_identity}")
+        if(DEFINED static_allowed_owner_${static_allowed_owner_key})
+            return()
+        endif()
+        set(static_allowed_owner_${static_allowed_owner_key} "${static_allowed_owner_marker}")
+        list(APPEND static_allowed_owner_keys "${static_allowed_owner_key}")
+    endforeach()
+    foreach(static_owner_marker IN LISTS static_owner_markers)
+        _protocyte_normalized_path_identity(static_owner_identity "${static_owner_marker}")
+        string(SHA256 static_owner_key "${static_owner_identity}")
+        if(
+            NOT DEFINED static_allowed_owner_${static_owner_key}
+            OR DEFINED static_created_owner_${static_owner_key}
+        )
+            return()
+        endif()
+        set(static_created_owner_${static_owner_key} TRUE)
+    endforeach()
+
+    if(static_owner_count GREATER 0)
+        string(LENGTH "${transaction_owner_transaction_id}" static_owner_id_length)
+        if(
+            NOT static_owner_id_length EQUAL 64
+            OR NOT transaction_owner_transaction_id MATCHES "^[0-9a-f]+$"
+        )
+            return()
+        endif()
+    elseif(
+        NOT "${transaction_owner_transaction_id}" STREQUAL ""
+        OR NOT transaction_owner_witness_state STREQUAL "removed"
+    )
+        return()
+    endif()
+    if(static_owner_count GREATER 0)
+        _protocyte_generation_transaction_owner_templates(
+            static_root_owner_template
+            static_lock_owner_template
+            "${transaction_owner_transaction_id}"
+        )
+        foreach(
+            static_owner_template
+            IN ITEMS "${static_root_owner_template}" "${static_lock_owner_template}"
+        )
+            if(EXISTS "${static_owner_template}" OR IS_SYMLINK "${static_owner_template}")
+                _protocyte_generation_transaction_owner_record_hash_matches(
+                    static_owner_template_matches
+                    "${static_owner_template}"
+                    "${transaction_owner_transaction_id}"
+                )
+                if(NOT static_owner_template_matches)
+                    return()
+                endif()
+            endif()
+        endforeach()
+        file(REMOVE "${static_root_owner_template}" "${static_lock_owner_template}")
+        if(
+            EXISTS "${static_root_owner_template}"
+            OR IS_SYMLINK "${static_root_owner_template}"
+            OR EXISTS "${static_lock_owner_template}"
+            OR IS_SYMLINK "${static_lock_owner_template}"
+        )
+            return()
+        endif()
+    endif()
+    if(
+        transaction_ownership_state STREQUAL "commit-pending"
+        AND static_owner_count GREATER 0
+        AND NOT transaction_owner_witness_state STREQUAL "planned"
+    )
+        return()
+    endif()
+    if(
+        (transaction_ownership_state STREQUAL "committed"
+            OR transaction_ownership_state STREQUAL "rollback-pending"
+            OR transaction_ownership_state STREQUAL "cleanup-pending")
+        AND static_owner_count GREATER 0
+        AND NOT transaction_owner_witness_state STREQUAL "retained"
+    )
+        return()
+    endif()
+
+    set(static_all_created_current TRUE)
+    set(static_all_created_missing_or_incomplete TRUE)
+    set(static_all_created_missing TRUE)
+    foreach(static_allowed_owner_key IN LISTS static_allowed_owner_keys)
+        set(static_allowed_owner_marker "${static_allowed_owner_${static_allowed_owner_key}}")
+        _protocyte_owner_record_status(
+            static_owner_status
+            static_owner_id
+            "${static_allowed_owner_marker}"
+            "${BUILD_OWNER_HASH}"
+            "${OUT_DIR_OWNER_MARKER}"
+        )
+        if(DEFINED static_created_owner_${static_allowed_owner_key})
+            if(static_owner_status STREQUAL "current")
+                if(NOT static_owner_id STREQUAL transaction_owner_transaction_id)
+                    return()
+                endif()
+                set(static_all_created_missing_or_incomplete FALSE)
+                set(static_all_created_missing FALSE)
+            elseif(static_owner_status STREQUAL "missing")
+                set(static_all_created_current FALSE)
+            elseif(static_owner_status STREQUAL "incomplete")
+                set(static_all_created_current FALSE)
+                set(static_all_created_missing FALSE)
+            else()
+                return()
+            endif()
+        elseif(NOT static_owner_status STREQUAL "current")
+            # Retained claims can be legacy v1 or valid v2 records from a
+            # different transaction, but never absent or malformed.
+            return()
+        endif()
+    endforeach()
+
+    if(transaction_ownership_state STREQUAL "commit-pending")
+        if(static_owner_count EQUAL 0)
+            set(transaction_ownership_state "committed")
+            set(transaction_owner_witness_state "removed")
+            _protocyte_write_generation_transaction(
+                static_transaction_written static_owner_markers
+                "${transaction_ownership_state}" "" "${transaction_owner_witness_state}"
+                static_owner_release_states static_initial_states static_operation_states
+                static_recovery_states static_initial_hashes static_staged_hashes
+            )
+            # The writer validates every list.  Keep immutable sentinels in
+            # scope instead of borrowing caller-local variables.
+            if(NOT static_transaction_written)
+                return()
+            endif()
+        elseif(static_all_created_current)
+            _protocyte_generation_transaction_claims_match(
+                static_claims_match static_owner_markers "${transaction_owner_transaction_id}"
+            )
+            if(NOT static_claims_match)
+                return()
+            endif()
+            set(transaction_ownership_state "committed")
+            set(transaction_owner_witness_state "retained")
+            set(static_owner_release_states)
+            foreach(static_owner_marker IN LISTS static_owner_markers)
+                list(APPEND static_owner_release_states "unreleased")
+            endforeach()
+            set(static_operation_states)
+            set(static_recovery_states)
+            foreach(static_output IN LISTS generation_outputs)
+                list(APPEND static_operation_states "untouched")
+                list(APPEND static_recovery_states "none")
+            endforeach()
+            _protocyte_write_generation_transaction(
+                static_transaction_written static_owner_markers
+                "${transaction_ownership_state}" "${transaction_owner_transaction_id}"
+                "${transaction_owner_witness_state}" static_owner_release_states
+                static_initial_states static_operation_states static_recovery_states
+                static_initial_hashes static_staged_hashes
+            )
+            if(NOT static_transaction_written)
+                return()
+            endif()
+        elseif(static_all_created_missing_or_incomplete)
+            _protocyte_owner_transaction_paths(
+                static_prepared_witness static_committed_witness
+                "${OUT_DIR_OWNER_MARKER}" "${transaction_owner_transaction_id}"
+            )
+            if(EXISTS "${static_committed_witness}" OR IS_SYMLINK "${static_committed_witness}")
+                return()
+            endif()
+            if(EXISTS "${static_prepared_witness}" OR IS_SYMLINK "${static_prepared_witness}")
+                _protocyte_generation_transaction_claims_match(
+                    static_prepared_claims_match static_owner_markers
+                    "${transaction_owner_transaction_id}" "prepared"
+                )
+                if(NOT static_prepared_claims_match)
+                    return()
+                endif()
+            endif()
+            set(static_manifest_staging "${OUT_DIR_OWNER_MARKER}.${transaction_owner_transaction_id}.manifest.tmp")
+            if(EXISTS "${static_manifest_staging}" OR IS_SYMLINK "${static_manifest_staging}")
+                _protocyte_generation_transaction_file_hash_matches(
+                    static_manifest_hash_matches "${static_manifest_staging}"
+                    "${transaction_owner_transaction_id}"
+                )
+                if(NOT static_manifest_hash_matches)
+                    return()
+                endif()
+            endif()
+            foreach(static_owner_marker IN LISTS static_owner_markers)
+                set(static_owner_staging "${static_owner_marker}.${transaction_owner_transaction_id}.tmp")
+                if(EXISTS "${static_owner_staging}" OR IS_SYMLINK "${static_owner_staging}")
+                    _protocyte_generation_transaction_owner_record_hash_matches(
+                        static_owner_staging_matches "${static_owner_staging}"
+                        "${transaction_owner_transaction_id}"
+                    )
+                    if(NOT static_owner_staging_matches)
+                        return()
+                    endif()
+                endif()
+                _protocyte_owner_record_status(
+                    static_owner_status static_owner_id "${static_owner_marker}"
+                    "${BUILD_OWNER_HASH}" "${OUT_DIR_OWNER_MARKER}"
+                )
+                if(static_owner_status STREQUAL "incomplete")
+                    _protocyte_recover_incomplete_owner_record(
+                        static_incomplete_owner_recovered "${static_owner_marker}"
+                        "${static_owner_id}" "${OUT_DIR_OWNER_MARKER}"
+                    )
+                    if(NOT static_incomplete_owner_recovered)
+                        return()
+                    endif()
+                elseif(NOT static_owner_status STREQUAL "missing")
+                    return()
+                endif()
+            endforeach()
+            foreach(static_owner_marker IN LISTS static_owner_markers)
+                file(REMOVE "${static_owner_marker}.${transaction_owner_transaction_id}.tmp")
+                if(EXISTS "${static_owner_marker}.${transaction_owner_transaction_id}.tmp")
+                    return()
+                endif()
+            endforeach()
+            file(REMOVE "${static_manifest_staging}" "${static_prepared_witness}")
+            if(
+                EXISTS "${static_manifest_staging}"
+                OR IS_SYMLINK "${static_manifest_staging}"
+                OR EXISTS "${static_prepared_witness}"
+                OR IS_SYMLINK "${static_prepared_witness}"
+            )
+                return()
+            endif()
+            file(REMOVE "${transaction_active}")
+            if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
+                return()
+            endif()
+            set(${out_recovered} TRUE PARENT_SCOPE)
+            return()
+        else()
+            return()
+        endif()
+    endif()
+
+    if(
+        NOT transaction_ownership_state STREQUAL "committed"
+        AND NOT transaction_ownership_state STREQUAL "rollback-pending"
+        AND NOT transaction_ownership_state STREQUAL "cleanup-pending"
+    )
+        return()
+    endif()
+    if(
+        NOT transaction_ownership_state STREQUAL "cleanup-pending"
+        AND NOT static_all_created_current
+    )
+        return()
+    endif()
+    if(static_owner_count GREATER 0)
+        _protocyte_owner_transaction_paths(
+            unused_static_prepared static_committed_witness
+            "${OUT_DIR_OWNER_MARKER}" "${transaction_owner_transaction_id}"
+        )
+        if(EXISTS "${static_committed_witness}" OR IS_SYMLINK "${static_committed_witness}")
+            _protocyte_generation_transaction_claims_match(
+                static_claims_match static_owner_markers "${transaction_owner_transaction_id}"
+            )
+            if(NOT static_claims_match)
+                return()
+            endif()
+        elseif(NOT transaction_ownership_state STREQUAL "cleanup-pending" OR NOT static_all_created_missing)
+            return()
+        endif()
+    endif()
+
+    # Classify every filesystem state and verify every observed byte before
+    # changing anything.  The valid combinations are induced by atomic
+    # output->backup and staged->output renames, so no mutable per-output
+    # journal record is necessary.
+    set(static_remove_actions)
+    set(static_restore_actions)
+    if(static_output_count GREATER 0)
+        math(EXPR static_last_output_index "${static_output_count} - 1")
+        foreach(static_output_index RANGE 0 ${static_last_output_index})
+            list(GET generation_outputs ${static_output_index} static_output)
+            list(GET static_initial_states ${static_output_index} static_initial_state)
+            list(GET static_initial_hashes ${static_output_index} static_initial_hash)
+            list(GET static_staged_hashes ${static_output_index} static_staged_hash)
+            _protocyte_staged_output_path(static_backup "backups" "${static_output}")
+            _protocyte_staged_output_path(static_staged "generated" "${static_output}")
+            _protocyte_generated_output_path_is_safe(
+                static_output_safe "${static_output}" "${OUTPUT_DIRECTORY}"
+            )
+            _protocyte_generated_output_path_is_safe(
+                static_backup_safe "${static_backup}" "${STAGING_OUTPUT_DIRECTORY}/backups"
+            )
+            _protocyte_generated_output_path_is_safe(
+                static_staged_safe "${static_staged}" "${STAGING_OUTPUT_DIRECTORY}/generated"
+            )
+            if(NOT static_output_safe OR NOT static_backup_safe OR NOT static_staged_safe)
+                return()
+            endif()
+            set(static_output_kind "missing")
+            if(EXISTS "${static_output}" OR IS_SYMLINK "${static_output}")
+                if(IS_DIRECTORY "${static_output}" OR IS_SYMLINK "${static_output}")
+                    return()
+                endif()
+                file(SHA256 "${static_output}" static_output_hash)
+                if(static_output_hash STREQUAL static_initial_hash)
+                    set(static_output_kind "initial")
+                elseif(static_output_hash STREQUAL static_staged_hash)
+                    set(static_output_kind "staged")
+                else()
+                    return()
+                endif()
+            endif()
+            set(static_backup_present FALSE)
+            if(EXISTS "${static_backup}" OR IS_SYMLINK "${static_backup}")
+                if(IS_DIRECTORY "${static_backup}" OR IS_SYMLINK "${static_backup}")
+                    return()
+                endif()
+                _protocyte_generation_transaction_file_hash_matches(
+                    static_backup_hash_matches "${static_backup}" "${static_initial_hash}"
+                )
+                if(NOT static_backup_hash_matches)
+                    return()
+                endif()
+                set(static_backup_present TRUE)
+            endif()
+            set(static_staged_present FALSE)
+            if(EXISTS "${static_staged}" OR IS_SYMLINK "${static_staged}")
+                _protocyte_generation_transaction_file_hash_matches(
+                    static_staged_hash_matches "${static_staged}" "${static_staged_hash}"
+                )
+                if(NOT static_staged_hash_matches)
+                    return()
+                endif()
+                set(static_staged_present TRUE)
+            endif()
+            set(static_remove FALSE)
+            set(static_restore FALSE)
+            if(static_initial_state STREQUAL "prior")
+                if(static_output_kind STREQUAL "initial")
+                    if(static_backup_present)
+                        return()
+                    endif()
+                elseif(static_output_kind STREQUAL "staged")
+                    if(NOT static_backup_present OR static_staged_present)
+                        return()
+                    endif()
+                    set(static_remove TRUE)
+                    set(static_restore TRUE)
+                elseif(static_output_kind STREQUAL "missing")
+                    if(NOT static_backup_present)
+                        return()
+                    endif()
+                    set(static_restore TRUE)
+                else()
+                    return()
+                endif()
+            elseif(static_initial_state STREQUAL "absent")
+                if(static_backup_present)
+                    return()
+                endif()
+                if(static_output_kind STREQUAL "staged")
+                    if(static_staged_present)
+                        return()
+                    endif()
+                    set(static_remove TRUE)
+                elseif(NOT static_output_kind STREQUAL "missing")
+                    return()
+                endif()
+            else()
+                return()
+            endif()
+            list(APPEND static_remove_actions "${static_remove}")
+            list(APPEND static_restore_actions "${static_restore}")
+        endforeach()
+    endif()
+
+    if(transaction_ownership_state STREQUAL "cleanup-pending")
+        foreach(static_action IN LISTS static_remove_actions static_restore_actions)
+            if(static_action)
+                return()
+            endif()
+        endforeach()
+    else()
+        if(transaction_ownership_state STREQUAL "committed")
+            set(transaction_ownership_state "rollback-pending")
+            set(static_owner_release_states)
+            foreach(static_owner_marker IN LISTS static_owner_markers)
+                list(APPEND static_owner_release_states "unreleased")
+            endforeach()
+            set(static_operation_states)
+            set(static_recovery_states)
+            foreach(static_output IN LISTS generation_outputs)
+                list(APPEND static_operation_states "untouched")
+                list(APPEND static_recovery_states "none")
+            endforeach()
+            _protocyte_write_generation_transaction(
+                static_transaction_written static_owner_markers
+                "${transaction_ownership_state}" "${transaction_owner_transaction_id}"
+                "${transaction_owner_witness_state}" static_owner_release_states
+                static_initial_states static_operation_states static_recovery_states
+                static_initial_hashes static_staged_hashes
+            )
+            if(NOT static_transaction_written)
+                return()
+            endif()
+        endif()
+        if(static_output_count GREATER 0)
+            foreach(static_output_index RANGE 0 ${static_last_output_index})
+                list(GET generation_outputs ${static_output_index} static_output)
+                list(GET static_remove_actions ${static_output_index} static_remove)
+                list(GET static_restore_actions ${static_output_index} static_restore)
+                if(static_remove)
+                    file(REMOVE "${static_output}")
+                    if(EXISTS "${static_output}" OR IS_SYMLINK "${static_output}")
+                        return()
+                    endif()
+                endif()
+                if(static_restore)
+                    _protocyte_staged_output_path(static_backup "backups" "${static_output}")
+                    file(
+                        RENAME "${static_backup}" "${static_output}"
+                        NO_REPLACE
+                        RESULT static_restore_result
+                    )
+                    if(NOT "${static_restore_result}" STREQUAL "0")
+                        return()
+                    endif()
+                endif()
+            endforeach()
+        endif()
+        set(transaction_ownership_state "cleanup-pending")
+        set(static_owner_release_states)
+        foreach(static_owner_marker IN LISTS static_owner_markers)
+            list(APPEND static_owner_release_states "unreleased")
+        endforeach()
+        set(static_operation_states)
+        set(static_recovery_states)
+        foreach(static_output IN LISTS generation_outputs)
+            list(APPEND static_operation_states "untouched")
+            list(APPEND static_recovery_states "none")
+        endforeach()
+        _protocyte_write_generation_transaction(
+            static_transaction_written static_owner_markers
+            "${transaction_ownership_state}" "${transaction_owner_transaction_id}"
+            "${transaction_owner_witness_state}" static_owner_release_states
+            static_initial_states static_operation_states static_recovery_states
+            static_initial_hashes static_staged_hashes
+        )
+        if(NOT static_transaction_written)
+            return()
+        endif()
+    endif()
+
+    foreach(static_owner_marker IN LISTS static_owner_markers)
+        _protocyte_owner_record_status(
+            static_owner_status static_owner_id "${static_owner_marker}"
+            "${BUILD_OWNER_HASH}" "${OUT_DIR_OWNER_MARKER}"
+        )
+        if(static_owner_status STREQUAL "missing")
+            continue()
+        endif()
+        if(
+            NOT static_owner_status STREQUAL "current"
+            OR NOT static_owner_id STREQUAL transaction_owner_transaction_id
+        )
+            return()
+        endif()
+        file(REMOVE "${static_owner_marker}")
+        if(EXISTS "${static_owner_marker}" OR IS_SYMLINK "${static_owner_marker}")
+            return()
+        endif()
+    endforeach()
+    if(static_owner_count GREATER 0)
+        _protocyte_owner_transaction_paths(
+            unused_static_prepared static_committed_witness
+            "${OUT_DIR_OWNER_MARKER}" "${transaction_owner_transaction_id}"
+        )
+        if(EXISTS "${static_committed_witness}" OR IS_SYMLINK "${static_committed_witness}")
+            _protocyte_generation_transaction_claims_match(
+                static_claims_match static_owner_markers "${transaction_owner_transaction_id}"
+            )
+            if(NOT static_claims_match)
+                return()
+            endif()
+            file(REMOVE "${static_committed_witness}")
+            if(EXISTS "${static_committed_witness}" OR IS_SYMLINK "${static_committed_witness}")
+                return()
+            endif()
+        endif()
+    endif()
+    file(REMOVE "${transaction_active}")
+    if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
+        return()
+    endif()
+    set(${out_recovered} TRUE PARENT_SCOPE)
+endfunction()
+
+function(
+    _protocyte_generation_transaction_owner_templates
+    out_root_template
+    out_lock_template
+    transaction_id
+)
+    # Both locations are deterministic, private-free names derived from the
+    # content-addressed ownership witness.  Separate templates retain the hard
+    # link fast path when OUT_DIR and the shared lock namespace are on distinct
+    # volumes.
+    set(
+        ${out_root_template}
+        "${OUT_DIR_OWNER_MARKER}.${transaction_id}.owner-template.tmp"
+        PARENT_SCOPE
+    )
+    set(
+        ${out_lock_template}
+        "${LOCK_DIRECTORY}/.protocyte-owner-${transaction_id}.tmp"
+        PARENT_SCOPE
+    )
+endfunction()
+
+# Version 6 writes its complete output plan only before publication and after
+# ownership commit.  Recovery derives progress from the atomic file topology;
+# it is therefore linear and remains convergent across a process death.
 function(_protocyte_recover_generation_transaction out_recovered)
     set(${out_recovered} FALSE PARENT_SCOPE)
     _protocyte_generation_transaction_paths(transaction_active transaction_committed)
@@ -718,6 +1302,23 @@ function(_protocyte_recover_generation_transaction out_recovered)
         endif()
         return()
     endif()
+    _protocyte_recover_generation_transaction_v6(
+        recovered_generation_transaction_v6
+        "${transaction_is_committed}"
+        "${transaction_ownership_state}"
+        "${transaction_owner_transaction_id}"
+        "${transaction_owner_witness_state}"
+        "${transaction_owner_markers}"
+        "${transaction_initial_states}"
+        "${transaction_initial_hashes}"
+        "${transaction_staged_hashes}"
+    )
+    set(${out_recovered} "${recovered_generation_transaction_v6}" PARENT_SCOPE)
+    return()
+
+    # Kept below temporarily as a source-level audit trail while v6 is
+    # introduced.  The v6-only reader above rejects every older mutable
+    # journal before this unreachable compatibility code can observe it.
     if(transaction_is_committed)
         foreach(transaction_operation_state IN LISTS transaction_operation_states)
             if(NOT transaction_operation_state STREQUAL "published")

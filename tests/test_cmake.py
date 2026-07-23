@@ -10415,35 +10415,34 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     generation_source = (repo_root / "cmake" / "ProtocyteGenerate.cmake").read_text(
         encoding="utf-8"
     )
-    staging_anchor = '        file(WRITE "${owner_staging}" "${transaction_owner}")\n'
-    staging_instrumentation = (
+    template_write_anchor = (
+        '        file(WRITE "${owner_template}" "${transaction_owner}")\n'
+    )
+    template_write_instrumentation = (
+        "        if(NOT DEFINED protocyte_test_owner_stage_index)\n"
+        "            set(protocyte_test_owner_stage_index 0)\n"
+        "        endif()\n"
+        "        math(EXPR protocyte_test_owner_stage_index "
+        '"${protocyte_test_owner_stage_index} + 1")\n'
         "        if(\n"
         "            DEFINED PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
-        '            AND "${owner_stage_index}" EQUAL "${PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX}"\n'
+        "            AND protocyte_test_owner_stage_index EQUAL "
+        "PROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX\n"
         "        )\n"
-        '            file(MAKE_DIRECTORY "${owner_staging}")\n'
-        "        endif()\n" + staging_anchor
-    )
-    assert generation_source.count(staging_anchor) == 1
-    generation_source = generation_source.replace(
-        staging_anchor, staging_instrumentation
-    )
-
-    staged_owner_abort_anchor = (
-        '        list(APPEND staged_owner_markers "${owner_staging}")\n'
-    )
-    staged_owner_abort_instrumentation = (
-        staged_owner_abort_anchor
+        '            file(MAKE_DIRECTORY "${owner_template}")\n'
+        "        endif()\n"
+        + template_write_anchor
         + "        if(\n"
         + "            DEFINED PROTOCYTE_TEST_ABORT_AFTER_OWNER_STAGING_INDEX\n"
-        + '            AND "${owner_stage_index}" EQUAL "${PROTOCYTE_TEST_ABORT_AFTER_OWNER_STAGING_INDEX}"\n'
+        + "            AND protocyte_test_owner_stage_index EQUAL "
+        + "PROTOCYTE_TEST_ABORT_AFTER_OWNER_STAGING_INDEX\n"
         + "        )\n"
         + '            message(FATAL_ERROR "injected generation transaction abort after owner staging")\n'
         + "        endif()\n"
     )
-    assert generation_source.count(staged_owner_abort_anchor) == 1
+    assert generation_source.count(template_write_anchor) == 1
     generation_source = generation_source.replace(
-        staged_owner_abort_anchor, staged_owner_abort_instrumentation
+        template_write_anchor, template_write_instrumentation
     )
 
     publication_anchor = (
@@ -10588,9 +10587,7 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     transaction_source = (
         repo_root / "cmake" / "ProtocyteGenerationTransaction.cmake"
     ).read_text(encoding="utf-8")
-    recovery_start = (
-        "function(_protocyte_recover_generation_transaction out_recovered)\n"
-    )
+    recovery_start = "function(\n    _protocyte_recover_generation_transaction_v6\n"
     recovery_offset = transaction_source.rfind(recovery_start)
     assert recovery_offset != -1
     recovery_prefix = transaction_source[:recovery_offset]
@@ -10617,23 +10614,23 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         recovery_source = recovery_source.replace(anchor, instrumentation)
 
     instrument_recovery_action(
-        '            file(REMOVE "${generation_output}")\n',
+        '                    file(REMOVE "${static_output}")\n',
         "protocyte_test_recovery_remove_count",
         "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_REMOVE_INDEX",
         "output removal",
     )
     instrument_recovery_action(
-        "            file(\n"
-        '                RENAME "${backup_generation_output}" "${generation_output}"\n'
-        "                NO_REPLACE\n"
-        "                RESULT restore_output_result\n"
-        "            )\n",
+        "                    file(\n"
+        '                        RENAME "${static_backup}" "${static_output}"\n'
+        "                        NO_REPLACE\n"
+        "                        RESULT static_restore_result\n"
+        "                    )\n",
         "protocyte_test_recovery_restore_count",
         "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RESTORE_INDEX",
         "output restoration",
     )
     instrument_recovery_action(
-        '            file(REMOVE "${transaction_owner_marker}")\n',
+        '        file(REMOVE "${static_owner_marker}")\n',
         "protocyte_test_recovery_owner_release_count",
         "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_OWNER_RELEASE_INDEX",
         "owner release",
@@ -11278,7 +11275,7 @@ def test_later_owner_staging_write_failure_publishes_no_durable_claim(
         failed_build_dir,
         output_directory,
         instrumented_script,
-        "-DPROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX=3",
+        "-DPROTOCYTE_TEST_FAIL_OWNER_STAGING_INDEX=2",
     )
 
     assert failed.returncode != 0
@@ -11863,7 +11860,7 @@ def test_generation_transaction_rejects_old_authoritative_journal_without_mutati
         (tmp_path / "output-locks").glob(".protocyte-generation-*.active")
     )
     transaction.write_text(
-        transaction.read_text(encoding="utf-8").replace("version=5", "version=4", 1),
+        transaction.read_text(encoding="utf-8").replace("version=6", "version=5", 1),
         encoding="utf-8",
     )
     staging_directory = next(tmp_path.glob(".protocyte-generation-staging-*"))
@@ -12045,8 +12042,13 @@ def test_generation_transaction_cleans_journal_bound_preparation_artifacts(
     manifest_staging = root_owner.with_name(
         f"{root_owner.name}.{transaction_id}.manifest.tmp"
     )
-    owner_staging = root_owner.with_name(f"{root_owner.name}.{transaction_id}.tmp")
-    assert manifest_staging != owner_staging
+    root_owner_template = root_owner.with_name(
+        f"{root_owner.name}.{transaction_id}.owner-template.tmp"
+    )
+    lock_owner_template = (
+        tmp_path / "output-locks" / f".protocyte-owner-{transaction_id}.tmp"
+    )
+    assert manifest_staging != root_owner_template
     assert prepared_witness.exists()
     assert hashlib.sha256(prepared_witness.read_bytes()).hexdigest() == transaction_id
     if "OWNER_STAGING_INDEX" in fault_argument:
@@ -12058,7 +12060,7 @@ def test_generation_transaction_cleans_journal_bound_preparation_artifacts(
         if os.name == "nt":
             expected_owner_bytes = expected_owner_bytes.replace(b"\n", b"\r\n")
         assert (
-            hashlib.sha256(owner_staging.read_bytes()).hexdigest()
+            hashlib.sha256(root_owner_template.read_bytes()).hexdigest()
             == hashlib.sha256(expected_owner_bytes).hexdigest()
         )
     _make_fake_protoc_fail_in_build(source_dir, owner_build_dir)
@@ -12074,6 +12076,8 @@ def test_generation_transaction_cleans_journal_bound_preparation_artifacts(
     assert "simulated protoc failure" in recovered.stdout + recovered.stderr
     assert not prepared_witness.exists()
     assert not manifest_staging.exists()
+    assert not root_owner_template.exists()
+    assert not lock_owner_template.exists()
     assert not list(root_owner.parent.glob(f"*.{transaction_id}.tmp"))
     assert not list((tmp_path / "output-locks").glob(f"*.{transaction_id}.tmp"))
     assert not root_owner.exists()
@@ -12224,6 +12228,39 @@ def test_generation_transaction_recovers_more_than_256_owner_markers(
     assert _committed_owner_build_hash(marker, marker) == (
         _build_tree_owner_hash(fresh_build_dir)
     )
+
+
+def test_generation_transaction_publication_scales_linearly(tmp_path: Path) -> None:
+    """Keep the immutable journal from regressing to per-output rewrites."""
+    timings: dict[int, float] = {}
+    generation_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteGenerate.cmake"
+    )
+    for descriptor_count in (16, 64):
+        case_root = tmp_path / str(descriptor_count)
+        source_dir = case_root / "project"
+        build_dir = case_root / "build"
+        output_directory = case_root / "generated"
+        _write_out_dir_owner_project(source_dir, output_directory)
+        _make_direct_owner_fake_protoc_write_outputs(
+            source_dir, output_directory, descriptor_count
+        )
+        started_at = time.monotonic()
+        generated = _run_direct_owner_generation(
+            source_dir,
+            build_dir,
+            output_directory,
+            generation_script,
+            descriptor_count=descriptor_count,
+        )
+        timings[descriptor_count] = time.monotonic() - started_at
+        assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    # The old mutable v5 journal takes roughly 3s/49s on this Windows host
+    # for these cases.  This leaves headroom for a loaded CI worker while
+    # detecting both quadratic serialisation and repeated owner-role scans.
+    assert timings[64] < 10.0, timings
+    assert timings[64] < timings[16] * 6.0 + 1.0, timings
 
 
 def test_nested_out_dirs_cannot_claim_the_same_generated_output(
