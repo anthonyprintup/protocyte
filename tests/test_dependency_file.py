@@ -119,6 +119,37 @@ def test_msbuild_depfile_omits_direct_semicolon_input(tmp_path: Path) -> None:
     assert imported.as_posix() in content
 
 
+def test_makefile_depfile_omits_guarded_semicolon_dependencies(
+    tmp_path: Path,
+) -> None:
+    import_root = tmp_path / "imports;root"
+    source = import_root / "demo.proto"
+    imported = import_root / "shared.proto"
+    import_root.mkdir()
+    source.write_text('syntax = "proto3";\n', encoding="utf-8")
+    imported.write_text('syntax = "proto3";\n', encoding="utf-8")
+
+    descriptor_set = descriptor_pb2.FileDescriptorSet()
+    descriptor_set.file.add().name = source.name
+    descriptor_set.file.add().name = imported.name
+    argument_file = tmp_path / "arguments.rsp"
+    argument_file.write_text(
+        f"--proto_path={import_root.as_posix()}\n{source.as_posix()}\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "dependencies.d"
+
+    write_dependency_file(
+        descriptor_set,
+        protoc_argument_file=argument_file,
+        output=output,
+        target="generated.pb",
+        makefiles=True,
+    )
+
+    assert output.read_text(encoding="utf-8") == "generated.pb:\n"
+
+
 @pytest.mark.parametrize(
     ("format_options", "backend"),
     [

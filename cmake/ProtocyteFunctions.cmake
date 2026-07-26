@@ -5080,6 +5080,8 @@ function(protocyte_generate)
             set(protocyte_dependency_file_format --ninja)
         elseif(CMAKE_GENERATOR MATCHES "^Visual Studio")
             set(protocyte_dependency_file_format --msbuild)
+        elseif(CMAKE_GENERATOR MATCHES "Makefiles")
+            set(protocyte_dependency_file_format --makefiles)
         endif()
         foreach(proto_file IN LISTS normalized_proto_files)
             string(SHA256 proto_file_key "${proto_file}")
@@ -5308,6 +5310,10 @@ function(protocyte_generate)
     )
     set(protocyte_generation_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerate.cmake")
     set(
+        protocyte_ownership_guard_script
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteOwnershipGuard.cmake"
+    )
+    set(
         protocyte_generation_transaction_script
         "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/ProtocyteGenerationTransaction.cmake"
     )
@@ -5364,7 +5370,31 @@ function(protocyte_generate)
         VERBATIM
     )
 
+    string(
+        SHA256
+        protocyte_ownership_guard_key
+        "${CMAKE_CURRENT_BINARY_DIR}|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
+    )
+    set(
+        protocyte_ownership_guard_target
+        "protocyte_ownership_guard_${protocyte_ownership_guard_key}"
+    )
+    add_custom_target(
+        "${protocyte_ownership_guard_target}"
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DGENERATION_TARGET=${PROTOCYTE_TARGET}"
+            "-DLOCK_DIRECTORY=${protocyte_lock_dir}"
+            "-DLOCK_DIRECTORY_IDENTITY_SHA256=${protocyte_lock_directory_identity_hash}"
+            "-DLOCK_MANIFEST=${protocyte_generation_lock_manifest}"
+            "-DOUT_DIR_OWNER_MARKER=${protocyte_out_dir_owner_marker}"
+            "-DOUT_DIR_OWNER_LOCK=${protocyte_out_dir_owner_lock}"
+            "-DBUILD_OWNER_HASH=${protocyte_build_tree_owner_hash}"
+            -P "${protocyte_ownership_guard_script}"
+        VERBATIM
+    )
     add_custom_target("${PROTOCYTE_TARGET}" DEPENDS ${protocyte_command_outputs})
+    add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_ownership_guard_target}")
     if(NOT protocyte_import_guard_target STREQUAL "")
         add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_import_guard_target}")
     endif()

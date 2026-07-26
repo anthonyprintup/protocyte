@@ -222,6 +222,7 @@ function(
         OR NOT staged_hash_count EQUAL generation_output_count
         OR owner_key_count GREATER maximum_owner_key_count
     )
+        set(${out_error} "transaction list cardinality validation failed" PARENT_SCOPE)
         return()
     endif()
     if(owner_key_count GREATER 0)
@@ -230,9 +231,11 @@ function(
             NOT owner_transaction_id_length EQUAL 64
             OR NOT owner_transaction_id MATCHES "^[0-9a-f]+$"
         )
+            set(${out_error} "ownership transaction identity validation failed" PARENT_SCOPE)
             return()
         endif()
     elseif(NOT "${owner_transaction_id}" STREQUAL "")
+        set(${out_error} "unexpected ownership transaction identity" PARENT_SCOPE)
         return()
     endif()
 
@@ -240,6 +243,7 @@ function(
     foreach(owner_key IN LISTS ${owner_keys_var})
         _protocyte_generation_transaction_owner_marker_for_key(owner_marker owner_key_known "${owner_key}")
         if(NOT owner_key_known OR DEFINED "transaction_written_owner_${owner_key}")
+            set(${out_error} "ownership key validation failed" PARENT_SCOPE)
             return()
         endif()
         set("transaction_written_owner_${owner_key}" TRUE)
@@ -275,6 +279,7 @@ function(
                 OR (initial_state STREQUAL "absent" AND NOT initial_hash STREQUAL "absent")
                 OR NOT staged_hash MATCHES "^[0-9a-f]+$"
             )
+                set(${out_error} "output state validation failed" PARENT_SCOPE)
                 return()
             endif()
             string(LENGTH "${initial_hash}" initial_hash_length)
@@ -283,6 +288,7 @@ function(
                 (initial_state STREQUAL "prior" AND NOT initial_hash_length EQUAL 64)
                 OR NOT staged_hash_length EQUAL 64
             )
+                set(${out_error} "output hash length validation failed" PARENT_SCOPE)
                 return()
             endif()
             file(RELATIVE_PATH generation_output_relative_path "${OUTPUT_DIRECTORY}" "${generation_output}")
@@ -291,6 +297,7 @@ function(
                 OR generation_output_relative_path MATCHES "^\\.\\.(\\\\|/|$)"
                 OR IS_ABSOLUTE "${generation_output_relative_path}"
             )
+                set(${out_error} "output-relative path validation failed" PARENT_SCOPE)
                 return()
             endif()
             string(HEX "${generation_output_relative_path}" encoded_generation_output)
@@ -308,6 +315,7 @@ function(
     set(transaction_staging "${transaction_active}.tmp")
     file(REMOVE "${transaction_staging}")
     if(EXISTS "${transaction_staging}" OR IS_SYMLINK "${transaction_staging}")
+        set(${out_error} "stale journal staging cleanup failed" PARENT_SCOPE)
         return()
     endif()
     file(WRITE "${transaction_staging}" "${transaction_content}")
@@ -316,10 +324,12 @@ function(
         OR IS_DIRECTORY "${transaction_staging}"
         OR IS_SYMLINK "${transaction_staging}"
     )
+        set(${out_error} "journal staging creation failed" PARENT_SCOPE)
         return()
     endif()
     file(READ "${transaction_staging}" observed_transaction_content)
     if(NOT observed_transaction_content STREQUAL transaction_content)
+        set(${out_error} "journal staging content verification failed" PARENT_SCOPE)
         return()
     endif()
     # Every declared output lock and the OUT_DIR ownership lock are held by

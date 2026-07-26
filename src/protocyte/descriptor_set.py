@@ -856,6 +856,11 @@ def main(
         action="store_true",
         help="emit Ninja-native dependency path syntax",
     )
+    dependency_parser.add_argument(
+        "--makefiles",
+        action="store_true",
+        help="omit semicolon paths tracked by the CMake import topology guard",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -872,6 +877,7 @@ def main(
                 target=args.target,
                 msbuild=args.msbuild,
                 ninja=args.ninja,
+                makefiles=args.makefiles,
             )
             return 0
     except ProtocyteError as exc:

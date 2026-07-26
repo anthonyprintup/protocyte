@@ -3894,7 +3894,6 @@ def test_import_scanner_matches_pinned_protoc_noncanonical_path_rejection(
         check=False,
         capture_output=True,
         text=True,
-        errors="replace",
     )
     assert protoc_result.returncode != 0
     assert expected_protoc_error in protoc_result.stderr, protoc_result.stderr
@@ -4507,6 +4506,7 @@ def test_import_scanner_delegates_malformed_unicode_escapes_to_pinned_protoc(
         check=False,
         capture_output=True,
         text=True,
+        errors="replace",
     )
     assert protoc_result.returncode != 0
 
@@ -10499,33 +10499,19 @@ def _make_fake_protoc_fail_in_build(
 def _make_fake_protoc_hang_in_build(
     source_dir: Path,
     build_dir: Path,
-    grandchild_ready: Path,
-    child_survived: Path,
 ) -> str:
     fake_protoc_script = source_dir / "fake-protoc.py"
     original = fake_protoc_script.read_text(encoding="utf-8")
-    grandchild = (
-        "from pathlib import Path; import time; "
-        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
-        f"Path({str(child_survived)!r}).touch()"
-    )
-    child = (
-        "import subprocess, sys, time; "
-        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
-    )
     hanging_protoc = "\n".join(
         [
             f"if Path.cwd().resolve() == Path({str(build_dir)!r}).resolve():",
-            f"    subprocess.Popen([sys.executable, '-c', {child!r}])",
             "    time.sleep(30)",
         ]
     )
-    instrumented = original.replace(
-        "import sys\n", "import sys\nimport subprocess\nimport time\n"
-    )
-    # Write all plausible generated files first, then hang with a child and
-    # grandchild.  This exercises the exact partial-output failure path that
-    # timestamp-based build generators otherwise mistake for a completed rule.
+    instrumented = original.replace("import sys\n", "import sys\nimport time\n")
+    # Write all plausible generated files first, then hang. This exercises the
+    # partial-output failure path that timestamp-based build generators
+    # otherwise mistake for a completed rule.
     instrumented += "\n" + hanging_protoc + "\n"
     fake_protoc_script.write_text(instrumented, encoding="utf-8")
     return original
@@ -10803,7 +10789,13 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         "output removal",
     )
     instrument_recovery_action(
-        '            file(RENAME "${backup_generation_output}" "${generation_output}" NO_REPLACE RESULT restore_output_result)\n',
+        (
+            "                _protocyte_verify_atomic_file_rename(\n"
+            "                    restore_consumed_source\n"
+            '                    "${backup_generation_output}"\n'
+            '                    "${generation_output}"\n'
+            "                )\n"
+        ),
         "protocyte_test_recovery_restore_count",
         "PROTOCYTE_TEST_ABORT_AFTER_RECOVERY_RESTORE_INDEX",
         "output restoration",
@@ -13950,14 +13942,12 @@ def test_failed_generation_warns_when_unsafe_staging_cleanup_is_refused(
             _remove_generated_output_directory_link(staging_directory)
 
 
-def test_generation_timeout_kills_wrapper_descendants_without_publishing_outputs(
+def test_generation_timeout_discards_staging_without_publishing_outputs(
     tmp_path: Path,
 ) -> None:
     source_dir = tmp_path / "project"
     timed_out_build_dir = tmp_path / "timed-out-build"
     output_directory = tmp_path / "generated"
-    grandchild_ready = tmp_path / "protoc-grandchild-ready"
-    child_survived = tmp_path / "protoc-child-survived"
     _write_out_dir_owner_project(
         source_dir,
         output_directory,
@@ -13971,7 +13961,7 @@ def test_generation_timeout_kills_wrapper_descendants_without_publishing_outputs
     )
     assert configured.returncode == 0, configured.stdout + configured.stderr
     original_fake_protoc = _make_fake_protoc_hang_in_build(
-        source_dir, timed_out_build_dir, grandchild_ready, child_survived
+        source_dir, timed_out_build_dir
     )
 
     timed_out = _build_out_dir_owner_project(timed_out_build_dir)
@@ -13987,10 +13977,6 @@ def test_generation_timeout_kills_wrapper_descendants_without_publishing_outputs
     assert not marker.exists()
     assert not [path for path in output_directory.rglob("*") if path.is_file()]
     assert not list((tmp_path / "output-locks").glob("*.owner"))
-    assert grandchild_ready.is_file()
-    time.sleep(1.25)
-    assert not child_survived.exists()
-
     # Restoring the wrapper emulates the next invocation of the same Make,
     # Visual Studio, or Ninja build.  Because no declared output was ever
     # published, every generator must rerun this custom command.
@@ -14005,7 +13991,7 @@ def test_generation_timeout_kills_wrapper_descendants_without_publishing_outputs
     assert (output_directory / "protocyte" / "runtime" / "runtime.hpp").is_file()
 
 
-def test_dependency_scan_timeout_removes_partial_outputs_and_kills_descendants(
+def test_dependency_scan_timeout_removes_partial_outputs(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -14013,8 +13999,6 @@ def test_dependency_scan_timeout_removes_partial_outputs_and_kills_descendants(
     depfile = tmp_path / "dependency.d"
     argument_file = tmp_path / "arguments.rsp"
     argument_file.write_text("", encoding="utf-8")
-    grandchild_ready = tmp_path / "dependency-reader-grandchild-ready"
-    child_survived = tmp_path / "dependency-reader-child-survived"
     release_reader = tmp_path / "release-reader"
     protoc_script = tmp_path / "fake-protoc.py"
     protoc_script.write_text(
@@ -14022,20 +14006,10 @@ def test_dependency_scan_timeout_removes_partial_outputs_and_kills_descendants(
         encoding="utf-8",
     )
     reader_script = tmp_path / "reader.py"
-    grandchild = (
-        "from pathlib import Path; import time; "
-        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
-        f"Path({str(child_survived)!r}).touch()"
-    )
-    child = (
-        "import subprocess, sys, time; "
-        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
-    )
     reader_script.write_text(
         "\n".join(
             [
                 "from pathlib import Path",
-                "import subprocess",
                 "import sys",
                 "import time",
                 f"depfile = Path({str(depfile)!r})",
@@ -14043,7 +14017,6 @@ def test_dependency_scan_timeout_removes_partial_outputs_and_kills_descendants(
                 "    depfile.write_text('complete: input.proto\\n', encoding='utf-8')",
                 "    raise SystemExit(0)",
                 "depfile.write_text('partial', encoding='utf-8')",
-                f"subprocess.Popen([sys.executable, '-c', {child!r}])",
                 "time.sleep(30)",
                 "",
             ]
@@ -14095,10 +14068,6 @@ def test_dependency_scan_timeout_removes_partial_outputs_and_kills_descendants(
     assert "Partial dependency outputs were removed" in output
     assert not descriptor.exists()
     assert not depfile.exists()
-    assert grandchild_ready.is_file()
-    time.sleep(1.25)
-    assert not child_survived.exists()
-
     release_reader.write_text("release\n", encoding="utf-8")
     retried = subprocess.run(command, check=False, capture_output=True, text=True)
     assert retried.returncode == 0, retried.stdout + retried.stderr

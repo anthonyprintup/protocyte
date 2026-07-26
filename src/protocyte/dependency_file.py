@@ -18,20 +18,28 @@ def write_dependency_file(
     working_directory: str | Path | None = None,
     msbuild: bool = False,
     ninja: bool = False,
+    makefiles: bool = False,
 ) -> None:
     """Write a CMake-compatible GCC depfile for an include-complete descriptor set."""
+    if sum((msbuild, ninja, makefiles)) > 1:
+        raise ProtocyteError("dependency file format options are mutually exclusive")
     roots, direct_input = _protoc_scan_context(
         protoc_argument_file,
         working_directory=working_directory,
     )
     dependencies = _resolve_descriptor_files(descriptor_set, roots)
-    if msbuild or ninja:
-        backend = "Visual Studio" if msbuild else "Ninja"
+    if msbuild or ninja or makefiles:
+        backend = "Visual Studio" if msbuild else "Ninja" if ninja else "Makefiles"
         direct_input_key = os.path.normcase(str(direct_input))
         tracked_dependencies: list[Path] = []
         for dependency in dependencies:
             if ";" not in str(dependency):
                 tracked_dependencies.append(dependency)
+                continue
+            if makefiles:
+                # Protocyte's always-run import topology guard tracks these
+                # paths. CMake's Makefile depfile ingestion cannot represent
+                # the semicolon without emitting a malformed make rule.
                 continue
             if os.path.normcase(str(dependency)) == direct_input_key:
                 # The direct input is already represented by a safe proxy in
