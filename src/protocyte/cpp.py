@@ -280,6 +280,15 @@ class _WindowsFormatterJob:
             _raise_windows_error()
         return information.active_processes != 0
 
+    def wait_for_no_active_processes(self, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while self.has_active_processes():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.005, remaining))
+        return True
+
     def close(self) -> None:
         if self._handle is None:
             return
@@ -693,7 +702,9 @@ def _run_formatter_bounded(
             try:
                 returncode = process.wait(timeout=timeout_seconds)
                 try:
-                    if job.has_active_processes():
+                    if not job.wait_for_no_active_processes(
+                        _FORMATTER_TEARDOWN_TIMEOUT_SECONDS
+                    ):
                         descendant_error = "formatter exited while descendant processes remained active"
                 except OSError as exc:
                     descendant_error = (

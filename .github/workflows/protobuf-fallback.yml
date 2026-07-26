@@ -58,7 +58,7 @@ jobs:
       - name: Verify fetched protobuf install isolation
         run: |
           test -f tests/find_package/install/share/protocyte-integration/find-package-consumer.txt
-          test "$(wc -l < tests/find_package/build/install_manifest.txt)" -eq 1
+          test "$(awk 'END { print NR }' tests/find_package/build/install_manifest.txt)" -eq 1
           test ! -e tests/find_package/install/include/google/protobuf
           test ! -e tests/find_package/install/include/absl
           test ! -e tests/find_package/install/include/upb

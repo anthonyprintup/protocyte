@@ -266,6 +266,11 @@ function(
         string(APPEND transaction_content "owner-key=${owner_key}\n")
     endforeach()
     string(APPEND transaction_content "output-count=${generation_output_count}\n")
+    cmake_path(
+        NORMAL_PATH
+        OUTPUT_DIRECTORY
+        OUTPUT_VARIABLE normalized_transaction_output_directory
+    )
     if(generation_output_count GREATER 0)
         math(EXPR last_generation_output_index "${generation_output_count} - 1")
         foreach(generation_output_index RANGE 0 ${last_generation_output_index})
@@ -291,7 +296,12 @@ function(
                 set(${out_error} "output hash length validation failed" PARENT_SCOPE)
                 return()
             endif()
-            file(RELATIVE_PATH generation_output_relative_path "${OUTPUT_DIRECTORY}" "${generation_output}")
+            cmake_path(
+                RELATIVE_PATH
+                generation_output
+                BASE_DIRECTORY "${normalized_transaction_output_directory}"
+                OUTPUT_VARIABLE generation_output_relative_path
+            )
             if(
                 generation_output_relative_path STREQUAL ""
                 OR generation_output_relative_path MATCHES "^\\.\\.(\\\\|/|$)"

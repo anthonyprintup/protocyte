@@ -15548,7 +15548,11 @@ def test_descriptor_set_library_accepts_build_generated_input_with_files(
         capture_output=True,
         text=True,
     )
-    assert "no work to do" in no_change.stdout.lower()
+    assert "ProtocyteOwnershipGuard.cmake" in no_change.stdout
+    assert "Generating" not in no_change.stdout
+    assert descriptor_set.stat().st_mtime_ns == initial_descriptor_mtime_ns
+    assert common_header.stat().st_mtime_ns == initial_header_mtime_ns
+    assert common_header.read_text(encoding="utf-8") == initial_header
 
     common_proto.write_text(
         'syntax = "proto3"; package generated_input; message Common { uint32 version = 1; }\n',
