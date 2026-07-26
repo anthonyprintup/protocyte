@@ -56,7 +56,9 @@ def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
     assert "$(command -v protoc)" in posix
     assert "Scripts" not in posix
 
-    linux_ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    quickstart_ci = (ROOT / ".github" / "workflows" / "quickstart.yml").read_text(
+        encoding="utf-8"
+    )
     for fragment in (
         "uv build --wheel",
         "uv venv build/quickstart-venv --python 3.12",
@@ -65,7 +67,7 @@ def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
         "cmake --build build/quickstart",
         "ctest --test-dir build/quickstart",
     ):
-        assert fragment in linux_ci
+        assert fragment in quickstart_ci
 
 
 def test_readme_documents_the_local_private_path_guard() -> None:
