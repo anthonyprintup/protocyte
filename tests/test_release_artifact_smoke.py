@@ -128,6 +128,21 @@ def test_release_plugin_artifact_runner_enforces_offline_install(
     assert all(call_cwd == test_root for _, call_cwd, _ in calls)
     assert all(call_env == install_env for _, _, call_env in calls)
     assert all(command[0] != "uv" for command, _, _ in calls)
+    configure = next(
+        command
+        for command, _, _ in calls
+        if command[0] == str(cmake) and "-S" in command
+    )
+    assert (
+        f"-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE={REPO_ROOT.resolve()}" in configure
+    )
+    assert "-DPROTOCYTE_FETCH_PROTOBUF=OFF" in configure
+    assert f"-DProtobuf_PROTOC_EXECUTABLE={protoc.resolve()}" in configure
+    assert (
+        "-DPROTOCYTE_PLUGIN_EXECUTABLE="
+        f"{test_root / 'venv' / 'bin' / 'protoc-gen-protocyte'}"
+        in configure
+    )
     assert any(
         command[0] == str(cmake) and "--build" in command for command, _, _ in calls
     )

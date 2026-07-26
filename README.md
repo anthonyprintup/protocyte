@@ -24,8 +24,11 @@ uv pip install --python $python $wheel
 
 $protoc = (Get-Command protoc).Source
 $plugin = "$PWD\build\quickstart-venv\Scripts\protoc-gen-protocyte.exe"
+$source = (Resolve-Path .).Path
 cmake -S examples/quickstart -B build/quickstart `
-  "-DPROTOC_EXECUTABLE=$protoc" `
+  "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=$source" `
+  -DPROTOCYTE_FETCH_PROTOBUF=OFF `
+  "-DProtobuf_PROTOC_EXECUTABLE=$protoc" `
   "-DPROTOCYTE_PLUGIN_EXECUTABLE=$plugin"
 cmake --build build/quickstart --config Release
 ctest --test-dir build/quickstart -C Release --output-on-failure
@@ -45,8 +48,11 @@ uv pip install --python "$python" "$wheel"
 
 protoc=$(command -v protoc)
 plugin="$PWD/build/quickstart-venv/bin/protoc-gen-protocyte"
+source_dir="$PWD"
 cmake -S examples/quickstart -B build/quickstart \
-  "-DPROTOC_EXECUTABLE=$protoc" \
+  "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=$source_dir" \
+  -DPROTOCYTE_FETCH_PROTOBUF=OFF \
+  "-DProtobuf_PROTOC_EXECUTABLE=$protoc" \
   "-DPROTOCYTE_PLUGIN_EXECUTABLE=$plugin" \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/quickstart --config Release
@@ -66,7 +72,7 @@ part of the complete install-to-round-trip path:
 
 #include <protocyte/runtime/runtime.hpp>
 
-#include "quickstart.protocyte.hpp"
+#include "reading.protocyte.hpp"
 
 namespace {
     int report_error(const char *operation, const protocyte::Error &error, const int exit_code) {
@@ -1136,7 +1142,7 @@ helper the project called and name both valid alternatives, such as
 ## Debugging
 
 LLDB formatters for Protocyte runtime and generated message types are documented
-in [docs/debugger.md](docs/debugger.md).
+in the [Debugging wiki page](https://github.com/anthonyprintup/protocyte/wiki/Debugging).
 
 ## Plugin Parameters
 

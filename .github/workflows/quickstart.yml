@@ -61,7 +61,9 @@ jobs:
       - name: Configure quick-start example
         run: >
           cmake -S examples/quickstart -B build/quickstart
-          "-DPROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=${{ github.workspace }}"
+          -DPROTOCYTE_FETCH_PROTOBUF=OFF
+          "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
           "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/bin/protoc-gen-protocyte"
 
       - name: Generate and build quick-start example
@@ -69,6 +71,20 @@ jobs:
 
       - name: Run quick-start round trip
         run: ctest --test-dir build/quickstart --output-on-failure
+
+      - name: Configure ExternalProject superbuild example
+        run: >
+          cmake -S examples/external-project-superbuild -B build/external-project
+          -DCMAKE_BUILD_TYPE=Release
+          "-DPROTOCYTE_SOURCE_DIR=${{ github.workspace }}"
+          -DPROTOCYTE_FETCH_PROTOBUF=OFF
+          "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/bin/protoc-gen-protocyte"
+
+      - name: Build and test ExternalProject superbuild example
+        run: |
+          cmake --build build/external-project --target application_external
+          ctest --test-dir build/external-project/application --output-on-failure
 
       - name: Verify incremental ownership, relocation, and multi-config generation
         env:
@@ -131,7 +147,9 @@ jobs:
       - name: Configure quick-start example
         run: >
           cmake -S examples/quickstart -B build/quickstart
-          "-DPROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=${{ github.workspace }}"
+          -DPROTOCYTE_FETCH_PROTOBUF=OFF
+          "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
           "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/Scripts/protoc-gen-protocyte.exe"
 
       - name: Generate and build quick-start example
@@ -139,6 +157,19 @@ jobs:
 
       - name: Run quick-start round trip
         run: ctest --test-dir build/quickstart -C Release --output-on-failure
+
+      - name: Configure ExternalProject superbuild example
+        run: >
+          cmake -S examples/external-project-superbuild -B build/external-project
+          "-DPROTOCYTE_SOURCE_DIR=${{ github.workspace }}"
+          -DPROTOCYTE_FETCH_PROTOBUF=OFF
+          "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/Scripts/protoc-gen-protocyte.exe"
+
+      - name: Build and test ExternalProject superbuild example
+        run: |
+          cmake --build build/external-project --config Release --target application_external
+          ctest --test-dir build/external-project/application -C Release --output-on-failure
 
   macos:
     name: macOS
@@ -183,7 +214,9 @@ jobs:
         run: >
           cmake -S examples/quickstart -B build/quickstart
           -DCMAKE_BUILD_TYPE=Release
-          "-DPROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=${{ github.workspace }}"
+          -DPROTOCYTE_FETCH_PROTOBUF=OFF
+          "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
           "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/bin/protoc-gen-protocyte"
 
       - name: Generate and build quick-start example
@@ -191,3 +224,17 @@ jobs:
 
       - name: Run quick-start round trip
         run: ctest --test-dir build/quickstart --output-on-failure
+
+      - name: Configure ExternalProject superbuild example
+        run: >
+          cmake -S examples/external-project-superbuild -B build/external-project
+          -DCMAKE_BUILD_TYPE=Release
+          "-DPROTOCYTE_SOURCE_DIR=${{ github.workspace }}"
+          -DPROTOCYTE_FETCH_PROTOBUF=OFF
+          "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
+          "-DPROTOCYTE_PLUGIN_EXECUTABLE=${{ github.workspace }}/build/quickstart-venv/bin/protoc-gen-protocyte"
+
+      - name: Build and test ExternalProject superbuild example
+        run: |
+          cmake --build build/external-project --target application_external
+          ctest --test-dir build/external-project/application --output-on-failure
