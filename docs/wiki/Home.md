@@ -1,6 +1,4 @@
-# Home
-
-## Protocyte
+# Protocyte
 
 Protocyte is a Python `protoc` plugin that generates C++20 protobuf code for freestanding, embedded, kernel-style, and hosted applications.
 

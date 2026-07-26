@@ -33,7 +33,8 @@ def test_wiki_navigation_is_complete_unique_and_title_aligned() -> None:
     assert len(targets) == len(set(targets))
     assert sorted(targets) == published
     for name, target in links:
-        assert _page(target).splitlines()[0] == f"# {name}"
+        expected_title = "Protocyte" if target == "Home" else name
+        assert _page(target).splitlines()[0] == f"# {expected_title}"
     assert names[0] == "Home"
 
 
