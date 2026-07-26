@@ -5,6 +5,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _workflow(name: str) -> str:
+    return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+
 def _step_containing(job: str, needle: str) -> str:
     before, after = job.split(needle, maxsplit=1)
     step_start = before.rfind("\n      - name:")
@@ -63,6 +67,42 @@ def test_protobuf_fallback_is_reusable_and_required_by_ci_and_release() -> None:
     assert "    uses: ./.github/workflows/ci.yml\n" in release
 
 
+def test_ci_groups_related_jobs_in_reusable_workflows() -> None:
+    ci = _workflow("ci.yml")
+    groups = {
+        "plugin": ("Plugin", "plugin.yml", ("test",)),
+        "quickstart": ("Quick Start", "quickstart.yml", ("linux", "windows", "macos")),
+        "smoke": (
+            "Smoke",
+            "smoke.yml",
+            ("host-clang-cl", "host-msvc", "host-linux", "kernel-build"),
+        ),
+        "cmake-integration": (
+            "CMake Integration",
+            "cmake-integration.yml",
+            (
+                "fetchcontent-linux",
+                "find-package-linux",
+                "find-package-windows",
+                "find-package-macos",
+                "hell-linux",
+                "visual-studio-incremental",
+            ),
+        ),
+    }
+
+    for caller_name, (group_name, workflow_name, job_names) in groups.items():
+        caller = _job_named(ci, caller_name)
+        workflow = _workflow(workflow_name)
+
+        assert f"name: {group_name}" in caller
+        assert f"uses: ./.github/workflows/{workflow_name}" in caller
+        assert "checkout_ref: ${{ inputs.checkout_ref || github.sha }}" in caller
+        assert "workflow_call:" in workflow
+        for job_name in job_names:
+            assert f"\n  {job_name}:\n" in workflow
+
+
 def test_ci_generates_with_the_public_protobuf_dependency_floor() -> None:
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     floor = _job_named(ci, "protobuf-floor")
@@ -110,20 +150,17 @@ def test_protobuf_fallback_gates_linux_and_windows_source_builds() -> None:
 
 
 def test_generated_library_relocation_is_required_on_linux_and_windows() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    quickstart = _workflow("quickstart.yml")
+    smoke = _workflow("smoke.yml")
     test_node = (
         "tests/test_cmake.py::"
         "test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix"
     )
-    linux_job = ci.split("\n  quickstart-linux:\n", maxsplit=1)[1].split(
-        "\n  smoke-host:\n", maxsplit=1
-    )[0]
-    windows_job = ci.split("\n  smoke-host:\n", maxsplit=1)[1].split(
-        "\n  smoke-host-msvc:\n", maxsplit=1
-    )[0]
+    linux_job = _job_named(quickstart, "linux")
+    windows_job = _job_named(smoke, "host-clang-cl")
     required_env = 'PROTOCYTE_CI_REQUIRE_INSTALL_EXPORT_TEST: "1"'
 
-    assert ci.count(test_node) == 2
+    assert (quickstart + smoke).count(test_node) == 2
     linux_step = _step_containing(linux_job, test_node)
     windows_step = _step_containing(windows_job, test_node)
     assert required_env in linux_step
@@ -133,10 +170,7 @@ def test_generated_library_relocation_is_required_on_linux_and_windows() -> None
 
 
 def test_ci_requires_real_protoc_integrations_without_tripling_the_matrix() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    plugin_job = ci.split("  plugin:\n", maxsplit=1)[1].split(
-        "  quickstart-linux:\n", maxsplit=1
-    )[0]
+    plugin_job = _job_named(_workflow("plugin.yml"), "test")
 
     assert "Install prebuilt protoc for required CMake integrations" in plugin_job
     assert "if: matrix.python-version == '3.12'" in plugin_job
@@ -147,8 +181,21 @@ def test_ci_requires_real_protoc_integrations_without_tripling_the_matrix() -> N
     assert "PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS:" in plugin_job
 
 
+def test_ci_runs_cmake_integrations_concurrently() -> None:
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    plugin = _job_named(_workflow("plugin.yml"), "test")
+    integration = _steps_by_name(plugin)["Run CMake integration tests"]
+
+    assert '"pytest-xdist>=3.8.0"' in pyproject
+    assert "if: matrix.python-version == '3.12'" in integration
+    assert (
+        "run: uv run pytest -q -m cmake_integration -n 4 --dist worksteal"
+        in integration
+    )
+
+
 def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    quickstart = _workflow("quickstart.yml")
     pinned_actions = (
         "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
         "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
@@ -156,11 +203,11 @@ def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
     )
 
     for job_name, runner in (
-        ("quickstart-linux", "ubuntu-latest"),
-        ("quickstart-windows", "windows-latest"),
-        ("quickstart-macos", "macos-latest"),
+        ("linux", "ubuntu-latest"),
+        ("windows", "windows-latest"),
+        ("macos", "macos-latest"),
     ):
-        job = _job_named(ci, job_name)
+        job = _job_named(quickstart, job_name)
         assert f"runs-on: {runner}" in job
         for action in pinned_actions:
             assert f"uses: {action}" in job
@@ -178,7 +225,7 @@ def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
             assert fragment in job
         assert "${{ steps.protoc.outputs.protoc }}" in job
 
-    windows_job = _job_named(ci, "quickstart-windows")
+    windows_job = _job_named(quickstart, "windows")
     assert "protoc-gen-protocyte.exe --help" in windows_job
     assert "protoc-gen-protocyte.exe --version" in windows_job
     assert "uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756" in (
@@ -187,8 +234,8 @@ def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
     assert "cmake --build build/quickstart --config Release" in windows_job
     assert "ctest --test-dir build/quickstart -C Release" in windows_job
 
-    for job_name in ("quickstart-linux", "quickstart-macos"):
-        job = _job_named(ci, job_name)
+    for job_name in ("linux", "macos"):
+        job = _job_named(quickstart, job_name)
         assert "build/quickstart-venv/bin/protoc-gen-protocyte --help" in job
         assert "build/quickstart-venv/bin/protoc-gen-protocyte --version" in job
 
@@ -196,8 +243,7 @@ def test_quickstart_wheel_is_exercised_on_linux_windows_and_macos() -> None:
 def test_macos_find_package_uses_a_read_only_installed_prefix_and_managed_plugin() -> (
     None
 ):
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    job = _job_named(ci, "find-package-macos")
+    job = _job_named(_workflow("cmake-integration.yml"), "find-package-macos")
     steps = _steps_by_name(job)
 
     assert "runs-on: macos-latest" in job
@@ -240,10 +286,7 @@ def test_macos_find_package_uses_a_read_only_installed_prefix_and_managed_plugin
 
 
 def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    smoke_job = ci.split("  smoke-host:\n", maxsplit=1)[1].split(
-        "  smoke-host-msvc:\n", maxsplit=1
-    )[0]
+    smoke_job = _job_named(_workflow("smoke.yml"), "host-clang-cl")
 
     assert "PROTOCYTE_SMOKE_PROTOC:" in smoke_job
     assert "PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR:" in smoke_job
@@ -260,10 +303,9 @@ def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
 
 
 def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    visual_studio_job = ci.split("  visual-studio-incremental:\n", maxsplit=1)[1].split(
-        "  smoke-host-linux:\n", maxsplit=1
-    )[0]
+    visual_studio_job = _job_named(
+        _workflow("cmake-integration.yml"), "visual-studio-incremental"
+    )
 
     assert "runs-on: windows-latest" in visual_studio_job
     assert 'PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS: "1"' in visual_studio_job
@@ -276,8 +318,9 @@ def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
 
 
 def test_fetchcontent_install_gate_counts_a_final_unterminated_manifest_entry() -> None:
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    fetchcontent_job = _job_named(ci, "fetchcontent-linux")
+    fetchcontent_job = _job_named(
+        _workflow("cmake-integration.yml"), "fetchcontent-linux"
+    )
     install_gate = _steps_by_name(fetchcontent_job)[
         "Verify FetchContent install isolation"
     ]
