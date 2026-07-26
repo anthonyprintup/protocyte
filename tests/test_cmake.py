@@ -1264,7 +1264,7 @@ def _write_version_only_plugin(path: Path, version: str) -> Path:
     return plugin
 
 
-def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
+def test_cmake_configs_track_generator_support_files() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source_config = (repo_root / "cmake" / "Protocyte.cmake").read_text(
         encoding="utf-8"
@@ -1282,14 +1282,17 @@ def test_installed_cmake_config_tracks_descriptor_set_helper() -> None:
         encoding="utf-8"
     )
 
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in source_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"' in installed_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in source_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/extensions.py"' in installed_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"' in source_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"' in installed_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/paths.py"' in source_config
-    assert '"${PROTOCYTE_PACKAGE_ROOT}/paths.py"' in installed_config
+    for generator_source in (
+        "_deterministic_math.py",
+        "_formatter_supervisor.py",
+        "descriptor_set.py",
+        "extensions.py",
+        "names.py",
+        "paths.py",
+    ):
+        source_entry = f'"${{PROTOCYTE_PACKAGE_ROOT}}/{generator_source}"'
+        assert source_entry in source_config
+        assert source_entry in installed_config
     assert (
         'set(PROTOCYTE_IMPORT_SCANNER "${PROTOCYTE_PACKAGE_ROOT}/import_scanner.py")'
         in source_config

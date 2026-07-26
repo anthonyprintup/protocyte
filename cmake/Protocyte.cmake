@@ -12,6 +12,7 @@ set(
     PROTOCYTE_GENERATOR_SOURCES
     "${PROTOCYTE_PACKAGE_ROOT}/__init__.py"
     "${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/_formatter_supervisor.py"
     "${PROTOCYTE_PACKAGE_ROOT}/cpp.py"
     "${PROTOCYTE_PACKAGE_ROOT}/dependency_file.py"
     "${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"
@@ -20,6 +21,7 @@ set(
     "${PROTOCYTE_IMPORT_SCANNER}"
     "${PROTOCYTE_PACKAGE_ROOT}/main.py"
     "${PROTOCYTE_PACKAGE_ROOT}/model.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/names.py"
     "${PROTOCYTE_PACKAGE_ROOT}/parameters.py"
     "${PROTOCYTE_PACKAGE_ROOT}/paths.py"
     "${PROTOCYTE_PACKAGE_ROOT}/plugin.py"
