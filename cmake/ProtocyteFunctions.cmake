@@ -1140,30 +1140,54 @@ function(_protocyte_normalize_generated_path out_var proto_name)
     endwhile()
     set(generated_base "${normalized}.protocyte")
     set(generated_path_exceeds_budget FALSE)
+    set(generated_path_is_budgeted FALSE)
     if(ARGC GREATER 2 AND NOT "${ARGV2}" STREQUAL "")
         set(max_output_path_length "${ARGV2}")
+        set(generated_path_is_budgeted TRUE)
+    endif()
+    if(ARGC GREATER 3 AND NOT "${ARGV3}" STREQUAL "")
+        set(max_output_directory_length "${ARGV3}")
+        set(generated_path_is_budgeted TRUE)
+    endif()
+    if(generated_path_is_budgeted)
+        string(LENGTH ".protocyte.hpp" generated_file_suffix_length)
+        set(generated_path_digest_length 64)
+        math(
+            EXPR
+            minimum_hashed_generated_path_length
+            "${generated_file_suffix_length} + ${generated_path_digest_length} + 1"
+        )
+        math(
+            EXPR
+            stable_budgeted_generated_directory_length
+            "${minimum_hashed_generated_path_length} - 12"
+        )
+        if(
+            NOT DEFINED max_output_path_length
+            OR max_output_path_length GREATER minimum_hashed_generated_path_length
+        )
+            set(max_output_path_length "${minimum_hashed_generated_path_length}")
+        endif()
+        if(
+            NOT DEFINED max_output_directory_length
+            OR max_output_directory_length GREATER stable_budgeted_generated_directory_length
+        )
+            set(max_output_directory_length "${stable_budgeted_generated_directory_length}")
+        endif()
         string(LENGTH "${generated_base}.hpp" output_path_length)
         if(output_path_length GREATER max_output_path_length)
             set(generated_path_exceeds_budget TRUE)
         endif()
-    endif()
-    if(ARGC GREATER 3 AND NOT "${ARGV3}" STREQUAL "")
         string(FIND "${normalized}" "/" final_directory_separator REVERSE)
         if(NOT final_directory_separator EQUAL -1)
             string(SUBSTRING "${normalized}" 0 ${final_directory_separator} generated_directory)
             string(LENGTH "${generated_directory}" generated_directory_length)
-            if(generated_directory_length GREATER ARGV3)
+            if(generated_directory_length GREATER max_output_directory_length)
                 set(generated_path_exceeds_budget TRUE)
             endif()
         endif()
     endif()
     if(generated_path_exceeds_budget)
-        if(NOT DEFINED max_output_path_length)
-            set(max_output_path_length 255)
-        elseif(max_output_path_length GREATER 255)
-            set(max_output_path_length 255)
-        endif()
-        string(LENGTH ".protocyte.hpp" generated_file_suffix_length)
         string(SHA256 descriptor_digest "${proto_name}")
         string(TOUPPER "${descriptor_digest}" descriptor_digest)
         string(LENGTH "${descriptor_digest}" digest_length)

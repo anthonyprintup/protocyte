@@ -201,12 +201,74 @@ def test_response_file_names_respect_complete_path_budget(path_budget: int) -> N
         f"{expected_base}.hpp",
     }
     assert all(len(file.name.encode("ascii")) <= path_budget for file in response.file)
-    if path_budget < len(generated_file_base(descriptor_name) + ".hpp"):
-        digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
-        assert "/" not in expected_base
-        assert expected_base.endswith(f"~{digest}.protocyte")
-    else:
-        assert "/" in expected_base
+    digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
+    assert "/" not in expected_base
+    assert expected_base.endswith(f"~{digest}.protocyte")
+
+
+def test_imported_header_name_is_stable_across_separate_path_budgets() -> None:
+    descriptor_name = f"{'nested/' * 10}dependency.proto"
+    dependency = descriptor_pb2.FileDescriptorProto(
+        name=descriptor_name,
+        package="dependency",
+        syntax="proto3",
+    )
+    dependency.message_type.add(name="Dependency")
+    consumer = descriptor_pb2.FileDescriptorProto(
+        name="consumer.proto",
+        package="consumer",
+        syntax="proto3",
+    )
+    consumer.dependency.append(descriptor_name)
+    consumer_message = consumer.message_type.add(name="Consumer")
+    consumer_message.field.add(
+        name="dependency",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".dependency.Dependency",
+    )
+
+    def generate(
+        generated_file: str,
+        *,
+        path_budget: int,
+        directory_budget: int,
+    ) -> plugin_pb2.CodeGeneratorResponse:
+        raw_parameter = (
+            "format=off,"
+            f"_protocyte_generated_path_max_bytes={path_budget},"
+            f"_protocyte_generated_directory_max_bytes={directory_budget}"
+        )
+        request = plugin_pb2.CodeGeneratorRequest(
+            file_to_generate=[generated_file],
+            parameter=f"_protocyte_options_hex={raw_parameter.encode('utf-8').hex()}",
+            proto_file=[dependency, consumer],
+        )
+        return generate_response(request)
+
+    dependency_response = generate(
+        descriptor_name,
+        path_budget=MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+        directory_budget=MIN_HASHED_GENERATED_FILE_PATH_BYTES - 12,
+    )
+    consumer_response = generate(
+        consumer.name,
+        path_budget=160,
+        directory_budget=148,
+    )
+
+    assert not dependency_response.error
+    assert not consumer_response.error
+    dependency_header = next(
+        file.name for file in dependency_response.file if file.name.endswith(".hpp")
+    )
+    consumer_header = next(
+        file.content
+        for file in consumer_response.file
+        if file.name == "consumer.protocyte.hpp"
+    )
+    assert f'#include "{dependency_header}"' in consumer_header
 
 
 def test_complete_path_budget_distinguishes_matching_leaf_names() -> None:
@@ -224,26 +286,26 @@ def test_complete_path_budget_distinguishes_matching_leaf_names() -> None:
     assert len(second + ".hpp") == MIN_HASHED_GENERATED_FILE_PATH_BYTES
 
 
-def test_generated_directory_budget_folds_nested_path_at_boundary() -> None:
+def test_budgeted_generated_file_name_is_stable_across_directory_budgets() -> None:
     descriptor_name = f"{'readable/' * 12}leaf.proto"
     ordinary_base = generated_file_base(descriptor_name)
     ordinary_directory = ordinary_base.rpartition("/")[0]
 
-    at_boundary = generated_file_base(
+    roomy = generated_file_base(
         descriptor_name,
         max_output_path_bytes=255,
         max_output_directory_bytes=len(ordinary_directory),
     )
-    over_boundary = generated_file_base(
+    tight = generated_file_base(
         descriptor_name,
         max_output_path_bytes=255,
         max_output_directory_bytes=len(ordinary_directory) - 1,
     )
 
-    assert at_boundary == ordinary_base
-    assert "/" not in over_boundary
+    assert roomy == tight
+    assert "/" not in tight
     digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
-    assert over_boundary.endswith(f"~{digest}.protocyte")
+    assert tight.endswith(f"~{digest}.protocyte")
 
 
 def test_response_rejects_portable_generated_path_collisions() -> None:

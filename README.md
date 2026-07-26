@@ -303,9 +303,12 @@ Protocyte retains a readable prefix and appends the full SHA-256 digest of the
 original segment. The final segment also reserves room for
 `.protocyte.hpp`/`.protocyte.cpp`. CMake projects generated with Visual Studio
 also budget the complete path below `OUT_DIR` for MSBuild's legacy path limits.
-Only names that exceed that remaining budget are folded into a readable prefix
-plus a SHA-256 digest of the complete descriptor name. Ninja and other
-non-Visual-Studio generators retain the ordinary component-bounded mapping.
+Budgeted invocations use one canonical compact spelling sized for the smallest
+supported remaining budget, so separately generated dependencies and consumers
+name imported headers identically even when their output roots have different
+lengths. Names that require compaction are folded into a SHA-256 digest of the
+complete descriptor name. Ninja and other non-Visual-Studio generators retain
+the ordinary component-bounded mapping.
 
 Descriptor names beginning with `-` are rejected, including during
 descriptor-set inspection, because protoc interprets selected names as
@@ -840,9 +843,11 @@ This is the lower-level primitive. It creates the custom target named by
   expressions are not accepted. A relative path is resolved from
   `CMAKE_CURRENT_BINARY_DIR`. With a Visual Studio generator, Protocyte
   automatically compacts overlong descriptor output paths to fit MSBuild's
-  source-item limits. Configuration reports a targeted error if the absolute
-  `OUT_DIR` itself leaves too little room for a collision-resistant generated
-  name; choose a shorter `OUT_DIR` or build directory in that case.
+  source-item limits. The compact spelling is stable across targets with
+  different output-root lengths. Configuration reports a targeted error if
+  the absolute `OUT_DIR` itself leaves too little room for a
+  collision-resistant generated name; choose a shorter `OUT_DIR` or build
+  directory in that case.
   Generated files in one configure must have exactly one current target owner,
   including portable case-insensitive path aliases. One canonical `OUT_DIR`
   belongs to one canonical CMake build tree. Targets and configurations in that

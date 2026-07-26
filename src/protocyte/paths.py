@@ -18,6 +18,9 @@ MIN_HASHED_GENERATED_FILE_PATH_BYTES = (
     + _GENERATED_PATH_DIGEST_BYTES
     + len(_GENERATED_FILE_SUFFIX)
 )
+_STABLE_BUDGETED_GENERATED_DIRECTORY_BYTES = (
+    MIN_HASHED_GENERATED_FILE_PATH_BYTES - 12
+)
 _WINDOWS_RESERVED_PATH_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{index}" for index in range(1, 10)}
@@ -56,25 +59,39 @@ def generated_file_base(
 ) -> str:
     """Return the portable generated-file base for a descriptor name.
 
-    ``max_output_path_bytes`` budgets the complete relative ``.hpp`` output
-    path, while ``max_output_directory_bytes`` independently budgets its
-    relative parent directory. When the normal component-bounded mapping
-    cannot fit either limit, the directory hierarchy is folded into a readable
-    prefix plus a SHA-256 digest of the complete descriptor name. The digest
-    keeps this fallback collision resistant even when distinct virtual
-    directories share a final segment.
+    Supplying either budget selects a canonical compact mapping that fits the
+    smallest output-root budgets accepted by the Visual Studio integration.
+    Larger local budgets never lengthen that spelling, so separately generated
+    dependencies and consumers agree on imported header names. Smaller explicit
+    budgets remain authoritative. When the normal component-bounded mapping
+    cannot fit, the directory hierarchy is folded into a SHA-256 digest of the
+    complete descriptor name.
     """
     normalized = normalize_generated_path(proto_name.removesuffix(".proto"))
     generated_base = normalized + ".protocyte"
     generated_directory = generated_base.rpartition("/")[0]
-    path_fits = (
-        max_output_path_bytes is None
-        or len(generated_base + ".hpp") <= max_output_path_bytes
+    budgeted = (
+        max_output_path_bytes is not None
+        or max_output_directory_bytes is not None
     )
+    if not budgeted:
+        return generated_base
+    effective_path_budget = MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    if max_output_path_bytes is not None:
+        effective_path_budget = min(
+            effective_path_budget,
+            max_output_path_bytes,
+        )
+    effective_directory_budget = _STABLE_BUDGETED_GENERATED_DIRECTORY_BYTES
+    if max_output_directory_bytes is not None:
+        effective_directory_budget = min(
+            effective_directory_budget,
+            max_output_directory_bytes,
+        )
+    path_fits = len(generated_base + ".hpp") <= effective_path_budget
     directory_fits = (
         not generated_directory
-        or max_output_directory_bytes is None
-        or len(generated_directory) <= max_output_directory_bytes
+        or len(generated_directory) <= effective_directory_budget
     )
     if path_fits and directory_fits:
         return generated_base
@@ -89,11 +106,6 @@ def generated_file_base(
 
     digest = hashlib.sha256(proto_name.encode("utf-8")).hexdigest().upper()
     readable = normalized.replace("/", "_")
-    effective_path_budget = (
-        min(max_output_path_bytes, _MAX_GENERATED_PATH_COMPONENT_BYTES)
-        if max_output_path_bytes is not None
-        else _MAX_GENERATED_PATH_COMPONENT_BYTES
-    )
     prefix_bytes = (
         effective_path_budget
         - len(_GENERATED_FILE_SUFFIX)
