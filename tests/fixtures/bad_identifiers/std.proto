@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package std;
+
+message Payload {
+  message std {}
+}

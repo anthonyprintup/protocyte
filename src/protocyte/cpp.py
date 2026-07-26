@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+import ctypes
+from ctypes import wintypes
 from dataclasses import dataclass, field
 import hashlib
+import json
+import os
 from pathlib import Path
+import select
 import shutil
+import signal
 import subprocess
+import sys
 import threading
+import time
+from typing import BinaryIO
 
 from protocyte.errors import ProtocyteError
 from protocyte.model import (
@@ -20,10 +29,19 @@ from protocyte.model import (
     FileModel,
     MessageModel,
     OneofModel,
+    SourceDocumentation,
+    _cpp_string_literal,
     cpp_identifier,
-    cpp_pascal_identifier,
+)
+from protocyte.names import (
+    CppNameKind,
+    EmittedNameAllocator,
+    EmittedNameMember,
+    EmittedNameRequest,
+    PROTOCYTE_RUNTIME_CPP_SYMBOLS,
 )
 from protocyte.parameters import GeneratorOptions
+from protocyte.paths import generated_file_base
 from protocyte.runtime import runtime_files
 
 
@@ -99,8 +117,462 @@ class _FormatterResult:
     stderr: str
 
 
+def _decode_formatter_result(
+    returncode: int,
+    stdout: bytes,
+    stderr: bytes,
+) -> _FormatterResult:
+    return _FormatterResult(
+        returncode=returncode,
+        stdout=stdout.decode("utf-8")
+        if returncode == 0
+        else stdout.decode("utf-8", errors="replace"),
+        stderr=stderr.decode("utf-8", errors="replace"),
+    )
+
+
 class _FormatterOutputLimit(Exception):
     pass
+
+
+_FORMATTER_TEARDOWN_TIMEOUT_SECONDS = 0.5
+_FORMATTER_SUPERVISOR_STATUS_MAX_BYTES = 4096
+_FORMATTER_SUPERVISOR_PATH = Path(__file__).with_name("_formatter_supervisor.py")
+_WINDOWS_CREATE_SUSPENDED = 0x00000004
+_WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_WINDOWS_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+_WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+
+
+def _is_windows_formatter_platform() -> bool:
+    return os.name == "nt"
+
+
+class _WindowsJobBasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("per_process_user_time_limit", wintypes.LARGE_INTEGER),
+        ("per_job_user_time_limit", wintypes.LARGE_INTEGER),
+        ("limit_flags", wintypes.DWORD),
+        ("minimum_working_set_size", ctypes.c_size_t),
+        ("maximum_working_set_size", ctypes.c_size_t),
+        ("active_process_limit", wintypes.DWORD),
+        ("affinity", ctypes.c_size_t),
+        ("priority_class", wintypes.DWORD),
+        ("scheduling_class", wintypes.DWORD),
+    ]
+
+
+class _WindowsIoCounters(ctypes.Structure):
+    _fields_ = [
+        ("read_operation_count", ctypes.c_ulonglong),
+        ("write_operation_count", ctypes.c_ulonglong),
+        ("other_operation_count", ctypes.c_ulonglong),
+        ("read_transfer_count", ctypes.c_ulonglong),
+        ("write_transfer_count", ctypes.c_ulonglong),
+        ("other_transfer_count", ctypes.c_ulonglong),
+    ]
+
+
+class _WindowsJobExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("basic_limit_information", _WindowsJobBasicLimitInformation),
+        ("io_info", _WindowsIoCounters),
+        ("process_memory_limit", ctypes.c_size_t),
+        ("job_memory_limit", ctypes.c_size_t),
+        ("peak_process_memory_used", ctypes.c_size_t),
+        ("peak_job_memory_used", ctypes.c_size_t),
+    ]
+
+
+class _WindowsJobBasicAccountingInformation(ctypes.Structure):
+    _fields_ = [
+        ("total_user_time", wintypes.LARGE_INTEGER),
+        ("total_kernel_time", wintypes.LARGE_INTEGER),
+        ("this_period_total_user_time", wintypes.LARGE_INTEGER),
+        ("this_period_total_kernel_time", wintypes.LARGE_INTEGER),
+        ("total_page_fault_count", wintypes.DWORD),
+        ("total_processes", wintypes.DWORD),
+        ("active_processes", wintypes.DWORD),
+        ("total_terminated_processes", wintypes.DWORD),
+    ]
+
+
+def _windows_kernel32():
+    return ctypes.WinDLL("kernel32", use_last_error=True)
+
+
+def _raise_windows_error() -> None:
+    raise ctypes.WinError(ctypes.get_last_error())
+
+
+class _WindowsFormatterJob:
+    def __init__(self, handle: int) -> None:
+        self._handle: int | None = handle
+
+    @classmethod
+    def create(cls) -> _WindowsFormatterJob:
+        kernel32 = _windows_kernel32()
+        create_job = kernel32.CreateJobObjectW
+        create_job.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        create_job.restype = wintypes.HANDLE
+        handle = create_job(None, None)
+        if not handle:
+            _raise_windows_error()
+
+        information = _WindowsJobExtendedLimitInformation()
+        information.basic_limit_information.limit_flags = (
+            _WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        set_information = kernel32.SetInformationJobObject
+        set_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        )
+        set_information.restype = wintypes.BOOL
+        if not set_information(
+            handle,
+            _WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        ):
+            error = ctypes.WinError(ctypes.get_last_error())
+            kernel32.CloseHandle(handle)
+            raise error
+        return cls(handle)
+
+    def assign(self, process: subprocess.Popen[bytes]) -> None:
+        if self._handle is None:
+            raise OSError("formatter job is already closed")
+        process_handle = getattr(process, "_handle", None)
+        if process_handle is None:
+            raise OSError("formatter process handle is unavailable")
+
+        kernel32 = _windows_kernel32()
+        assign_process = kernel32.AssignProcessToJobObject
+        assign_process.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        assign_process.restype = wintypes.BOOL
+        if not assign_process(self._handle, int(process_handle)):
+            _raise_windows_error()
+
+    def has_active_processes(self) -> bool:
+        if self._handle is None:
+            return False
+        information = _WindowsJobBasicAccountingInformation()
+        kernel32 = _windows_kernel32()
+        query_information = kernel32.QueryInformationJobObject
+        query_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+        )
+        query_information.restype = wintypes.BOOL
+        if not query_information(
+            self._handle,
+            _WINDOWS_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+            None,
+        ):
+            _raise_windows_error()
+        return information.active_processes != 0
+
+    def wait_for_no_active_processes(self, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while self.has_active_processes():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.005, remaining))
+        return True
+
+    def close(self) -> None:
+        if self._handle is None:
+            return
+        handle = self._handle
+        self._handle = None
+        kernel32 = _windows_kernel32()
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+        if not close_handle(handle):
+            _raise_windows_error()
+
+
+# POSIX has no portable Job Object equivalent. A retained supervisor pins the
+# fresh formatter process-group identity until its status is reported and every
+# grouped process is killed. A trusted formatter that deliberately creates
+# another session or process group is outside this containment contract.
+@dataclass(frozen=True)
+class _PosixFormatterGroup:
+    process_group_id: int
+    status_stream: BinaryIO
+
+    def wait_for_formatter_exit(
+        self,
+        command: list[str],
+        timeout_seconds: float | None,
+    ) -> int:
+        deadline = (
+            None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        )
+        content = bytearray()
+        while b"\n" not in content:
+            remaining = (
+                None if deadline is None else max(0.0, deadline - time.monotonic())
+            )
+            if remaining == 0:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                readable, _, _ = select.select(
+                    (self.status_stream,),
+                    (),
+                    (),
+                    remaining,
+                )
+            except InterruptedError:
+                continue
+            if not readable:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                chunk = os.read(self.status_stream.fileno(), 1024)
+            except InterruptedError:
+                continue
+            if not chunk:
+                raise OSError("formatter supervisor exited without reporting status")
+            content.extend(chunk)
+            if len(content) > _FORMATTER_SUPERVISOR_STATUS_MAX_BYTES:
+                raise OSError("formatter supervisor reported an oversized status")
+
+        line, _, remainder = content.partition(b"\n")
+        if remainder:
+            raise OSError("formatter supervisor reported trailing status data")
+        try:
+            payload = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise OSError("formatter supervisor reported an invalid status") from exc
+
+        if isinstance(payload, dict) and set(payload) == {"returncode"}:
+            returncode = payload["returncode"]
+            if isinstance(returncode, int) and not isinstance(returncode, bool):
+                return returncode
+            raise OSError("formatter supervisor reported an invalid return code")
+
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if not isinstance(error, dict):
+            raise OSError("formatter supervisor reported an invalid status")
+        error_number = error.get("errno")
+        message = error.get("message")
+        filename = error.get("filename")
+        if not isinstance(message, str):
+            raise OSError("formatter supervisor reported an invalid launch error")
+        if error_number is None:
+            raise OSError(message)
+        if not isinstance(error_number, int) or isinstance(error_number, bool):
+            raise OSError("formatter supervisor reported an invalid launch errno")
+        if filename is not None and not isinstance(filename, str):
+            raise OSError("formatter supervisor reported an invalid launch filename")
+        raise OSError(error_number, message, filename)
+
+    def close(self) -> None:
+        self.status_stream.close()
+
+
+def _resume_windows_formatter_process(process: subprocess.Popen[bytes]) -> None:
+    process_handle = getattr(process, "_handle", None)
+    if process_handle is None:
+        raise OSError("formatter process handle is unavailable")
+
+    # Popen closes the primary thread handle, so resume via its retained process
+    # handle instead of rediscovering a thread by a potentially reused PID.
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    resume_process = ntdll.NtResumeProcess
+    resume_process.argtypes = (wintypes.HANDLE,)
+    resume_process.restype = wintypes.LONG
+    status = resume_process(int(process_handle))
+    if status < 0:
+        raise OSError(
+            f"could not resume the suspended formatter process: NTSTATUS 0x{status & 0xFFFFFFFF:08X}"
+        )
+
+
+def _formatter_popen_kwargs(
+    status_write_fd: int | None = None,
+) -> dict[str, object]:
+    if _is_windows_formatter_platform():
+        return {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
+            | _WINDOWS_CREATE_SUSPENDED
+        }
+    kwargs: dict[str, object] = {"start_new_session": True}
+    if status_write_fd is not None:
+        kwargs["pass_fds"] = (status_write_fd,)
+    return kwargs
+
+
+def _formatter_supervisor_command(
+    command: list[str],
+    status_write_fd: int,
+) -> list[str]:
+    return [
+        sys.executable,
+        str(_FORMATTER_SUPERVISOR_PATH),
+        str(status_write_fd),
+        *command,
+    ]
+
+
+def _start_formatter_process(
+    command: list[str],
+) -> tuple[
+    subprocess.Popen[bytes],
+    _WindowsFormatterJob | _PosixFormatterGroup,
+]:
+    containment: _WindowsFormatterJob | _PosixFormatterGroup
+    windows_job = (
+        _WindowsFormatterJob.create() if _is_windows_formatter_platform() else None
+    )
+    status_read_fd: int | None = None
+    status_write_fd: int | None = None
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        launch_command = command
+        if windows_job is None:
+            status_read_fd, status_write_fd = os.pipe()
+            launch_command = _formatter_supervisor_command(command, status_write_fd)
+        process = subprocess.Popen(
+            launch_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **_formatter_popen_kwargs(status_write_fd),
+        )
+        if windows_job is not None:
+            windows_job.assign(process)
+            _resume_windows_formatter_process(process)
+            containment = windows_job
+        else:
+            assert status_read_fd is not None
+            assert status_write_fd is not None
+            os.close(status_write_fd)
+            status_write_fd = None
+            status_stream = os.fdopen(status_read_fd, "rb", buffering=0)
+            status_read_fd = None
+            containment = _PosixFormatterGroup(process.pid, status_stream)
+        return process, containment
+    except BaseException:
+        for descriptor in (status_read_fd, status_write_fd):
+            if descriptor is None:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if windows_job is not None:
+            try:
+                windows_job.close()
+            except OSError:
+                pass
+        if process is not None:
+            if windows_job is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+            try:
+                process.kill()
+            except OSError:
+                pass
+            _wait_for_formatter_termination(process)
+        raise
+
+
+def _terminate_formatter_process_tree(
+    process: subprocess.Popen[bytes],
+    containment: _WindowsFormatterJob | _PosixFormatterGroup,
+) -> None:
+    if isinstance(containment, _WindowsFormatterJob):
+        try:
+            containment.close()
+        except OSError:
+            pass
+    else:
+        try:
+            os.killpg(containment.process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+
+    try:
+        process.kill()
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _wait_for_formatter_termination(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.wait(timeout=_FORMATTER_TEARDOWN_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except (OSError, ProcessLookupError):
+            pass
+        try:
+            process.wait(timeout=_FORMATTER_TEARDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _join_formatter_threads(threads: tuple[threading.Thread, ...]) -> bool:
+    deadline = time.monotonic() + _FORMATTER_TEARDOWN_TIMEOUT_SECONDS
+    for thread in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        thread.join(timeout=remaining)
+    return any(thread.is_alive() for thread in threads)
+
+
+def _close_formatter_streams(streams: Iterable[BinaryIO | None]) -> None:
+    for stream in streams:
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _cleanup_formatter_setup_failure(
+    process: subprocess.Popen[bytes],
+    job: _WindowsFormatterJob | _PosixFormatterGroup,
+    started_threads: list[threading.Thread],
+    worker_streams: list[tuple[threading.Thread, BinaryIO]],
+) -> None:
+    _terminate_formatter_process_tree(process, job)
+    _wait_for_formatter_termination(process)
+
+    started_ids = {id(thread) for thread in started_threads}
+    started_stream_ids = {
+        id(stream) for thread, stream in worker_streams if id(thread) in started_ids
+    }
+    process_streams = (process.stdin, process.stdout, process.stderr)
+    _close_formatter_streams(
+        stream
+        for stream in process_streams
+        if stream is not None and id(stream) not in started_stream_ids
+    )
+    _join_formatter_threads(tuple(started_threads))
+    _close_formatter_streams(process_streams)
+    if job is not None:
+        try:
+            job.close()
+        except OSError:
+            pass
 
 
 def _run_formatter_bounded(
@@ -108,89 +580,175 @@ def _run_formatter_bounded(
     content: str,
     *,
     timeout_seconds: float | None,
-    max_output_bytes: int,
+    max_output_bytes: int | None,
 ) -> _FormatterResult:
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert process.stdin is not None
-    assert process.stdout is not None
-    assert process.stderr is not None
-
-    output_lock = threading.Lock()
-    output_size = 0
-    output_limit_reached = threading.Event()
-    stdout_chunks: list[bytes] = []
-    stderr_chunks: list[bytes] = []
-    io_errors: list[OSError] = []
-
-    def read_stream(stream, chunks: list[bytes]) -> None:
-        nonlocal output_size
-        try:
-            while chunk := stream.read(64 * 1024):
-                with output_lock:
-                    if output_size + len(chunk) > max_output_bytes:
-                        output_limit_reached.set()
-                    else:
-                        output_size += len(chunk)
-                        chunks.append(chunk)
-                if output_limit_reached.is_set():
-                    process.kill()
-                    return
-        except OSError as exc:
-            if not output_limit_reached.is_set():
-                io_errors.append(exc)
-        finally:
-            stream.close()
-
-    def write_input() -> None:
-        try:
-            process.stdin.write(content.encode("utf-8"))
-        except (BrokenPipeError, OSError):
-            pass
-        finally:
-            process.stdin.close()
-
-    stdout_reader = threading.Thread(
-        target=read_stream,
-        args=(process.stdout, stdout_chunks),
-        name="protocyte-formatter-stdout",
-    )
-    stderr_reader = threading.Thread(
-        target=read_stream,
-        args=(process.stderr, stderr_chunks),
-        name="protocyte-formatter-stderr",
-    )
-    stdin_writer = threading.Thread(
-        target=write_input,
-        name="protocyte-formatter-stdin",
-    )
-    stdout_reader.start()
-    stderr_reader.start()
-    stdin_writer.start()
-
+    input_bytes = content.encode("utf-8")
+    process, job = _start_formatter_process(command)
+    started_threads: list[threading.Thread] = []
+    worker_streams: list[tuple[threading.Thread, BinaryIO]] = []
     try:
-        returncode = process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+        assert process.stdin is not None
+        assert process.stdout is not None
+        assert process.stderr is not None
+
+        output_lock = threading.Lock()
+        output_size = 0
+        output_limit_reached = threading.Event()
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        io_errors: list[OSError] = []
+        termination_lock = threading.Lock()
+        termination_requested = False
+
+        def terminate_process_tree() -> None:
+            nonlocal termination_requested
+            with termination_lock:
+                if termination_requested:
+                    return
+                termination_requested = True
+            _terminate_formatter_process_tree(process, job)
+
+        def read_stream(stream, chunks: list[bytes]) -> None:
+            nonlocal output_size
+            try:
+                while chunk := stream.read(64 * 1024):
+                    with output_lock:
+                        if (
+                            max_output_bytes is not None
+                            and output_size + len(chunk) > max_output_bytes
+                        ):
+                            output_limit_reached.set()
+                        else:
+                            output_size += len(chunk)
+                            chunks.append(chunk)
+                    if output_limit_reached.is_set():
+                        terminate_process_tree()
+                        return
+            except OSError as exc:
+                if not output_limit_reached.is_set():
+                    io_errors.append(exc)
+            finally:
+                stream.close()
+
+        def write_input() -> None:
+            try:
+                process.stdin.write(input_bytes)
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+            finally:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+
+        worker_streams = [
+            (
+                threading.Thread(
+                    target=read_stream,
+                    args=(process.stdout, stdout_chunks),
+                    name="protocyte-formatter-stdout",
+                    daemon=True,
+                ),
+                process.stdout,
+            ),
+            (
+                threading.Thread(
+                    target=read_stream,
+                    args=(process.stderr, stderr_chunks),
+                    name="protocyte-formatter-stderr",
+                    daemon=True,
+                ),
+                process.stderr,
+            ),
+            (
+                threading.Thread(
+                    target=write_input,
+                    name="protocyte-formatter-stdin",
+                    daemon=True,
+                ),
+                process.stdin,
+            ),
+        ]
+        for thread, _stream in worker_streams:
+            thread.start()
+            started_threads.append(thread)
+    except BaseException:
+        _cleanup_formatter_setup_failure(process, job, started_threads, worker_streams)
         raise
+
+    stdout_reader, stderr_reader, stdin_writer = (
+        thread for thread, _stream in worker_streams
+    )
+
+    timeout: subprocess.TimeoutExpired | None = None
+    formatter_error: OSError | None = None
+    descendant_error: str | None = None
+    returncode = 0
+    try:
+        if isinstance(job, _PosixFormatterGroup):
+            try:
+                returncode = job.wait_for_formatter_exit(command, timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                timeout = exc
+            except OSError as exc:
+                if not output_limit_reached.is_set():
+                    formatter_error = exc
+            finally:
+                # The live supervisor still owns the original PGID here, so it
+                # cannot be reused between status receipt and group teardown.
+                terminate_process_tree()
+                _wait_for_formatter_termination(process)
+        else:
+            try:
+                returncode = process.wait(timeout=timeout_seconds)
+                try:
+                    if not job.wait_for_no_active_processes(
+                        _FORMATTER_TEARDOWN_TIMEOUT_SECONDS
+                    ):
+                        descendant_error = "formatter exited while descendant processes remained active"
+                except OSError as exc:
+                    descendant_error = (
+                        f"failed to verify formatter containment state: {exc}"
+                    )
+            except subprocess.TimeoutExpired as exc:
+                timeout = exc
+                terminate_process_tree()
+                _wait_for_formatter_termination(process)
     finally:
-        stdin_writer.join()
-        stdout_reader.join()
-        stderr_reader.join()
+        threads = (stdin_writer, stdout_reader, stderr_reader)
+        if descendant_error is not None:
+            terminate_process_tree()
+            _wait_for_formatter_termination(process)
+        if _join_formatter_threads(threads):
+            if timeout is None and not output_limit_reached.is_set():
+                descendant_error = (
+                    descendant_error
+                    or "formatter exited while descendants kept its output pipes open"
+                )
+            terminate_process_tree()
+            _wait_for_formatter_termination(process)
+            _join_formatter_threads(threads)
+        job.close()
+
+    if timeout is not None:
+        timeout.output = b"".join(stdout_chunks)
+        timeout.stderr = b"".join(stderr_chunks)
+        raise timeout
 
     if output_limit_reached.is_set():
         raise _FormatterOutputLimit
+    if formatter_error is not None:
+        raise formatter_error
+    if descendant_error is not None:
+        detail = b"".join(stderr_chunks).decode("utf-8", errors="replace").strip()
+        suffix = f": {detail}" if detail else ""
+        raise OSError(f"{descendant_error}{suffix}")
     if io_errors:
         raise io_errors[0]
-    return _FormatterResult(
-        returncode=returncode,
-        stdout=b"".join(stdout_chunks).decode("utf-8", errors="replace"),
-        stderr=b"".join(stderr_chunks).decode("utf-8", errors="replace"),
+    return _decode_formatter_result(
+        returncode,
+        b"".join(stdout_chunks),
+        b"".join(stderr_chunks),
     )
 
 
@@ -255,56 +813,34 @@ class CppWriter:
         return "\n".join(self.lines) + "\n"
 
 
-@dataclass
-class _CppNameScope:
-    label: str
-    names: dict[str, str] = field(default_factory=dict)
-
-    def owner(self, name: str) -> str | None:
-        return self.names.get(name)
-
-    def reserve(self, name: str, owner: str, *, error: str | None = None) -> None:
-        existing = self.names.get(name)
-        if existing is not None and existing != owner:
-            raise ProtocyteError(
-                error
-                or f"{self.label}: generated C++ name {name!r} from {owner} collides with {existing}"
-            )
-        self.names[name] = owner
+def _emit_documentation(
+    w: CppWriter, documentation: SourceDocumentation, options: GeneratorOptions
+) -> None:
+    if not options.emit_comments or not documentation.text:
+        return
+    w.line("/**")
+    for source_line in documentation.text.split("\n"):
+        safe_line = _sanitize_documentation_line(source_line)
+        w.line(f" * {safe_line}" if safe_line else " *")
+    w.line(" */")
 
 
-@dataclass
-class _CppNameRegistry:
-    scopes: dict[str, _CppNameScope] = field(default_factory=dict)
-
-    def scope(self, label: str) -> _CppNameScope:
-        scope = self.scopes.get(label)
-        if scope is None:
-            scope = _CppNameScope(label)
-            self.scopes[label] = scope
-        return scope
+def _sanitize_documentation_line(value: str) -> str:
+    escaped = value.replace("*/", "* /")
+    return "".join(
+        char
+        if char == "\t" or ord(char) >= 0x20 and ord(char) != 0x7F
+        else f"\\x{ord(char):02X}"
+        for char in escaped
+    )
 
 
-@dataclass
-class _CppFunctionScope:
-    label: str
-    visible_storage: set[str] = field(default_factory=set)
-    names: set[str] = field(default_factory=set)
-
-    def parameter(self, name: str) -> None:
-        self._reserve(name, "parameter")
-
-    def local(self, name: str) -> None:
-        self._reserve(name, "local")
-
-    def _reserve(self, name: str, kind: str) -> None:
-        if name in self.visible_storage:
-            raise ProtocyteError(
-                f"{self.label}: {kind} {name!r} shadows visible generated storage"
-            )
-        if name in self.names:
-            raise ProtocyteError(f"{self.label}: {kind} {name!r} is already declared")
-        self.names.add(name)
+def _emit_field_api_annotations(
+    w: CppWriter, item: FieldModel, options: GeneratorOptions
+) -> None:
+    _emit_documentation(w, item.documentation, options)
+    if item.deprecated:
+        w.line("[[deprecated]]")
 
 
 def generate_outputs(
@@ -318,18 +854,42 @@ def generate_outputs(
     _validate_generated_cpp_names(model, options)
     output_budget = _OutputBudget(max_output_bytes)
     outputs: dict[str, str] = {}
+    output_owners: dict[str, tuple[str, str]] = {}
     if options.emit_runtime:
         for name, content in runtime_files(options.runtime_prefix).items():
             output_budget.consume(content)
             outputs[name] = content
+            output_owners[name.casefold()] = ("generated runtime", name)
     for file_model in model.generated_files():
-        outputs[_header_name(file_model.name)] = generate_header(
+        header_name = _header_name(file_model.name, options)
+        source_name = _source_name(file_model.name, options)
+        for name in (header_name, source_name):
+            collision = output_owners.get(name.casefold())
+            if collision is not None:
+                collision_owner, collision_name = collision
+                raise ProtocyteError(
+                    "generated file name collision after portable path normalization: "
+                    f"{collision_owner} produces {collision_name!r}, while descriptor file "
+                    f"{file_model.name!r} produces {name!r}; these paths collide on "
+                    "case-insensitive filesystems"
+                )
+            output_owners[name.casefold()] = (
+                f"descriptor file {file_model.name!r}",
+                name,
+            )
+        outputs[header_name] = generate_header(
             file_model, options, output_budget=output_budget
         )
-        outputs[_source_name(file_model.name)] = generate_source(
+        outputs[source_name] = generate_source(
             file_model, options, output_budget=output_budget
         )
     if not format_outputs:
+        if options.formatting_required:
+            raise ProtocyteError(
+                "output formatting is required but disabled by the generator policy"
+            )
+        return outputs
+    if options.format_mode == "off":
         return outputs
     return _format_cpp_outputs(
         outputs,
@@ -346,29 +906,43 @@ def _format_cpp_outputs(
     timeout_seconds: float | None = None,
     max_output_bytes: int | None = None,
 ) -> dict[str, str]:
+    style_args = _clang_format_style_args(options)
     clang_format = _resolve_clang_format_executable(options)
     if clang_format is None:
+        if options.formatting_required:
+            raise ProtocyteError(
+                "clang-format is required but was not found on PATH; "
+                "set clang_format=<executable-or-path> or use format=auto or format=off"
+            )
         return outputs
 
-    style_args = _clang_format_style_args(options)
     formatted: dict[str, str] = {}
     formatted_budget = _OutputBudget(max_output_bytes)
+    style_root = Path.cwd().resolve()
     for name, content in outputs.items():
         if not name.endswith((".h", ".hh", ".hpp", ".c", ".cc", ".cpp", ".cxx")):
             formatted_budget.consume(content)
             formatted[name] = content
             continue
         try:
-            command = [clang_format, *style_args, f"--assume-filename={name}"]
+            assume_filename = (style_root / name).resolve()
+            command = [
+                clang_format,
+                *style_args,
+                f"--assume-filename={assume_filename}",
+            ]
             remaining = formatted_budget.remaining()
-            if remaining is None:
-                result = subprocess.run(
+            if remaining is None and timeout_seconds is None:
+                completed = subprocess.run(
                     command,
-                    input=content,
-                    text=True,
+                    input=content.encode("utf-8"),
                     capture_output=True,
                     check=False,
-                    timeout=timeout_seconds,
+                )
+                result = _decode_formatter_result(
+                    completed.returncode,
+                    completed.stdout,
+                    completed.stderr,
                 )
             else:
                 result = _run_formatter_bounded(
@@ -378,13 +952,26 @@ def _format_cpp_outputs(
                     max_output_bytes=remaining,
                 )
         except subprocess.TimeoutExpired as exc:
+            stderr = exc.stderr
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            detail = stderr.strip() if isinstance(stderr, str) else ""
+            suffix = f": {detail}" if detail else ""
             raise ProtocyteError(
-                f"clang-format timed out for {name} after {timeout_seconds} seconds"
+                f"clang-format timed out for {name} after {timeout_seconds} seconds{suffix}"
             ) from exc
         except _FormatterOutputLimit as exc:
             raise ProtocyteError(
                 "generator policy limit exceeded for generated output bytes while "
                 f"formatting {name}: more than {max_output_bytes} bytes"
+            ) from exc
+        except UnicodeEncodeError as exc:
+            raise ProtocyteError(
+                f"clang-format input for {name} is not valid UTF-8"
+            ) from exc
+        except UnicodeDecodeError as exc:
+            raise ProtocyteError(
+                f"clang-format produced invalid UTF-8 output for {name}"
             ) from exc
         except OSError as exc:
             raise ProtocyteError(f"failed to run clang-format: {exc}") from exc
@@ -414,34 +1001,359 @@ def _clang_format_style_args(options: GeneratorOptions) -> list[str]:
 
 
 def _resolve_clang_format_config(options: GeneratorOptions) -> str | None:
-    if options.clang_format_config is not None:
-        if not Path(options.clang_format_config).is_file():
-            raise ProtocyteError(
-                f"clang-format config was not found: {options.clang_format_config}"
-            )
-        return options.clang_format_config
-    config = _find_clang_format_config()
-    if config is None:
+    if options.clang_format_config is None:
         return None
-    return str(config)
-
-
-def _find_clang_format_config() -> Path | None:
-    for root in (Path.cwd(), Path(__file__).resolve().parents[2]):
-        for directory in (root, *root.parents):
-            config = directory / ".clang-format"
-            if config.is_file():
-                return config
-    return None
+    config = Path(options.clang_format_config)
+    if not config.is_file():
+        raise ProtocyteError(
+            f"clang-format config was not found: {options.clang_format_config}"
+        )
+    return options.clang_format_config
 
 
 def _validate_generated_cpp_names(
     model: DescriptorModel, options: GeneratorOptions
 ) -> None:
-    for file_model in model.generated_files():
+    _allocate_cpp_namespaces(model, options)
+    _validate_generated_reflection_symbols(model, options)
+    _validate_generated_namespace_scopes(model, options)
+
+
+@dataclass(slots=True)
+class _NamespaceAllocationNode:
+    raw_parts: tuple[str, ...]
+    files: list[FileModel] = field(default_factory=list)
+    children: dict[str, "_NamespaceAllocationNode"] = field(default_factory=dict)
+
+
+_CROSS_FILE_CPP_COLLISION_EXPLANATION = (
+    "protoc may accept this schema, but the declarations cannot coexist in the "
+    "same C++ scope and compilation may fail. Protocyte does not rename "
+    "cross-file declarations because separately generated headers must agree on "
+    "their spelling; rename one of the conflicting protobuf symbols"
+)
+
+
+def _allocate_cpp_namespaces(model: DescriptorModel, options: GeneratorOptions) -> None:
+    root = _NamespaceAllocationNode(())
+    for file_model in model.generated_header_files():
+        raw_parts: list[str] = []
+        if options.namespace_prefix:
+            raw_parts.extend(options.namespace_prefix.split("::"))
+        if file_model.package:
+            raw_parts.extend(
+                cpp_identifier(part) for part in file_model.package.split(".")
+            )
+        current = root
+        for part in raw_parts:
+            current = current.children.setdefault(
+                part, _NamespaceAllocationNode((*current.raw_parts, part))
+            )
+        current.files.append(file_model)
+
+    def allocate_node(
+        node: _NamespaceAllocationNode, emitted_parts: tuple[str, ...]
+    ) -> None:
+        allocated: dict[str, str] = {}
+        emitted_children: dict[str, str] = {}
+        for raw_name, child in sorted(node.children.items()):
+            owner = f"namespace:{'.'.join(child.raw_parts)}"
+            scope = EmittedNameAllocator().scope(
+                "namespace-component:"
+                f"{'::'.join(emitted_parts) or '<global>'}:"
+                f"{raw_name}"
+            )
+            if emitted_parts == ("protocyte",):
+                for name in sorted(PROTOCYTE_RUNTIME_CPP_SYMBOLS):
+                    scope.reserve(
+                        name,
+                        owner=f"runtime:{name}",
+                        kind=CppNameKind.TYPE,
+                    )
+            emitted = scope.allocate(
+                (
+                    EmittedNameRequest(
+                        owner=owner,
+                        preferred=raw_name,
+                        members=(EmittedNameMember(kind=CppNameKind.NAMESPACE),),
+                        hash_fallback=True,
+                    ),
+                )
+            )[owner]
+            existing = emitted_children.get(emitted)
+            if existing is not None:
+                qualified_name = _cpp_namespace_name((*emitted_parts, emitted))
+                raise ProtocyteError(
+                    f"{owner}: generated namespace {qualified_name} collides "
+                    f"with generated namespace from {existing}; "
+                    f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+                )
+            allocated[raw_name] = emitted
+            emitted_children[emitted] = owner
+
+        for raw_name, child in node.children.items():
+            emitted = allocated[raw_name]
+            child_emitted_parts = (*emitted_parts, emitted)
+            for file_model in child.files:
+                file_model.cpp_namespace = child_emitted_parts
+                for enum in file_model.enums:
+                    enum.cpp_namespace = child_emitted_parts
+                for message in _walk_generated_messages(file_model.messages):
+                    message.cpp_namespace = child_emitted_parts
+                    for enum in message.nested_enums:
+                        enum.cpp_namespace = child_emitted_parts
+            allocate_node(child, child_emitted_parts)
+
+        for file_model in node.files:
+            file_model.cpp_namespace = emitted_parts
+            for enum in file_model.enums:
+                enum.cpp_namespace = emitted_parts
+            for message in _walk_generated_messages(file_model.messages):
+                message.cpp_namespace = emitted_parts
+                for enum in message.nested_enums:
+                    enum.cpp_namespace = emitted_parts
+
+    allocate_node(root, ())
+
+
+@dataclass(slots=True)
+class _GeneratedCppSymbol:
+    kind: str
+    owner: str
+
+
+@dataclass(slots=True)
+class _GeneratedCppNamespace:
+    parts: tuple[str, ...]
+    owner: str | None = None
+    children: dict[str, "_GeneratedCppNamespace"] = field(default_factory=dict)
+    symbols: dict[str, _GeneratedCppSymbol] = field(default_factory=dict)
+
+    def namespace(self, parts: list[str], *, owner: str) -> "_GeneratedCppNamespace":
+        current = self
+        for part in parts:
+            symbol = current.symbols.get(part)
+            if symbol is not None:
+                full_name = (*current.parts, part)
+                raise ProtocyteError(
+                    f"{owner}: generated namespace {_cpp_namespace_name(full_name)} "
+                    f"collides with generated {symbol.kind} {symbol.owner!r} "
+                    f"in namespace {_cpp_namespace_name(current.parts)}; "
+                    f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+                )
+            child = current.children.get(part)
+            if child is None:
+                child = _GeneratedCppNamespace((*current.parts, part), owner)
+                current.children[part] = child
+            current = child
+        return current
+
+    def symbol(self, name: str, *, kind: str, owner: str) -> None:
+        namespace = self.children.get(name)
+        if namespace is not None:
+            raise ProtocyteError(
+                f"{owner}: generated {kind} {name!r} collides with generated "
+                f"namespace {_cpp_namespace_name(namespace.parts)} introduced by "
+                f"{namespace.owner}; {_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+            )
+        existing = self.symbols.get(name)
+        if existing is not None:
+            raise ProtocyteError(
+                f"{owner}: generated {kind} {name!r} collides with generated "
+                f"{existing.kind} {existing.owner!r} in namespace "
+                f"{_cpp_namespace_name(self.parts)}; "
+                f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+            )
+        self.symbols[name] = _GeneratedCppSymbol(kind, owner)
+
+
+def _cpp_namespace_name(parts: tuple[str, ...]) -> str:
+    return "::" + "::".join(parts) if parts else "::"
+
+
+def _generated_namespace_owner(file_model: FileModel) -> str:
+    return f"descriptor file {file_model.name!r} package {file_model.package!r}"
+
+
+def _validate_generated_namespace_scopes(
+    model: DescriptorModel, options: GeneratorOptions
+) -> None:
+    namespaces = _GeneratedCppNamespace(())
+    scope_files = _generated_cpp_scope_files(model)
+
+    for file_model in scope_files:
+        namespaces.namespace(
+            _namespace_parts(file_model),
+            owner=_generated_namespace_owner(file_model),
+        )
+
+    for file_model in scope_files:
+        namespace = namespaces.namespace(
+            _namespace_parts(file_model),
+            owner=_generated_namespace_owner(file_model),
+        )
+        for full_name, cpp_name in _file_generated_cpp_symbols(file_model):
+            namespace.symbol(cpp_name, kind="type", owner=full_name)
+        for constant in file_model.constants:
+            namespace.symbol(
+                constant.cpp_name,
+                kind="package constant",
+                owner=constant.full_name,
+            )
+
+    for file_model in scope_files:
+        messages = [
+            message
+            for message in _walk_generated_messages(file_model.messages)
+            if not message.is_map_entry
+        ]
+        if not messages:
+            continue
+        reflection_namespace = namespaces.namespace(
+            [*_namespace_parts(file_model), "protocyte_reflection"],
+            owner=f"descriptor file {file_model.name!r} generated reflection API",
+        )
+        for message in messages:
+            reflection_namespace.symbol(
+                _reflection_name(message),
+                kind="reflection symbol",
+                owner=message.full_name,
+            )
+
+
+def _file_generated_cpp_symbols(file_model: FileModel) -> Iterator[tuple[str, str]]:
+    for enum in file_model.enums:
+        yield enum.full_name, enum.cpp_name
+    for message in _walk_generated_messages(file_model.messages):
+        if message.is_map_entry:
+            continue
+        yield message.full_name, message.cpp_name
+        for enum in message.nested_enums:
+            yield enum.full_name, enum.cpp_name
+
+
+def _generated_cpp_scope_files(model: DescriptorModel) -> list[FileModel]:
+    """Return the complete C++ declaration scope for generated headers."""
+    return list(model.generated_header_files())
+
+
+def _validate_generated_reflection_symbols(
+    model: DescriptorModel, options: GeneratorOptions
+) -> None:
+    reflection_symbols: dict[tuple[str, ...], dict[str, str]] = {}
+    type_owners: dict[tuple[str, ...], dict[str, str]] = {}
+    constant_owners: dict[tuple[str, ...], dict[str, str]] = {}
+
+    scope_files = _generated_cpp_scope_files(model)
+    for file_model in scope_files:
+        namespace = tuple(_namespace_parts(file_model))
+        owners = type_owners.setdefault(namespace, {})
+        constants = constant_owners.setdefault(namespace, {})
+        for constant in file_model.constants:
+            existing_type = owners.get(constant.cpp_name)
+            if existing_type is not None:
+                raise ProtocyteError(
+                    f"{constant.full_name}: generated package constant "
+                    f"{constant.cpp_name!r} collides with generated type "
+                    f"{existing_type!r} in namespace "
+                    f"{_cpp_namespace_name(namespace)}; "
+                    f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+                )
+            existing_constant = constants.get(constant.cpp_name)
+            if existing_constant is not None:
+                raise ProtocyteError(
+                    f"{constant.full_name}: generated package constant "
+                    f"{constant.cpp_name!r} collides with generated package "
+                    f"constant {existing_constant!r} in namespace "
+                    f"{_cpp_namespace_name(namespace)}; "
+                    f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+                )
+            constants[constant.cpp_name] = constant.full_name
+        for enum in file_model.enums:
+            _register_generated_type_name(
+                namespace, enum.cpp_name, enum.full_name, owners, constants
+            )
+            owners[enum.cpp_name] = enum.full_name
         for message in _walk_generated_messages(file_model.messages):
             if not message.is_map_entry:
-                _build_message_cpp_name_registry(message, options)
+                _register_generated_type_name(
+                    namespace,
+                    message.cpp_name,
+                    message.full_name,
+                    owners,
+                    constants,
+                )
+                owners[message.cpp_name] = message.full_name
+            for enum in message.nested_enums:
+                _register_generated_type_name(
+                    namespace, enum.cpp_name, enum.full_name, owners, constants
+                )
+                owners[enum.cpp_name] = enum.full_name
+
+    for file_model in scope_files:
+        messages = [
+            message
+            for message in _walk_generated_messages(file_model.messages)
+            if not message.is_map_entry
+        ]
+        if not messages:
+            continue
+
+        namespace = (*_namespace_parts(file_model), "protocyte_reflection")
+        symbols = reflection_symbols.setdefault(namespace, {})
+        for message in messages:
+            symbol = _reflection_name(message)
+            first = symbols.get(symbol)
+            if first is not None:
+                raise ProtocyteError(
+                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"collides with {first!r}"
+                )
+            type_owner = type_owners.get(namespace, {}).get(symbol)
+            if type_owner is not None:
+                raise ProtocyteError(
+                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"collides with generated type {type_owner!r}"
+                )
+            constant_owner = constant_owners.get(namespace, {}).get(symbol)
+            if constant_owner is not None:
+                raise ProtocyteError(
+                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"collides with generated package constant {constant_owner!r}"
+                )
+            symbols[symbol] = message.full_name
+
+    for reflection_namespace in reflection_symbols:
+        namespace = reflection_namespace[:-1]
+        owner = type_owners.get(namespace, {}).get("protocyte_reflection")
+        if owner is not None:
+            raise ProtocyteError(
+                f"{owner}: type collides with generated reflection namespace"
+            )
+
+
+def _register_generated_type_name(
+    namespace: tuple[str, ...],
+    cpp_name: str,
+    owner: str,
+    type_owners: dict[str, str],
+    constant_owners: dict[str, str],
+) -> None:
+    existing_type = type_owners.get(cpp_name)
+    if existing_type is not None:
+        raise ProtocyteError(
+            f"{owner}: generated type {cpp_name!r} collides with generated type "
+            f"{existing_type!r} in namespace {_cpp_namespace_name(namespace)}; "
+            f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+        )
+    existing_constant = constant_owners.get(cpp_name)
+    if existing_constant is not None:
+        raise ProtocyteError(
+            f"{owner}: generated type {cpp_name!r} collides with generated package "
+            f"constant {existing_constant!r} in namespace "
+            f"{_cpp_namespace_name(namespace)}; "
+            f"{_CROSS_FILE_CPP_COLLISION_EXPLANATION}"
+        )
 
 
 def _walk_generated_messages(messages: list[MessageModel]) -> Iterator[MessageModel]:
@@ -450,321 +1362,58 @@ def _walk_generated_messages(messages: list[MessageModel]) -> Iterator[MessageMo
         yield from _walk_generated_messages(message.nested_messages)
 
 
-def _build_message_cpp_name_registry(
-    message: MessageModel, options: GeneratorOptions
-) -> _CppNameRegistry:
-    registry = _CppNameRegistry()
-    class_scope = registry.scope(message.full_name)
-
-    class_scope.reserve("Context", "generated context alias")
-    class_scope.reserve("ctx_", "generated context storage")
-    for enum in message.nested_enums:
-        class_scope.reserve(
-            cpp_identifier(enum.name),
-            f"nested enum {enum.name} alias",
-            error=f"{message.full_name}.{enum.name}: nested type alias collides with generated API",
-        )
-    for nested in message.nested_messages:
-        if nested.is_map_entry:
-            continue
-        class_scope.reserve(
-            cpp_identifier(nested.name),
-            f"nested message {nested.name} alias",
-            error=f"{message.full_name}.{nested.name}: nested type alias collides with generated API",
-        )
-
-    for constant in message.constants:
-        class_scope.reserve(
-            constant.cpp_name,
-            f"constant {constant.name}",
-            error=f"{message.full_name}.{constant.name}: constant collides with generated API",
-        )
-
-    for oneof in message.oneofs:
-        _reserve_oneof_case_enum_cpp_names(registry, class_scope, message, oneof)
-    _reserve_field_number_enum_cpp_names(registry, class_scope, message)
-
-    _reserve_message_function_cpp_names(class_scope, message)
-
-    visible_storage = _message_visible_storage_names(message)
-    _reserve_message_function_parameter_cpp_names(message, visible_storage)
-
-    for oneof in message.oneofs:
-        _reserve_oneof_cpp_names(registry, class_scope, message, oneof, options)
-    for item in message.fields:
-        _reserve_field_cpp_names(class_scope, message, item)
-
-    return registry
+def _reflection_name(message: MessageModel) -> str:
+    return _cpp_suffix_identifier(message.cpp_name, "fields")
 
 
-def _reserve_message_function_cpp_names(
-    class_scope: _CppNameScope, message: MessageModel
+def _reflection_label(item: FieldModel) -> str:
+    if item.label == FieldDescriptorProto.LABEL_REQUIRED:
+        return "required"
+    if item.label == FieldDescriptorProto.LABEL_REPEATED:
+        return "repeated"
+    return "optional"
+
+
+def _emit_reflection_api_macro(w: CppWriter, macro: str) -> None:
+    w.line(f"#if !defined({macro})")
+    w.line("#if defined(_WIN32)")
+    w.line(f"#if defined({macro}_EXPORTS)")
+    w.line(f"#define {macro} __declspec(dllexport)")
+    w.line("#else")
+    w.line(f"#define {macro} __declspec(dllimport)")
+    w.line("#endif")
+    w.line("#else")
+    w.line(f"#define {macro}")
+    w.line("#endif")
+    w.line("#endif")
+    w.line()
+
+
+def _emit_reflection_declarations(
+    w: CppWriter, file_model: FileModel, options: GeneratorOptions
 ) -> None:
-    for name, owner in (
-        ("create", "generated create function"),
-        ("context", "generated context accessor"),
-        ("copy_from", "generated copy function"),
-        ("clone", "generated clone function"),
-        ("parse", "generated parse function"),
-        ("merge_from", "generated merge function"),
-        ("merge_partial_from", "generated partial merge function"),
-        ("serialize", "generated serialize function"),
-        ("encoded_size", "generated size function"),
-        ("validate", "generated validate function"),
-    ):
-        _reserve_generated_class_name(class_scope, message, name, owner)
-    if message.oneofs:
-        _reserve_generated_class_name(
-            class_scope, message, "destroy_at_", "generated oneof destroy helper"
-        )
-
-
-def _reserve_generated_class_name(
-    class_scope: _CppNameScope, message: MessageModel, name: str, owner: str
-) -> None:
-    existing = class_scope.owner(name)
-    if existing is not None and existing != owner:
-        if existing.startswith("constant "):
-            constant_name = existing.removeprefix("constant ")
-            raise ProtocyteError(
-                f"{message.full_name}.{constant_name}: constant collides with generated API"
+    messages = _ordered_messages(file_model)
+    if not messages:
+        return
+    w.line("#if PROTOCYTE_ENABLE_REFLECTION")
+    if options.reflection_api_macro is not None:
+        _emit_reflection_api_macro(w, options.reflection_api_macro)
+    w.line("namespace protocyte_reflection {")
+    with w.indent():
+        for message in messages:
+            api_macro = (
+                f"{options.reflection_api_macro} "
+                if options.reflection_api_macro is not None
+                else ""
             )
-        if existing.startswith("nested enum ") or existing.startswith(
-            "nested message "
-        ):
-            nested_name = existing.split(" ", 2)[2].removesuffix(" alias")
-            raise ProtocyteError(
-                f"{message.full_name}.{nested_name}: nested type alias collides with generated API"
+            w.line(
+                f"extern {api_macro}const "
+                f"::std::array<::protocyte::ReflectionFieldInfo, {len(message.fields)}> "
+                f"{_reflection_name(message)};"
             )
-        if existing.startswith("field "):
-            field_name = existing.split(" ", 2)[1]
-            raise ProtocyteError(
-                f"{message.full_name}.{field_name}: field collides with generated API"
-            )
-        if existing.startswith("oneof "):
-            oneof_name = existing.split(" ", 2)[1]
-            raise ProtocyteError(
-                f"{message.full_name}.{oneof_name}: oneof collides with generated API"
-            )
-    class_scope.reserve(name, owner)
-
-
-def _reserve_message_function_parameter_cpp_names(
-    message: MessageModel, visible_storage: set[str]
-) -> None:
-    def function(name: str, *parameters: str) -> None:
-        scope = _CppFunctionScope(f"{message.full_name}::{name}", visible_storage)
-        for parameter in parameters:
-            scope.parameter(parameter)
-
-    function(message.cpp_name, "ctx")
-    function("create", "ctx")
-    if message.oneofs:
-        function(f"{message.cpp_name} move constructor", "other")
-        function("operator= move", "other")
-        function("destroy_at_", "value")
-    function("copy_from", "other")
-    function("parse", "ctx", "reader")
-    function("merge_from", "reader")
-    function("merge_partial_from", "reader")
-    if message.fields:
-        function("serialize", "writer")
-
-    for item in message.fields:
-        _reserve_field_function_parameter_cpp_names(message, item, visible_storage)
-
-
-def _reserve_field_function_parameter_cpp_names(
-    message: MessageModel, item: FieldModel, visible_storage: set[str]
-) -> None:
-    def function(name: str, *parameters: str) -> None:
-        scope = _CppFunctionScope(f"{message.full_name}::{name}", visible_storage)
-        for parameter in parameters:
-            scope.parameter(parameter)
-
-    if item.repeated and item.kind != "map":
-        return
-    if item.kind == "map":
-        return
-    if item.kind == "message":
-        return
-    if item.fixed_bytes:
-        function(f"resize_{item.cpp_name}_for_overwrite", "size")
-        function(f"set_{item.cpp_name}", "value")
-        return
-    if item.kind == "bytes" and item.array_enabled:
-        function(f"resize_{item.cpp_name}", "size")
-        function(f"resize_{item.cpp_name}_for_overwrite", "size")
-        function(f"set_{item.cpp_name}", "value")
-        return
-    if item.kind in {"string", "bytes"}:
-        function(f"set_{item.cpp_name}", "value")
-        return
-    if item.kind == "enum":
-        function(f"set_{item.cpp_name}_raw", "value")
-        function(f"set_{item.cpp_name}", "value")
-        return
-    function(f"set_{item.cpp_name}", "value")
-
-
-def _reserve_oneof_case_enum_cpp_names(
-    registry: _CppNameRegistry,
-    class_scope: _CppNameScope,
-    message: MessageModel,
-    oneof: OneofModel,
-) -> None:
-    class_scope.reserve(
-        _oneof_case_type(oneof.name),
-        f"oneof {oneof.name} case type",
-        error=f"{message.full_name}.{oneof.name}: oneof collides with generated API",
-    )
-    enum_scope = registry.scope(f"{message.full_name}::{_oneof_case_type(oneof.name)}")
-    enum_scope.reserve("none", f"oneof {oneof.name} empty case")
-    for item in oneof.fields:
-        enum_scope.reserve(
-            item.cpp_name,
-            f"oneof field {item.name} case",
-            error=f"{message.full_name}.{item.name}: field collides with generated API",
-        )
-
-
-def _reserve_field_number_enum_cpp_names(
-    registry: _CppNameRegistry, class_scope: _CppNameScope, message: MessageModel
-) -> None:
-    if not message.fields:
-        return
-    class_scope.reserve("FieldNumber", "generated field number enum")
-    enum_scope = registry.scope(f"{message.full_name}::FieldNumber")
-    for item in sorted(message.fields, key=lambda field: field.number):
-        enum_scope.reserve(
-            _field_number_name(item),
-            f"field {item.name} number",
-            error=f"{message.full_name}.{item.name}: field collides with generated API",
-        )
-
-
-def _reserve_oneof_cpp_names(
-    registry: _CppNameRegistry,
-    class_scope: _CppNameScope,
-    message: MessageModel,
-    oneof: OneofModel,
-    options: GeneratorOptions,
-) -> None:
-    del options
-    lower = cpp_identifier(oneof.name)
-    if class_scope.owner(lower) is not None:
-        raise ProtocyteError(
-            f"{message.full_name}.{oneof.name}: oneof collides with generated API"
-        )
-    for name, owner in (
-        (f"{lower}_case", f"oneof {oneof.name} case accessor"),
-        (f"clear_{lower}", f"oneof {oneof.name} clear function"),
-        (_oneof_case_member(oneof.name), f"oneof {oneof.name} case storage"),
-        (_oneof_storage_type(oneof), f"oneof {oneof.name} storage type"),
-        (_oneof_storage_member(oneof.name), f"oneof {oneof.name} storage"),
-    ):
-        class_scope.reserve(
-            name,
-            owner,
-            error=f"{message.full_name}.{oneof.name}: oneof collides with generated API",
-        )
-
-    union_scope = registry.scope(f"{message.full_name}::{_oneof_storage_type(oneof)}")
-    for item in oneof.fields:
-        union_scope.reserve(
-            _oneof_member_name(item),
-            f"oneof field {item.name} storage",
-            error=f"{message.full_name}.{item.name}: field collides with generated API",
-        )
-
-
-def _reserve_field_cpp_names(
-    class_scope: _CppNameScope, message: MessageModel, item: FieldModel
-) -> None:
-    for name, owner in _field_class_cpp_name_items(item):
-        class_scope.reserve(
-            name,
-            owner,
-            error=f"{message.full_name}.{item.name}: field collides with generated API",
-        )
-
-
-def _field_class_cpp_name_items(item: FieldModel) -> Iterator[tuple[str, str]]:
-    cpp_name = item.cpp_name
-    yield cpp_name, f"field {item.name} accessor"
-    if item.oneof_name is not None:
-        yield f"has_{cpp_name}", f"oneof field {item.name} presence accessor"
-        if item.kind == "message":
-            yield f"ensure_{cpp_name}", f"oneof field {item.name} ensure accessor"
-        elif item.kind == "enum":
-            yield f"{cpp_name}_raw", f"oneof field {item.name} raw accessor"
-            yield f"set_{cpp_name}_raw", f"oneof field {item.name} raw setter"
-            yield f"set_{cpp_name}", f"oneof field {item.name} setter"
-        else:
-            yield f"set_{cpp_name}", f"oneof field {item.name} setter"
-        return
-
-    yield _member(item), f"field {item.name} storage"
-    if _has_presence_flag(item):
-        yield f"has_{cpp_name}_", f"field {item.name} presence storage"
-
-    yield f"clear_{cpp_name}", f"field {item.name} clear function"
-    if item.repeated and item.kind != "map":
-        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
-    elif item.kind == "map":
-        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
-    elif item.kind == "message":
-        yield f"has_{cpp_name}", f"field {item.name} presence accessor"
-        yield f"ensure_{cpp_name}", f"field {item.name} ensure accessor"
-    elif item.fixed_bytes:
-        yield f"has_{cpp_name}", f"field {item.name} presence accessor"
-        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
-        yield (
-            f"resize_{cpp_name}_for_overwrite",
-            f"field {item.name} overwrite resize function",
-        )
-        yield f"set_{cpp_name}", f"field {item.name} setter"
-    elif item.kind == "bytes" and item.array_enabled:
-        yield f"{cpp_name}_size", f"field {item.name} size accessor"
-        yield f"{cpp_name}_max_size", f"field {item.name} max size accessor"
-        yield f"resize_{cpp_name}", f"field {item.name} resize function"
-        yield (
-            f"resize_{cpp_name}_for_overwrite",
-            f"field {item.name} overwrite resize function",
-        )
-        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
-        yield f"set_{cpp_name}", f"field {item.name} setter"
-        if item.proto3_optional:
-            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
-    elif item.kind in {"string", "bytes"}:
-        yield f"mutable_{cpp_name}", f"field {item.name} mutable accessor"
-        yield f"set_{cpp_name}", f"field {item.name} setter"
-        if item.proto3_optional:
-            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
-    elif item.kind == "enum":
-        yield f"{cpp_name}_raw", f"field {item.name} raw accessor"
-        yield f"set_{cpp_name}_raw", f"field {item.name} raw setter"
-        yield f"set_{cpp_name}", f"field {item.name} setter"
-        if item.proto3_optional:
-            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
-    else:
-        yield f"set_{cpp_name}", f"field {item.name} setter"
-        if item.proto3_optional:
-            yield f"has_{cpp_name}", f"field {item.name} presence accessor"
-
-
-def _message_visible_storage_names(message: MessageModel) -> set[str]:
-    names = {"ctx_"}
-    for oneof in message.oneofs:
-        names.add(_oneof_case_member(oneof.name))
-        names.add(_oneof_storage_member(oneof.name))
-    for item in message.fields:
-        if item.oneof_name is not None:
-            continue
-        names.add(_member(item))
-        if _has_presence_flag(item):
-            names.add(f"has_{item.cpp_name}_")
-    return names
+    w.line("}  // namespace protocyte_reflection")
+    w.line("#endif  // PROTOCYTE_ENABLE_REFLECTION")
+    w.line()
 
 
 def generate_header(
@@ -781,6 +1430,10 @@ def generate_header(
     w.line(f"#define {guard}")
     w.line()
     w.line(f"#include <{options.runtime_prefix}/runtime.hpp>")
+    w.line()
+    w.line("#if PROTOCYTE_ENABLE_REFLECTION")
+    w.line("#include <array>")
+    w.line("#endif")
     extra_includes: list[str] = []
     if _file_uses_numeric_limits(file_model):
         extra_includes.append("#include <limits>")
@@ -791,19 +1444,23 @@ def generate_header(
         for include in extra_includes:
             w.line(include)
     w.line()
-    _open_namespace(w, _namespace_parts(file_model, options))
-    _emit_enums(w, file_model)
+    _open_namespace(w, _namespace_parts(file_model))
+    _emit_reflection_declarations(w, file_model, options)
+    _emit_enums(w, file_model, options)
     _emit_file_constants(w, file_model)
     ordered_messages = _ordered_messages(file_model)
     for message in ordered_messages:
-        w.line("template <typename Config = ::protocyte::DefaultConfig>")
-        w.line(f"struct {message.cpp_name};")
+        w.line(
+            f"template <typename {message.config_cpp_name} = ::protocyte::DefaultConfig>"
+        )
+        deprecated = " [[deprecated]]" if message.deprecated else ""
+        w.line(f"struct{deprecated} {message.cpp_name};")
     w.line()
     for index, message in enumerate(ordered_messages):
         _emit_message(w, message, options)
         if index + 1 != len(ordered_messages):
             w.line()
-    _close_namespace(w, _namespace_parts(file_model, options))
+    _close_namespace(w, _namespace_parts(file_model))
     w.line()
     w.line(f"#endif  // {guard}")
     return w.render()
@@ -816,43 +1473,76 @@ def generate_source(
     output_budget: _OutputBudget | None = None,
 ) -> str:
     w = CppWriter(output_budget=output_budget)
-    w.line(f'#include "{_header_name(file_model.name)}"')
+    w.line(f'#include "{_header_name(file_model.name, options)}"')
     w.line()
-    w.line("#ifdef PROTOCYTE_ENABLE_REFLECTION")
-    _open_namespace(w, _namespace_parts(file_model, options))
+    w.line("#if PROTOCYTE_ENABLE_REFLECTION")
+    _open_namespace(w, _namespace_parts(file_model))
     w.line("namespace protocyte_reflection {")
     with w.indent():
-        w.line(
-            "struct FieldInfo { const char* name; ::protocyte::u32 number; const char* kind; bool repeated; bool optional; bool packed; };"
-        )
-        w.line()
         for message in _ordered_messages(file_model):
-            w.line(f"static const FieldInfo {message.cpp_name}_fields[] = {{")
+            reflection_name = _reflection_name(message)
+            api_macro = (
+                f"{options.reflection_api_macro} "
+                if options.reflection_api_macro is not None
+                else ""
+            )
+            w.line(
+                f"extern {api_macro}const "
+                f"::std::array<::protocyte::ReflectionFieldInfo, {len(message.fields)}> "
+                f"{reflection_name} {{{{"
+            )
             with w.indent():
                 for item in message.fields:
                     w.line(
-                        f'{{"{_escape(item.name)}", {item.number}u, "{item.kind}", '
-                        f"{_cpp_bool(item.repeated)}, {_cpp_bool(item.has_explicit_presence)}, {_cpp_bool(item.packed)}}},"
+                        f"{{{_cpp_string_literal(item.name.encode('utf-8'))}, {item.number}u, "
+                        f'"{item.kind}", '
+                        f"::protocyte::ReflectionFieldLabel::{_reflection_label(item)}, "
+                        f"{_cpp_bool(item.has_explicit_presence)}, {_cpp_bool(item.packed)}}},"
                     )
-            w.line("};")
+            w.line("}};")
             w.line()
     w.line("}  // namespace protocyte_reflection")
-    _close_namespace(w, _namespace_parts(file_model, options))
+    _close_namespace(w, _namespace_parts(file_model))
     w.line("#endif  // PROTOCYTE_ENABLE_REFLECTION")
     return w.render()
 
 
-def _emit_enums(w: CppWriter, file_model: FileModel) -> None:
+def _emit_enums(w: CppWriter, file_model: FileModel, options: GeneratorOptions) -> None:
     enums = list(file_model.enums)
     for message in _walk_messages(file_model.messages):
         enums.extend(message.nested_enums)
     for enum in enums:
-        w.line(f"enum struct {enum.cpp_name} : ::protocyte::i32 {{")
+        _emit_documentation(w, enum.documentation, options)
+        deprecated = " [[deprecated]]" if enum.deprecated else ""
+        w.line(f"enum struct{deprecated} {enum.cpp_name} : ::protocyte::i32 {{")
         with w.indent():
             for value in enum.values:
-                w.line(f"{value.cpp_name} = {value.number},")
+                _emit_documentation(w, value.documentation, options)
+                deprecated = " [[deprecated]]" if value.deprecated else ""
+                w.line(f"{value.cpp_name}{deprecated} = {value.number},")
         w.line("};")
         w.line()
+
+
+def _message_uses_deprecated_declarations(message: MessageModel) -> bool:
+    return (
+        message.deprecated
+        or any(enum.deprecated for enum in message.nested_enums)
+        or any(nested.deprecated for nested in message.nested_messages)
+        or any(
+            item.deprecated or _field_uses_deprecated_type(item)
+            for item in message.fields
+        )
+    )
+
+
+def _field_uses_deprecated_type(item: FieldModel) -> bool:
+    return (
+        (item.enum_type is not None and item.enum_type.deprecated)
+        or (item.message_type is not None and item.message_type.deprecated)
+        or (item.map_key is not None and _field_uses_deprecated_type(item.map_key))
+        or (item.map_value is not None and _field_uses_deprecated_type(item.map_value))
+    )
 
 
 def _emit_constants(w: CppWriter, message: MessageModel) -> None:
@@ -878,65 +1568,113 @@ def _emit_file_constants(w: CppWriter, file_model: FileModel) -> None:
 def _emit_message(
     w: CppWriter, message: MessageModel, options: GeneratorOptions
 ) -> None:
-    w.line("template <typename Config>")
-    w.line(f"struct {message.cpp_name} {{")
+    suppress_internal_deprecation = _message_uses_deprecated_declarations(message)
+    if suppress_internal_deprecation:
+        _emit_deprecated_diagnostic_push(w)
+    _emit_documentation(w, message.documentation, options)
+    config_cpp_name = message.config_cpp_name
+    context_storage = _message_context_storage(message)
+    unknown_storage = _message_unknown_storage(message)
+    w.line(f"template <typename {config_cpp_name}>")
+    deprecated = " [[deprecated]]" if message.deprecated else ""
+    w.line(f"struct{deprecated} {message.cpp_name} {{")
     with w.indent():
-        w.line("using Context = typename Config::Context;")
+        w.line(f"using Context = typename {config_cpp_name}::Context;")
         for enum in message.nested_enums:
-            w.line(f"using {cpp_identifier(enum.name)} = {enum.cpp_name};")
+            _emit_documentation(w, enum.documentation, options)
+            alias_deprecated = " [[deprecated]]" if enum.deprecated else ""
+            alias_name = enum.emitted_names["alias"]
+            w.line(f"using {alias_name}{alias_deprecated} = {enum.cpp_name};")
         for nested in message.nested_messages:
             if not nested.is_map_entry:
-                w.line("template <typename NestedConfig = Config>")
+                _emit_documentation(w, nested.documentation, options)
+                alias_name = nested.emitted_names["alias"]
+                nested_config_name = nested.emitted_names["alias_config"]
+                w.line(f"template <typename {nested_config_name} = {config_cpp_name}>")
+                alias_deprecated = " [[deprecated]]" if nested.deprecated else ""
                 w.line(
-                    f"using {cpp_identifier(nested.name)} = {nested.cpp_name}<NestedConfig>;"
+                    f"using {alias_name}{alias_deprecated} = "
+                    f"{nested.cpp_name}<{nested_config_name}>;"
                 )
         if message.nested_enums or message.nested_messages:
             w.line()
         _emit_constants(w, message)
-        _emit_oneof_case_enums(w, message)
-        _emit_field_number_enum(w, message)
+        _emit_oneof_case_enums(w, message, options)
+        _emit_field_number_enum(w, message, options)
         w.line(f"explicit {message.cpp_name}(Context& ctx) noexcept")
         _emit_constructor_initializers(w, message)
         _emit_constructor_body(w, message)
         w.line()
-        w.line(
-            f"static ::protocyte::Result<{message.cpp_name}> create(Context& ctx) noexcept {{"
-        )
+        w.line(f"static {message.cpp_name} create(Context& ctx) noexcept {{")
         with w.indent():
             w.line(f"return {message.cpp_name}{{ctx}};")
         w.line("}")
-        w.line("Context* context() const noexcept { return ctx_; }")
+        w.line(f"Context* context() const noexcept {{ return {context_storage}; }}")
         _emit_special_members(w, message, options)
         w.line(f"{message.cpp_name}(const {message.cpp_name}&) = delete;")
         w.line(f"{message.cpp_name}& operator=(const {message.cpp_name}&) = delete;")
         w.line()
         if message.oneofs:
-            w.line("template <typename T>")
-            w.line("static void destroy_at_(T* value) noexcept { value->~T(); }")
+            generic_cpp_name = message.generic_cpp_name
+            destroy_name = _message_emitted(message, "destroy_at_")
+            w.line(f"template <typename {generic_cpp_name}>")
+            w.line(
+                f"static void {destroy_name}({generic_cpp_name}* value) noexcept {{ value->~{generic_cpp_name}(); }}"
+            )
             w.line()
         _emit_clone_api(w, message, options)
-        for oneof in message.oneofs:
-            lower = cpp_identifier(oneof.name)
+        w.line(
+            f"::protocyte::UnknownFieldRange unknown_fields() const noexcept {{ return ::protocyte::UnknownFieldRange{{{unknown_storage}.bytes(), {context_storage}->limits.max_recursion_depth}}; }}"
+        )
+        w.line(
+            "::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }"
+        )
+        w.line(
+            f"::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {{ return {unknown_storage}.bytes(); }}"
+        )
+        w.line(f"void clear_unknown_fields() noexcept {{ {unknown_storage}.clear(); }}")
+        w.line(
+            f"::protocyte::MutableUnknownFieldSet<{config_cpp_name}> mutable_unknown_fields() noexcept"
+        )
+        w.line(
+            f"    requires(::protocyte::preserve_unknown_fields_v<{config_cpp_name}>)"
+        )
+        w.line("{")
+        with w.indent():
             w.line(
-                f"constexpr {oneof.cpp_name}Case {lower}_case() const noexcept {{ return {lower}_case_; }}"
+                f"return ::protocyte::MutableUnknownFieldSet<{config_cpp_name}>{{*{context_storage}, {unknown_storage}}};"
             )
-            w.line(f"void clear_{lower}() noexcept {{")
+        w.line("}")
+        w.line()
+        for oneof in message.oneofs:
+            case_type = _oneof_emitted(oneof, "case_type")
+            case_accessor = _oneof_emitted(oneof, "case_accessor")
+            clear_name = _oneof_emitted(oneof, "clear")
+            case_storage = _oneof_emitted(oneof, "case_storage")
+            _emit_documentation(w, oneof.documentation, options)
+            w.line(
+                f"constexpr {case_type} {case_accessor}() const noexcept {{ return {case_storage}; }}"
+            )
+            _emit_documentation(w, oneof.documentation, options)
+            w.line(f"void {clear_name}() noexcept {{")
             with w.indent():
-                w.line(f"switch ({lower}_case_) {{")
+                w.line(f"switch ({case_storage}) {{")
                 with w.indent():
                     for item in oneof.fields:
-                        w.line(f"case {oneof.cpp_name}Case::{item.cpp_name}: {{")
+                        w.line(
+                            f"case {case_type}::{_field_emitted(item, 'oneof_case')}: {{"
+                        )
                         with w.indent():
                             _emit_destroy_oneof_member(w, item)
                             w.line("break;")
                         w.line("}")
-                    w.line(f"case {oneof.cpp_name}Case::none:")
+                    w.line(f"case {case_type}::none:")
                     w.line("default: {")
                     with w.indent():
                         w.line("break;")
                     w.line("}")
                 w.line("}")
-                w.line(f"{lower}_case_ = {oneof.cpp_name}Case::none;")
+                w.line(f"{case_storage} = {case_type}::none;")
             w.line("}")
             w.line()
         for item in message.fields:
@@ -945,7 +1683,10 @@ def _emit_message(
         _emit_wire_api(w, message, options)
         w.line("protected:")
         with w.indent():
-            w.line("Context* ctx_;")
+            w.line(f"Context* {context_storage};")
+            w.line(
+                f"PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<{config_cpp_name}> {unknown_storage};"
+            )
             oneofs_by_name = {oneof.name: oneof for oneof in message.oneofs}
             emitted_oneofs: set[str] = set()
             for item in message.fields:
@@ -953,40 +1694,75 @@ def _emit_message(
                     if item.oneof_name in emitted_oneofs:
                         continue
                     oneof = oneofs_by_name[item.oneof_name]
-                    w.line(
-                        f"{oneof.cpp_name}Case {cpp_identifier(oneof.name)}_case_ {{{oneof.cpp_name}Case::none}};"
-                    )
+                    case_type = _oneof_case_type(oneof)
+                    case_member = _oneof_case_member(oneof)
+                    w.line(f"{case_type} {case_member} {{{case_type}::none}};")
                     _emit_oneof_storage(w, oneof, options)
                     emitted_oneofs.add(item.oneof_name)
                     continue
                 _emit_member(w, item, options)
     w.line("};")
+    if suppress_internal_deprecation:
+        _emit_deprecated_diagnostic_pop(w)
 
 
-def _emit_oneof_case_enums(w: CppWriter, message: MessageModel) -> None:
+def _emit_deprecated_diagnostic_push(w: CppWriter) -> None:
+    w.line("#if defined(__clang__)")
+    w.line("#pragma clang diagnostic push")
+    w.line('#pragma clang diagnostic ignored "-Wdeprecated-declarations"')
+    w.line("#elif defined(__GNUC__)")
+    w.line("#pragma GCC diagnostic push")
+    w.line('#pragma GCC diagnostic ignored "-Wdeprecated-declarations"')
+    w.line("#elif defined(_MSC_VER)")
+    w.line("#pragma warning(push)")
+    w.line("#pragma warning(disable : 4996)")
+    w.line("#endif")
+
+
+def _emit_deprecated_diagnostic_pop(w: CppWriter) -> None:
+    w.line("#if defined(__clang__)")
+    w.line("#pragma clang diagnostic pop")
+    w.line("#elif defined(__GNUC__)")
+    w.line("#pragma GCC diagnostic pop")
+    w.line("#elif defined(_MSC_VER)")
+    w.line("#pragma warning(pop)")
+    w.line("#endif")
+
+
+def _emit_oneof_case_enums(
+    w: CppWriter, message: MessageModel, options: GeneratorOptions
+) -> None:
     for oneof in message.oneofs:
-        w.line(f"enum struct {oneof.cpp_name}Case : ::protocyte::u32 {{")
+        _emit_documentation(w, oneof.documentation, options)
+        w.line(f"enum struct {_oneof_case_type(oneof)} : ::protocyte::u32 {{")
         with w.indent():
             w.line("none = 0u,")
             for item in oneof.fields:
-                w.line(f"{item.cpp_name} = {item.number}u,")
+                _emit_documentation(w, item.documentation, options)
+                w.line(f"{_field_emitted(item, 'oneof_case')} = {item.number}u,")
         w.line("};")
         w.line()
 
 
-def _emit_field_number_enum(w: CppWriter, message: MessageModel) -> None:
+def _emit_field_number_enum(
+    w: CppWriter, message: MessageModel, options: GeneratorOptions
+) -> None:
     if not message.fields:
         return
     w.line("enum struct FieldNumber : ::protocyte::u32 {")
     with w.indent():
         for item in sorted(message.fields, key=lambda field: field.number):
+            _emit_documentation(w, item.documentation, options)
             w.line(f"{_field_number_name(item)} = {item.number}u,")
     w.line("};")
     w.line()
 
 
 def _emit_constructor_initializers(w: CppWriter, message: MessageModel) -> None:
-    initializers = ["ctx_{&ctx}"]
+    initializers = [
+        f"{_message_context_storage(message)}{{&ctx}}",
+        f"{_message_unknown_storage(message)}{{&ctx}}",
+    ]
     for item in message.fields:
         if item.oneof_name is not None:
             continue
@@ -1034,8 +1810,11 @@ def _emit_special_members(
     with w.indent():
         w.line("if (this == &other) { return *this; }")
         for oneof in message.oneofs:
-            w.line(f"clear_{cpp_identifier(oneof.name)}();")
-        w.line("ctx_ = other.ctx_;")
+            w.line(f"{_oneof_emitted(oneof, 'clear')}();")
+        context_storage = _message_context_storage(message)
+        unknown_storage = _message_unknown_storage(message)
+        w.line(f"{context_storage} = other.{context_storage};")
+        w.line(f"{unknown_storage} = ::protocyte::move(other.{unknown_storage});")
         for item in message.fields:
             if item.oneof_name is not None:
                 continue
@@ -1047,12 +1826,17 @@ def _emit_special_members(
     w.line(f"~{message.cpp_name}() noexcept {{")
     with w.indent():
         for oneof in message.oneofs:
-            w.line(f"clear_{cpp_identifier(oneof.name)}();")
+            w.line(f"{_oneof_emitted(oneof, 'clear')}();")
     w.line("}")
 
 
 def _emit_move_constructor_initializers(w: CppWriter, message: MessageModel) -> None:
-    initializers = ["ctx_{other.ctx_}"]
+    context_storage = _message_context_storage(message)
+    unknown_storage = _message_unknown_storage(message)
+    initializers = [
+        f"{context_storage}{{other.{context_storage}}}",
+        f"{unknown_storage}{{::protocyte::move(other.{unknown_storage})}}",
+    ]
     for item in message.fields:
         if item.oneof_name is not None:
             continue
@@ -1076,7 +1860,8 @@ def _emit_move_state_setup(w: CppWriter, message: MessageModel) -> None:
         if item.oneof_name is not None:
             continue
         if _has_presence_flag(item):
-            w.line(f"has_{item.cpp_name}_ = other.has_{item.cpp_name}_;")
+            presence = _presence_storage(item)
+            w.line(f"{presence} = other.{presence};")
 
 
 def _emit_move_assignment_for_field(w: CppWriter, item: FieldModel) -> None:
@@ -1090,15 +1875,17 @@ def _emit_move_assignment_for_field(w: CppWriter, item: FieldModel) -> None:
     else:
         w.line(f"{member} = other.{member};")
     if _has_presence_flag(item):
-        w.line(f"has_{item.cpp_name}_ = other.has_{item.cpp_name}_;")
+        presence = _presence_storage(item)
+        w.line(f"{presence} = other.{presence};")
 
 
 def _emit_move_oneof_from_other(
     w: CppWriter, oneof: OneofModel, options: GeneratorOptions, *, source: str
 ) -> None:
-    lower = cpp_identifier(oneof.name)
-    case_type = oneof.cpp_name + "Case"
-    w.line(f"switch ({source}.{lower}_case_) {{")
+    case_type = _oneof_case_type(oneof)
+    case_member = _oneof_case_member(oneof)
+    clear_name = _oneof_emitted(oneof, "clear")
+    w.line(f"switch ({source}.{case_member}) {{")
     with w.indent():
         for item in oneof.fields:
             storage_type = _storage_type(item, options)
@@ -1107,10 +1894,11 @@ def _emit_move_oneof_from_other(
                 if item.kind in {"string", "bytes", "message"}
                 else f"{source}.{_member(item)}"
             )
-            w.line(f"case {case_type}::{item.cpp_name}: {{")
+            case_value = _field_emitted(item, "oneof_case")
+            w.line(f"case {case_type}::{case_value}: {{")
             with w.indent():
                 w.line(f"new (&{_member(item)}) {storage_type} {{{value}}};")
-                w.line(f"{lower}_case_ = {case_type}::{item.cpp_name};")
+                w.line(f"{case_member} = {case_type}::{case_value};")
                 w.line("break;")
             w.line("}")
         w.line(f"case {case_type}::none:")
@@ -1119,38 +1907,105 @@ def _emit_move_oneof_from_other(
             w.line("break;")
         w.line("}")
     w.line("}")
-    w.line(f"{source}.clear_{lower}();")
+    w.line(f"{source}.{clear_name}();")
 
 
 def _emit_clone_api(
     w: CppWriter, message: MessageModel, options: GeneratorOptions
 ) -> None:
+    context_storage = _message_context_storage(message)
+    unknown_storage = _message_unknown_storage(message)
+    reset_name = _message_emitted(message, "reset_for_reuse_")
+    copy_in_place_name = _message_emitted(message, "copy_from_in_place_")
     non_oneof_fields = [item for item in message.fields if item.oneof_name is None]
     map_only = bool(non_oneof_fields) and all(
         item.kind == "map" for item in non_oneof_fields
     )
     w.line(
-        f"::protocyte::Status copy_from(const {message.cpp_name}& other) noexcept {{"
+        f"::protocyte::Status copy_from(const {message.cpp_name}& source) noexcept {{"
+    )
+    with w.indent():
+        w.line("if (this == &source) { return {}; }")
+        w.line(f"{message.cpp_name} staging_message{{*{context_storage}}};")
+        w.line("return copy_from(source, staging_message);")
+    w.line("}")
+    w.line()
+    w.line(
+        f"::protocyte::Status copy_from(const {message.cpp_name}& source, {message.cpp_name}& staging_message) noexcept {{"
+    )
+    with w.indent():
+        w.line("if (this == &source) { return {}; }")
+        w.line("if (this == &staging_message || &source == &staging_message) {")
+        with w.indent():
+            w.line(
+                "return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});"
+            )
+        w.line("}")
+        w.line(f"{reset_name}(staging_message, *{context_storage});")
+        w.line(
+            f"if (const auto st = staging_message.{copy_in_place_name}(source); !st) {{"
+        )
+        with w.indent():
+            w.line(f"{reset_name}(staging_message, *{context_storage});")
+            w.line("return st;")
+        w.line("}")
+        w.line("*this = ::protocyte::move(staging_message);")
+        w.line("return {};")
+    w.line("}")
+    w.line()
+    w.line(f"::protocyte::Result<{message.cpp_name}> clone() const noexcept {{")
+    with w.indent():
+        w.line(f"auto output = {message.cpp_name}::create(*{context_storage});")
+        w.line(
+            "if (const auto st = clone(output); !st) { return ::protocyte::unexpected(st.error()); }"
+        )
+        w.line("return ::protocyte::move(output);")
+    w.line("}")
+    w.line()
+    w.line(f"::protocyte::Status clone({message.cpp_name}& output) const noexcept {{")
+    with w.indent():
+        w.line("if (this == &output) { return {}; }")
+        w.line("Context* const output_ctx = output.context();")
+        w.line(f"{reset_name}(output, *output_ctx);")
+        w.line(f"if (const auto st = output.{copy_in_place_name}(*this); !st) {{")
+        with w.indent():
+            w.line(f"{reset_name}(output, *output_ctx);")
+            w.line("return st;")
+        w.line("}")
+        w.line("return {};")
+    w.line("}")
+    w.line()
+    w.line("protected:")
+    w.line(
+        f"static void {reset_name}({message.cpp_name}& value, Context& ctx) noexcept {{"
+    )
+    with w.indent():
+        w.line(f"value.~{message.cpp_name}();")
+        w.line(f"new (&value) {message.cpp_name}{{ctx}};")
+    w.line("}")
+    w.line()
+    in_place_source = "source"
+    w.line(
+        f"::protocyte::Status {copy_in_place_name}(const {message.cpp_name}& {in_place_source}) noexcept {{"
     )
     w.push()
-    w.line("if (this == &other) { return {}; }")
     if map_only:
-        w.line("const auto& source = other;")
+        w.line("const auto& map_source = source;")
     for item in message.fields:
         if item.oneof_name is not None:
             continue
         if item.fixed_bytes:
-            w.line(f"if (other.has_{item.cpp_name}()) {{")
+            w.line(f"if (source.{_field_has(item)}()) {{")
             w.push()
             w.line(
-                f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                f"if (const auto st = {_field_setter(item)}(source.{item.cpp_name}()); !st) {{ return st; }}"
             )
             w.pop()
-            w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
+            w.line(f"}} else {{ {_field_clear(item)}(); }}")
             continue
         if item.kind == "map":
             _emit_copy_map_field(
-                w, item, options, source="source" if map_only else "other"
+                w, item, options, source="map_source" if map_only else "source"
             )
             continue
         if item.repeated_array:
@@ -1161,65 +2016,60 @@ def _emit_clone_api(
             continue
         if item.kind in {"string", "bytes"}:
             if _has_presence_flag(item):
-                w.line(f"if (other.has_{item.cpp_name}()) {{")
+                w.line(f"if (source.{_field_has(item)}()) {{")
                 w.push()
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                    f"if (const auto st = {_field_setter(item)}(source.{item.cpp_name}()); !st) {{ return st; }}"
                 )
                 w.pop()
-                w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
+                w.line(f"}} else {{ {_field_clear(item)}(); }}")
             else:
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
+                    f"if (const auto st = {_field_setter(item)}(source.{item.cpp_name}()); !st) {{ return st; }}"
                 )
         elif item.kind == "message":
-            w.line(f"if (other.has_{item.cpp_name}()) {{")
+            w.line(f"if (source.{_field_has(item)}()) {{")
             w.push()
-            _emit_copy_message_from_pointer(w, item, f"other.{item.cpp_name}()")
+            _emit_copy_message_from_pointer(w, item, f"source.{item.cpp_name}()")
             w.pop()
-            w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
+            w.line(f"}} else {{ {_field_clear(item)}(); }}")
         elif item.kind == "enum":
             if _has_presence_flag(item):
-                w.line(f"if (other.has_{item.cpp_name}()) {{")
+                w.line(f"if (source.{_field_has(item)}()) {{")
                 w.push()
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}_raw(other.{item.cpp_name}_raw()); !st) {{ return st; }}"
+                    f"if (const auto st = {_field_raw_setter(item)}(source.{_field_raw_accessor(item)}()); !st) {{ return st; }}"
                 )
                 w.pop()
-                w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
+                w.line(f"}} else {{ {_field_clear(item)}(); }}")
             else:
                 w.line(
-                    f"if (const auto st = set_{item.cpp_name}_raw(other.{item.cpp_name}_raw()); !st) {{ return st; }}"
+                    f"if (const auto st = {_field_raw_setter(item)}(source.{_field_raw_accessor(item)}()); !st) {{ return st; }}"
                 )
         elif not item.repeated and item.kind != "map":
             if _has_presence_flag(item):
-                w.line(f"if (other.has_{item.cpp_name}()) {{")
+                w.line(f"if (source.{_field_has(item)}()) {{")
                 w.push()
-                w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
-                )
+                w.line(f"{_field_setter(item)}(source.{item.cpp_name}());")
                 w.pop()
-                w.line(f"}} else {{ clear_{item.cpp_name}(); }}")
+                w.line(f"}} else {{ {_field_clear(item)}(); }}")
             else:
-                w.line(
-                    f"if (const auto st = set_{item.cpp_name}(other.{item.cpp_name}()); !st) {{ return st; }}"
-                )
+                w.line(f"{_field_setter(item)}(source.{item.cpp_name}());")
     for oneof in message.oneofs:
-        _emit_copy_oneof_from_other(w, oneof, options, source="other")
+        _emit_copy_oneof_from_other(w, oneof, options, source="source")
+    w.line(
+        f"if constexpr (::protocyte::preserve_unknown_fields_v<{message.config_cpp_name}>) {{"
+    )
+    with w.indent():
+        w.line(
+            f"if (const auto st = {unknown_storage}.copy_from(source.{unknown_storage}, {context_storage}->limits.max_unknown_field_bytes); !st) {{ return st; }}"
+        )
+    w.line("}")
     w.line("return {};")
     w.pop()
     w.line("}")
     w.line()
-    w.line(f"::protocyte::Result<{message.cpp_name}> clone() const noexcept {{")
-    w.push()
-    w.line(f"auto out = {message.cpp_name}::create(*ctx_);")
-    w.line("if (!out) { return out; }")
-    w.line(
-        "if (const auto st = out->copy_from(*this); !st) { return ::protocyte::unexpected(st.error()); }"
-    )
-    w.line("return out;")
-    w.pop()
-    w.line("}")
+    w.line("public:")
     w.line()
 
 
@@ -1227,9 +2077,9 @@ def _emit_copy_repeated_field(
     w: CppWriter, item: FieldModel, options: GeneratorOptions
 ) -> None:
     del options
-    source = f"other.{item.cpp_name}()"
+    source = f"source.{item.cpp_name}()"
     w.line(
-        f"if (const auto st = mutable_{item.cpp_name}().copy_from({source}); !st) {{ return st; }}"
+        f"if (const auto st = {_field_mutable(item)}().copy_from({source}); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
     )
 
 
@@ -1238,19 +2088,21 @@ def _emit_copy_map_field(
 ) -> None:
     del options
     w.line(
-        f"if (const auto st = mutable_{item.cpp_name}().copy_from({source}.{item.cpp_name}()); !st) {{ return st; }}"
+        f"if (const auto st = {_field_mutable(item)}().copy_from({source}.{item.cpp_name}()); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
     )
 
 
 def _emit_copy_message_from_pointer(
     w: CppWriter, item: FieldModel, source_ptr: str
 ) -> None:
-    result_name = f"ensured_{item.cpp_name}"
-    w.line(f"const auto {result_name} = ensure_{item.cpp_name}();")
-    w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
+    result_name = _field_implementation_name(item, "ensured")
+    w.line(f"const auto {result_name} = {_field_ensure(item)}();")
+    w.line(
+        f"if (!{result_name}) {{ return ::protocyte::with_field({result_name}.status(), {_field_number_u32(item)}); }}"
+    )
     w.line(f"if (const auto st = {result_name}->copy_from(*{source_ptr}); !st) {{")
     w.push()
-    w.line("return st;")
+    w.line(f"return ::protocyte::with_field(st, {_field_number_u32(item)});")
     w.pop()
     w.line("}")
 
@@ -1258,35 +2110,34 @@ def _emit_copy_message_from_pointer(
 def _emit_copy_oneof_from_other(
     w: CppWriter, oneof: OneofModel, options: GeneratorOptions, *, source: str
 ) -> None:
-    lower = cpp_identifier(oneof.name)
-    case_type = oneof.cpp_name + "Case"
-    case_member = _oneof_case_member(oneof.name)
+    case_type = _oneof_case_type(oneof)
+    case_member = _oneof_case_member(oneof)
     w.line(f"switch ({source}.{case_member}) {{")
     w.push()
     for item in oneof.fields:
-        w.line(f"case {case_type}::{item.cpp_name}: {{")
+        case_value = _field_emitted(item, "oneof_case")
+        w.line(f"case {case_type}::{case_value}: {{")
         w.push()
         if item.kind in {"string", "bytes"}:
             w.line(
-                f"if (const auto st = set_{item.cpp_name}({source}.{item.cpp_name}()); !st) {{ return st; }}"
+                f"if (const auto st = {_field_setter(item)}({source}.{item.cpp_name}()); !st) {{ return st; }}"
             )
         elif item.kind == "message":
             _emit_copy_message_from_pointer(w, item, f"{source}.{item.cpp_name}()")
         elif item.kind == "enum":
             w.line(
-                f"if (const auto st = set_{item.cpp_name}_raw({source}.{item.cpp_name}_raw()); !st) {{ return st; }}"
+                f"if (const auto st = {_field_raw_setter(item)}({source}.{_field_raw_accessor(item)}()); !st) {{ return st; }}"
             )
         else:
-            w.line(
-                f"if (const auto st = set_{item.cpp_name}({source}.{item.cpp_name}()); !st) {{ return st; }}"
-            )
+            w.line(f"{_field_setter(item)}({source}.{item.cpp_name}());")
         w.line("break;")
         w.pop()
         w.line("}")
     w.line(f"case {case_type}::none:")
     w.line("default: {")
     w.push()
-    w.line(f"clear_{lower}();")
+    clear_name = _oneof_emitted(oneof, "clear")
+    w.line(f"{clear_name}();")
     w.line("break;")
     w.pop()
     w.line("}")
@@ -1294,7 +2145,14 @@ def _emit_copy_oneof_from_other(
     w.line("}")
 
 
-def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) -> None:
+def _emit_byte_range_setter_family(
+    w: CppWriter,
+    item: FieldModel,
+    options: GeneratorOptions,
+    emit_body,
+) -> None:
+    value_cpp_name = item.value_cpp_name
+
     def emit_setter_start(
         signature: str,
         view_expr: str,
@@ -1302,33 +2160,38 @@ def _emit_byte_range_setter_family(w: CppWriter, item: FieldModel, emit_body) ->
         requires_expr: str | None = None,
         template_prefix: bool = False,
     ) -> None:
+        _emit_documentation(w, item.documentation, options)
         if template_prefix:
-            w.line("template<class Value>")
+            w.line(f"template<class {value_cpp_name}>")
+        if item.deprecated:
+            w.line("[[deprecated]]")
         w.line(signature)
         if requires_expr is not None:
             w.line(f"    requires({requires_expr})")
         w.line("{")
         w.push()
         w.line(f"const auto view = {view_expr};")
-        w.line("if (!view) { return view.status(); }")
+        w.line(
+            f"if (!view) {{ return ::protocyte::with_field(view.status(), {_field_number_u32(item)}); }}"
+        )
         emit_body()
         w.pop()
         w.line("}")
 
-    byte_source_requires = "::protocyte::ByteSpanSource<Value>"
+    byte_source_requires = f"::protocyte::ByteSpanSource<{value_cpp_name}>"
     if item.kind == "string":
-        byte_source_requires += " && !::protocyte::TextSource<Value>"
+        byte_source_requires += f" && !::protocyte::TextSource<{value_cpp_name}>"
     emit_setter_start(
-        f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept",
+        f"::protocyte::Status {_field_setter(item)}(const {value_cpp_name} &value) noexcept",
         "::protocyte::byte_span_of(value)",
         requires_expr=byte_source_requires,
         template_prefix=True,
     )
     if item.kind == "string":
         emit_setter_start(
-            f"::protocyte::Status set_{item.cpp_name}(const Value &value) noexcept",
+            f"::protocyte::Status {_field_setter(item)}(const {value_cpp_name} &value) noexcept",
             "::protocyte::text_byte_span_of(value)",
-            requires_expr="::protocyte::TextSource<Value>",
+            requires_expr=f"::protocyte::TextSource<{value_cpp_name}>",
             template_prefix=True,
         )
 
@@ -1339,80 +2202,91 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         return
     if item.repeated and item.kind != "map":
         typ = _storage_type(item, options)
+        _emit_field_api_annotations(w, item, options)
         w.line(
             f"const {typ}& {item.cpp_name}() const noexcept {{ return {_member(item)}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"{typ}& mutable_{item.cpp_name}() noexcept {{ return {_member(item)}; }}"
+            f"{typ}& {_field_mutable(item)}() noexcept {{ return {_member(item)}; }}"
         )
-        w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear(); }}")
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"void {_field_clear(item)}() noexcept {{ {_member(item)}.clear(); }}")
         return
     if item.kind == "map":
         assert item.map_key is not None and item.map_value is not None
-        typ = f"typename Config::template Map<{_field_type(item.map_key, options)}, {_field_type(item.map_value, options)}>"
+        typ = f"typename {item.config_cpp_name}::template Map<{_field_type(item.map_key, options)}, {_field_type(item.map_value, options)}>"
+        _emit_field_api_annotations(w, item, options)
         w.line(
             f"const {typ}& {item.cpp_name}() const noexcept {{ return {_member(item)}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"{typ}& mutable_{item.cpp_name}() noexcept {{ return {_member(item)}; }}"
+            f"{typ}& {_field_mutable(item)}() noexcept {{ return {_member(item)}; }}"
         )
-        w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear(); }}")
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"void {_field_clear(item)}() noexcept {{ {_member(item)}.clear(); }}")
         return
     if item.kind == "message":
         typ = _field_type(item, options)
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"bool has_{item.cpp_name}() const noexcept {{ return {_member(item)}.has_value(); }}"
+            f"bool {_field_has(item)}() const noexcept {{ return {_member(item)}.has_value(); }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"const {typ}* {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.operator->() : nullptr; }}"
+            f"const {typ}* {item.cpp_name}() const noexcept {{ return {_field_has(item)}() ? {_member(item)}.operator->() : nullptr; }}"
         )
-        w.line(f"::protocyte::Result<{typ}&> ensure_{item.cpp_name}() noexcept {{")
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"::protocyte::Result<{typ}&> {_field_ensure(item)}() noexcept {{")
         w.push()
         if item.recursive_box:
-            w.line(f"return {_member(item)}.ensure();")
+            w.line(
+                f"return ::protocyte::with_field({_member(item)}.ensure(), {_field_number_u32(item)});"
+            )
         else:
             w.line(f"if ({_member(item)}.has_value()) {{")
             w.push()
             w.line(f"return *{_member(item)};")
             w.pop()
             w.line("}")
-            w.line(f"if (const auto st = {_member(item)}.emplace(*ctx_); !st) {{")
+            w.line(
+                f"if (const auto st = {_member(item)}.emplace(*{_owner_context_storage(item)}); !st) {{"
+            )
             w.push()
-            w.line("return ::protocyte::unexpected(st.error());")
+            w.line(
+                f"return ::protocyte::unexpected(::protocyte::with_field(st.error(), {_field_number_u32(item)}));"
+            )
             w.pop()
             w.line("}")
             w.line(f"return *{_member(item)};")
         w.pop()
         w.line("}")
-        w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.reset(); }}")
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"void {_field_clear(item)}() noexcept {{ {_member(item)}.reset(); }}")
         return
     if item.fixed_bytes:
         bound = _array_max_literal(item)
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"bool has_{item.cpp_name}() const noexcept {{ return {_member(item)}.has_value(); }}"
+            f"bool {_field_has(item)}() const noexcept {{ return {_member(item)}.has_value(); }}"
         )
         expr = f"{_member(item)}.view()"
         if item.default_cpp is not None:
-            expr = (
-                f"has_{item.cpp_name}() ? {_member(item)}.view() : {item.default_cpp}"
-            )
+            expr = f"{_field_has(item)}() ? {_member(item)}.view() : {item.default_cpp}"
+        _emit_field_api_annotations(w, item, options)
         w.line(
             f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {expr}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Span<::protocyte::u8> mutable_{item.cpp_name}() noexcept {{"
+            f"::protocyte::Span<::protocyte::u8> {_field_mutable(item)}() noexcept {{"
         )
         w.push()
-        w.line(
-            f"if (ctx_->limits.max_string_bytes < {bound}) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
-        )
         if item.default_cpp is not None:
-            w.line(f"if (!has_{item.cpp_name}()) {{")
+            w.line(f"if (!{_field_has(item)}()) {{")
             w.push()
             w.line(f"const auto default_value = {item.default_cpp};")
-            w.line(
-                "if (default_value.size() > ctx_->limits.max_string_bytes) { return ::protocyte::Span<::protocyte::u8>{}; }"
-            )
             w.line(
                 f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
             )
@@ -1421,150 +2295,140 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         w.line(f"return {_member(item)}.mutable_view();")
         w.pop()
         w.line("}")
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status resize_{item.cpp_name}_for_overwrite(const ::protocyte::usize size) noexcept {{"
+            f"::protocyte::Status {_field_resize_overwrite(item)}(const ::protocyte::usize size) noexcept {{"
         )
         w.push()
         w.line(
-            "if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
+            f"return ::protocyte::with_field({_member(item)}.resize_for_overwrite(size), {_field_number_u32(item)});"
         )
-        w.line(f"return {_member(item)}.resize_for_overwrite(size);")
         w.pop()
         w.line("}")
 
         def emit_setter_body() -> None:
             w.line(
-                "if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
+                f"return ::protocyte::with_field({_member(item)}.assign(*view), {_field_number_u32(item)});"
             )
-            w.line(f"return {_member(item)}.assign(*view);")
 
-        _emit_byte_range_setter_family(w, item, emit_setter_body)
-        w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear(); }}")
+        _emit_byte_range_setter_family(w, item, options, emit_setter_body)
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"void {_field_clear(item)}() noexcept {{ {_member(item)}.clear(); }}")
         return
     if item.kind == "bytes" and item.array_enabled:
         bound = _array_max_literal(item)
         expr = f"{_member(item)}.view()"
         if _has_presence_flag(item) and item.default_cpp is not None:
-            expr = f"has_{item.cpp_name}_ ? {_member(item)}.view() : {item.default_cpp}"
+            expr = f"{_presence_storage(item)} ? {_member(item)}.view() : {item.default_cpp}"
+        _emit_field_api_annotations(w, item, options)
         w.line(
             f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {expr}; }}"
         )
         if item.proto3_optional:
+            _emit_field_api_annotations(w, item, options)
             w.line(
-                f"bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
+                f"bool {_field_has(item)}() const noexcept {{ return {_presence_storage(item)}; }}"
             )
         size_expr = f"{_member(item)}.size()"
         if _has_presence_flag(item) and item.default_cpp is not None:
             size_expr = f"{item.cpp_name}().size()"
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::usize {item.cpp_name}_size() const noexcept {{ return {size_expr}; }}"
+            f"::protocyte::usize {_field_size(item)}() const noexcept {{ return {size_expr}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"static constexpr ::protocyte::usize {item.cpp_name}_max_size() noexcept {{ return {bound}; }}"
+            f"static constexpr ::protocyte::usize {_field_max_size(item)}() noexcept {{ return {bound}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status resize_{item.cpp_name}(const ::protocyte::usize size) noexcept {{"
+            f"::protocyte::Status {_field_resize(item)}(const ::protocyte::usize size) noexcept {{"
         )
         w.push()
         w.line(
-            "if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
-        )
-        w.line(
-            f"if (size > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {{}}); }}"
+            f"if (size > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {{}}, {_field_number_u32(item)}); }}"
         )
         if item.array_fixed:
             w.line(
-                f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}"
+                f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)}); }}"
             )
         if _has_presence_flag(item) and item.default_cpp is not None:
-            w.line(f"if (!has_{item.cpp_name}_) {{")
+            w.line(f"if (!{_presence_storage(item)}) {{")
             w.push()
             w.line(f"const auto default_value = {item.default_cpp};")
             w.line(
-                "if (default_value.size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
-            )
-            w.line(
-                f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return st; }}"
+                f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
             )
             w.pop()
             w.line("}")
         w.line(
-            f"if (const auto st = {_member(item)}.resize(size); !st) {{ return st; }}"
+            f"if (const auto st = {_member(item)}.resize(size); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
         )
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
+            w.line(f"{_presence_storage(item)} = true;")
         w.line("return {};")
         w.pop()
         w.line("}")
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status resize_{item.cpp_name}_for_overwrite(const ::protocyte::usize size) noexcept {{"
-        )
-        w.push()
-        w.line(
-            "if (size > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
-        )
-        if item.array_fixed:
-            w.line(
-                f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}"
-            )
-        w.line(
-            f"if (const auto st = {_member(item)}.resize_for_overwrite(size); !st) {{ return st; }}"
-        )
-        if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
-        w.line("return {};")
-        w.pop()
-        w.line("}")
-        w.line(
-            f"::protocyte::Span<::protocyte::u8> mutable_{item.cpp_name}() noexcept {{"
+            f"::protocyte::Status {_field_resize_overwrite(item)}(const ::protocyte::usize size) noexcept {{"
         )
         w.push()
         if item.array_fixed:
             w.line(
-                f"if (ctx_->limits.max_string_bytes < {bound}) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
+                f"if (size != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)}); }}"
             )
+        w.line(
+            f"if (const auto st = {_member(item)}.resize_for_overwrite(size); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
+        )
+        if item.proto3_optional:
+            w.line(f"{_presence_storage(item)} = true;")
+        w.line("return {};")
+        w.pop()
+        w.line("}")
+        _emit_field_api_annotations(w, item, options)
+        w.line(
+            f"::protocyte::Span<::protocyte::u8> {_field_mutable(item)}() noexcept {{"
+        )
+        w.push()
+        if item.array_fixed:
             w.line(f"if ({_member(item)}.size() != {bound}) {{")
             w.push()
             w.line(f"static_cast<void>({_member(item)}.resize({bound}));")
             w.pop()
             w.line("}")
         if _has_presence_flag(item) and item.default_cpp is not None:
-            w.line(f"if (!has_{item.cpp_name}_) {{")
+            w.line(f"if (!{_presence_storage(item)}) {{")
             w.push()
             w.line(f"const auto default_value = {item.default_cpp};")
-            w.line(
-                "if (default_value.size() > ctx_->limits.max_string_bytes) { return ::protocyte::Span<::protocyte::u8>{}; }"
-            )
             w.line(
                 f"if (const auto st = {_member(item)}.assign(default_value); !st) {{ return ::protocyte::Span<::protocyte::u8>{{}}; }}"
             )
             w.pop()
             w.line("}")
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
+            w.line(f"{_presence_storage(item)} = true;")
         w.line(f"return {_member(item)}.mutable_view();")
         w.pop()
         w.line("}")
 
         def emit_setter_body() -> None:
-            w.line(
-                "if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
-            )
             if item.array_fixed:
                 w.line(
-                    f"if (view->size() != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}); }}"
+                    f"if (view->size() != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)}); }}"
                 )
             w.line(
-                f"if (const auto st = {_member(item)}.assign(*view); !st) {{ return st; }}"
+                f"if (const auto st = {_member(item)}.assign(*view); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
             )
             if item.proto3_optional:
-                w.line(f"has_{item.cpp_name}_ = true;")
+                w.line(f"{_presence_storage(item)} = true;")
             w.line("return {};")
 
-        _emit_byte_range_setter_family(w, item, emit_setter_body)
-        w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear();")
+        _emit_byte_range_setter_family(w, item, options, emit_setter_body)
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"void {_field_clear(item)}() noexcept {{ {_member(item)}.clear();")
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = false;")
+            w.line(f"{_presence_storage(item)} = false;")
         w.line("}")
         return
     if item.kind in {"string", "bytes"}:
@@ -1572,39 +2436,45 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         if item.kind == "string":
             expr = f"{_member(item)}.view()"
             if _has_presence_flag(item) and item.default_cpp is not None:
-                expr = f"has_{item.cpp_name}_ ? {_member(item)}.view() : {item.default_cpp}"
-            _emit_string_view_accessor(w, item.cpp_name, expr)
+                expr = f"{_presence_storage(item)} ? {_member(item)}.view() : {item.default_cpp}"
+            _emit_string_view_accessor(w, item, options, expr)
         else:
             expr = f"{_member(item)}.view()"
             if _has_presence_flag(item) and item.default_cpp is not None:
-                expr = f"has_{item.cpp_name}_ ? {_member(item)}.view() : {item.default_cpp}"
+                expr = f"{_presence_storage(item)} ? {_member(item)}.view() : {item.default_cpp}"
+            _emit_field_api_annotations(w, item, options)
             w.line(
                 f"::protocyte::Span<const ::protocyte::u8> {item.cpp_name}() const noexcept {{ return {expr}; }}"
             )
         if item.proto3_optional:
+            _emit_field_api_annotations(w, item, options)
             w.line(
-                f"bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
+                f"bool {_field_has(item)}() const noexcept {{ return {_presence_storage(item)}; }}"
             )
-        w.line(f"{typ}& mutable_{item.cpp_name}() noexcept {{")
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"{typ}& {_field_mutable(item)}() noexcept {{")
         w.push()
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
+            w.line(f"{_presence_storage(item)} = true;")
         w.line(f"return {_member(item)};")
         w.pop()
         w.line("}")
 
         def emit_setter_body() -> None:
-            w.line(f"{typ} temp{{ctx_}};")
-            w.line("if (const auto st = temp.assign(*view); !st) { return st; }")
+            w.line(f"{typ} temp{{{_owner_context_storage(item)}}};")
+            w.line(
+                f"if (const auto st = temp.assign(*view); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
+            )
             w.line(f"{_member(item)} = ::protocyte::move(temp);")
             if item.proto3_optional:
-                w.line(f"has_{item.cpp_name}_ = true;")
+                w.line(f"{_presence_storage(item)} = true;")
             w.line("return {};")
 
-        _emit_byte_range_setter_family(w, item, emit_setter_body)
-        w.line(f"void clear_{item.cpp_name}() noexcept {{ {_member(item)}.clear();")
+        _emit_byte_range_setter_family(w, item, options, emit_setter_body)
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"void {_field_clear(item)}() noexcept {{ {_member(item)}.clear();")
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = false;")
+            w.line(f"{_presence_storage(item)} = false;")
         w.line("}")
         return
     if item.kind == "enum":
@@ -1612,20 +2482,24 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         raw_expr = _member(item)
         enum_expr = f"static_cast<{enum_typ}>({_member(item)})"
         if _has_presence_flag(item) and item.default_cpp is not None:
-            raw_expr = f"has_{item.cpp_name}_ ? {_member(item)} : {_default(item)}"
+            raw_expr = f"{_presence_storage(item)} ? {_member(item)} : {_default(item)}"
             enum_expr = f"static_cast<{enum_typ}>({raw_expr})"
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"constexpr ::protocyte::i32 {item.cpp_name}_raw() const noexcept {{ return {raw_expr}; }}"
+            f"constexpr ::protocyte::i32 {_field_raw_accessor(item)}() const noexcept {{ return {raw_expr}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
             f"constexpr {enum_typ} {item.cpp_name}() const noexcept {{ return {enum_expr}; }}"
         )
         if item.proto3_optional:
+            _emit_field_api_annotations(w, item, options)
             w.line(
-                f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
+                f"constexpr bool {_field_has(item)}() const noexcept {{ return {_presence_storage(item)}; }}"
             )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{"
+            f"::protocyte::Status {_field_raw_setter(item)}(const ::protocyte::i32 value) noexcept {{"
         )
         w.push()
         _emit_closed_enum_reject(
@@ -1636,42 +2510,46 @@ def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
         )
         w.line(f"{_member(item)} = value;")
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = true;")
+            w.line(f"{_presence_storage(item)} = true;")
         w.line("return {};")
         w.pop()
         w.line("}")
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status set_{item.cpp_name}(const {enum_typ} value) noexcept {{ return set_{item.cpp_name}_raw(static_cast<::protocyte::i32>(value)); }}"
+            f"::protocyte::Status {_field_setter(item)}(const {enum_typ} value) noexcept {{ return {_field_raw_setter(item)}(static_cast<::protocyte::i32>(value)); }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"constexpr void clear_{item.cpp_name}() noexcept {{ {_member(item)} = {{}};"
+            f"constexpr void {_field_clear(item)}() noexcept {{ {_member(item)} = {{}};"
         )
         if item.proto3_optional:
-            w.line(f"has_{item.cpp_name}_ = false;")
+            w.line(f"{_presence_storage(item)} = false;")
         w.line("}")
         return
     typ = _field_type(item, options)
     value_expr = _member(item)
     if _has_presence_flag(item) and item.default_cpp is not None:
-        value_expr = f"has_{item.cpp_name}_ ? {_member(item)} : {_default(item)}"
+        value_expr = f"{_presence_storage(item)} ? {_member(item)} : {_default(item)}"
+    _emit_field_api_annotations(w, item, options)
     w.line(
         f"constexpr {typ} {item.cpp_name}() const noexcept {{ return {value_expr}; }}"
     )
     if item.proto3_optional:
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"constexpr bool has_{item.cpp_name}() const noexcept {{ return has_{item.cpp_name}_; }}"
+            f"constexpr bool {_field_has(item)}() const noexcept {{ return {_presence_storage(item)}; }}"
         )
+    _emit_field_api_annotations(w, item, options)
     w.line(
-        f"::protocyte::Status set_{item.cpp_name}(const {typ} value) noexcept {{ {_member(item)} = value;"
+        f"void {_field_setter(item)}(const {typ} value) noexcept {{ {_member(item)} = value;"
     )
     if item.proto3_optional:
-        w.line(f"has_{item.cpp_name}_ = true;")
-    w.line("return {}; }")
-    w.line(
-        f"constexpr void clear_{item.cpp_name}() noexcept {{ {_member(item)} = {{}};"
-    )
+        w.line(f"{_presence_storage(item)} = true;")
+    w.line("}")
+    _emit_field_api_annotations(w, item, options)
+    w.line(f"constexpr void {_field_clear(item)}() noexcept {{ {_member(item)} = {{}};")
     if item.proto3_optional:
-        w.line(f"has_{item.cpp_name}_ = false;")
+        w.line(f"{_presence_storage(item)} = false;")
     w.line("}")
 
 
@@ -1679,86 +2557,102 @@ def _emit_oneof_accessors(
     w: CppWriter, item: FieldModel, options: GeneratorOptions
 ) -> None:
     assert item.oneof_name is not None
-    case_type = _oneof_case_type(item.oneof_name)
-    case_member = _oneof_case_member(item.oneof_name)
+    case_type = _field_oneof_case_type(item)
+    case_member = _field_oneof_case_storage(item)
+    case_value = _field_emitted(item, "oneof_case")
+    clear_name = _field_oneof_clear(item)
+    context_storage = _owner_context_storage(item)
     typ = _field_type(item, options)
+    _emit_field_api_annotations(w, item, options)
     w.line(
-        f"constexpr bool has_{item.cpp_name}() const noexcept {{ return {case_member} == {case_type}::{item.cpp_name}; }}"
+        f"constexpr bool {_field_has(item)}() const noexcept {{ return {case_member} == {case_type}::{case_value}; }}"
     )
     if item.kind in {"string", "bytes"}:
         if item.kind == "string":
             fallback = item.default_cpp or "::protocyte::StringView{}"
             _emit_string_view_accessor(
                 w,
-                item.cpp_name,
-                f"has_{item.cpp_name}() ? {_member(item)}.view() : {fallback}",
+                item,
+                options,
+                f"{_field_has(item)}() ? {_member(item)}.view() : {fallback}",
             )
         else:
             view_type = "::protocyte::Span<const ::protocyte::u8>"
             fallback = item.default_cpp or f"{view_type}{{}}"
+            _emit_field_api_annotations(w, item, options)
             w.line(
-                f"{view_type} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)}.view() : {fallback}; }}"
+                f"{view_type} {item.cpp_name}() const noexcept {{ return {_field_has(item)}() ? {_member(item)}.view() : {fallback}; }}"
             )
 
         def emit_setter_body() -> None:
             if item.kind == "bytes" and item.array_enabled:
-                w.line(
-                    "if (view->size() > ctx_->limits.max_string_bytes) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {}); }"
-                )
                 w.line(f"{_storage_type(item, options)} temp{{}};")
             else:
-                w.line(f"{typ} temp{{ctx_}};")
-            w.line("if (const auto st = temp.assign(*view); !st) { return st; }")
-            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+                w.line(f"{typ} temp{{{context_storage}}};")
+            w.line(
+                f"if (const auto st = temp.assign(*view); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
+            )
+            w.line(f"{clear_name}();")
             w.line(
                 f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move(temp)}};"
             )
-            w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+            w.line(f"{case_member} = {case_type}::{case_value};")
             w.line("return {};")
 
-        _emit_byte_range_setter_family(w, item, emit_setter_body)
+        _emit_byte_range_setter_family(w, item, options, emit_setter_body)
         return
     if item.kind == "message":
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"const {typ}* {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() && {_member(item)}.has_value() ? {_member(item)}.operator->() : nullptr; }}"
+            f"const {typ}* {item.cpp_name}() const noexcept {{ return {_field_has(item)}() && {_member(item)}.has_value() ? {_member(item)}.operator->() : nullptr; }}"
         )
-        w.line(f"::protocyte::Result<{typ}&> ensure_{item.cpp_name}() noexcept {{")
+        _emit_field_api_annotations(w, item, options)
+        w.line(f"::protocyte::Result<{typ}&> {_field_ensure(item)}() noexcept {{")
         w.push()
         if item.recursive_box:
-            w.line(f"if (has_{item.cpp_name}()) {{")
+            w.line(f"if ({_field_has(item)}()) {{")
             w.push()
             w.line(f"return *{_member(item)};")
             w.pop()
             w.line("}")
-            w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
-            w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{ctx_}};")
+            w.line(f"{clear_name}();")
+            w.line(
+                f"new (&{_member(item)}) {_storage_type(item, options)} {{{context_storage}}};"
+            )
             w.line(f"auto ensured = {_member(item)}.ensure();")
             w.line("if (!ensured) {")
             w.push()
-            w.line(f"destroy_at_(&{_member(item)});")
-            w.line("return ensured;")
+            destroy_name = _field_emitted(item, "destroy_at_")
+            w.line(f"{destroy_name}(&{_member(item)});")
+            w.line(
+                f"return ::protocyte::with_field(ensured, {_field_number_u32(item)});"
+            )
             w.pop()
             w.line("}")
-            w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+            w.line(f"{case_member} = {case_type}::{case_value};")
             w.line("return ensured;")
             w.pop()
             w.line("}")
             return
-        w.line(f"if (!has_{item.cpp_name}()) {{")
+        w.line(f"if (!{_field_has(item)}()) {{")
         w.push()
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"{clear_name}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{}};")
         w.pop()
         w.line("}")
-        w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+        w.line(f"{case_member} = {case_type}::{case_value};")
         w.line(f"if ({_member(item)}.has_value()) {{")
         w.push()
         w.line(f"return *{_member(item)};")
         w.pop()
         w.line("}")
-        w.line(f"if (const auto st = {_member(item)}.emplace(*ctx_); !st) {{")
+        w.line(
+            f"if (const auto st = {_member(item)}.emplace(*{context_storage}); !st) {{"
+        )
         w.push()
-        w.line("return ::protocyte::unexpected(st.error());")
+        w.line(
+            f"return ::protocyte::unexpected(::protocyte::with_field(st.error(), {_field_number_u32(item)}));"
+        )
         w.pop()
         w.line("}")
         w.line(f"return *{_member(item)};")
@@ -1767,14 +2661,17 @@ def _emit_oneof_accessors(
         return
     if item.kind == "enum":
         enum_typ = _enum_type(item.enum_type, options)
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"constexpr ::protocyte::i32 {item.cpp_name}_raw() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)} : {_default(item)}; }}"
+            f"constexpr ::protocyte::i32 {_field_raw_accessor(item)}() const noexcept {{ return {_field_has(item)}() ? {_member(item)} : {_default(item)}; }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"constexpr {enum_typ} {item.cpp_name}() const noexcept {{ return static_cast<{enum_typ}>({item.cpp_name}_raw()); }}"
+            f"constexpr {enum_typ} {item.cpp_name}() const noexcept {{ return static_cast<{enum_typ}>({_field_raw_accessor(item)}()); }}"
         )
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status set_{item.cpp_name}_raw(const ::protocyte::i32 value) noexcept {{"
+            f"::protocyte::Status {_field_raw_setter(item)}(const ::protocyte::i32 value) noexcept {{"
         )
         w.push()
         _emit_closed_enum_reject(
@@ -1783,25 +2680,27 @@ def _emit_oneof_accessors(
             _closed_enum_invalid_condition(item, "value"),
             field_number=_field_number_u32(item),
         )
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"{clear_name}();")
         w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
-        w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+        w.line(f"{case_member} = {case_type}::{case_value};")
         w.line("return {};")
         w.pop()
         w.line("}")
+        _emit_field_api_annotations(w, item, options)
         w.line(
-            f"::protocyte::Status set_{item.cpp_name}(const {enum_typ} value) noexcept {{ return set_{item.cpp_name}_raw(static_cast<::protocyte::i32>(value)); }}"
+            f"::protocyte::Status {_field_setter(item)}(const {enum_typ} value) noexcept {{ return {_field_raw_setter(item)}(static_cast<::protocyte::i32>(value)); }}"
         )
         return
+    _emit_field_api_annotations(w, item, options)
     w.line(
-        f"constexpr {typ} {item.cpp_name}() const noexcept {{ return has_{item.cpp_name}() ? {_member(item)} : {_default(item)}; }}"
+        f"constexpr {typ} {item.cpp_name}() const noexcept {{ return {_field_has(item)}() ? {_member(item)} : {_default(item)}; }}"
     )
-    w.line(f"::protocyte::Status set_{item.cpp_name}(const {typ} value) noexcept {{")
+    _emit_field_api_annotations(w, item, options)
+    w.line(f"void {_field_setter(item)}(const {typ} value) noexcept {{")
     w.push()
-    w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+    w.line(f"{clear_name}();")
     w.line(f"new (&{_member(item)}) {_storage_type(item, options)} {{value}};")
-    w.line(f"{case_member} = {case_type}::{item.cpp_name};")
-    w.line("return {};")
+    w.line(f"{case_member} = {case_type}::{case_value};")
     w.pop()
     w.line("}")
 
@@ -1809,71 +2708,136 @@ def _emit_oneof_accessors(
 def _emit_wire_api(
     w: CppWriter, message: MessageModel, options: GeneratorOptions
 ) -> None:
-    w.line("template <typename Reader>")
+    reader_cpp_name = message.reader_cpp_name
+    writer_cpp_name = message.writer_cpp_name
+    config_cpp_name = message.config_cpp_name
+    context_storage = _message_context_storage(message)
+    unknown_storage = _message_unknown_storage(message)
+    reset_name = _message_emitted(message, "reset_for_reuse_")
+    merge_field_name = _message_emitted(message, "merge_field_from_")
+    w.line(f"template <::protocyte::ReaderLike {reader_cpp_name}>")
     w.line(
-        f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, Reader& reader) noexcept {{"
+        f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, {reader_cpp_name}& reader) noexcept {{"
     )
     with w.indent():
-        w.line(f"auto out = {message.cpp_name}::create(ctx);")
-        w.line("if (!out) { return out; }")
+        w.line(f"auto output = {message.cpp_name}::create(ctx);")
         w.line(
-            "if (const auto st = out->merge_from(reader); !st) { return ::protocyte::unexpected(st.error()); }"
+            "if (const auto st = parse(reader, output); !st) { return ::protocyte::unexpected(st.error()); }"
         )
-        w.line("return out;")
+        w.line("return ::protocyte::move(output);")
     w.line("}")
     w.line()
-    w.line("template <typename Reader>")
-    w.line("::protocyte::Status merge_from(Reader& reader) noexcept {")
+    w.line(
+        f"static ::protocyte::Result<{message.cpp_name}> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {{"
+    )
     with w.indent():
-        w.line("if (const auto st = merge_partial_from(reader); !st) { return st; }")
-        w.line("return validate();")
+        w.line("const auto checked_input = ::protocyte::checked_span_of(input);")
+        w.line(
+            "if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }"
+        )
+        w.line(
+            "::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};"
+        )
+        w.line("return parse(ctx, reader);")
     w.line("}")
     w.line()
-    w.line("template <typename InputReader>")
-    w.line("::protocyte::Status merge_partial_from(InputReader& reader) noexcept {")
+    w.line(f"template <::protocyte::ReaderLike {reader_cpp_name}>")
+    w.line(
+        f"static ::protocyte::Status parse({reader_cpp_name}& reader, {message.cpp_name}& output) noexcept {{"
+    )
     with w.indent():
-        w.line(
-            "::protocyte::ParseBudgetReader<InputReader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
-        )
-        w.line("if (const auto st = merge_fields_from(budget_reader); !st) { return st; }")
-        w.line(
-            "if (budget_reader.limit_reached()) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position()); }"
-        )
+        w.line("Context* const output_ctx = output.context();")
+        w.line(f"{reset_name}(output, *output_ctx);")
+        w.line("if (const auto st = output.merge_from(reader); !st) {")
+        with w.indent():
+            w.line(f"{reset_name}(output, *output_ctx);")
+            w.line("return st;")
+        w.line("}")
         w.line("return {};")
     w.line("}")
     w.line()
-    w.line("friend class ::protocyte::MessageParseAccess;")
+    w.line(f"template <::protocyte::ReaderLike {reader_cpp_name}>")
+    w.line(f"::protocyte::Status merge_from({reader_cpp_name}& reader) noexcept {{")
+    with w.indent():
+        w.line(
+            f"::protocyte::ParseBudgetReader<{reader_cpp_name}> budget_reader{{reader, {context_storage}->limits.max_total_bytes, {context_storage}->limits.max_repeated_elements, {context_storage}->limits.max_map_entries}};"
+        )
+        w.line(
+            "if (const auto st = merge_fields_from(budget_reader); !st) { return st; }"
+        )
+        w.line(
+            "if (budget_reader.limit_reached()) { return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position()); }"
+        )
+        w.line("return validate();")
+    w.line("}")
+    w.line()
+    w.line("private:")
+    w.line(f"template <typename {reader_cpp_name}>")
+    w.line(
+        f"::protocyte::Status {merge_field_name}({reader_cpp_name}& reader, const ::protocyte::u32 field_number, const ::protocyte::WireType wire_type) noexcept {{"
+    )
+    with w.indent():
+        _emit_merge_field_body(w, message, options)
+    w.line("}")
     w.line()
     w.line("protected:")
-    w.line("template <typename Reader>")
-    w.line("::protocyte::Status merge_fields_from(Reader& reader) noexcept {")
+    w.line("friend class ::protocyte::MessageParseAccess;")
+    w.line()
+    w.line(f"template <typename {reader_cpp_name}>")
+    w.line(
+        f"::protocyte::Status merge_fields_from({reader_cpp_name}& reader) noexcept {{"
+    )
     with w.indent():
         _emit_merge_fields_body(w, message, options)
     w.line("}")
     w.line()
     w.line("public:")
-    writer_name = "writer" if message.fields else "/* writer */"
-    w.line("template <typename Writer>")
-    w.line(f"::protocyte::Status serialize(Writer& {writer_name}) const noexcept {{")
+    w.line(f"template <::protocyte::WriterLike {writer_cpp_name}>")
+    w.line(
+        f"::protocyte::Status serialize({writer_cpp_name}& writer) const noexcept {{"
+    )
     with w.indent():
         w.line("if (const auto st = validate(); !st) { return st; }")
         for item in sorted(message.fields, key=lambda f: f.number):
             _emit_serialize_statement(w, item, options)
+        w.line(
+            f"if constexpr (::protocyte::preserve_unknown_fields_v<{config_cpp_name}>) {{"
+        )
+        with w.indent():
+            w.line(f"const auto unknown_bytes = {unknown_storage}.bytes();")
+            w.line("if (!unknown_bytes.empty()) {")
+            with w.indent():
+                w.line(
+                    "if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) { return st; }"
+                )
+            w.line("}")
+        w.line("}")
         w.line("return {};")
+    w.line("}")
+    w.line()
+    w.line(
+        "::protocyte::Result<::protocyte::usize> serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {"
+    )
+    with w.indent():
+        w.line("return ::protocyte::serialize(*this, output);")
     w.line("}")
     w.line()
     w.line("::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {")
     with w.indent():
+        w.line(
+            "if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }"
+        )
+        w.line("::protocyte::usize total {};")
         if message.fields:
-            w.line(
-                "if (const auto st = validate(); !st) { return ::protocyte::unexpected(st.error()); }"
-            )
-            w.line("::protocyte::usize total {};")
             for item in sorted(message.fields, key=lambda f: f.number):
                 _emit_size_statement(w, item, options)
-            w.line("return total;")
-        else:
-            w.line("return ::protocyte::usize {};")
+        w.line(
+            f"const auto total_with_unknown = ::protocyte::checked_add(total, {unknown_storage}.size());"
+        )
+        w.line(
+            "if (!total_with_unknown) { return ::protocyte::unexpected(total_with_unknown.error()); }"
+        )
+        w.line("return *total_with_unknown;")
     w.line("}")
     w.line()
     w.line("::protocyte::Status validate() const noexcept {")
@@ -1881,41 +2845,73 @@ def _emit_wire_api(
         _emit_fixed_array_validation(w, message)
         _emit_closed_enum_validation(w, message)
         _emit_required_validation(w, message)
+        _emit_string_validation(w, message)
         _emit_nested_validation(w, message)
         w.line("return {};")
+    w.line("}")
+
+
+def _emit_unknown_field_handling(
+    w: CppWriter,
+    owner: MessageModel | FieldModel,
+    config_cpp_name: str,
+) -> None:
+    context_storage = _owner_context_storage(owner)
+    unknown_storage = _owner_unknown_storage(owner)
+    w.line(
+        f"if constexpr (::protocyte::preserve_unknown_fields_v<{config_cpp_name}>) {{"
+    )
+    with w.indent():
+        w.line(
+            f"if (const auto st = ::protocyte::read_unknown_field<{config_cpp_name}>(*{context_storage}, reader, wire_type, field_number, {unknown_storage}); !st) {{ return st; }}"
+        )
+    w.line("} else {")
+    with w.indent():
+        w.line(
+            f"if (const auto st = ::protocyte::skip_field<{config_cpp_name}>(*{context_storage}, reader, wire_type, field_number); !st) {{ return st; }}"
+        )
     w.line("}")
 
 
 def _emit_merge_fields_body(
     w: CppWriter, message: MessageModel, options: GeneratorOptions
 ) -> None:
+    merge_field_name = _message_emitted(message, "merge_field_from_")
     w.line("while (!reader.eof()) {")
     with w.indent():
         w.line("const auto tag = ::protocyte::read_tag(reader);")
         w.line("if (!tag) { return tag.status(); }")
         w.line("const auto [field_number, wire_type] = *tag;")
-        if message.fields:
-            w.line("switch (static_cast<FieldNumber>(field_number)) {")
-            with w.indent():
-                for item in sorted(message.fields, key=lambda f: f.number):
-                    w.line(f"case FieldNumber::{_field_number_name(item)}: {{")
-                    with w.indent():
-                        _emit_parse_case(w, item, options)
-                        w.line("break;")
-                    w.line("}")
-                w.line("default: {")
+        w.line(
+            f"if (const auto st = {merge_field_name}(reader, field_number, wire_type); !st) {{"
+        )
+        with w.indent():
+            w.line("return ::protocyte::with_field(st, field_number);")
+        w.line("}")
+    w.line("}")
+    w.line("return {};")
+
+
+def _emit_merge_field_body(
+    w: CppWriter, message: MessageModel, options: GeneratorOptions
+) -> None:
+    if message.fields:
+        w.line("switch (static_cast<FieldNumber>(field_number)) {")
+        with w.indent():
+            for item in sorted(message.fields, key=lambda f: f.number):
+                w.line(f"case FieldNumber::{_field_number_name(item)}: {{")
                 with w.indent():
-                    w.line(
-                        "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
-                    )
+                    _emit_parse_case(w, item, options)
                     w.line("break;")
                 w.line("}")
+            w.line("default: {")
+            with w.indent():
+                _emit_unknown_field_handling(w, message, message.config_cpp_name)
+                w.line("break;")
             w.line("}")
-        else:
-            w.line(
-                "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) { return st; }"
-            )
-    w.line("}")
+        w.line("}")
+    else:
+        _emit_unknown_field_handling(w, message, message.config_cpp_name)
     w.line("return {};")
 
 
@@ -1950,7 +2946,7 @@ def _emit_required_validation(
     for item in sorted(message.fields, key=lambda f: f.number):
         if not item.required:
             continue
-        w.line(f"if (!has_{item.cpp_name}()) {{")
+        w.line(f"if (!{_field_has(item)}()) {{")
         with w.indent():
             error = f"::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {{}}, {_field_number_u32(item)})"
             if for_size:
@@ -1967,14 +2963,15 @@ def _emit_closed_enum_validation(
     for item in sorted(message.fields, key=lambda f: f.number):
         if item.kind == "map":
             assert item.map_key is not None and item.map_value is not None
+            entry_name = _field_implementation_name(item, "entry")
             for map_item, value_expr in (
-                (item.map_key, f"{item.cpp_name}_entry.key"),
-                (item.map_value, f"{item.cpp_name}_entry.value"),
+                (item.map_key, f"{entry_name}.key"),
+                (item.map_value, f"{entry_name}.value"),
             ):
                 condition = _closed_enum_invalid_condition(map_item, value_expr)
                 if condition is None:
                     continue
-                w.line(f"for (const auto &{item.cpp_name}_entry : {_member(item)}) {{")
+                w.line(f"for (const auto &{entry_name} : {_member(item)}) {{")
                 with w.indent():
                     _emit_closed_enum_reject(w, item, condition)
                 w.line("}")
@@ -1984,7 +2981,7 @@ def _emit_closed_enum_validation(
         if condition is None:
             continue
         if item.repeated:
-            value_name = f"{item.cpp_name}_value"
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto {value_name} : {_member(item)}) {{")
             with w.indent():
                 _emit_closed_enum_reject(
@@ -1993,20 +2990,75 @@ def _emit_closed_enum_validation(
             w.line("}")
             continue
         if item.oneof_name is not None:
-            case_member = _oneof_case_member(item.oneof_name)
-            case_type = _oneof_case_type(item.oneof_name)
-            w.line(f"if ({case_member} == {case_type}::{item.cpp_name}) {{")
+            case_member = _field_oneof_case_storage(item)
+            case_type = _field_oneof_case_type(item)
+            case_value = _field_emitted(item, "oneof_case")
+            w.line(f"if ({case_member} == {case_type}::{case_value}) {{")
             with w.indent():
                 _emit_closed_enum_reject(w, item, condition)
             w.line("}")
             continue
         if _has_presence_flag(item):
-            w.line(f"if (has_{item.cpp_name}_) {{")
+            w.line(f"if ({_presence_storage(item)}) {{")
             with w.indent():
                 _emit_closed_enum_reject(w, item, condition)
             w.line("}")
             continue
         _emit_closed_enum_reject(w, item, condition)
+
+
+def _emit_string_validation_reject(
+    w: CppWriter, item: FieldModel, value_expr: str
+) -> None:
+    w.line(f"if (const auto st = {value_expr}.validate(); !st) {{")
+    with w.indent():
+        w.line(
+            "return ::protocyte::unexpected("
+            f"st.error().code, {{}}, {_field_number_u32(item)});"
+        )
+    w.line("}")
+
+
+def _emit_string_validation(w: CppWriter, message: MessageModel) -> None:
+    for item in sorted(message.fields, key=lambda f: f.number):
+        if item.kind == "map":
+            assert item.map_key is not None and item.map_value is not None
+            string_members = [
+                member
+                for member in (item.map_key, item.map_value)
+                if member.kind == "string"
+            ]
+            if not string_members:
+                continue
+            entry_name = _field_implementation_name(item, "entry")
+            w.line(f"for (const auto &{entry_name} : {_member(item)}) {{")
+            with w.indent():
+                for member in string_members:
+                    _emit_string_validation_reject(
+                        w, item, f"{entry_name}.{member.cpp_name}"
+                    )
+            w.line("}")
+            continue
+
+        if item.kind != "string":
+            continue
+        if item.repeated:
+            value_name = _field_implementation_name(item, "value")
+            w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
+            with w.indent():
+                _emit_string_validation_reject(w, item, value_name)
+            w.line("}")
+            continue
+        if item.oneof_name is not None:
+            case_member = _field_oneof_case_storage(item)
+            case_type = _field_oneof_case_type(item)
+            case_value = _field_emitted(item, "oneof_case")
+            w.line(f"if ({case_member} == {case_type}::{case_value}) {{")
+            with w.indent():
+                _emit_string_validation_reject(w, item, _member(item))
+            w.line("}")
+            continue
+        _emit_string_validation_reject(w, item, _member(item))
 
 
 def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
@@ -2015,33 +3067,37 @@ def _emit_nested_validation(w: CppWriter, message: MessageModel) -> None:
             assert item.map_value is not None
             if item.map_value.kind != "message":
                 continue
-            value_name = f"{item.cpp_name}_value"
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
                 w.line(
-                    f"if (const auto st = {value_name}.value.validate(); !st) {{ return st; }}"
+                    f"if (const auto st = {value_name}.value.validate(); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
                 )
             w.line("}")
             continue
         if item.kind != "message":
             continue
         if item.repeated:
-            value_name = f"{item.cpp_name}_value"
+            value_name = _field_implementation_name(item, "value")
             w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
             with w.indent():
                 w.line(
-                    f"if (const auto st = {value_name}.validate(); !st) {{ return st; }}"
+                    f"if (const auto st = {value_name}.validate(); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
                 )
             w.line("}")
             continue
         if item.oneof_name is not None:
-            condition = f"{_oneof_case_member(item.oneof_name)} == {_oneof_case_type(item.oneof_name)}::{item.cpp_name}"
+            condition = (
+                f"{_field_oneof_case_storage(item)} == "
+                f"{_field_oneof_case_type(item)}::"
+                f"{_field_emitted(item, 'oneof_case')}"
+            )
             w.line(f"if ({condition} && {_member(item)}.has_value()) {{")
         else:
             w.line(f"if ({_member(item)}.has_value()) {{")
         with w.indent():
             w.line(
-                f"if (const auto st = {_member(item)}->validate(); !st) {{ return st; }}"
+                f"if (const auto st = {_member(item)}->validate(); !st) {{ return ::protocyte::with_field(st, {_field_number_u32(item)}); }}"
             )
         w.line("}")
 
@@ -2069,13 +3125,24 @@ def _packed_bulk_fixed_width_size(item: FieldModel) -> str | None:
 
 
 def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
+    allowed_wire_types = [_wire(item)]
+    if item.repeated and item.packable:
+        allowed_wire_types.append("::protocyte::WireType::LEN")
+    mismatch = " && ".join(
+        f"wire_type != {wire_type}" for wire_type in dict.fromkeys(allowed_wire_types)
+    )
+    w.line(f"if ({mismatch}) {{")
+    with w.indent():
+        _emit_unknown_field_handling(w, item, item.config_cpp_name)
+        w.line("break;")
+    w.line("}")
     if item.repeated and item.kind != "map":
         if item.packable:
             w.line("if (wire_type == ::protocyte::WireType::LEN) {")
             with w.indent():
                 w.line("auto len = ::protocyte::read_length_delimited_size(reader);")
                 w.line("if (!len) { return len.status(); }")
-                packed_values_name = f"packed_{item.cpp_name}_values"
+                packed_values_name = _field_implementation_name(item, "packed_values")
                 width = _packed_fixed_width_size(item)
                 bulk_width = _packed_bulk_fixed_width_size(item)
                 if not item.repeated_array and bulk_width is not None:
@@ -2084,7 +3151,9 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                     )
                     w.line("break;")
                 else:
-                    w.line("if (const auto st = reader.can_read(*len); !st) { return st; }")
+                    w.line(
+                        "if (const auto st = reader.can_read(*len); !st) { return st; }"
+                    )
                     if width is not None:
                         w.line(f"if (*len % {width} != 0u) {{")
                         with w.indent():
@@ -2096,13 +3165,25 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                             f"if (const auto st = reader.consume_repeated_elements(*len / {width}, field_number); !st) {{ return st; }}"
                         )
                     _emit_repeated_storage_decl(w, item, packed_values_name, options)
+                    packed_unknown_name = None
+                    if item.enum_closed:
+                        packed_unknown_name = _field_implementation_name(
+                            item, "packed_unknown_fields"
+                        )
+                        w.line(
+                            f"::protocyte::UnknownFieldStorage<{item.config_cpp_name}> {packed_unknown_name}{{{_owner_context_storage(item)}}};"
+                        )
                     if not item.repeated_array and width is not None:
-                        reserve_name = f"packed_reserve_{item.cpp_name}"
+                        reserve_name = _field_implementation_name(
+                            item, "packed_reserve"
+                        )
                         w.line(f"const auto {reserve_name} = *len / {width};")
                         w.line(
                             f"if (const auto st = {packed_values_name}.reserve({reserve_name}); !st) {{ return st; }}"
                         )
-                    w.line("::protocyte::LimitedReader<Reader> packed{reader, *len};")
+                    w.line(
+                        f"::protocyte::LimitedReader<{item.reader_cpp_name}> packed{{reader, *len}};"
+                    )
                     w.line("while (!packed.eof()) {")
                     with w.indent():
                         _emit_read_repeated_value(
@@ -2112,9 +3193,43 @@ def _emit_parse_case(w: CppWriter, item: FieldModel, options: GeneratorOptions) 
                             options,
                             target=packed_values_name,
                             consume_budget=width is None,
+                            unknown_storage=packed_unknown_name,
                         )
                     w.line("}")
+                    if packed_unknown_name is not None:
+                        _emit_prepare_repeated_values_commit(
+                            w, item, packed_values_name
+                        )
+                        merged_unknown_name = _field_implementation_name(
+                            item, "merged_unknown_fields"
+                        )
+                        w.line(
+                            f"::protocyte::UnknownFieldStorage<{item.config_cpp_name}> {merged_unknown_name}{{{_owner_context_storage(item)}}};"
+                        )
+                        w.line(
+                            f"if constexpr (::protocyte::preserve_unknown_fields_v<{item.config_cpp_name}>) {{"
+                        )
+                        with w.indent():
+                            w.line(f"if (!{packed_unknown_name}.empty()) {{")
+                            with w.indent():
+                                w.line(
+                                    f"if (const auto st = ::protocyte::prepare_unknown_field_merge<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {_owner_unknown_storage(item)}, {packed_unknown_name}, {merged_unknown_name}); !st) {{ return st; }}"
+                                )
+                            w.line("}")
+                        w.line("}")
                     _emit_commit_repeated_values(w, item, packed_values_name)
+                    if packed_unknown_name is not None:
+                        w.line(
+                            f"if constexpr (::protocyte::preserve_unknown_fields_v<{item.config_cpp_name}>) {{"
+                        )
+                        with w.indent():
+                            w.line(f"if (!{packed_unknown_name}.empty()) {{")
+                            with w.indent():
+                                w.line(
+                                    f"{_owner_unknown_storage(item)} = ::protocyte::move({merged_unknown_name});"
+                                )
+                            w.line("}")
+                        w.line("}")
                     w.line("break;")
             w.line("}")
         if _is_scalar_field(item) or _uses_runtime_len_field_helper(item):
@@ -2146,6 +3261,7 @@ def _emit_read_repeated_value(
     checked: bool = False,
     target: str | None = None,
     consume_budget: bool = True,
+    unknown_storage: str | None = None,
 ) -> None:
     target = _member(item) if target is None else target
     if consume_budget:
@@ -2154,15 +3270,15 @@ def _emit_read_repeated_value(
         )
     if item.kind in {"string", "bytes"}:
         typ = _field_type(item, options)
-        w.line(f"{typ} value{{ctx_}};")
+        w.line(f"{typ} value{{{_owner_context_storage(item)}}};")
         helper = _length_delimited_read_helper(item, checked=checked)
         args = (
-            f"*ctx_, {reader}, wire_type, field_number, value"
+            f"*{_owner_context_storage(item)}, {reader}, wire_type, field_number, value"
             if checked
-            else f"*ctx_, {reader}, value"
+            else f"*{_owner_context_storage(item)}, {reader}, value"
         )
         w.line(
-            f"if (const auto st = ::protocyte::{helper}<Config>({args}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::{helper}<{item.config_cpp_name}>({args}); !st) {{ return st; }}"
         )
         w.line(
             f"if (const auto st = {target}.push_back(::protocyte::move(value)); !st) {{ return st; }}"
@@ -2170,16 +3286,27 @@ def _emit_read_repeated_value(
         return
     if item.kind == "message":
         typ = _field_type(item, options)
-        w.line(f"{typ} value{{*ctx_}};")
+        w.line(f"{typ} value{{*{_owner_context_storage(item)}}};")
         w.line(
-            f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, field_number, value); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::read_message_partial<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {reader}, field_number, value); !st) {{ return st; }}"
         )
         w.line(
             f"if (const auto st = {target}.push_back(::protocyte::move(value)); !st) {{ return st; }}"
         )
         return
     w.line(f"{_element_type(item, options)} value{{}};")
-    _emit_read_scalar(w, item, reader, "value", options, checked=checked)
+    accepted = _emit_read_scalar(
+        w,
+        item,
+        reader,
+        "value",
+        options,
+        checked=checked,
+        unknown_storage=unknown_storage,
+    )
+    if accepted is not None:
+        action = "continue" if reader == "packed" else "break"
+        w.line(f"if (!{accepted}) {{ {action}; }}")
     w.line(f"if (const auto st = {target}.push_back(value); !st) {{ return st; }}")
 
 
@@ -2190,7 +3317,28 @@ def _emit_repeated_storage_decl(
     if item.repeated_array:
         w.line(f"{typ} {name}{{}};")
     else:
-        w.line(f"{typ} {name}{{ctx_}};")
+        w.line(f"{typ} {name}{{{_owner_context_storage(item)}}};")
+
+
+def _emit_prepare_repeated_values_commit(
+    w: CppWriter, item: FieldModel, source: str
+) -> None:
+    prepared_size_name = f"{source}_prepared_size"
+    w.line(
+        f"const auto {prepared_size_name} = ::protocyte::checked_add({_member(item)}.size(), {source}.size());"
+    )
+    w.line(f"if (!{prepared_size_name}) {{ return {prepared_size_name}.status(); }}")
+    if item.repeated_array:
+        w.line(f"if (*{prepared_size_name} > {_array_max_literal(item)}) {{")
+        with w.indent():
+            w.line(
+                "return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, reader.position(), field_number);"
+            )
+        w.line("}")
+        return
+    w.line(
+        f"if (const auto st = {_member(item)}.reserve(*{prepared_size_name}); !st) {{ return st; }}"
+    )
 
 
 def _emit_commit_repeated_values(w: CppWriter, item: FieldModel, source: str) -> None:
@@ -2236,9 +3384,6 @@ def _emit_read_bounded_bytes(
     bound = _array_max_literal(item)
     w.line(f"auto len = ::protocyte::read_length_delimited_size({reader});")
     w.line("if (!len) { return len.status(); }")
-    w.line(
-        f"if (*len > ctx_->limits.max_string_bytes) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, {reader}.position(), field_number); }}"
-    )
     if item.array_fixed:
         w.line(
             f"if (*len != {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {reader}.position(), field_number); }}"
@@ -2248,7 +3393,7 @@ def _emit_read_bounded_bytes(
             f"if (*len > {bound}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::count_limit, {reader}.position(), field_number); }}"
         )
     w.line(f"if (const auto st = {reader}.can_read(*len); !st) {{ return st; }}")
-    value_name = f"{item.cpp_name}_value"
+    value_name = _field_implementation_name(item, "value")
     w.line(f"{_storage_type(item, options)} {value_name}{{}};")
     w.line(
         f"if (const auto st = {value_name}.resize_for_overwrite(*len); !st) {{ return st; }}"
@@ -2258,27 +3403,28 @@ def _emit_read_bounded_bytes(
         f"if (const auto st = {reader}.read(view.data(), view.size()); !st) {{ return st; }}"
     )
     if item.oneof_name:
-        w.line(f"clear_{cpp_identifier(item.oneof_name)}();")
+        w.line(f"{_field_oneof_clear(item)}();")
         w.line(
             f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move({value_name})}};"
         )
         w.line(
-            f"{_oneof_case_member(item.oneof_name)} = {_oneof_case_type(item.oneof_name)}::{item.cpp_name};"
+            f"{_field_oneof_case_storage(item)} = {_field_oneof_case_type(item)}::"
+            f"{_field_emitted(item, 'oneof_case')};"
         )
         return
     w.line(f"{_member(item)} = ::protocyte::move({value_name});")
     if _has_presence_flag(item):
-        w.line(f"has_{item.cpp_name}_ = true;")
+        w.line(f"{_presence_storage(item)} = true;")
 
 
 def _emit_read_staged_message(
     w: CppWriter, item: FieldModel, reader: str, options: GeneratorOptions
 ) -> None:
-    value_name = f"{item.cpp_name}_value"
+    value_name = _field_implementation_name(item, "value")
     typ = _field_type(item, options)
-    w.line(f"{typ} {value_name}{{*ctx_}};")
+    w.line(f"{typ} {value_name}{{*{_owner_context_storage(item)}}};")
     if item.oneof_name:
-        w.line(f"if (has_{item.cpp_name}() && {_member(item)}.has_value()) {{")
+        w.line(f"if ({_field_has(item)}() && {_member(item)}.has_value()) {{")
         with w.indent():
             w.line(
                 f"if (const auto st = {value_name}.copy_from(*{_member(item)}); !st) {{ return st; }}"
@@ -2292,7 +3438,7 @@ def _emit_read_staged_message(
             )
         w.line("}")
     w.line(
-        f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, field_number, {value_name}); !st) {{ return st; }}"
+        f"if (const auto st = ::protocyte::read_message_partial<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {reader}, field_number, {value_name}); !st) {{ return st; }}"
     )
     if item.oneof_name:
         _emit_commit_oneof_value(w, item, value_name, options)
@@ -2310,13 +3456,16 @@ def _emit_commit_oneof_value(
     w: CppWriter, item: FieldModel, value: str, options: GeneratorOptions
 ) -> None:
     assert item.oneof_name is not None
-    oneof_name = cpp_identifier(item.oneof_name)
-    case_type = _oneof_case_type(item.oneof_name)
-    case_member = _oneof_case_member(item.oneof_name)
+    clear_name = _field_oneof_clear(item)
+    case_type = _field_oneof_case_type(item)
+    case_member = _field_oneof_case_storage(item)
+    case_value = _field_emitted(item, "oneof_case")
     if item.kind == "message":
-        committed_name = f"{item.cpp_name}_committed"
+        committed_name = _field_implementation_name(item, "committed")
         if item.recursive_box:
-            w.line(f"{_storage_type(item, options)} {committed_name}{{ctx_}};")
+            w.line(
+                f"{_storage_type(item, options)} {committed_name}{{{_owner_context_storage(item)}}};"
+            )
             w.line(
                 f"if (const auto st = {committed_name}.assign(::protocyte::move({value})); !st) {{ return st; }}"
             )
@@ -2326,11 +3475,11 @@ def _emit_commit_oneof_value(
                 f"if (const auto st = {committed_name}.emplace(::protocyte::move({value})); !st) {{ return st; }}"
             )
         value = committed_name
-    w.line(f"clear_{oneof_name}();")
+    w.line(f"{clear_name}();")
     w.line(
         f"new (&{_member(item)}) {_storage_type(item, options)} {{::protocyte::move({value})}};"
     )
-    w.line(f"{case_member} = {case_type}::{item.cpp_name};")
+    w.line(f"{case_member} = {case_type}::{case_value};")
 
 
 def _emit_read_single_value(
@@ -2341,11 +3490,11 @@ def _emit_read_single_value(
             _emit_read_bounded_bytes(w, item, reader, options)
         else:
             typ = _field_type(item, options)
-            value_name = f"{item.cpp_name}_value"
-            w.line(f"{typ} {value_name}{{ctx_}};")
+            value_name = _field_implementation_name(item, "value")
+            w.line(f"{typ} {value_name}{{{_owner_context_storage(item)}}};")
             helper = _length_delimited_read_helper(item, checked=True)
             w.line(
-                f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {value_name}); !st) {{ return st; }}"
+                f"if (const auto st = ::protocyte::{helper}<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {reader}, wire_type, field_number, {value_name}); !st) {{ return st; }}"
             )
             _emit_commit_oneof_value(w, item, value_name, options)
         return
@@ -2355,23 +3504,27 @@ def _emit_read_single_value(
     if item.kind in {"string", "bytes"}:
         helper = _length_delimited_read_helper(item, checked=True)
         w.line(
-            f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, wire_type, field_number, {_member(item)}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::{helper}<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {reader}, wire_type, field_number, {_member(item)}); !st) {{ return st; }}"
         )
         if _has_presence_flag(item):
-            w.line(f"has_{item.cpp_name}_ = true;")
+            w.line(f"{_presence_storage(item)} = true;")
         return
     if item.kind == "message":
         _emit_read_staged_message(w, item, reader, options)
         return
     if item.oneof_name:
-        value_name = f"{item.cpp_name}_value"
+        value_name = _field_implementation_name(item, "value")
         w.line(f"{_field_type(item, options)} {value_name}{{}};")
-        _emit_read_scalar(w, item, reader, value_name, options, checked=True)
+        accepted = _emit_read_scalar(w, item, reader, value_name, options, checked=True)
+        if accepted is not None:
+            w.line(f"if (!{accepted}) {{ break; }}")
         _emit_commit_oneof_value(w, item, value_name, options)
         return
-    _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
+    accepted = _emit_read_scalar(w, item, reader, _member(item), options, checked=True)
+    if accepted is not None:
+        w.line(f"if (!{accepted}) {{ break; }}")
     if _has_presence_flag(item):
-        w.line(f"has_{item.cpp_name}_ = true;")
+        w.line(f"{_presence_storage(item)} = true;")
 
 
 def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
@@ -2384,63 +3537,174 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
     w.line(
         "if (const auto st = reader.consume_map_entries(1u, field_number); !st) { return st; }"
     )
-    w.line(
-        "auto entry = ::protocyte::open_nested_message<Config>(*ctx_, reader, field_number);"
-    )
-    w.line("if (!entry) { return entry.status(); }")
-    w.line("auto &entry_reader = entry->reader();")
     _emit_temp_decl(w, key, "key", options)
     _emit_temp_decl(w, value, "value", options)
-    w.line("while (!entry_reader.eof()) {")
+    w.line("bool entry_is_unknown{};")
+    parse_name = _field_implementation_name(item, "parse_entry")
+    w.line(
+        f"const auto {parse_name} = [&](auto& entry_reader) noexcept -> ::protocyte::Status {{"
+    )
     with w.indent():
-        w.line("const auto entry_tag = ::protocyte::read_tag(entry_reader);")
-        w.line("if (!entry_tag) { return entry_tag.status(); }")
-        w.line("const auto [entry_field, entry_wire] = *entry_tag;")
-        w.line("switch (entry_field) {")
+        w.line("while (!entry_reader.eof()) {")
         with w.indent():
-            w.line("case 1u: {")
+            w.line("const auto entry_tag = ::protocyte::read_tag(entry_reader);")
+            w.line("if (!entry_tag) { return entry_tag.status(); }")
+            w.line("const auto [entry_field, entry_wire] = *entry_tag;")
+            w.line("switch (entry_field) {")
             with w.indent():
-                w.line(
-                    f"if (entry_wire != {_wire(key)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), 1u); }}"
-                )
-                _emit_read_named_value(
-                    w,
-                    key,
-                    "entry_reader",
-                    "key",
-                    options,
-                    "1u",
-                )
-                w.line("break;")
-            w.line("}")
-            w.line("case 2u: {")
-            with w.indent():
-                w.line(
-                    f"if (entry_wire != {_wire(value)}) {{ return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_wire_type, entry_reader.position(), 2u); }}"
-                )
-                _emit_read_named_value(
-                    w,
-                    value,
-                    "entry_reader",
-                    "value",
-                    options,
-                    "2u",
-                )
-                w.line("break;")
-            w.line("}")
-            w.line("default: {")
-            with w.indent():
-                w.line(
-                    "if (const auto st = ::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire, entry_field); !st) { return st; }"
-                )
-                w.line("break;")
+                w.line("case 1u: {")
+                with w.indent():
+                    w.line(f"if (entry_wire != {_wire(key)}) {{")
+                    with w.indent():
+                        w.line(
+                            f"if (const auto st = ::protocyte::skip_field<{item.config_cpp_name}>(*{_owner_context_storage(item)}, entry_reader, entry_wire, entry_field); !st) {{ return st; }}"
+                        )
+                        w.line("break;")
+                    w.line("}")
+                    _emit_read_map_member(
+                        w,
+                        key,
+                        "entry_reader",
+                        "key",
+                        options,
+                        "1u",
+                    )
+                    w.line("break;")
+                w.line("}")
+                w.line("case 2u: {")
+                with w.indent():
+                    w.line(f"if (entry_wire != {_wire(value)}) {{")
+                    with w.indent():
+                        w.line(
+                            f"if (const auto st = ::protocyte::skip_field<{item.config_cpp_name}>(*{_owner_context_storage(item)}, entry_reader, entry_wire, entry_field); !st) {{ return st; }}"
+                        )
+                        w.line("break;")
+                    w.line("}")
+                    _emit_read_map_member(
+                        w,
+                        value,
+                        "entry_reader",
+                        "value",
+                        options,
+                        "2u",
+                    )
+                    w.line("break;")
+                w.line("}")
+                w.line("default: {")
+                with w.indent():
+                    w.line(
+                        f"if (const auto st = ::protocyte::skip_field<{item.config_cpp_name}>(*{_owner_context_storage(item)}, entry_reader, entry_wire, entry_field); !st) {{ return st; }}"
+                    )
+                    w.line("break;")
+                w.line("}")
             w.line("}")
         w.line("}")
-    w.line("}")
-    w.line("if (const auto st = entry->finish(); !st) { return st; }")
-    w.line(
-        f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
-    )
+        w.line("return {};")
+    w.line("};")
+
+    def emit_normal_entry_parse() -> None:
+        w.line(
+            f"auto entry = ::protocyte::open_nested_message<{item.config_cpp_name}>(*{_owner_context_storage(item)}, reader, field_number);"
+        )
+        w.line("if (!entry) { return entry.status(); }")
+        w.line("auto& entry_reader = entry->reader();")
+        w.line(f"if (const auto st = {parse_name}(entry_reader); !st) {{ return st; }}")
+        w.line("if (const auto st = entry->finish(); !st) { return st; }")
+        w.line("if (!entry_is_unknown) {")
+        with w.indent():
+            w.line(
+                f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
+            )
+        w.line("}")
+
+    if value.enum_closed:
+        w.line(
+            f"if constexpr (::protocyte::preserve_unknown_fields_v<{item.config_cpp_name}>) {{"
+        )
+        with w.indent():
+            staged_name = _field_implementation_name(item, "staged_entry")
+            w.line(
+                "const auto entry_size = ::protocyte::read_length_delimited_size(reader);"
+            )
+            w.line("if (!entry_size) { return entry_size.status(); }")
+            w.line(
+                f"if (*entry_size > {_owner_context_storage(item)}->limits.max_message_bytes) {{"
+            )
+            with w.indent():
+                w.line(
+                    "return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, reader.position(), field_number);"
+                )
+            w.line("}")
+            w.line(
+                "if (const auto st = reader.can_read(*entry_size); !st) { return st; }"
+            )
+            w.line(
+                f"if (const auto st = ::protocyte::push_recursion<{item.config_cpp_name}>(*{_owner_context_storage(item)}, reader.position(), field_number); !st) {{ return st; }}"
+            )
+            w.line("const auto entry_offset = reader.position();")
+            w.line(
+                f"typename {item.config_cpp_name}::template Vector<::protocyte::u8> {staged_name}{{{_owner_context_storage(item)}}};"
+            )
+            w.line(
+                f"if (const auto st = {staged_name}.resize_for_overwrite(*entry_size); !st) {{ ::protocyte::pop_recursion<{item.config_cpp_name}>(*{_owner_context_storage(item)}); return st; }}"
+            )
+            w.line(
+                f"if (const auto st = reader.read({staged_name}.data(), {staged_name}.size()); !st) {{ ::protocyte::pop_recursion<{item.config_cpp_name}>(*{_owner_context_storage(item)}); return st; }}"
+            )
+            w.line(
+                f"::protocyte::StagedReader<{item.reader_cpp_name}> entry_reader{{::protocyte::Span<const ::protocyte::u8>{{{staged_name}.data(), {staged_name}.size()}}, reader, entry_offset}};"
+            )
+            w.line(f"const auto entry_status = {parse_name}(entry_reader);")
+            w.line(
+                f"::protocyte::pop_recursion<{item.config_cpp_name}>(*{_owner_context_storage(item)});"
+            )
+            w.line("if (!entry_status) { return entry_status; }")
+            w.line("if (entry_is_unknown) {")
+            with w.indent():
+                w.line("auto unknown = mutable_unknown_fields();")
+                w.line(
+                    f"if (const auto st = unknown.add_length_delimited(field_number, ::protocyte::Span<const ::protocyte::u8>{{{staged_name}.data(), {staged_name}.size()}}); !st) {{ return st; }}"
+                )
+            w.line("} else {")
+            with w.indent():
+                w.line(
+                    f"if (const auto insert = {_member(item)}.insert_or_assign(::protocyte::move(key), ::protocyte::move(value)); !insert) {{ return insert; }}"
+                )
+            w.line("}")
+        w.line("} else {")
+        with w.indent():
+            emit_normal_entry_parse()
+        w.line("}")
+    else:
+        emit_normal_entry_parse()
+
+
+def _emit_read_map_member(
+    w: CppWriter,
+    item: FieldModel,
+    reader: str,
+    target: str,
+    options: GeneratorOptions,
+    field_number: str,
+) -> None:
+    if item.enum_closed:
+        result_name = f"decoded_{target}_enum"
+        value_name = f"{target}_enum_value"
+        w.line(f"const auto {result_name} = ::protocyte::read_enum({reader});")
+        w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
+        w.line(f"const auto {value_name} = *{result_name};")
+        condition = _closed_enum_invalid_condition(item, value_name)
+        assert condition is not None
+        w.line(f"if ({condition}) {{")
+        with w.indent():
+            w.line("entry_is_unknown = true;")
+        w.line("} else {")
+        with w.indent():
+            w.line("entry_is_unknown = false;")
+            w.line(f"{target} = {value_name};")
+        w.line("}")
+        return
+    _emit_read_named_value(w, item, reader, target, options, field_number)
 
 
 def _emit_temp_decl(
@@ -2448,9 +3712,9 @@ def _emit_temp_decl(
 ) -> None:
     typ = _field_type(item, options)
     if item.kind in {"string", "bytes"}:
-        w.line(f"{typ} {name}{{ctx_}};")
+        w.line(f"{typ} {name}{{{_owner_context_storage(item)}}};")
     elif item.kind == "message":
-        w.line(f"{typ} {name}{{*ctx_}};")
+        w.line(f"{typ} {name}{{*{_owner_context_storage(item)}}};")
     else:
         w.line(f"{typ} {name}{{}};")
 
@@ -2466,11 +3730,11 @@ def _emit_read_named_value(
     if item.kind in {"string", "bytes"}:
         helper = _length_delimited_read_helper(item, checked=False)
         w.line(
-            f"if (const auto st = ::protocyte::{helper}<Config>(*ctx_, {reader}, {target}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::{helper}<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {reader}, {target}); !st) {{ return st; }}"
         )
     elif item.kind == "message":
         w.line(
-            f"if (const auto st = ::protocyte::read_message_partial<Config>(*ctx_, {reader}, {field_number}, {target}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::read_message_partial<{item.config_cpp_name}>(*{_owner_context_storage(item)}, {reader}, {field_number}, {target}); !st) {{ return st; }}"
         )
     else:
         _emit_read_scalar(
@@ -2487,14 +3751,48 @@ def _emit_read_scalar(
     *,
     checked: bool = False,
     field_number_expr: str | None = None,
-) -> None:
+    unknown_storage: str | None = None,
+) -> str | None:
     del options
     helper = _scalar_read_helper(item, checked=checked)
     args = f"{reader}, wire_type, field_number" if checked else reader
     error_field_number = "field_number" if checked else field_number_expr
+    if item.enum_closed and field_number_expr is None:
+        raw_name = _field_implementation_name(item, "decoded_raw")
+        result_name = _field_implementation_name(item, "decoded")
+        value_name = _field_implementation_name(item, "value")
+        accepted_name = _field_implementation_name(item, "accepted")
+        w.line(f"const auto {raw_name} = ::protocyte::read_varint({reader});")
+        w.line(f"if (!{raw_name}) {{ return {raw_name}.status(); }}")
+        w.line(f"const auto {value_name} = static_cast<::protocyte::i32>(*{raw_name});")
+        w.line(f"bool {accepted_name}{{true}};")
+        condition = _closed_enum_invalid_condition(item, value_name)
+        assert condition is not None
+        w.line(f"if ({condition}) {{")
+        with w.indent():
+            w.line(
+                f"if constexpr (::protocyte::preserve_unknown_fields_v<{item.config_cpp_name}>) {{"
+            )
+            with w.indent():
+                if unknown_storage is None:
+                    w.line("auto unknown = mutable_unknown_fields();")
+                else:
+                    w.line(
+                        f"::protocyte::MutableUnknownFieldSet<{item.config_cpp_name}> unknown{{*{_owner_context_storage(item)}, {unknown_storage}}};"
+                    )
+                w.line(
+                    f"if (const auto st = unknown.add_varint(field_number, *{raw_name}); !st) {{ return st; }}"
+                )
+            w.line("}")
+            w.line(f"{accepted_name} = false;")
+        w.line("} else {")
+        with w.indent():
+            w.line(f"{target} = {value_name};")
+        w.line("}")
+        return accepted_name
     if item.enum_closed:
-        result_name = f"decoded_{item.cpp_name}"
-        value_name = f"{item.cpp_name}_value"
+        result_name = _field_implementation_name(item, "decoded")
+        value_name = _field_implementation_name(item, "value")
         w.line(f"const auto {result_name} = ::protocyte::{helper}({args});")
         w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
         w.line(f"const auto {value_name} = *{result_name};")
@@ -2505,12 +3803,13 @@ def _emit_read_scalar(
             field_number=error_field_number,
         )
         w.line(f"{target} = {value_name};")
-        return
-    result_name = f"decoded_{item.cpp_name}"
+        return None
+    result_name = _field_implementation_name(item, "decoded")
     with w.local_decl(result_name):
         w.line(f"const auto {result_name} = ::protocyte::{helper}({args});")
         w.line(f"if (!{result_name}) {{ return {result_name}.status(); }}")
         w.line(f"{target} = *{result_name};")
+    return None
 
 
 def _emit_serialize_statement(
@@ -2518,9 +3817,13 @@ def _emit_serialize_statement(
 ) -> None:
     condition = _presence(item)
     if item.oneof_name:
-        condition = f"{_oneof_case_member(item.oneof_name)} == {_oneof_case_type(item.oneof_name)}::{item.cpp_name}"
+        condition = (
+            f"{_field_oneof_case_storage(item)} == "
+            f"{_field_oneof_case_type(item)}::"
+            f"{_field_emitted(item, 'oneof_case')}"
+        )
     if item.repeated and item.kind != "map":
-        value_name = f"{item.cpp_name}_value"
+        value_name = _field_implementation_name(item, "value")
         if item.packed:
             w.line(f"if (!{_member(item)}.empty()) {{")
             w.push()
@@ -2551,34 +3854,38 @@ def _emit_write_field(
     options: GeneratorOptions,
     *,
     enum_type: str | None = "FieldNumber",
+    error_field_number: str | None = None,
 ) -> None:
     del options
+    field_number = _field_number_u32(item, enum_type)
+    error_field_number = error_field_number or field_number
     if _is_scalar_field(item):
         helper = _scalar_write_helper(item, field=True)
         w.line(
-            f"if (const auto st = ::protocyte::{helper}(writer, {_field_number_u32(item, enum_type)}, {value}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::{helper}(writer, {field_number}, {value}); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
         return
     if item.kind in {"string", "bytes"}:
         helper = _length_delimited_write_helper(item)
         w.line(
-            f"if (const auto st = ::protocyte::{helper}(writer, {_field_number_u32(item, enum_type)}, {value}.view()); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::{helper}(writer, {field_number}, {value}.view()); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
         return
     if item.kind == "message":
         expr = f"*{value}" if value == _member(item) else value
         w.line(
-            f"if (const auto st = ::protocyte::write_message_field(writer, {_field_number_u32(item, enum_type)}, {expr}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::write_message_field(writer, {field_number}, {expr}); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
     else:
         w.line(
-            f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item, enum_type)}, {_wire(item)}); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::write_tag(writer, {field_number}, {_wire(item)}); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
-        _emit_write_scalar(w, item, value)
+        _emit_write_scalar(w, item, value, error_field_number)
 
 
 def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     assert item.map_key is not None and item.map_value is not None
+    error_field_number = _field_number_u32(item)
     w.line(f"for (const auto &entry : {_member(item)}) {{")
     with w.indent(), w.cpp_scope():
         w.line("::protocyte::usize entry_payload {};")
@@ -2590,6 +3897,7 @@ def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             "entry_payload",
             enum_type=None,
             force_scope=True,
+            error_field_number=error_field_number,
         )
         _emit_add_size_status(
             w,
@@ -2599,12 +3907,13 @@ def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             "entry_payload",
             enum_type=None,
             force_scope=True,
+            error_field_number=error_field_number,
         )
         w.line(
-            f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item)}, ::protocyte::WireType::LEN); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::write_tag(writer, {error_field_number}, ::protocyte::WireType::LEN); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
         w.line(
-            "if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(entry_payload)); !st) { return st; }"
+            f"if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>(entry_payload)); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
         _emit_write_field(
             w,
@@ -2612,6 +3921,7 @@ def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             "entry.key",
             options,
             enum_type=None,
+            error_field_number=error_field_number,
         )
         _emit_write_field(
             w,
@@ -2619,6 +3929,7 @@ def _emit_write_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -
             "entry.value",
             options,
             enum_type=None,
+            error_field_number=error_field_number,
         )
     w.line("}")
 
@@ -2632,7 +3943,8 @@ def _emit_write_packed_field(
     enum_type: str = "FieldNumber",
 ) -> None:
     del options
-    packed_name = f"packed_size_{item.cpp_name}"
+    error_field_number = _field_number_u32(item, enum_type)
+    packed_name = _field_implementation_name(item, "packed_size")
     w.line(f"::protocyte::usize {packed_name} {{}};")
     width = _fixed_scalar_width(item)
     if width is not None:
@@ -2640,37 +3952,46 @@ def _emit_write_packed_field(
             f"const auto {packed_name}_result = ::protocyte::checked_mul({value}.size(), {width});"
         )
         w.line(
-            f"if (!{packed_name}_result) {{ return {packed_name}_result.status(); }}"
+            f"if (!{packed_name}_result) {{ return ::protocyte::with_field({packed_name}_result.status(), {error_field_number}); }}"
         )
         w.line(f"{packed_name} = *{packed_name}_result;")
     else:
-        packed_value = f"packed_value_{item.cpp_name}"
+        packed_value = _field_implementation_name(item, "packed_value")
         w.line(f"for (const auto &{packed_value} : {value}) {{")
         with w.indent(), w.cpp_scope():
-            _emit_add_packed_size(w, item, packed_value, packed_name, result=False)
+            _emit_add_packed_size(
+                w,
+                item,
+                packed_value,
+                packed_name,
+                result=False,
+                error_field_number=error_field_number,
+            )
         w.line("}")
     w.line(
-        f"if (const auto st = ::protocyte::write_tag(writer, {_field_number_u32(item, enum_type)}, ::protocyte::WireType::LEN); !st) {{ return st; }}"
+        f"if (const auto st = ::protocyte::write_tag(writer, {error_field_number}, ::protocyte::WireType::LEN); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
     )
     w.line(
-        f"if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>({packed_name})); !st) {{ return st; }}"
+        f"if (const auto st = ::protocyte::write_varint(writer, static_cast<::protocyte::u64>({packed_name})); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
     )
     if _packed_bulk_fixed_width_size(item) is not None:
         w.line(
-            f"if (const auto st = ::protocyte::write_fixed_width_packed_values(writer, {value}.data(), {value}.size()); !st) {{ return st; }}"
+            f"if (const auto st = ::protocyte::write_fixed_width_packed_values(writer, {value}.data(), {value}.size()); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
         )
         return
-    packed_value = f"packed_value_{item.cpp_name}"
+    packed_value = _field_implementation_name(item, "packed_value")
     w.line(f"for (const auto &{packed_value} : {value}) {{")
     with w.indent(), w.cpp_scope():
-        _emit_write_scalar(w, item, packed_value)
+        _emit_write_scalar(w, item, packed_value, error_field_number)
     w.line("}")
 
 
-def _emit_write_scalar(w: CppWriter, item: FieldModel, value: str) -> None:
+def _emit_write_scalar(
+    w: CppWriter, item: FieldModel, value: str, error_field_number: str
+) -> None:
     helper = _scalar_write_helper(item, field=False)
     w.line(
-        f"if (const auto st = ::protocyte::{helper}(writer, {value}); !st) {{ return st; }}"
+        f"if (const auto st = ::protocyte::{helper}(writer, {value}); !st) {{ return ::protocyte::with_field(st, {error_field_number}); }}"
     )
 
 
@@ -2679,11 +4000,15 @@ def _emit_size_statement(
 ) -> None:
     condition = _presence(item)
     if item.oneof_name:
-        condition = f"{_oneof_case_member(item.oneof_name)} == {_oneof_case_type(item.oneof_name)}::{item.cpp_name}"
+        condition = (
+            f"{_field_oneof_case_storage(item)} == "
+            f"{_field_oneof_case_type(item)}::"
+            f"{_field_emitted(item, 'oneof_case')}"
+        )
     if item.repeated and item.kind != "map":
-        value_name = f"{item.cpp_name}_value"
+        value_name = _field_implementation_name(item, "value")
         if item.packed:
-            packed_name = f"packed_size_{item.cpp_name}"
+            packed_name = _field_implementation_name(item, "packed_size")
             w.line(f"if (!{_member(item)}.empty()) {{")
             with w.indent(), w.cpp_scope():
                 w.line(f"::protocyte::usize {packed_name} {{}};")
@@ -2693,14 +4018,19 @@ def _emit_size_statement(
                         f"const auto {packed_name}_result = ::protocyte::checked_mul({_member(item)}.size(), {width});"
                     )
                     w.line(
-                        f"if (!{packed_name}_result) {{ return ::protocyte::unexpected({packed_name}_result.error()); }}"
+                        f"if (!{packed_name}_result) {{ return ::protocyte::unexpected(::protocyte::with_field({packed_name}_result.error(), {_field_number_u32(item)})); }}"
                     )
                     w.line(f"{packed_name} = *{packed_name}_result;")
                 else:
                     w.line(f"for (const auto &{value_name} : {_member(item)}) {{")
                     with w.indent(), w.cpp_scope():
                         _emit_add_packed_size(
-                            w, item, value_name, packed_name, result=True
+                            w,
+                            item,
+                            value_name,
+                            packed_name,
+                            result=True,
+                            error_field_number=_field_number_u32(item),
                         )
                     w.line("}")
                 _emit_size_result_update(
@@ -2708,7 +4038,8 @@ def _emit_size_statement(
                     "total",
                     f"::protocyte::length_delimited_field_size({_field_number_u32(item)}, {packed_name})",
                     result=True,
-                    size_name=f"field_size_{item.cpp_name}",
+                    size_name=_field_implementation_name(item, "field_size"),
+                    error_field_number=_field_number_u32(item),
                 )
             w.line("}")
             return
@@ -2728,6 +4059,7 @@ def _emit_size_statement(
 
 def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
     assert item.map_key is not None and item.map_value is not None
+    error_field_number = _field_number_u32(item)
     w.line(f"for (const auto &entry : {_member(item)}) {{")
     with w.indent(), w.cpp_scope():
         w.line("::protocyte::usize entry_payload {};")
@@ -2740,6 +4072,7 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             enum_type=None,
             result=True,
             force_scope=True,
+            error_field_number=error_field_number,
         )
         _emit_add_size_status(
             w,
@@ -2750,13 +4083,15 @@ def _emit_size_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             enum_type=None,
             result=True,
             force_scope=True,
+            error_field_number=error_field_number,
         )
         _emit_size_result_update(
             w,
             "total",
             f"::protocyte::length_delimited_field_size({_field_number_u32(item)}, entry_payload)",
             result=True,
-            size_name=f"field_size_{item.cpp_name}",
+            size_name=_field_implementation_name(item, "field_size"),
+            error_field_number=error_field_number,
         )
     w.line("}")
 
@@ -2770,18 +4105,20 @@ def _emit_size_result_update(
     result: bool = False,
     size_name: str | None = None,
     force_scope: bool = False,
+    error_field_number: str | None = None,
 ) -> None:
     if size_name is not None:
         with w.local_decl(size_name, force_scope=force_scope):
             w.line(f"const auto {size_name} = {result_expr};")
             w.line(
-                f"if (!{size_name}) {{ return {_size_error_return(size_name, result)}; }}"
+                f"if (!{size_name}) {{ return {_size_error_return(size_name, result, error_field_number)}; }}"
             )
             _emit_size_result_update(
                 w,
                 total_name,
                 f"::protocyte::add_size({total_name}, *{size_name})",
-                error_return=_size_error_return("st_size", result),
+                error_return=_size_error_return("st_size", result, error_field_number),
+                error_field_number=error_field_number,
             )
         return
     assert error_return is not None
@@ -2791,10 +4128,18 @@ def _emit_size_result_update(
         w.line(f"{total_name} = *st_size;")
 
 
-def _size_error_return(result_name: str, result: bool) -> str:
+def _size_error_return(
+    result_name: str, result: bool, error_field_number: str | None = None
+) -> str:
     if result:
-        return f"::protocyte::unexpected({result_name}.error())"
-    return f"{result_name}.status()"
+        error = f"{result_name}.error()"
+        if error_field_number is not None:
+            error = f"::protocyte::with_field({error}, {error_field_number})"
+        return f"::protocyte::unexpected({error})"
+    status = f"{result_name}.status()"
+    if error_field_number is not None:
+        status = f"::protocyte::with_field({status}, {error_field_number})"
+    return status
 
 
 def _emit_add_size(
@@ -2804,15 +4149,18 @@ def _emit_add_size(
     options: GeneratorOptions,
     *,
     enum_type: str | None = "FieldNumber",
+    error_field_number: str | None = None,
 ) -> None:
     del options
+    error_field_number = error_field_number or _field_number_u32(item, enum_type)
     if item.kind in {"string", "bytes"}:
         _emit_size_result_update(
             w,
             "total",
             f"::protocyte::length_delimited_field_size({_field_number_u32(item, enum_type)}, {value}.size())",
             result=True,
-            size_name=f"field_size_{item.cpp_name}",
+            size_name=_field_implementation_name(item, "field_size"),
+            error_field_number=error_field_number,
         )
         return
     elif item.kind == "message":
@@ -2822,7 +4170,8 @@ def _emit_add_size(
             "total",
             f"::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {expr})",
             result=True,
-            size_name=f"field_size_{item.cpp_name}",
+            size_name=_field_implementation_name(item, "field_size"),
+            error_field_number=error_field_number,
         )
         return
     else:
@@ -2831,7 +4180,8 @@ def _emit_add_size(
             w,
             "total",
             f"::protocyte::add_size(total, {value_size})",
-            error_return="::protocyte::unexpected(st_size.error())",
+            error_return=f"::protocyte::unexpected(::protocyte::with_field(st_size.error(), {error_field_number}))",
+            error_field_number=error_field_number,
         )
 
 
@@ -2845,15 +4195,18 @@ def _emit_add_size_status(
     enum_type: str | None = "FieldNumber",
     result: bool = False,
     force_scope: bool = False,
+    error_field_number: str | None = None,
 ) -> None:
+    error_field_number = error_field_number or _field_number_u32(item, enum_type)
     if item.kind in {"string", "bytes"}:
         _emit_size_result_update(
             w,
             total_name,
             f"::protocyte::length_delimited_field_size({_field_number_u32(item, enum_type)}, {value}.size())",
             result=result,
-            size_name=f"field_size_{item.cpp_name}",
+            size_name=_field_implementation_name(item, "field_size"),
             force_scope=force_scope,
+            error_field_number=error_field_number,
         )
         return
     if item.kind == "message":
@@ -2862,8 +4215,9 @@ def _emit_add_size_status(
             total_name,
             f"::protocyte::message_field_size({_field_number_u32(item, enum_type)}, {value})",
             result=result,
-            size_name=f"field_size_{item.cpp_name}",
+            size_name=_field_implementation_name(item, "field_size"),
             force_scope=force_scope,
+            error_field_number=error_field_number,
         )
         return
     value_size = f"::protocyte::tag_size({_field_number_u32(item, enum_type)}) + {_scalar_size(item, value)}"
@@ -2871,62 +4225,78 @@ def _emit_add_size_status(
         w,
         total_name,
         f"::protocyte::add_size({total_name}, {value_size})",
-        error_return=_size_error_return("st_size", result),
+        error_return=_size_error_return("st_size", result, error_field_number),
         force_scope=force_scope,
+        error_field_number=error_field_number,
     )
 
 
 def _emit_add_packed_size(
-    w: CppWriter, item: FieldModel, value: str, total_name: str, *, result: bool
+    w: CppWriter,
+    item: FieldModel,
+    value: str,
+    total_name: str,
+    *,
+    result: bool,
+    error_field_number: str,
 ) -> None:
     w.line(
         f"const auto st_size = ::protocyte::add_size({total_name}, {_scalar_size(item, value)});"
     )
-    w.line(f"if (!st_size) {{ return {_size_error_return('st_size', result)}; }}")
+    w.line(
+        f"if (!st_size) {{ return {_size_error_return('st_size', result, error_field_number)}; }}"
+    )
     w.line(f"{total_name} = *st_size;")
 
 
 def _emit_member(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
+    _emit_documentation(w, item.documentation, options)
     if item.repeated and item.kind != "map":
         w.line(f"{_storage_type(item, options)} {_member(item)};")
         return
     if item.kind == "map":
         assert item.map_key is not None and item.map_value is not None
         w.line(
-            f"typename Config::template Map<{_field_type(item.map_key, options)}, {_field_type(item.map_value, options)}> {_member(item)};"
+            f"typename {item.config_cpp_name}::template Map<{_field_type(item.map_key, options)}, {_field_type(item.map_value, options)}> {_member(item)};"
         )
         return
     if item.kind == "message":
         typ = _field_type(item, options)
         if item.recursive_box:
-            w.line(f"typename Config::template Box<{typ}> {_member(item)};")
+            w.line(
+                f"typename {item.config_cpp_name}::template Box<{typ}> {_member(item)};"
+            )
         else:
-            w.line(f"typename Config::template Optional<{typ}> {_member(item)};")
+            w.line(
+                f"typename {item.config_cpp_name}::template Optional<{typ}> {_member(item)};"
+            )
         return
     if item.kind == "bytes" and item.array_enabled:
         w.line(f"{_storage_type(item, options)} {_member(item)};")
         if _has_presence_flag(item):
-            w.line(f"bool has_{item.cpp_name}_ {{}};")
+            w.line(f"bool {_presence_storage(item)} {{}};")
         return
     if item.kind in {"string", "bytes"}:
         w.line(f"{_field_type(item, options)} {_member(item)};")
         if _has_presence_flag(item):
-            w.line(f"bool has_{item.cpp_name}_ {{}};")
+            w.line(f"bool {_presence_storage(item)} {{}};")
         return
     w.line(f"{_field_type(item, options)} {_member(item)}{{}};")
     if _has_presence_flag(item):
-        w.line(f"bool has_{item.cpp_name}_ {{}};")
+        w.line(f"bool {_presence_storage(item)} {{}};")
 
 
 def _emit_oneof_member(
     w: CppWriter, item: FieldModel, options: GeneratorOptions
 ) -> None:
+    _emit_documentation(w, item.documentation, options)
     w.line(f"{_storage_type(item, options)} {_oneof_member_name(item)};")
 
 
 def _emit_destroy_oneof_member(w: CppWriter, item: FieldModel) -> None:
     if item.kind in {"string", "bytes", "message"}:
-        w.line(f"destroy_at_(&{_member(item)});")
+        destroy_name = _field_emitted(item, "destroy_at_")
+        w.line(f"{destroy_name}(&{_member(item)});")
 
 
 def _emit_oneof_storage(
@@ -2939,22 +4309,22 @@ def _emit_oneof_storage(
         w.line(f"~{storage_type}() noexcept {{}}")
         for item in oneof.fields:
             _emit_oneof_member(w, item, options)
-    w.line(f"}} {_oneof_storage_member(oneof.name)};")
+    w.line(f"}} {_oneof_storage_member(oneof)};")
 
 
 def _storage_type(item: FieldModel, options: GeneratorOptions) -> str:
     if item.repeated and item.kind != "map":
         if item.repeated_array and item.array_max is not None:
             return f"::protocyte::Array<{_element_type(item, options)}, {_array_max_literal(item)}>"
-        return f"typename Config::template Vector<{_element_type(item, options)}>"
+        return f"typename {item.config_cpp_name}::template Vector<{_element_type(item, options)}>"
     if item.kind == "map":
         assert item.map_key is not None and item.map_value is not None
-        return f"typename Config::template Map<{_field_type(item.map_key, options)}, {_field_type(item.map_value, options)}>"
+        return f"typename {item.config_cpp_name}::template Map<{_field_type(item.map_key, options)}, {_field_type(item.map_value, options)}>"
     if item.kind == "message":
         typ = _field_type(item, options)
         if item.recursive_box:
-            return f"typename Config::template Box<{typ}>"
-        return f"typename Config::template Optional<{typ}>"
+            return f"typename {item.config_cpp_name}::template Box<{typ}>"
+        return f"typename {item.config_cpp_name}::template Optional<{typ}>"
     if item.fixed_bytes and item.array_max is not None:
         return f"::protocyte::FixedByteArray<{_array_max_literal(item)}>"
     if item.kind == "bytes" and item.array_enabled and item.array_max is not None:
@@ -2996,17 +4366,23 @@ def _field_with_number(item: FieldModel, number: int) -> FieldModel:
         required=False,
         default_cpp=item.default_cpp,
         default_byte_size=item.default_byte_size,
+        config_cpp_name=item.config_cpp_name,
+        reader_cpp_name=item.reader_cpp_name,
+        writer_cpp_name=item.writer_cpp_name,
+        value_cpp_name=item.value_cpp_name,
+        generic_cpp_name=item.generic_cpp_name,
+        emitted_names=item.emitted_names.copy(),
     )
 
 
 def _field_type(item: FieldModel, options: GeneratorOptions) -> str:
     if item.kind == "message":
         assert item.message_type is not None
-        return f"{_qualified_name(item.message_type.package, item.message_type.cpp_name, options)}<Config>"
+        return f"{_qualified_name(item.message_type.cpp_namespace, item.message_type.cpp_name)}<{item.config_cpp_name}>"
     if item.kind == "string":
-        return "typename Config::String"
+        return f"typename {item.config_cpp_name}::String"
     if item.kind == "bytes":
-        return "typename Config::Bytes"
+        return f"typename {item.config_cpp_name}::Bytes"
     if item.kind == "enum":
         return "::protocyte::i32"
     return _runtime_scalar_type(SCALAR_CPP_TYPES[item.proto_type])
@@ -3015,7 +4391,7 @@ def _field_type(item: FieldModel, options: GeneratorOptions) -> str:
 def _enum_type(enum: EnumModel | None, options: GeneratorOptions) -> str:
     if enum is None:
         return "::protocyte::i32"
-    return _qualified_name(enum.package, enum.cpp_name, options)
+    return _qualified_name(enum.cpp_namespace, enum.cpp_name)
 
 
 def _element_type(item: FieldModel, options: GeneratorOptions) -> str:
@@ -3059,7 +4435,7 @@ def _emit_closed_enum_reject(
 
 
 def _field_number_name(item: FieldModel) -> str:
-    return item.cpp_name
+    return _field_emitted(item, "number")
 
 
 def _field_number_u32(item: FieldModel, enum_type: str | None = "FieldNumber") -> str:
@@ -3070,28 +4446,128 @@ def _field_number_u32(item: FieldModel, enum_type: str | None = "FieldNumber") -
 
 def _member(item: FieldModel) -> str:
     if item.oneof_name is not None:
-        return f"{_oneof_storage_member(item.oneof_name)}.{_oneof_member_name(item)}"
-    return f"{item.cpp_name}_"
+        storage = _field_emitted(item, "oneof_container")
+        return f"{storage}.{_oneof_member_name(item)}"
+    return _field_emitted(item, "storage")
 
 
-def _oneof_case_type(oneof_name: str) -> str:
-    return f"{cpp_pascal_identifier(oneof_name)}Case"
+def _message_emitted(message: MessageModel, key: str) -> str:
+    return message.emitted_names[key]
 
 
-def _oneof_case_member(oneof_name: str) -> str:
-    return f"{cpp_identifier(oneof_name)}_case_"
+def _field_emitted(item: FieldModel, key: str) -> str:
+    return item.emitted_names[key]
+
+
+def _field_implementation_name(item: FieldModel, key: str) -> str:
+    return _field_emitted(item, f"implementation:{key}")
+
+
+def _presence_storage(item: FieldModel) -> str:
+    return _field_emitted(item, "presence_storage")
+
+
+def _field_clear(item: FieldModel) -> str:
+    return _field_emitted(item, "clear")
+
+
+def _field_setter(item: FieldModel) -> str:
+    return _field_emitted(item, "setter")
+
+
+def _field_has(item: FieldModel) -> str:
+    return _field_emitted(item, "has")
+
+
+def _field_mutable(item: FieldModel) -> str:
+    return _field_emitted(item, "mutable")
+
+
+def _field_ensure(item: FieldModel) -> str:
+    return _field_emitted(item, "ensure")
+
+
+def _field_raw_accessor(item: FieldModel) -> str:
+    return _field_emitted(item, "raw_accessor")
+
+
+def _field_raw_setter(item: FieldModel) -> str:
+    return _field_emitted(item, "raw_setter")
+
+
+def _field_size(item: FieldModel) -> str:
+    return _field_emitted(item, "size")
+
+
+def _field_max_size(item: FieldModel) -> str:
+    return _field_emitted(item, "max_size")
+
+
+def _field_resize(item: FieldModel) -> str:
+    return _field_emitted(item, "resize")
+
+
+def _field_resize_overwrite(item: FieldModel) -> str:
+    return _field_emitted(item, "resize_overwrite")
+
+
+def _message_context_storage(message: MessageModel) -> str:
+    return _message_emitted(message, "context_storage")
+
+
+def _message_unknown_storage(message: MessageModel) -> str:
+    return _message_emitted(message, "unknown_storage")
+
+
+def _owner_context_storage(owner: MessageModel | FieldModel) -> str:
+    if isinstance(owner, MessageModel):
+        return _message_context_storage(owner)
+    return _field_emitted(owner, "context_storage")
+
+
+def _owner_unknown_storage(owner: MessageModel | FieldModel) -> str:
+    if isinstance(owner, MessageModel):
+        return _message_unknown_storage(owner)
+    return _field_emitted(owner, "unknown_storage")
+
+
+def _oneof_emitted(oneof: OneofModel, key: str) -> str:
+    return oneof.emitted_names[key]
+
+
+def _oneof_case_type(oneof: OneofModel) -> str:
+    return _oneof_emitted(oneof, "case_type")
+
+
+def _oneof_case_member(oneof: OneofModel) -> str:
+    return _oneof_emitted(oneof, "case_storage")
 
 
 def _oneof_storage_type(oneof: OneofModel) -> str:
-    return f"{oneof.cpp_name}Storage"
+    return _oneof_emitted(oneof, "storage_type")
 
 
-def _oneof_storage_member(oneof_name: str) -> str:
-    return f"{cpp_identifier(oneof_name)}_"
+def _oneof_storage_member(oneof: OneofModel) -> str:
+    return _oneof_emitted(oneof, "storage")
 
 
 def _oneof_member_name(item: FieldModel) -> str:
-    return f"{item.cpp_name}_"
+    return _field_emitted(item, "oneof_storage")
+
+
+def _field_oneof_case_type(item: FieldModel) -> str:
+    assert item.oneof_name is not None
+    return _field_emitted(item, "oneof_case_type")
+
+
+def _field_oneof_case_storage(item: FieldModel) -> str:
+    assert item.oneof_name is not None
+    return _field_emitted(item, "oneof_case_storage")
+
+
+def _field_oneof_clear(item: FieldModel) -> str:
+    assert item.oneof_name is not None
+    return _field_emitted(item, "oneof_clear")
 
 
 def _array_max_literal(item: FieldModel) -> str:
@@ -3125,7 +4601,7 @@ def _presence(item: FieldModel) -> str:
     if item.kind == "message":
         return f"{_member(item)}.has_value()"
     if _has_presence_flag(item):
-        return f"has_{item.cpp_name}_"
+        return _presence_storage(item)
     if item.kind in {"string", "bytes"}:
         return f"!{_member(item)}.empty()"
     if item.kind == "enum":
@@ -3207,10 +4683,14 @@ def _runtime_scalar_type(cpp_type: str) -> str:
 
 def _emit_string_view_accessor(
     w: CppWriter,
-    name: str,
+    item: FieldModel,
+    options: GeneratorOptions,
     expr: str,
 ) -> None:
-    w.line(f"::protocyte::StringView {name}() const noexcept {{ return {expr}; }}")
+    _emit_field_api_annotations(w, item, options)
+    w.line(
+        f"::protocyte::StringView {item.cpp_name}() const noexcept {{ return {expr}; }}"
+    )
 
 
 def _file_uses_numeric_limits(file_model: FileModel) -> bool:
@@ -3264,40 +4744,65 @@ def _walk_messages(messages: list[MessageModel]):
         yield from _walk_messages(message.nested_messages)
 
 
-def _header_name(proto_name: str) -> str:
-    return proto_name.removesuffix(".proto") + ".protocyte.hpp"
+def _header_name(proto_name: str, options: GeneratorOptions) -> str:
+    return (
+        generated_file_base(
+            proto_name,
+            max_output_path_bytes=options.generated_path_max_bytes,
+            max_output_directory_bytes=options.generated_directory_max_bytes,
+        )
+        + ".hpp"
+    )
 
 
-def _source_name(proto_name: str) -> str:
-    return proto_name.removesuffix(".proto") + ".protocyte.cpp"
+def _source_name(proto_name: str, options: GeneratorOptions) -> str:
+    return (
+        generated_file_base(
+            proto_name,
+            max_output_path_bytes=options.generated_path_max_bytes,
+            max_output_directory_bytes=options.generated_directory_max_bytes,
+        )
+        + ".cpp"
+    )
 
 
 def _include_path(proto_name: str, options: GeneratorOptions) -> str:
-    path = _header_name(proto_name)
+    path = _header_name(proto_name, options)
     return f"{options.include_prefix}/{path}" if options.include_prefix else path
 
 
 def _include_guard(proto_name: str) -> str:
-    sanitized = "".join(ch if ch.isalnum() else "_" for ch in proto_name.upper())
+    raw_sanitized = "".join(
+        ch if ch.isascii() and ch.isalnum() else "_" for ch in proto_name.upper()
+    )
+    sanitized = "_".join(part for part in raw_sanitized.split("_") if part) or "FILE"
     digest = hashlib.sha1(proto_name.encode("utf-8")).hexdigest().upper()[:12]
     return f"PROTOCYTE_GENERATED_{sanitized}_{digest}_HPP"
 
 
-def _namespace_parts(file_model: FileModel, options: GeneratorOptions) -> list[str]:
-    parts: list[str] = []
-    if options.namespace_prefix:
-        parts.extend(options.namespace_prefix.split("::"))
-    if file_model.package:
-        parts.extend(cpp_identifier(part) for part in file_model.package.split("."))
-    return parts
+def _cpp_suffix_identifier(identifier: str, suffix: str) -> str:
+    if identifier.endswith("_"):
+        # A second underscore would be reserved to the implementation, while
+        # omitting it makes Foo and Foo_ collide.  Moving the separator after
+        # the suffix is portable and makes the two output domains disjoint:
+        # ordinary identifiers end in ``_{suffix}``, escaped ones in
+        # ``_{suffix}_``.
+        return f"{identifier}{suffix}_"
+    return f"{identifier}_{suffix}"
 
 
-def _qualified_name(package: str, cpp_name: str, options: GeneratorOptions) -> str:
-    parts: list[str] = []
-    if options.namespace_prefix:
-        parts.extend(options.namespace_prefix.split("::"))
-    if package:
-        parts.extend(cpp_identifier(part) for part in package.split("."))
+def _namespace_parts(file_model: FileModel) -> list[str]:
+    if file_model.cpp_namespace is None:
+        raise AssertionError(
+            f"{file_model.name}: missing allocated C++ namespace spelling"
+        )
+    return list(file_model.cpp_namespace)
+
+
+def _qualified_name(cpp_namespace: tuple[str, ...] | None, cpp_name: str) -> str:
+    if cpp_namespace is None:
+        raise AssertionError(f"{cpp_name}: missing allocated C++ namespace spelling")
+    parts = list(cpp_namespace)
     parts.append(cpp_name)
     return "::" + "::".join(parts)
 
@@ -3312,10 +4817,6 @@ def _close_namespace(w: CppWriter, parts: list[str]) -> None:
     if parts:
         w.line()
         w.line(f"}}  // namespace {'::'.join(parts)}")
-
-
-def _escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _cpp_bool(value: bool) -> str:

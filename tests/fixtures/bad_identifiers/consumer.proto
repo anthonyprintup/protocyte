@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package compat.consumer;
+
+import "bad_identifiers.proto";
+import "types.proto";
+import "protocyte.proto";
+
+message References {
+  compat.bad.foo lower = 1;
+  compat.bad.Foo upper = 2;
+  compat.bad.payload lowercase_type = 3;
+  compat.bad.Container.serialize nested_serialize = 4;
+  compat.bad.Container.parse nested_parse = 5;
+  compat.bad.Container.context nested_context = 6;
+  compat.bad.Container.unknown_fields nested_unknown_fields = 7;
+  compat.bad.Container.validate nested_validate = 8;
+  compat.bad.Container.copy_from nested_copy_from = 9;
+  compat.bad.Container.std nested_std = 10;
+  compat.bad.Container.while nested_enum = 11;
+  compat.bad._Private private_type = 12;
+  compat.bad.proto__reserved reserved_type = 13;
+  compat.bad.HelperFields helper = 14;
+  protocyte.Span runtime_span = 15;
+  protocyte.Result runtime_result = 16;
+  protocyte.read_varint runtime_function = 17;
+  compat.bad.config lowercase_config = 18;
+  compat.bad.Container.NestedConfig nested_config = 19;
+  compat.bad.Container.compatibilityConfig nested_compatibility_config = 20;
+  compat.bad.ImplementationNames implementation_names = 21;
+  compat.bad.state lower_enum_type = 22;
+  compat.bad.State upper_enum_type = 23;
+}

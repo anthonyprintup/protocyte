@@ -3,6 +3,7 @@ syntax = "proto2";
 package test.required;
 
 import "protocyte/options.proto";
+import "open_enum.proto";
 
 message RequiredChild {
   required int32 id = 1;
@@ -24,6 +25,11 @@ enum Proto2DefaultMode {
   PROTO2_DEFAULT_MODE_READY = 9;
 }
 
+enum Proto2MapMode {
+  PROTO2_MAP_MODE_UNKNOWN = 0;
+  PROTO2_MAP_MODE_READY = 9;
+}
+
 message Proto2DefaultValues {
   optional double double_value = 1 [default = 1.5];
   optional float float_value = 2 [default = -2.25];
@@ -42,6 +48,15 @@ message Proto2DefaultValues {
   optional sint32 sint32_value = 15 [default = -23456];
   optional sint64 sint64_value = 16 [default = -123456789012];
   optional Proto2DefaultMode implicit_enum_value = 17;
+  repeated Proto2DefaultMode enum_values = 18 [packed = true];
+  map<string, Proto2MapMode> enum_by_name = 19;
+  optional test.open.Mode imported_open_enum = 20;
+  repeated test.open.Mode imported_open_unpacked = 21 [packed = false];
+  repeated test.open.Mode imported_open_packed = 22 [packed = true];
+  oneof imported_open_choice {
+    test.open.Mode imported_open_oneof = 23;
+  }
+  map<string, test.open.Mode> imported_open_by_name = 24;
 }
 
 message OneofShadowingValue {

@@ -15,4 +15,5 @@ if(NOT EXISTS "${protocyte_source_dir}/CMakeLists.txt")
     message(FATAL_ERROR "PROTOCYTE_SOURCE_DIR '${protocyte_source_dir}' does not look like the protocyte repository root")
 endif()
 
+set(PROTOCYTE_INSTALL ON)
 add_subdirectory("${protocyte_source_dir}" "${CMAKE_CURRENT_BINARY_DIR}/protocyte")

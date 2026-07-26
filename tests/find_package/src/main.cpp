@@ -48,44 +48,30 @@ int main() {
     };
 
     auto header = Header::create(ctx);
-    if (!header) {
-        std::cerr << "failed to create Header\n";
-        return EXIT_FAILURE;
-    }
-    if (const auto st = header->set_version(1u); !st) {
-        std::cerr << "failed to set header version\n";
-        return EXIT_FAILURE;
-    }
+    header.set_version(1u);
     constexpr std::array<unsigned char, 2> tag {'O', 'K'};
-    if (const auto st = header->set_tag(view_of(tag)); !st) {
+    if (const auto st = header.set_tag(view_of(tag)); !st) {
         std::cerr << "failed to set header tag\n";
         return EXIT_FAILURE;
     }
 
     auto envelope = Envelope::create(ctx);
-    if (!envelope) {
-        std::cerr << "failed to create Envelope\n";
-        return EXIT_FAILURE;
-    }
-    if (auto ensured = envelope->ensure_header(); !ensured) {
+    if (auto ensured = envelope.ensure_header(); !ensured) {
         std::cerr << "failed to create envelope header\n";
         return EXIT_FAILURE;
-    } else if (const auto st = ensured.value().copy_from(*header); !st) {
+    } else if (const auto st = ensured.value().copy_from(header); !st) {
         std::cerr << "failed to copy header into envelope\n";
         return EXIT_FAILURE;
     }
-    if (const auto st = envelope->set_id(150u); !st) {
-        std::cerr << "failed to set envelope id\n";
-        return EXIT_FAILURE;
-    }
+    envelope.set_id(150u);
     constexpr std::array<unsigned char, 3> payload {'h', 'e', 'y'};
-    if (const auto st = envelope->set_payload(view_of(payload)); !st) {
+    if (const auto st = envelope.set_payload(view_of(payload)); !st) {
         std::cerr << "failed to set envelope payload\n";
         return EXIT_FAILURE;
     }
 
-    const std::string header_hex = encode_hex(*header);
-    const std::string envelope_hex = encode_hex(*envelope);
+    const std::string header_hex = encode_hex(header);
+    const std::string envelope_hex = encode_hex(envelope);
 
     std::cout << "Header: " << header_hex << '\n';
     std::cout << "Envelope: " << envelope_hex << '\n';

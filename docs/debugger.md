@@ -11,6 +11,40 @@ This document describes LLDB visualizers for the generated Protocyte runtime:
 
 ## Plain LLDB
 
+Protocyte's formatters are Python scripts, so they require an LLDB build with
+Python scripting enabled. Check your LLDB before importing the formatter:
+
+```text
+(lldb) script print("LLDB Python scripting is available")
+```
+
+If LLDB reports that Python scripting is unavailable, use a Python-enabled LLDB
+build. On Windows, CLion's bundled LLDB is one suitable option. Keep debugger
+executable and formatter paths in your user-level LLDB or IDE configuration,
+not in repository files shared with other users.
+
+### Installed package
+
+When Protocyte is installed in a Python environment, locate the packaged
+formatter with that environment's Python interpreter:
+
+```shell
+python -c "from pathlib import Path; import protocyte.debugger as d; print(Path(d.__file__).with_name('protocyte_lldb.py').resolve().as_posix())"
+```
+
+If the package is managed by `uv`, use `uv run python` in place of `python`.
+Copy the printed absolute path into LLDB:
+
+```text
+(lldb) command script import "C:/path/to/site-packages/protocyte/debugger/protocyte_lldb.py"
+```
+
+To load the formatters in future LLDB sessions, add the same `command script
+import` line, without the `(lldb)` prompt, to your user-level `.lldbinit`. Run
+the locator command again if you recreate or move the Python environment.
+
+### Source checkout
+
 This repository includes a project-local [`.lldbinit`](../.lldbinit) at the repo root. From the repository root, load that file:
 
 ```text
@@ -32,7 +66,9 @@ Then inspect values normally:
 (lldb) frame variable bytes[0] bytes[1]
 ```
 
-The previews inline at most 64 bytes to keep variable views responsive. Expanding a formatted value also exposes underlying object members as `raw.*` children, such as `raw.ctx_`, `raw.data_`, `raw.size_`, and `raw.capacity_`.
+The previews inline at most 64 bytes to keep variable views responsive. Types
+with synthetic expansion also expose a **Raw View** child. Expand it to inspect
+the underlying members such as `ctx_`, `data_`, `size_`, and `capacity_`.
 
 Generated oneofs are stored as a case tag plus payload fields, so the oneof formatter is opt-in per generated type regex. Register it after importing the formatter:
 
@@ -56,7 +92,11 @@ On Windows with the MSVC toolchain, CLion uses JetBrains' LLDB-based debugger fo
 
 The smoke CMake project lives under `tests/smoke`, so this repository also tracks [tests/smoke/.lldbinit](../tests/smoke/.lldbinit). That file imports the same formatter module with a path relative to the smoke project root and registers the generated-message oneof formatter used by `protocyte_host_smoke`.
 
-If CLion starts the debugger from a different working directory, add the same import command under **Settings | Build, Execution, Deployment | Debugger | LLDB Startup Commands** with the absolute path to `src/protocyte/debugger/protocyte_lldb.py`.
+If CLion starts the debugger from a different working directory, add the same
+import command under **Settings | Build, Execution, Deployment | Debugger |
+LLDB Startup Commands**. Use the installed formatter path reported by the
+locator command above, or the absolute path to
+`src/protocyte/debugger/protocyte_lldb.py` when working from a source checkout.
 
 To enable the oneof tagged-union view in CLion, add a second startup command with the generated namespace or message regex you want, for example:
 

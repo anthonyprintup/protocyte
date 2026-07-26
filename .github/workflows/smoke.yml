@@ -1,0 +1,199 @@
+name: Smoke
+
+on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Exact source revision tested by the caller
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-clang-cl:
+    name: Host (clang-cl)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Verify generated-output containment at the CMake floor
+        run: >
+          uv run --with cmake==3.24.3 pytest -q -m cmake_integration
+          tests/test_cmake.py::test_generation_rejects_nested_output_directory_links
+          tests/test_cmake.py::test_retirement_rejects_nested_output_directory_links
+          tests/test_cmake.py::test_retirement_rechecks_containment_immediately_before_removal
+          tests/test_cmake.py::test_unsafe_current_output_reconfigure_preserves_cleanup_fingerprints
+
+      - name: Install prebuilt protoc for Windows argument transport
+        id: windows-protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Verify prebuilt protoc UTF-8 response-file transport
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_WINDOWS_TRANSPORT_TEST: "1"
+        run: >
+          uv run pytest -q -m cmake_integration
+          tests/test_cmake.py::test_prebuilt_windows_protoc_receives_utf8_descriptor_arguments
+          tests/test_cmake.py::test_source_mode_codegen_declares_normalized_generated_paths
+
+      - name: Verify checked smoke outputs
+        env:
+          PROTOCYTE_SMOKE_PROTOC: ${{ steps.windows-protoc.outputs.protoc }}
+          PROTOCYTE_SMOKE_PROTOBUF_IMPORT_DIR: ${{ steps.windows-protoc.outputs.include }}
+          PROTOCYTE_SMOKE_PLUGIN: ${{ github.workspace }}/.venv/Scripts/protoc-gen-protocyte.exe
+          PROTOCYTE_SMOKE_CLANG_FORMAT: ${{ github.workspace }}/.venv/Scripts/clang-format.exe
+        run: |
+          uv run python tests/smoke/tools/generate_checked_outputs.py
+          git diff --exit-code -- tests/smoke/generated
+          if ($LASTEXITCODE -ne 0) {
+              throw "Tracked smoke outputs differ from canonical regeneration"
+          }
+          uv run python .github/scripts/verify_tracked_tree.py tests/smoke/generated
+
+      - name: Verify generated library install and relocation
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_INSTALL_EXPORT_TEST: "1"
+        run: >
+          uv run pytest -q -m cmake_integration
+          tests/test_cmake.py::test_proto_library_installs_exports_and_reconsumes_from_relocated_prefix
+
+      - name: Configure non-kernel smoke tests
+        working-directory: tests/smoke
+        run: cmake --preset windows-clangcl-ninja
+
+      - name: Build non-kernel smoke tests
+        working-directory: tests/smoke
+        run: cmake --build --preset windows-clangcl-ninja
+
+      - name: Run non-kernel smoke tests
+        working-directory: tests/smoke
+        run: ctest --preset windows-clangcl-ninja
+
+  host-msvc:
+    name: Host (MSVC)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Install prebuilt protoc for MSVC shared reflection
+        id: windows-msvc-protoc
+        run: python .github/scripts/install_protoc.py --dest "${{ runner.temp }}/protoc"
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Verify MSVC shared-library reflection exports
+        env:
+          PROTOCYTE_CI_PROTOC_EXECUTABLE: ${{ steps.windows-msvc-protoc.outputs.protoc }}
+          PROTOCYTE_CI_REQUIRE_WINDOWS_SHARED_REFLECTION_TEST: "1"
+        run: >
+          uv run pytest -q -m cmake_integration
+          tests/test_cmake.py::test_msvc_shared_library_exports_reflection_to_consumer
+
+      - name: Configure non-kernel smoke tests
+        working-directory: tests/smoke
+        run: cmake --preset windows-msvc-ninja
+
+      - name: Build non-kernel smoke tests
+        working-directory: tests/smoke
+        run: cmake --build --preset windows-msvc-ninja
+
+      - name: Run non-kernel smoke tests
+        working-directory: tests/smoke
+        run: ctest --preset windows-msvc-ninja
+
+  host-linux:
+    name: Host (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Configure Linux smoke tests
+        run: cmake -S tests/smoke -B tests/smoke/build/linux-host -G Ninja
+
+      - name: Build Linux smoke tests
+        run: cmake --build tests/smoke/build/linux-host
+
+      - name: Run Linux smoke tests
+        run: ctest --test-dir tests/smoke/build/linux-host --output-on-failure
+
+  kernel-build:
+    name: Kernel Build
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --locked --group dev
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Configure kernel smoke build
+        working-directory: tests/smoke
+        run: cmake --preset windows-msvc-ninja-driver
+
+      - name: Build kernel smoke target
+        working-directory: tests/smoke
+        run: cmake --build --preset windows-msvc-ninja-driver --target protocyte_kernel_smoke

@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package separate.collision;
+
+message foo {}
+
+enum state {
+  STATE_UNSPECIFIED = 0;
+}

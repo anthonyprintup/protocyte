@@ -4,44 +4,76 @@ package protocyte;
 
 import "google/protobuf/descriptor.proto";
 
+// Declares a typed compile-time constant emitted into generated C++.
+// Exactly one value field must be set. Literal fields embed a value directly;
+// expression fields are evaluated by Protocyte during generation.
 message Constant {
+  // C++ identifier used for the generated constexpr declaration.
   string name = 1;
   oneof value {
+    // Boolean literal value.
     bool boolean = 2;
+    // Generator-side expression whose result is converted to bool.
     string boolean_expr = 3;
+    // Signed 32-bit integer literal value.
     int32 i32 = 4;
+    // Generator-side expression whose result is converted to int32.
     string i32_expr = 5;
+    // Unsigned 32-bit integer literal value.
     uint32 u32 = 6;
+    // Generator-side expression whose result is converted to uint32.
     string u32_expr = 7;
+    // Signed 64-bit integer literal value.
     int64 i64 = 8;
+    // Generator-side expression whose result is converted to int64.
     string i64_expr = 9;
+    // Unsigned 64-bit integer literal value.
     uint64 u64 = 10;
+    // Generator-side expression whose result is converted to uint64.
     string u64_expr = 11;
+    // IEEE-754 binary32 literal value.
     float f32 = 12;
+    // Generator-side expression whose result is converted to binary32.
     string f32_expr = 13;
+    // IEEE-754 binary64 literal value.
     double f64 = 14;
+    // Generator-side expression whose result is converted to binary64.
     string f64_expr = 15;
+    // UTF-8 string literal value.
     string str = 16;
+    // Generator-side expression whose result is converted to a string.
     string str_expr = 17;
   }
 }
 
+// Selects inline bounded storage for a bytes or repeated field.
 message ArrayOptions {
   oneof bound {
+    // Positive literal capacity or extent.
     uint32 max = 1;
+    // Generator-side expression that resolves to a positive capacity or extent.
     string expr = 2;
   }
+  // Requires fixed-size semantics. For bytes, the field has the declared extent
+  // when present. For repeated fields, valid sizes are zero or the exact extent.
+  // Default: false.
   bool fixed = 3;
 }
 
 extend google.protobuf.MessageOptions {
+  // Declares a message-scoped constexpr constant. Constants can reference
+  // enclosing-message and package constants.
   repeated Constant constant = 50000;
 }
 
 extend google.protobuf.FileOptions {
+  // Declares a package-scoped inline constexpr constant shared by generated
+  // files in the same protobuf package.
   repeated Constant package_constant = 50002;
 }
 
 extend google.protobuf.FieldOptions {
+  // Uses inline bounded storage. Supported on singular bytes and repeated
+  // non-map fields. Exactly one of max or expr must be set.
   ArrayOptions array = 50000;
 }

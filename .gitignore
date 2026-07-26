@@ -11,6 +11,8 @@ __pycache__/
 build/
 dist/
 staging/
+/.pytest-tmp/
+/t/
 tests/fetchcontent/build/
 tests/find_package/build/
 tests/smoke/build/

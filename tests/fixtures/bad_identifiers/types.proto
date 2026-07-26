@@ -1,0 +1,39 @@
+// Focused compatibility cases derived from Protobuf's
+// compiler/cpp/test_bad_identifiers_proto2.proto corpus.
+syntax = "proto3";
+
+package compat.bad;
+
+message foo {}
+message Foo {}
+message payload {}
+message config {}
+
+enum state {
+  STATE_UNSPECIFIED = 0;
+}
+
+enum State {
+  STATE_CAP_UNSPECIFIED = 0;
+}
+
+message Container {
+  message serialize {}
+  message parse {}
+  message context {}
+  message unknown_fields {}
+  message validate {}
+  message copy_from {}
+  message std {}
+  message NestedConfig {}
+  message compatibilityConfig {}
+
+  enum while {
+    default = 0;
+    class = 1;
+    __LINE__ = 2;
+  }
+}
+
+message _Private {}
+message proto__reserved {}

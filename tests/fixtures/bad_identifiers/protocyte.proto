@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package protocyte;
+
+message Payload {}
+message Span {}
+message Result {}
+message read_varint {}

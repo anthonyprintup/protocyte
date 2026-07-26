@@ -1,28 +1,56 @@
 include_guard(GLOBAL)
 
-set(PROTOCYTE_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
+cmake_path(GET CMAKE_CURRENT_LIST_DIR PARENT_PATH PROTOCYTE_REPO_ROOT)
+set(PROTOCYTE_PYTHON_PROJECT_ROOT "${PROTOCYTE_REPO_ROOT}")
+set(PROTOCYTE_PYTHON_CONSTRAINTS "${PROTOCYTE_PYTHON_PROJECT_ROOT}/protocyte-cmake-constraints.txt")
 set(PROTOCYTE_PYTHON_SOURCE_ROOT "${PROTOCYTE_REPO_ROOT}/src")
 set(PROTOCYTE_PACKAGE_ROOT "${PROTOCYTE_PYTHON_SOURCE_ROOT}/protocyte")
+set(PROTOCYTE_IMPORT_SCANNER "${PROTOCYTE_PACKAGE_ROOT}/import_scanner.py")
 set(PROTOCYTE_PROTO_DIR "${PROTOCYTE_PACKAGE_ROOT}/proto")
 set(PROTOCYTE_OPTIONS_PROTO "${PROTOCYTE_PROTO_DIR}/protocyte/options.proto")
 set(
     PROTOCYTE_GENERATOR_SOURCES
     "${PROTOCYTE_PACKAGE_ROOT}/__init__.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/_deterministic_math.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/_formatter_supervisor.py"
     "${PROTOCYTE_PACKAGE_ROOT}/cpp.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/dependency_file.py"
     "${PROTOCYTE_PACKAGE_ROOT}/descriptor_set.py"
     "${PROTOCYTE_PACKAGE_ROOT}/errors.py"
     "${PROTOCYTE_PACKAGE_ROOT}/extensions.py"
+    "${PROTOCYTE_IMPORT_SCANNER}"
     "${PROTOCYTE_PACKAGE_ROOT}/main.py"
     "${PROTOCYTE_PACKAGE_ROOT}/model.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/names.py"
     "${PROTOCYTE_PACKAGE_ROOT}/parameters.py"
+    "${PROTOCYTE_PACKAGE_ROOT}/paths.py"
     "${PROTOCYTE_PACKAGE_ROOT}/plugin.py"
     "${PROTOCYTE_PACKAGE_ROOT}/runtime/__init__.py"
     "${PROTOCYTE_PACKAGE_ROOT}/runtime/runtime.hpp"
 )
 
+if(NOT DEFINED PROTOCYTE_PYTHON_ENV_ROOT)
+    set(
+        PROTOCYTE_PYTHON_ENV_ROOT
+        "${CMAKE_CURRENT_BINARY_DIR}/protocyte-python"
+        CACHE PATH
+        "Directory for Protocyte-managed Python virtual environments."
+    )
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteFunctions.cmake")
+_protocyte_configure_python_environment_root()
+
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_PROJECT_ROOT "${PROTOCYTE_PYTHON_PROJECT_ROOT}")
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_CONSTRAINTS "${PROTOCYTE_PYTHON_CONSTRAINTS}")
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PYTHON_SOURCE_ROOT "${PROTOCYTE_PYTHON_SOURCE_ROOT}")
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_IMPORT_SCANNER "${PROTOCYTE_IMPORT_SCANNER}")
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_IMPORT_SCAN_COMMAND "_cmake-import-scan-v1")
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_PROTO_DIR "${PROTOCYTE_PROTO_DIR}")
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_OPTIONS_PROTO "${PROTOCYTE_OPTIONS_PROTO}")
 set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_GENERATOR_SOURCES "${PROTOCYTE_GENERATOR_SOURCES}")
-
-include("${CMAKE_CURRENT_LIST_DIR}/ProtocyteFunctions.cmake")
+file(STRINGS "${PROTOCYTE_PACKAGE_ROOT}/__init__.py" protocyte_version_line REGEX "^__version__ = ")
+if(NOT protocyte_version_line MATCHES "^__version__ = \"([^\"]+)\"$")
+    message(FATAL_ERROR "Failed to read Protocyte's Python package version")
+endif()
+set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_VERSION "${CMAKE_MATCH_1}")

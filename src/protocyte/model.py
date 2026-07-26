@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import ast
 import math
+import re
 import struct
 import warnings
+from bisect import bisect_right
 from dataclasses import dataclass, field
-from typing import Callable, Iterable
+from decimal import Decimal, InvalidOperation
+from typing import Callable, Iterable, NoReturn
 
 from google.protobuf import (
     descriptor_pb2,
@@ -21,112 +24,78 @@ from protocyte._deterministic_math import (
     evaluate_pow as evaluate_deterministic_pow,
     evaluate_unary,
 )
-from protocyte.descriptor_set import validate_virtual_file_name
+from protocyte.descriptor_set import (
+    render_diagnostic_context,
+    validate_generation_capabilities,
+    validate_virtual_file_name,
+)
 from protocyte.errors import ProtocyteError
 from protocyte.extensions import CUSTOM_OPTION_EXTENDEES, is_custom_option_extension
+from protocyte.names import (
+    CppNameKind,
+    EmittedNameAllocator,
+    EmittedNameMember,
+    EmittedNameRequest,
+    EmittedNameScope,
+    PROTOCYTE_RUNTIME_CPP_SYMBOLS,
+    cpp_derivable_identifier,
+    cpp_emitted_derivable_identifier,
+    cpp_identifier,
+    cpp_pascal_identifier,
+)
 
 FieldDescriptorProto = descriptor_pb2.FieldDescriptorProto
 
 
-CPP_KEYWORDS = {
-    "alignas",
-    "alignof",
-    "and",
-    "and_eq",
-    "asm",
-    "atomic_cancel",
-    "atomic_commit",
-    "atomic_noexcept",
-    "auto",
-    "bitand",
-    "bitor",
-    "bool",
-    "break",
-    "case",
-    "catch",
-    "char",
-    "char8_t",
-    "char16_t",
-    "char32_t",
-    "class",
-    "compl",
-    "concept",
-    "const",
-    "consteval",
-    "constexpr",
-    "constinit",
-    "const_cast",
-    "continue",
-    "co_await",
-    "co_return",
-    "co_yield",
-    "decltype",
-    "default",
-    "delete",
-    "do",
-    "double",
-    "dynamic_cast",
-    "else",
-    "enum",
-    "explicit",
-    "export",
-    "extern",
-    "false",
-    "float",
-    "for",
-    "friend",
-    "goto",
-    "if",
-    "inline",
-    "int",
-    "long",
-    "mutable",
-    "namespace",
-    "new",
-    "noexcept",
-    "not",
-    "not_eq",
-    "nullptr",
-    "operator",
-    "or",
-    "or_eq",
-    "private",
-    "protected",
-    "public",
-    "reflexpr",
-    "register",
-    "reinterpret_cast",
-    "requires",
-    "return",
-    "short",
-    "signed",
-    "sizeof",
-    "static",
-    "static_assert",
-    "static_cast",
-    "struct",
-    "switch",
-    "synchronized",
-    "template",
-    "this",
-    "thread_local",
-    "throw",
-    "true",
-    "try",
-    "typedef",
-    "typeid",
-    "typename",
-    "union",
-    "unsigned",
-    "using",
-    "virtual",
-    "void",
-    "volatile",
-    "wchar_t",
-    "while",
-    "xor",
-    "xor_eq",
-}
+def _descriptor_field_number(message_type, name: str) -> int:
+    return message_type.DESCRIPTOR.fields_by_name[name].number
+
+
+_FILE_MESSAGE_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.FileDescriptorProto, "message_type"
+)
+_FILE_ENUM_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.FileDescriptorProto, "enum_type"
+)
+_MESSAGE_FIELD_PATH = _descriptor_field_number(descriptor_pb2.DescriptorProto, "field")
+_MESSAGE_NESTED_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.DescriptorProto, "nested_type"
+)
+_MESSAGE_ENUM_TYPE_PATH = _descriptor_field_number(
+    descriptor_pb2.DescriptorProto, "enum_type"
+)
+_MESSAGE_ONEOF_DECL_PATH = _descriptor_field_number(
+    descriptor_pb2.DescriptorProto, "oneof_decl"
+)
+_ENUM_VALUE_PATH = _descriptor_field_number(descriptor_pb2.EnumDescriptorProto, "value")
+
+_MAX_FIELD_NUMBER = (1 << 29) - 1
+_FIRST_RESERVED_FIELD_NUMBER = 19_000
+_LAST_RESERVED_FIELD_NUMBER = 19_999
+_VALID_FIELD_LABELS = frozenset(
+    {
+        FieldDescriptorProto.LABEL_OPTIONAL,
+        FieldDescriptorProto.LABEL_REQUIRED,
+        FieldDescriptorProto.LABEL_REPEATED,
+    }
+)
+_VALID_FIELD_TYPES = frozenset(range(1, FieldDescriptorProto.TYPE_SINT64 + 1))
+_MAP_KEY_TYPES = frozenset(
+    {
+        FieldDescriptorProto.TYPE_INT32,
+        FieldDescriptorProto.TYPE_INT64,
+        FieldDescriptorProto.TYPE_UINT32,
+        FieldDescriptorProto.TYPE_UINT64,
+        FieldDescriptorProto.TYPE_SINT32,
+        FieldDescriptorProto.TYPE_SINT64,
+        FieldDescriptorProto.TYPE_FIXED32,
+        FieldDescriptorProto.TYPE_FIXED64,
+        FieldDescriptorProto.TYPE_SFIXED32,
+        FieldDescriptorProto.TYPE_SFIXED64,
+        FieldDescriptorProto.TYPE_BOOL,
+        FieldDescriptorProto.TYPE_STRING,
+    }
+)
 
 
 SCALAR_CPP_TYPES = {
@@ -208,6 +177,17 @@ _SCALAR_CAST_KINDS = {
 }
 _MAX_EXPRESSION_NESTING = 32
 _MAX_CONSTANT_DEPENDENCY_DEPTH = 32
+_MAX_FLOATING_DEFAULT_TEXT_LENGTH = 62
+_FINITE_FLOATING_DEFAULT_RE = re.compile(
+    r"(?P<sign>[+-]?)(?P<significand>[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
+    r"(?:[eE][+-]?[0-9]+)?",
+    re.ASCII,
+)
+_NONFINITE_FLOATING_DEFAULT_RE = re.compile(
+    r"(?P<sign>[+-]?)(?:(?P<infinity>inf(?:inity)?)|nan(?:\([A-Za-z0-9_]*\))?)",
+    re.ASCII | re.IGNORECASE,
+)
+_MIN_NORMAL_F64 = float.fromhex("0x1.0p-1022")
 
 INTEGER_CONSTANT_KINDS = {
     FieldDescriptorProto.TYPE_INT32: CONSTANT_KIND_INT32,
@@ -573,11 +553,61 @@ class _CustomOptions:
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class SourceDocumentation:
+    text: str = ""
+
+
+@dataclass(slots=True)
+class _SourceDocumentationIndex:
+    by_path: dict[tuple[int, ...], SourceDocumentation]
+
+    @classmethod
+    def from_file(
+        cls, file: descriptor_pb2.FileDescriptorProto
+    ) -> "_SourceDocumentationIndex":
+        by_path: dict[tuple[int, ...], SourceDocumentation] = {}
+        for location in file.source_code_info.location:
+            documentation = _source_documentation(location)
+            if documentation.text:
+                by_path.setdefault(tuple(location.path), documentation)
+        return cls(by_path)
+
+    def get(self, path: tuple[int, ...]) -> SourceDocumentation:
+        return self.by_path.get(path, SourceDocumentation())
+
+
+def _source_documentation(location) -> SourceDocumentation:
+    parts = [
+        *location.leading_detached_comments,
+        location.leading_comments,
+        location.trailing_comments,
+    ]
+    normalized = [
+        fragment for part in parts if (fragment := _normalize_source_comment(part))
+    ]
+    return SourceDocumentation("\n\n".join(normalized))
+
+
+def _normalize_source_comment(value: str) -> str:
+    lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    first = 0
+    last = len(lines)
+    while first < last and not lines[first].strip():
+        first += 1
+    while first < last and not lines[last - 1].strip():
+        last -= 1
+    return "\n".join(line.rstrip() for line in lines[first:last])
+
+
 @dataclass(slots=True)
 class EnumValueModel:
     name: str
     cpp_name: str
     number: int
+    deprecated: bool
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -588,7 +618,12 @@ class EnumModel:
     file_name: str
     package: str
     values: list[EnumValueModel]
+    closed: bool = False
+    deprecated: bool = False
     parent: "MessageModel | None" = None
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    cpp_namespace: tuple[str, ...] | None = None
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -596,6 +631,8 @@ class OneofModel:
     name: str
     cpp_name: str
     fields: list["FieldModel"] = field(default_factory=list)
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -610,6 +647,7 @@ class ConstantModel:
     family: str = ""
     cpp_type: str = ""
     cpp_value: str = ""
+    emitted_names: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -643,10 +681,17 @@ class FieldModel:
     default_cpp: str | None = None
     default_byte_size: int | None = None
     enum_closed: bool = False
+    config_cpp_name: str = "Config"
+    reader_cpp_name: str = "Reader"
+    writer_cpp_name: str = "Writer"
+    value_cpp_name: str = "Value"
+    generic_cpp_name: str = "T"
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
     @property
     def has_explicit_presence(self) -> bool:
-        return (
+        return not self.repeated and (
             self.explicit_presence
             or self.oneof_name is not None
             or self.kind == "message"
@@ -696,12 +741,22 @@ class MessageModel:
     package: str
     parent: "MessageModel | None"
     descriptor: descriptor_pb2.DescriptorProto
+    descriptor_path: tuple[int, ...]
     is_map_entry: bool = False
+    deprecated: bool = False
+    config_cpp_name: str = "Config"
+    reader_cpp_name: str = "Reader"
+    writer_cpp_name: str = "Writer"
+    value_cpp_name: str = "Value"
+    generic_cpp_name: str = "T"
     fields: list[FieldModel] = field(default_factory=list)
     oneofs: list[OneofModel] = field(default_factory=list)
     nested_messages: list["MessageModel"] = field(default_factory=list)
     nested_enums: list[EnumModel] = field(default_factory=list)
     constants: list[ConstantModel] = field(default_factory=list)
+    emitted_names: dict[str, str] = field(default_factory=dict)
+    cpp_namespace: tuple[str, ...] | None = None
+    documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
 
 @dataclass(slots=True)
@@ -714,6 +769,7 @@ class FileModel:
     messages: list[MessageModel] = field(default_factory=list)
     enums: list[EnumModel] = field(default_factory=list)
     dependencies: set[str] = field(default_factory=set)
+    cpp_namespace: tuple[str, ...] | None = None
 
 
 @dataclass(slots=True)
@@ -726,6 +782,31 @@ class DescriptorModel:
     def generated_files(self) -> Iterable[FileModel]:
         for name in self.file_to_generate:
             yield self.files[name]
+
+    def generated_header_files(self) -> Iterable[FileModel]:
+        """Yield generated files and every generated header they include.
+
+        A CodeGeneratorRequest can carry descriptors used only to decode custom
+        options. Such descriptors do not contribute C++ declarations unless a
+        generated field type makes its header part of the include closure.
+        """
+        included: set[str] = set()
+        pending = list(self.file_to_generate)
+        while pending:
+            file_name = pending.pop()
+            if file_name in included:
+                continue
+            included.add(file_name)
+            file_model = self.files[file_name]
+            for message in _walk_messages(file_model.messages):
+                for field_model in message.fields:
+                    for dependency in _field_dependencies(field_model):
+                        if dependency != file_name:
+                            pending.append(dependency)
+
+        for file_name, file_model in self.files.items():
+            if file_name in included:
+                yield file_model
 
 
 @dataclass(slots=True)
@@ -1193,22 +1274,30 @@ class _ExprParser:
             )
 
 
-def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> DescriptorModel:
+def build_model(
+    request: descriptor_pb2.FileDescriptorSet | object,
+    *,
+    namespace_prefix: str | None = None,
+) -> DescriptorModel:
     """Build a resolved model from a CodeGeneratorRequest-like object."""
     files_by_name = _index_request_files(request.proto_file)
     file_to_generate = list(request.file_to_generate)
-    custom_options = _custom_options(request.proto_file)
 
     missing = [name for name in file_to_generate if name not in files_by_name]
     if missing:
         raise ProtocyteError(
-            f"protoc request is missing file descriptors for: {', '.join(missing)}"
+            "protoc request is missing file descriptors for: "
+            f"{', '.join(render_diagnostic_context(name) for name in missing)}"
         )
 
     for name in file_to_generate:
         validate_virtual_file_name(name)
         file = files_by_name[name]
         _reject_unsupported_file_features(file, f"target file {name}")
+
+    validate_generation_capabilities(files_by_name, file_to_generate)
+    _validate_descriptor_invariants(files_by_name.values())
+    custom_options = _custom_options(request.proto_file)
 
     selected_files = set(file_to_generate)
     reachable_files = _validate_import_graph(files_by_name, file_to_generate)
@@ -1220,6 +1309,10 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
     files: dict[str, FileModel] = {}
     messages: dict[str, MessageModel] = {}
     enums: dict[str, EnumModel] = {}
+    source_documentation = {
+        file.name: _SourceDocumentationIndex.from_file(file)
+        for file in files_by_name.values()
+    }
 
     for file in files_by_name.values():
         files[file.name] = FileModel(
@@ -1231,35 +1324,69 @@ def build_model(request: descriptor_pb2.FileDescriptorSet | object) -> Descripto
 
     for file in files_by_name.values():
         file_model = files[file.name]
-        for enum in file.enum_type:
-            enum_model = _build_enum(file, enum, None, enum.name)
+        documentation = source_documentation[file.name]
+        for index, enum in enumerate(file.enum_type):
+            enum_model = _build_enum(
+                file,
+                enum,
+                None,
+                enum.name,
+                (_FILE_ENUM_TYPE_PATH, index),
+                documentation,
+            )
             file_model.enums.append(enum_model)
             enums[enum_model.full_name] = enum_model
-        for message in file.message_type:
-            message_model = _build_message_skeleton(file, message, None, message.name)
+        for index, message in enumerate(file.message_type):
+            message_model = _build_message_skeleton(
+                file,
+                message,
+                None,
+                message.name,
+                (_FILE_MESSAGE_TYPE_PATH, index),
+                documentation,
+            )
             file_model.messages.append(message_model)
             _register_message_tree(message_model, messages, enums)
         file_model.constants = _build_file_constants(file_model, custom_options)
         _validate_package_constant_collisions(file_model)
 
-    _validate_enum_value_collisions(enums.values())
-    _validate_type_cpp_name_collisions(files)
-
     for file_model in files.values():
         for message in _walk_messages(file_model.messages):
-            _fill_message_details(message, files, messages, enums, custom_options)
+            _fill_message_details(
+                message,
+                files,
+                messages,
+                enums,
+                custom_options,
+                source_documentation[message.file_name],
+            )
+
+    model = DescriptorModel(
+        files=files,
+        file_to_generate=file_to_generate,
+        messages=messages,
+        enums=enums,
+    )
+    generated_header_files = {
+        file_model.name: file_model for file_model in model.generated_header_files()
+    }
+    generated_header_enums = (
+        enum for enum in enums.values() if enum.file_name in generated_header_files
+    )
+    _allocate_namespace_cpp_names(
+        generated_header_files,
+        generated_header_enums,
+        namespace_prefix=namespace_prefix,
+    )
+
+    _allocate_message_cpp_names(files)
 
     _validate_package_constant_namespace(files)
     _resolve_constants_and_arrays(files, messages)
     _compute_file_dependencies(file_to_generate, files)
     _mark_recursive_boxes(messages)
 
-    return DescriptorModel(
-        files=files,
-        file_to_generate=file_to_generate,
-        messages=messages,
-        enums=enums,
-    )
+    return model
 
 
 def _index_request_files(
@@ -1269,7 +1396,10 @@ def _index_request_files(
     for file in proto_files:
         validate_virtual_file_name(file.name)
         if file.name in files:
-            raise ProtocyteError(f"duplicate descriptor file name: {file.name}")
+            raise ProtocyteError(
+                "duplicate descriptor file name: "
+                f"{render_diagnostic_context(file.name)}"
+            )
         files[file.name] = file
     return files
 
@@ -1476,24 +1606,9 @@ def _find_extension(pool: descriptor_pool.DescriptorPool, name: str) -> object |
         return None
 
 
-def cpp_identifier(name: str) -> str:
-    if not name:
-        return "_"
-    out = []
-    for index, char in enumerate(name):
-        valid = char == "_" or char.isalpha() or (char.isdigit() and index > 0)
-        out.append(char if valid and ord(char) < 128 else "_")
-    ident = "".join(out)
-    if ident in CPP_KEYWORDS:
-        return f"{ident}_"
-    return ident
-
-
-def cpp_pascal_identifier(name: str) -> str:
-    ident = cpp_identifier(name)
-    if not ident:
-        return "_"
-    return ident[0].upper() + ident[1:]
+def _join_cpp_type_identifiers(parent: str, child: str) -> str:
+    separator = "" if parent.endswith("_") else "_"
+    return f"{parent}{separator}{child}"
 
 
 def proto_full_name(file: descriptor_pb2.FileDescriptorProto, path: str) -> str:
@@ -1506,6 +1621,446 @@ def strip_type_name(type_name: str) -> str:
 
 def _file_syntax(file: descriptor_pb2.FileDescriptorProto) -> str:
     return file.syntax or "proto2"
+
+
+def _validate_descriptor_invariants(
+    files: Iterable[descriptor_pb2.FileDescriptorProto],
+) -> None:
+    message_descriptors: list[
+        tuple[
+            descriptor_pb2.FileDescriptorProto,
+            descriptor_pb2.DescriptorProto,
+            str,
+            str | None,
+        ]
+    ] = []
+    map_entry_owners: dict[str, str] = {}
+
+    for file in files:
+        if file.syntax == "editions":
+            raise ProtocyteError(
+                f"{file.name}: protobuf Editions are not supported in v1"
+            )
+        if file.syntax not in {"", "proto2", "proto3"}:
+            raise ProtocyteError(
+                f"{file.name}: unsupported protobuf syntax {file.syntax!r}"
+            )
+        for enum, path in _walk_descriptor_enums(file):
+            _validate_enum_descriptor(file, enum, path)
+        for message, path, parent_full_name in _walk_descriptor_messages(file):
+            message_descriptors.append((file, message, path, parent_full_name))
+            _validate_message_descriptor(file, message, path)
+            if message.options.map_entry:
+                full_name = proto_full_name(file, path)
+                if parent_full_name is None:
+                    raise ProtocyteError(
+                        f"{full_name}: map entry messages must be nested"
+                    )
+                _validate_map_entry_descriptor(full_name, message)
+                map_entry_owners[full_name] = parent_full_name
+
+    for file, message, path, _ in message_descriptors:
+        owner_full_name = proto_full_name(file, path)
+        for field_proto in message.field:
+            if field_proto.type != FieldDescriptorProto.TYPE_MESSAGE:
+                continue
+            map_owner = map_entry_owners.get(strip_type_name(field_proto.type_name))
+            if map_owner is None:
+                continue
+            label = f"{owner_full_name}.{field_proto.name}"
+            if owner_full_name != map_owner:
+                raise ProtocyteError(
+                    f"{label}: map entry type {field_proto.type_name!r} belongs to {map_owner}"
+                )
+            if field_proto.label != FieldDescriptorProto.LABEL_REPEATED:
+                raise ProtocyteError(f"{label}: map fields must be repeated")
+
+
+def _walk_descriptor_enums(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> Iterable[tuple[descriptor_pb2.EnumDescriptorProto, str]]:
+    for enum in file.enum_type:
+        yield enum, enum.name
+    for message, path, _ in _walk_descriptor_messages(file):
+        for enum in message.enum_type:
+            yield enum, f"{path}.{enum.name}" if enum.name else path
+
+
+def _walk_descriptor_messages(
+    file: descriptor_pb2.FileDescriptorProto,
+) -> Iterable[tuple[descriptor_pb2.DescriptorProto, str, str | None]]:
+    def walk(
+        message: descriptor_pb2.DescriptorProto,
+        path: str,
+        parent_full_name: str | None,
+    ) -> Iterable[tuple[descriptor_pb2.DescriptorProto, str, str | None]]:
+        yield message, path, parent_full_name
+        full_name = proto_full_name(file, path)
+        for nested in message.nested_type:
+            yield from walk(nested, f"{path}.{nested.name}", full_name)
+
+    for message in file.message_type:
+        yield from walk(message, message.name, None)
+
+
+def _validate_enum_descriptor(
+    file: descriptor_pb2.FileDescriptorProto,
+    enum: descriptor_pb2.EnumDescriptorProto,
+    path: str,
+) -> None:
+    if not enum.name:
+        label = proto_full_name(file, path) if path else file.name
+        raise ProtocyteError(f"{label}: enum name must not be empty")
+
+    owner_full_name = proto_full_name(file, path)
+    if not enum.value:
+        raise ProtocyteError(f"{owner_full_name}: enum must declare at least one value")
+
+    value_names: set[str] = set()
+    value_numbers: dict[int, str] = {}
+    for index, value in enumerate(enum.value):
+        if not value.name:
+            raise ProtocyteError(
+                f"{owner_full_name}: enum value at index {index} has no name"
+            )
+        label = f"{owner_full_name}.{value.name}"
+        if not value.HasField("number"):
+            raise ProtocyteError(f"{label}: enum number is missing")
+        if value.name in value_names:
+            raise ProtocyteError(f"{label}: duplicate enum value name")
+        value_names.add(value.name)
+
+        first_value = value_numbers.get(value.number)
+        if first_value is not None and not enum.options.allow_alias:
+            raise ProtocyteError(
+                f"{label}: enum number {value.number} is already used by "
+                f"{first_value!r}; set option allow_alias = true to allow aliases"
+            )
+        value_numbers.setdefault(value.number, value.name)
+
+    if _file_syntax(file) == "proto3" and enum.value[0].number != 0:
+        first = enum.value[0]
+        raise ProtocyteError(
+            f"{owner_full_name}.{first.name}: first value in a proto3 enum must "
+            "have number 0"
+        )
+
+    reserved_names: set[str] = set()
+    for name in enum.reserved_name:
+        if not name:
+            raise ProtocyteError(
+                f"{owner_full_name}: reserved enum value name must not be empty"
+            )
+        if name in reserved_names:
+            raise ProtocyteError(
+                f"{owner_full_name}: duplicate reserved enum value name {name!r}"
+            )
+        if name in value_names:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: enum value name is reserved"
+            )
+        reserved_names.add(name)
+
+    ranges: list[tuple[int, int]] = []
+    for reserved_range in enum.reserved_range:
+        if not reserved_range.HasField("start") or not reserved_range.HasField("end"):
+            raise ProtocyteError(
+                f"{owner_full_name}: reserved enum range must specify start and end"
+            )
+        start = reserved_range.start
+        end = reserved_range.end
+        if start > end:
+            raise ProtocyteError(
+                f"{owner_full_name}: invalid reserved enum range [{start}, {end}]"
+            )
+        ranges.append((start, end))
+
+    ranges, overlap = _sort_ranges_and_find_overlap(ranges, end_inclusive=True)
+    if overlap is not None:
+        (previous_start, previous_end), (start, end) = overlap
+        raise ProtocyteError(
+            f"{owner_full_name}: reserved enum ranges "
+            f"[{previous_start}, {previous_end}] and [{start}, {end}] overlap"
+        )
+
+    range_starts = [start for start, _ in ranges]
+    for number, name in value_numbers.items():
+        containing_range = _find_containing_range(
+            ranges,
+            range_starts,
+            number,
+            end_inclusive=True,
+        )
+        if containing_range is not None:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: enum number {number} is reserved"
+            )
+
+
+def _validate_message_descriptor(
+    file: descriptor_pb2.FileDescriptorProto,
+    message: descriptor_pb2.DescriptorProto,
+    path: str,
+) -> None:
+    owner_full_name = proto_full_name(file, path)
+    oneof_names: set[str] = set()
+    for oneof in message.oneof_decl:
+        if not oneof.name:
+            raise ProtocyteError(f"{owner_full_name}: oneof name must not be empty")
+        if oneof.name in oneof_names:
+            raise ProtocyteError(
+                f"{owner_full_name}: duplicate oneof name {oneof.name!r}"
+            )
+        oneof_names.add(oneof.name)
+
+    field_names: set[str] = set()
+    field_numbers: dict[int, str] = {}
+    oneof_members: dict[int, list[descriptor_pb2.FieldDescriptorProto]] = {
+        index: [] for index in range(len(message.oneof_decl))
+    }
+    syntax = _file_syntax(file)
+
+    for index, field_proto in enumerate(message.field):
+        if not field_proto.name:
+            raise ProtocyteError(
+                f"{owner_full_name}: field at index {index} has no name"
+            )
+        if "\0" in field_proto.name:
+            raise ProtocyteError(
+                f"{owner_full_name}: field at index {index} name contains a null character"
+            )
+        label = f"{owner_full_name}.{field_proto.name}"
+        if field_proto.name in field_names:
+            raise ProtocyteError(f"{label}: duplicate field name")
+        field_names.add(field_proto.name)
+
+        _validate_field_descriptor(label, field_proto, syntax)
+        first_field = field_numbers.get(field_proto.number)
+        if first_field is not None:
+            raise ProtocyteError(
+                f"{label}: field number {field_proto.number} is already used by {first_field!r}"
+            )
+        field_numbers[field_proto.number] = field_proto.name
+
+        if field_proto.HasField("oneof_index"):
+            oneof_index = field_proto.oneof_index
+            oneof_count = len(message.oneof_decl)
+            if oneof_index < 0 or oneof_index >= oneof_count:
+                raise ProtocyteError(
+                    f"{label}: oneof_index {oneof_index} is outside the message's "
+                    f"{oneof_count} oneof declaration(s)"
+                )
+            if field_proto.label != FieldDescriptorProto.LABEL_OPTIONAL:
+                raise ProtocyteError(f"{label}: oneof fields must be optional")
+            oneof_members[oneof_index].append(field_proto)
+
+        if field_proto.proto3_optional:
+            if syntax != "proto3":
+                raise ProtocyteError(
+                    f"{label}: proto3_optional is only valid in proto3"
+                )
+            if not field_proto.HasField("oneof_index"):
+                raise ProtocyteError(
+                    f"{label}: proto3_optional fields must belong to a synthetic oneof"
+                )
+
+    _validate_reserved_fields(owner_full_name, message, field_names, field_numbers)
+
+    synthetic_oneofs: set[int] = set()
+    for oneof_index, members in oneof_members.items():
+        optional_members = [field for field in members if field.proto3_optional]
+        if not optional_members:
+            continue
+        synthetic_oneofs.add(oneof_index)
+        if len(members) != 1:
+            oneof_name = message.oneof_decl[oneof_index].name
+            raise ProtocyteError(
+                f"{owner_full_name}.{oneof_name}: a synthetic oneof must contain exactly one proto3_optional field"
+            )
+
+    if synthetic_oneofs:
+        first_synthetic = min(synthetic_oneofs)
+        if any(
+            oneof_index not in synthetic_oneofs
+            for oneof_index in range(first_synthetic, len(message.oneof_decl))
+        ):
+            raise ProtocyteError(
+                f"{owner_full_name}: synthetic oneofs must follow all regular oneofs"
+            )
+
+
+def _validate_field_descriptor(
+    label: str,
+    field: descriptor_pb2.FieldDescriptorProto,
+    syntax: str,
+) -> None:
+    if field.number < 1 or field.number > _MAX_FIELD_NUMBER:
+        raise ProtocyteError(
+            f"{label}: field number {field.number} is outside the valid range 1..{_MAX_FIELD_NUMBER}"
+        )
+    if _FIRST_RESERVED_FIELD_NUMBER <= field.number <= _LAST_RESERVED_FIELD_NUMBER:
+        raise ProtocyteError(
+            f"{label}: field number {field.number} is reserved by the protobuf implementation"
+        )
+    if not field.HasField("label") or field.label not in _VALID_FIELD_LABELS:
+        raise ProtocyteError(f"{label}: field label is missing or invalid")
+    if not field.HasField("type") or field.type not in _VALID_FIELD_TYPES:
+        raise ProtocyteError(f"{label}: field type is missing or invalid")
+    if syntax == "proto3" and field.label == FieldDescriptorProto.LABEL_REQUIRED:
+        raise ProtocyteError(f"{label}: required fields are not allowed in proto3")
+
+    typed_reference = field.type in {
+        FieldDescriptorProto.TYPE_ENUM,
+        FieldDescriptorProto.TYPE_MESSAGE,
+    }
+    if typed_reference and not field.type_name:
+        raise ProtocyteError(f"{label}: field type requires type_name")
+    if (
+        not typed_reference
+        and field.type != FieldDescriptorProto.TYPE_GROUP
+        and field.type_name
+    ):
+        raise ProtocyteError(f"{label}: scalar fields must not specify type_name")
+
+
+def _validate_reserved_fields(
+    owner_full_name: str,
+    message: descriptor_pb2.DescriptorProto,
+    field_names: set[str],
+    field_numbers: dict[int, str],
+) -> None:
+    reserved_names: set[str] = set()
+    for name in message.reserved_name:
+        if not name:
+            raise ProtocyteError(
+                f"{owner_full_name}: reserved field name must not be empty"
+            )
+        if name in reserved_names:
+            raise ProtocyteError(
+                f"{owner_full_name}: duplicate reserved field name {name!r}"
+            )
+        if name in field_names:
+            raise ProtocyteError(f"{owner_full_name}.{name}: field name is reserved")
+        reserved_names.add(name)
+
+    ranges: list[tuple[int, int]] = []
+    for reserved_range in message.reserved_range:
+        start = reserved_range.start
+        end = reserved_range.end
+        if start < 1 or end > _MAX_FIELD_NUMBER + 1 or start >= end:
+            raise ProtocyteError(
+                f"{owner_full_name}: invalid reserved field range [{start}, {end})"
+            )
+        ranges.append((start, end))
+
+    ranges, overlap = _sort_ranges_and_find_overlap(ranges, end_inclusive=False)
+    if overlap is not None:
+        (previous_start, previous_end), (start, end) = overlap
+        raise ProtocyteError(
+            f"{owner_full_name}: reserved field ranges [{previous_start}, {previous_end}) "
+            f"and [{start}, {end}) overlap"
+        )
+
+    range_starts = [start for start, _ in ranges]
+    for number, name in field_numbers.items():
+        containing_range = _find_containing_range(
+            ranges,
+            range_starts,
+            number,
+            end_inclusive=False,
+        )
+        if containing_range is not None:
+            raise ProtocyteError(
+                f"{owner_full_name}.{name}: field number {number} is reserved"
+            )
+
+
+def _sort_ranges_and_find_overlap(
+    ranges: list[tuple[int, int]],
+    *,
+    end_inclusive: bool,
+) -> tuple[
+    list[tuple[int, int]],
+    tuple[tuple[int, int], tuple[int, int]] | None,
+]:
+    ordered = sorted(ranges)
+    if not ordered:
+        return ordered, None
+
+    previous = ordered[0]
+    for current in ordered[1:]:
+        overlaps = (
+            current[0] <= previous[1] if end_inclusive else current[0] < previous[1]
+        )
+        if overlaps:
+            return ordered, (previous, current)
+        previous = current
+    return ordered, None
+
+
+def _find_containing_range(
+    ranges: list[tuple[int, int]],
+    range_starts: list[int],
+    value: int,
+    *,
+    end_inclusive: bool,
+) -> tuple[int, int] | None:
+    range_index = bisect_right(range_starts, value) - 1
+    if range_index < 0:
+        return None
+    start, end = ranges[range_index]
+    if value < end or (end_inclusive and value == end):
+        return start, end
+    return None
+
+
+def _validate_map_entry_descriptor(
+    full_name: str,
+    message: descriptor_pb2.DescriptorProto,
+) -> None:
+    if len(message.field) != 2:
+        raise ProtocyteError(
+            f"{full_name}: map entry must contain exactly key and value fields"
+        )
+    if (
+        message.oneof_decl
+        or message.extension
+        or message.extension_range
+        or message.nested_type
+        or message.enum_type
+    ):
+        raise ProtocyteError(
+            f"{full_name}: map entry must not declare oneofs, extensions, or nested types"
+        )
+
+    key, value = message.field
+    if (
+        key.name != "key"
+        or key.number != 1
+        or key.label != FieldDescriptorProto.LABEL_OPTIONAL
+    ):
+        raise ProtocyteError(
+            f"{full_name}: map entry field 1 must be an optional field named 'key'"
+        )
+    if key.type not in _MAP_KEY_TYPES:
+        raise ProtocyteError(f"{full_name}.key: invalid map key type {key.type}")
+    if (
+        value.name != "value"
+        or value.number != 2
+        or value.label != FieldDescriptorProto.LABEL_OPTIONAL
+    ):
+        raise ProtocyteError(
+            f"{full_name}: map entry field 2 must be an optional field named 'value'"
+        )
+    for field_proto in (key, value):
+        if field_proto.HasField("oneof_index") or field_proto.proto3_optional:
+            raise ProtocyteError(
+                f"{full_name}.{field_proto.name}: map entry fields must not belong to oneofs"
+            )
+        if field_proto.HasField("default_value"):
+            raise ProtocyteError(
+                f"{full_name}.{field_proto.name}: map entry fields must not have default values"
+            )
 
 
 def _reject_unsupported_file_features(
@@ -1570,22 +2125,37 @@ def _build_enum(
     enum: descriptor_pb2.EnumDescriptorProto,
     parent: MessageModel | None,
     path: str,
+    descriptor_path: tuple[int, ...],
+    documentation: _SourceDocumentationIndex,
 ) -> EnumModel:
-    cpp_prefix = f"{parent.cpp_name}_" if parent else ""
+    cpp_name = cpp_identifier(enum.name)
+    if parent is not None:
+        cpp_name = _join_cpp_type_identifiers(parent.cpp_name, cpp_name)
     values = [
         EnumValueModel(
-            name=value.name, cpp_name=cpp_identifier(value.name), number=value.number
+            name=value.name,
+            cpp_name=cpp_identifier(value.name),
+            number=value.number,
+            deprecated=value.options.deprecated,
+            documentation=documentation.get(
+                (*descriptor_path, _ENUM_VALUE_PATH, index)
+            ),
         )
-        for value in enum.value
+        for index, value in enumerate(enum.value)
     ]
     return EnumModel(
         name=enum.name,
-        cpp_name=f"{cpp_prefix}{cpp_pascal_identifier(enum.name)}",
+        cpp_name=cpp_name,
         full_name=proto_full_name(file, path),
         file_name=file.name,
         package=file.package,
         values=values,
+        # Protobuf enum openness follows the syntax of the file declaring the
+        # enum, not the syntax of a message that imports and consumes it.
+        closed=_file_syntax(file) == "proto2",
+        deprecated=enum.options.deprecated,
         parent=parent,
+        documentation=documentation.get(descriptor_path),
     )
 
 
@@ -1594,22 +2164,45 @@ def _build_message_skeleton(
     message: descriptor_pb2.DescriptorProto,
     parent: MessageModel | None,
     path: str,
+    descriptor_path: tuple[int, ...],
+    documentation: _SourceDocumentationIndex,
 ) -> MessageModel:
-    cpp_prefix = f"{parent.cpp_name}_" if parent else ""
+    cpp_name = cpp_identifier(message.name)
+    if parent is not None:
+        cpp_name = _join_cpp_type_identifiers(parent.cpp_name, cpp_name)
     model = MessageModel(
         name=message.name,
-        cpp_name=f"{cpp_prefix}{cpp_pascal_identifier(message.name)}",
+        cpp_name=cpp_name,
         full_name=proto_full_name(file, path),
         file_name=file.name,
         package=file.package,
         parent=parent,
         descriptor=message,
+        descriptor_path=descriptor_path,
         is_map_entry=message.options.map_entry,
+        deprecated=message.options.deprecated,
+        documentation=documentation.get(descriptor_path),
     )
-    for enum in message.enum_type:
-        model.nested_enums.append(_build_enum(file, enum, model, f"{path}.{enum.name}"))
-    for nested in message.nested_type:
-        child = _build_message_skeleton(file, nested, model, f"{path}.{nested.name}")
+    for index, enum in enumerate(message.enum_type):
+        model.nested_enums.append(
+            _build_enum(
+                file,
+                enum,
+                model,
+                f"{path}.{enum.name}",
+                (*descriptor_path, _MESSAGE_ENUM_TYPE_PATH, index),
+                documentation,
+            )
+        )
+    for index, nested in enumerate(message.nested_type):
+        child = _build_message_skeleton(
+            file,
+            nested,
+            model,
+            f"{path}.{nested.name}",
+            (*descriptor_path, _MESSAGE_NESTED_TYPE_PATH, index),
+            documentation,
+        )
         model.nested_messages.append(child)
     return model
 
@@ -1638,6 +2231,7 @@ def _fill_message_details(
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
     custom_options: _CustomOptions,
+    documentation: _SourceDocumentationIndex,
 ) -> None:
     message.constants = _build_constants(message, custom_options)
 
@@ -1646,9 +2240,12 @@ def _fill_message_details(
         oneof_fields[index] = OneofModel(
             name=oneof.name,
             cpp_name=cpp_pascal_identifier(oneof.name),
+            documentation=documentation.get(
+                (*message.descriptor_path, _MESSAGE_ONEOF_DECL_PATH, index)
+            ),
         )
 
-    for field_proto in message.descriptor.field:
+    for index, field_proto in enumerate(message.descriptor.field):
         field_model = _build_field(
             message,
             files[message.file_name],
@@ -1656,6 +2253,9 @@ def _fill_message_details(
             messages,
             enums,
             custom_options,
+            documentation=documentation.get(
+                (*message.descriptor_path, _MESSAGE_FIELD_PATH, index)
+            ),
         )
         message.fields.append(field_model)
         if field_model.oneof_index is not None and field_model.oneof_name is not None:
@@ -1664,10 +2264,658 @@ def _fill_message_details(
     message.oneofs = [
         oneof for _, oneof in sorted(oneof_fields.items()) if oneof.fields
     ]
-    _validate_oneof_collisions(message)
-    _validate_nested_alias_collisions(message)
     _validate_constant_collisions(message)
-    _validate_field_collisions(message)
+
+
+_MESSAGE_PUBLIC_FUNCTIONS: tuple[tuple[str, str], ...] = (
+    ("create", "fn/1/static"),
+    ("context", "fn/0/const"),
+    ("unknown_fields", "fn/0/const"),
+    ("unknown_field_count", "fn/0/const"),
+    ("unknown_field_bytes", "fn/0/const"),
+    ("clear_unknown_fields", "fn/0"),
+    ("mutable_unknown_fields", "fn/0"),
+    ("copy_from", "fn/1"),
+    ("clone", "fn/0/const"),
+    ("parse", "fn/2/static"),
+    ("merge_from", "fn/1"),
+    ("merge_fields_from", "fn/1"),
+    ("serialize", "fn/1/const"),
+    ("encoded_size", "fn/0/const"),
+    ("validate", "fn/0/const"),
+)
+
+_MESSAGE_PRIVATE_FUNCTIONS = (
+    "copy_from_in_place_",
+    "reset_for_reuse_",
+    "merge_field_from_",
+    "destroy_at_",
+)
+
+_FIELD_IMPLEMENTATION_NAME_TEMPLATES: tuple[tuple[str, str], ...] = (
+    ("ensured", "ensured_{name}"),
+    ("entry", "{name}_entry"),
+    ("value", "{name}_value"),
+    ("packed_values", "packed_{name}_values"),
+    ("packed_unknown_fields", "packed_{name}_unknown_fields"),
+    ("packed_reserve", "packed_reserve_{name}"),
+    ("merged_unknown_fields", "merged_{name}_unknown_fields"),
+    ("committed", "{name}_committed"),
+    ("parse_entry", "parse_{name}_entry"),
+    ("staged_entry", "staged_{name}_entry"),
+    ("decoded_raw", "decoded_{name}_raw"),
+    ("decoded", "decoded_{name}"),
+    ("accepted", "{name}_accepted"),
+    ("packed_size", "packed_size_{name}"),
+    ("packed_value", "packed_value_{name}"),
+    ("field_size", "field_size_{name}"),
+)
+
+
+def _allocate_message_cpp_names(files: dict[str, FileModel]) -> None:
+    allocator = EmittedNameAllocator()
+    for file_model in files.values():
+        for message in _walk_messages(file_model.messages):
+            if not message.is_map_entry:
+                _allocate_message_class_names(allocator, message)
+
+
+def _allocate_message_class_names(
+    allocator: EmittedNameAllocator, message: MessageModel
+) -> None:
+    scope = allocator.scope(f"message:{message.full_name}")
+    scope.reserve(
+        message.cpp_name,
+        owner=f"{message.full_name}:injected-class-name",
+        kind=CppNameKind.TYPE,
+    )
+    scope.reserve(
+        "Context",
+        owner=f"{message.full_name}:context-alias",
+        kind=CppNameKind.TYPE_ALIAS,
+    )
+    message.emitted_names["context_alias"] = "Context"
+    if message.fields:
+        scope.reserve(
+            "FieldNumber",
+            owner=f"{message.full_name}:field-number-type",
+            kind=CppNameKind.TYPE,
+        )
+        message.emitted_names["field_number_type"] = "FieldNumber"
+    for name, signature in _MESSAGE_PUBLIC_FUNCTIONS:
+        scope.reserve(
+            name,
+            owner=f"{message.full_name}:public:{name}",
+            kind=CppNameKind.PUBLIC_FUNCTION,
+            signature=signature,
+        )
+        message.emitted_names[name] = name
+
+    requests: list[EmittedNameRequest] = []
+    for enum in message.nested_enums:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"nested-enum:{enum.full_name}",
+                preferred=cpp_identifier(enum.name),
+                members=(EmittedNameMember(kind=CppNameKind.TYPE_ALIAS),),
+                priority=20,
+            )
+        )
+    for nested in message.nested_messages:
+        if nested.is_map_entry:
+            continue
+        requests.append(
+            EmittedNameRequest(
+                owner=f"nested-message:{nested.full_name}",
+                preferred=cpp_identifier(nested.name),
+                members=(EmittedNameMember(kind=CppNameKind.TYPE_ALIAS),),
+                priority=20,
+            )
+        )
+    for constant in message.constants:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"constant:{constant.full_name}",
+                preferred=constant.cpp_name,
+                members=(EmittedNameMember(kind=CppNameKind.CONSTANT),),
+                priority=30,
+            )
+        )
+    for item in message.fields:
+        requests.append(
+            EmittedNameRequest(
+                owner=f"field:{message.full_name}.{item.name}",
+                preferred=item.cpp_name,
+                members=tuple(member for _, member in _field_public_name_members(item)),
+                priority=10,
+            )
+        )
+
+    allocated = scope.allocate(requests)
+    for enum in message.nested_enums:
+        enum.emitted_names["alias"] = allocated[f"nested-enum:{enum.full_name}"]
+    for nested in message.nested_messages:
+        if not nested.is_map_entry:
+            nested.emitted_names["alias"] = allocated[
+                f"nested-message:{nested.full_name}"
+            ]
+    for constant in message.constants:
+        constant.cpp_name = allocated[f"constant:{constant.full_name}"]
+        constant.emitted_names["declaration"] = constant.cpp_name
+    for item in message.fields:
+        stem = allocated[f"field:{message.full_name}.{item.name}"]
+        item.cpp_name = stem
+        item.emitted_names.update(
+            {
+                key: member.render(stem)
+                for key, member in _field_public_name_members(item)
+            }
+        )
+        item.emitted_names["number"] = stem
+
+    _allocate_nested_alias_template_names(message)
+    _allocate_message_oneof_names(scope, message)
+    _allocate_message_private_names(scope, message)
+    _allocate_message_implementation_names(allocator, message)
+    _allocate_message_template_names(scope, message)
+    _validate_message_cpp_name_allocations(message)
+
+
+def _field_public_name_members(
+    item: FieldModel,
+) -> tuple[tuple[str, EmittedNameMember], ...]:
+    members: list[tuple[str, EmittedNameMember]] = [
+        (
+            "accessor",
+            EmittedNameMember(kind=CppNameKind.FIELD_ACCESSOR, signature="fn/0/const"),
+        )
+    ]
+
+    def function(key: str, template: str, signature: str) -> None:
+        members.append(
+            (
+                key,
+                EmittedNameMember(
+                    template=template,
+                    kind=CppNameKind.FIELD_ACCESSOR,
+                    signature=signature,
+                ),
+            )
+        )
+
+    if item.oneof_name is not None:
+        function("has", "has_{name}", "fn/0/const")
+        if item.kind == "message":
+            function("ensure", "ensure_{name}", "fn/0")
+        elif item.kind == "enum":
+            function("raw_accessor", "{name}_raw", "fn/0/const")
+            function("raw_setter", "set_{name}_raw", "fn/1")
+            function("setter", "set_{name}", "fn/1")
+        else:
+            function("setter", "set_{name}", "fn/1")
+        return tuple(members)
+
+    function("clear", "clear_{name}", "fn/0")
+    if item.repeated or item.kind == "map":
+        function("mutable", "mutable_{name}", "fn/0")
+    elif item.kind == "message":
+        function("has", "has_{name}", "fn/0/const")
+        function("ensure", "ensure_{name}", "fn/0")
+    elif item.fixed_bytes:
+        function("has", "has_{name}", "fn/0/const")
+        function("mutable", "mutable_{name}", "fn/0")
+        function("resize_overwrite", "resize_{name}_for_overwrite", "fn/1")
+        function("setter", "set_{name}", "fn/1")
+    elif item.kind == "bytes" and item.array_enabled:
+        function("size", "{name}_size", "fn/0/const")
+        function("max_size", "{name}_max_size", "fn/0/const")
+        function("resize", "resize_{name}", "fn/1")
+        function("resize_overwrite", "resize_{name}_for_overwrite", "fn/1")
+        function("mutable", "mutable_{name}", "fn/0")
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    elif item.kind in {"string", "bytes"}:
+        function("mutable", "mutable_{name}", "fn/0")
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    elif item.kind == "enum":
+        function("raw_accessor", "{name}_raw", "fn/0/const")
+        function("raw_setter", "set_{name}_raw", "fn/1")
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    else:
+        function("setter", "set_{name}", "fn/1")
+        if item.proto3_optional:
+            function("has", "has_{name}", "fn/0/const")
+    return tuple(members)
+
+
+def _validate_message_cpp_name_allocations(message: MessageModel) -> None:
+    message_names = {
+        "context_alias",
+        "context_storage",
+        "unknown_storage",
+        *(name for name, _ in _MESSAGE_PUBLIC_FUNCTIONS),
+        *(
+            name
+            for name in _MESSAGE_PRIVATE_FUNCTIONS
+            if name != "destroy_at_" or message.oneofs
+        ),
+    }
+    if message.fields:
+        message_names.add("field_number_type")
+    _require_emitted_names(message.full_name, message.emitted_names, message_names)
+
+    for enum in message.nested_enums:
+        _require_emitted_names(enum.full_name, enum.emitted_names, {"alias"})
+    for nested in message.nested_messages:
+        if not nested.is_map_entry:
+            _require_emitted_names(
+                nested.full_name,
+                nested.emitted_names,
+                {"alias", "alias_config"},
+            )
+
+    private_names = {
+        "context_storage",
+        "unknown_storage",
+        *(
+            name
+            for name in _MESSAGE_PRIVATE_FUNCTIONS
+            if name != "destroy_at_" or message.oneofs
+        ),
+    }
+    implementation_names = {
+        f"implementation:{key}" for key, _ in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+    }
+    for item in message.fields:
+        field_names = {
+            "number",
+            *(key for key, _ in _field_public_name_members(item)),
+            *private_names,
+            *implementation_names,
+        }
+        if item.oneof_name is not None:
+            field_names.update(
+                {
+                    "oneof_case",
+                    "oneof_storage",
+                    "oneof_case_type",
+                    "oneof_case_storage",
+                    "oneof_container",
+                    "oneof_clear",
+                }
+            )
+        else:
+            field_names.add("storage")
+            if item.has_explicit_presence and item.kind != "message":
+                field_names.add("presence_storage")
+        _require_emitted_names(
+            f"{message.full_name}.{item.name}", item.emitted_names, field_names
+        )
+        for map_member in (item.map_key, item.map_value):
+            if map_member is not None:
+                _require_emitted_names(
+                    f"{message.full_name}.{item.name}.{map_member.name}",
+                    map_member.emitted_names,
+                    private_names | implementation_names | {"storage"},
+                )
+
+    for oneof in message.oneofs:
+        _require_emitted_names(
+            f"{message.full_name}.{oneof.name}",
+            oneof.emitted_names,
+            {
+                "case_type",
+                "case_accessor",
+                "clear",
+                "case_storage",
+                "storage_type",
+                "storage",
+            },
+        )
+
+
+def _require_emitted_names(
+    owner: str, emitted_names: dict[str, str], required: set[str]
+) -> None:
+    missing = sorted(required - emitted_names.keys())
+    if missing:
+        raise AssertionError(
+            f"{owner}: missing allocated C++ names: {', '.join(missing)}"
+        )
+
+
+def _allocate_message_oneof_names(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    requests: list[EmittedNameRequest] = []
+    for oneof in message.oneofs:
+        lower = cpp_derivable_identifier(oneof.name)
+        requests.extend(
+            (
+                EmittedNameRequest(
+                    owner=f"oneof-case-type:{message.full_name}.{oneof.name}",
+                    preferred=f"{oneof.cpp_name}Case",
+                    members=(EmittedNameMember(kind=CppNameKind.ONEOF_CASE_TYPE),),
+                ),
+                EmittedNameRequest(
+                    owner=f"oneof-api:{message.full_name}.{oneof.name}",
+                    preferred=lower,
+                    members=(
+                        EmittedNameMember(
+                            template="{name}_case",
+                            kind=CppNameKind.PUBLIC_FUNCTION,
+                            signature="fn/0/const",
+                        ),
+                        EmittedNameMember(
+                            template="clear_{name}",
+                            kind=CppNameKind.PUBLIC_FUNCTION,
+                            signature="fn/0",
+                        ),
+                    ),
+                ),
+            )
+        )
+    allocated = scope.allocate(requests)
+    for oneof in message.oneofs:
+        case_owner = f"oneof-case-type:{message.full_name}.{oneof.name}"
+        api_owner = f"oneof-api:{message.full_name}.{oneof.name}"
+        oneof.emitted_names["case_type"] = allocated[case_owner]
+        stem = allocated[api_owner]
+        oneof.emitted_names["case_accessor"] = f"{stem}_case"
+        oneof.emitted_names["clear"] = f"clear_{stem}"
+
+        case_scope = EmittedNameAllocator().scope(
+            f"oneof-case:{message.full_name}.{oneof.name}"
+        )
+        case_scope.reserve(
+            "none",
+            owner=f"{message.full_name}.{oneof.name}:none",
+            kind=CppNameKind.ONEOF_CASE_VALUE,
+        )
+        case_requests = [
+            EmittedNameRequest(
+                owner=f"oneof-value:{message.full_name}.{item.name}",
+                preferred=item.cpp_name,
+                members=(EmittedNameMember(kind=CppNameKind.ONEOF_CASE_VALUE),),
+            )
+            for item in oneof.fields
+        ]
+        case_allocated = case_scope.allocate(case_requests)
+        for item in oneof.fields:
+            item.emitted_names["oneof_case"] = case_allocated[
+                f"oneof-value:{message.full_name}.{item.name}"
+            ]
+
+
+def _allocate_message_private_names(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    requests: list[EmittedNameRequest] = [
+        EmittedNameRequest(
+            owner=f"private:{message.full_name}:context-storage",
+            preferred="ctx_",
+            members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+        ),
+        EmittedNameRequest(
+            owner=f"private:{message.full_name}:unknown-storage",
+            preferred="unknown_fields_",
+            members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+        ),
+    ]
+    for name in _MESSAGE_PRIVATE_FUNCTIONS:
+        if name == "destroy_at_" and not message.oneofs:
+            continue
+        requests.append(
+            EmittedNameRequest(
+                owner=f"private:{message.full_name}:function:{name}",
+                preferred=name,
+                members=(
+                    EmittedNameMember(
+                        kind=CppNameKind.IMPLEMENTATION, signature=f"private:{name}"
+                    ),
+                ),
+            )
+        )
+    for item in message.fields:
+        if item.oneof_name is not None:
+            continue
+        requests.append(
+            EmittedNameRequest(
+                owner=f"private:{message.full_name}:field:{item.name}:storage",
+                preferred=f"{item.cpp_name}_",
+                members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+            )
+        )
+        if item.has_explicit_presence and item.kind != "message":
+            requests.append(
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:field:{item.name}:presence",
+                    preferred=f"has_{item.cpp_name}_",
+                    members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+                )
+            )
+    for oneof in message.oneofs:
+        lower = cpp_derivable_identifier(oneof.name)
+        requests.extend(
+            (
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:oneof:{oneof.name}:case",
+                    preferred=f"{lower}_case_",
+                    members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+                ),
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:oneof:{oneof.name}:type",
+                    preferred=f"{oneof.cpp_name}Storage",
+                    members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                ),
+                EmittedNameRequest(
+                    owner=f"private:{message.full_name}:oneof:{oneof.name}:storage",
+                    preferred=f"{lower}_",
+                    members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+                ),
+            )
+        )
+    allocated = scope.allocate(requests)
+    message.emitted_names["context_storage"] = allocated[
+        f"private:{message.full_name}:context-storage"
+    ]
+    message.emitted_names["unknown_storage"] = allocated[
+        f"private:{message.full_name}:unknown-storage"
+    ]
+    for name in _MESSAGE_PRIVATE_FUNCTIONS:
+        owner = f"private:{message.full_name}:function:{name}"
+        if owner in allocated:
+            message.emitted_names[name] = allocated[owner]
+    for item in message.fields:
+        if item.oneof_name is not None:
+            continue
+        item.emitted_names["storage"] = allocated[
+            f"private:{message.full_name}:field:{item.name}:storage"
+        ]
+        presence_owner = f"private:{message.full_name}:field:{item.name}:presence"
+        if presence_owner in allocated:
+            item.emitted_names["presence_storage"] = allocated[presence_owner]
+    for oneof in message.oneofs:
+        prefix = f"private:{message.full_name}:oneof:{oneof.name}"
+        oneof.emitted_names["case_storage"] = allocated[f"{prefix}:case"]
+        oneof.emitted_names["storage_type"] = allocated[f"{prefix}:type"]
+        oneof.emitted_names["storage"] = allocated[f"{prefix}:storage"]
+        union_scope = EmittedNameAllocator().scope(
+            f"oneof-storage:{message.full_name}.{oneof.name}"
+        )
+        union_allocated = union_scope.allocate(
+            EmittedNameRequest(
+                owner=f"oneof-storage:{message.full_name}.{item.name}",
+                preferred=f"{item.cpp_name}_",
+                members=(EmittedNameMember(kind=CppNameKind.PRIVATE_STORAGE),),
+            )
+            for item in oneof.fields
+        )
+        for item in oneof.fields:
+            item.emitted_names["oneof_storage"] = union_allocated[
+                f"oneof-storage:{message.full_name}.{item.name}"
+            ]
+            item.emitted_names["oneof_case_type"] = oneof.emitted_names["case_type"]
+            item.emitted_names["oneof_case_storage"] = oneof.emitted_names[
+                "case_storage"
+            ]
+            item.emitted_names["oneof_container"] = oneof.emitted_names["storage"]
+            item.emitted_names["oneof_clear"] = oneof.emitted_names["clear"]
+    for item in message.fields:
+        _assign_message_private_names_to_field(item, message)
+
+
+def _assign_message_private_names_to_field(
+    item: FieldModel, message: MessageModel
+) -> None:
+    item.emitted_names["context_storage"] = message.emitted_names["context_storage"]
+    item.emitted_names["unknown_storage"] = message.emitted_names["unknown_storage"]
+    for name in _MESSAGE_PRIVATE_FUNCTIONS:
+        if name in message.emitted_names:
+            item.emitted_names[name] = message.emitted_names[name]
+    if item.map_key is not None:
+        _assign_message_private_names_to_field(item.map_key, message)
+    if item.map_value is not None:
+        _assign_message_private_names_to_field(item.map_value, message)
+
+
+def _allocate_message_implementation_names(
+    allocator: EmittedNameAllocator, message: MessageModel
+) -> None:
+    scope = allocator.scope(f"implementation:{message.full_name}")
+    requests: list[EmittedNameRequest] = []
+    for item in message.fields:
+        owner = f"implementation:{message.full_name}.{item.name}"
+        requests.append(
+            EmittedNameRequest(
+                owner=owner,
+                preferred=cpp_emitted_derivable_identifier(item.cpp_name),
+                members=tuple(
+                    EmittedNameMember(
+                        template=template, kind=CppNameKind.IMPLEMENTATION
+                    )
+                    for _, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+                ),
+            )
+        )
+    allocated = scope.allocate(requests)
+    for item in message.fields:
+        owner = f"implementation:{message.full_name}.{item.name}"
+        stem = allocated[owner]
+        item.emitted_names.update(
+            {
+                f"implementation:{key}": template.format(name=stem)
+                for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+            }
+        )
+        for map_member in (item.map_key, item.map_value):
+            if map_member is not None:
+                _allocate_map_member_implementation_names(
+                    allocator,
+                    message=message,
+                    map_field=item,
+                    map_member=map_member,
+                )
+
+
+def _allocate_map_member_implementation_names(
+    allocator: EmittedNameAllocator,
+    *,
+    message: MessageModel,
+    map_field: FieldModel,
+    map_member: FieldModel,
+) -> None:
+    owner = f"implementation:{message.full_name}.{map_field.name}.{map_member.name}"
+    scope = allocator.scope(owner)
+    members = tuple(
+        EmittedNameMember(template=template, kind=CppNameKind.IMPLEMENTATION)
+        for _, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+    ) + (EmittedNameMember(template="{name}_", kind=CppNameKind.IMPLEMENTATION),)
+    stem = scope.allocate(
+        (
+            EmittedNameRequest(
+                owner=owner,
+                preferred=cpp_emitted_derivable_identifier(map_member.cpp_name),
+                members=members,
+            ),
+        )
+    )[owner]
+    map_member.emitted_names.update(
+        {
+            f"implementation:{key}": template.format(name=stem)
+            for key, template in _FIELD_IMPLEMENTATION_NAME_TEMPLATES
+        }
+    )
+    map_member.emitted_names["storage"] = f"{stem}_"
+
+
+def _allocate_message_template_names(
+    scope: EmittedNameScope, message: MessageModel
+) -> None:
+    requests = [
+        EmittedNameRequest(
+            owner=f"template:{message.full_name}:{preferred}",
+            preferred=preferred,
+            members=(EmittedNameMember(kind=CppNameKind.IMPLEMENTATION),),
+        )
+        for preferred in ("Config", "Reader", "Writer", "Value", "T")
+    ]
+    allocated = scope.allocate(requests)
+    message.config_cpp_name = allocated[f"template:{message.full_name}:Config"]
+    message.reader_cpp_name = allocated[f"template:{message.full_name}:Reader"]
+    message.writer_cpp_name = allocated[f"template:{message.full_name}:Writer"]
+    message.value_cpp_name = allocated[f"template:{message.full_name}:Value"]
+    message.generic_cpp_name = allocated[f"template:{message.full_name}:T"]
+    for item in message.fields:
+        _assign_field_internal_cpp_names_from_model(item, message)
+
+
+def _allocate_nested_alias_template_names(message: MessageModel) -> None:
+    for nested in message.nested_messages:
+        if nested.is_map_entry:
+            continue
+        alias = nested.emitted_names["alias"]
+        nested.emitted_names["alias_config"] = _allocate_alias_template_parameter(
+            label=f"nested-alias-template:{nested.full_name}",
+            alias=alias,
+            preferred="NestedConfig",
+        )
+
+
+def _allocate_alias_template_parameter(
+    *, label: str, alias: str, preferred: str
+) -> str:
+    owner = f"{label}:parameter"
+    scope = EmittedNameAllocator().scope(label)
+    scope.reserve(alias, owner=f"{label}:alias", kind=CppNameKind.TYPE_ALIAS)
+    return scope.allocate(
+        (
+            EmittedNameRequest(
+                owner=owner,
+                preferred=preferred,
+                members=(EmittedNameMember(kind=CppNameKind.IMPLEMENTATION),),
+            ),
+        )
+    )[owner]
+
+
+def _assign_field_internal_cpp_names_from_model(
+    item: FieldModel, message: MessageModel
+) -> None:
+    item.config_cpp_name = message.config_cpp_name
+    item.reader_cpp_name = message.reader_cpp_name
+    item.writer_cpp_name = message.writer_cpp_name
+    item.value_cpp_name = message.value_cpp_name
+    item.generic_cpp_name = message.generic_cpp_name
+    if item.map_key is not None:
+        _assign_field_internal_cpp_names_from_model(item.map_key, message)
+    if item.map_value is not None:
+        _assign_field_internal_cpp_names_from_model(item.map_value, message)
 
 
 def _build_file_constants(
@@ -1717,7 +2965,6 @@ def _build_raw_constants(
 
 def _validate_constant_collisions(message: MessageModel) -> None:
     seen_names: set[str] = set()
-    seen_cpp_names: set[str] = set()
 
     for constant in message.constants:
         if constant.name in seen_names:
@@ -1725,183 +2972,145 @@ def _validate_constant_collisions(message: MessageModel) -> None:
                 f"{message.full_name}.{constant.name}: constant cannot be redefined"
             )
         seen_names.add(constant.name)
-        if not constant.cpp_name or constant.cpp_name == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{constant.name}: constant name is not a valid C++ identifier"
-            )
-        if constant.cpp_name in seen_cpp_names:
-            raise ProtocyteError(
-                f"{message.full_name}.{constant.name}: constant collides after C++ identifier normalization"
-            )
-        seen_cpp_names.add(constant.cpp_name)
 
 
 def _validate_package_constant_collisions(file_model: FileModel) -> None:
     seen_names: set[str] = set()
-    seen_cpp_names: set[str] = set()
     for constant in file_model.constants:
         if constant.name in seen_names:
             raise ProtocyteError(f"{constant.full_name}: constant cannot be redefined")
         seen_names.add(constant.name)
-        if not constant.cpp_name or constant.cpp_name == "_":
-            raise ProtocyteError(
-                f"{constant.full_name}: constant name is not a valid C++ identifier"
-            )
-        if constant.cpp_name in seen_cpp_names:
-            raise ProtocyteError(
-                f"{constant.full_name}: constant collides after C++ identifier normalization"
-            )
-        seen_cpp_names.add(constant.cpp_name)
 
 
 def _validate_package_constant_namespace(files: dict[str, FileModel]) -> None:
-    top_level_cpp_names: dict[tuple[str, ...], set[str]] = {}
-    for file_model in files.values():
-        package_key = _cpp_package_key(file_model.package)
-        reserved = top_level_cpp_names.setdefault(package_key, {"protocyte_reflection"})
-        reserved.update(_file_type_cpp_names(file_model))
-
     seen_names: dict[tuple[str, ...], set[str]] = {}
-    seen_cpp_names: dict[tuple[str, ...], set[str]] = {}
     for file_model in files.values():
         package_key = _cpp_package_key(file_model.package)
         names = seen_names.setdefault(package_key, set())
-        cpp_names = seen_cpp_names.setdefault(package_key, set())
-        reserved = top_level_cpp_names[package_key]
         for constant in file_model.constants:
             if constant.name in names:
                 raise ProtocyteError(
                     f"{constant.full_name}: constant cannot be redefined"
                 )
             names.add(constant.name)
-            if constant.cpp_name in cpp_names:
-                raise ProtocyteError(
-                    f"{constant.full_name}: constant collides after C++ identifier normalization"
-                )
-            if constant.cpp_name in reserved:
-                raise ProtocyteError(
-                    f"{constant.full_name}: constant collides with generated API"
-                )
-            cpp_names.add(constant.cpp_name)
 
 
-def _validate_enum_value_collisions(enums: Iterable[EnumModel]) -> None:
-    for enum in enums:
-        seen_cpp_names: dict[str, str] = {}
-        for value in enum.values:
-            if not value.cpp_name or value.cpp_name == "_":
-                raise ProtocyteError(
-                    f"{enum.full_name}.{value.name}: enum value name is not a valid C++ identifier"
-                )
-            if value.cpp_name in seen_cpp_names:
-                first = seen_cpp_names[value.cpp_name]
-                raise ProtocyteError(
-                    f"{enum.full_name}.{value.name}: enum value collides with {first!r} after C++ identifier normalization"
-                )
-            seen_cpp_names[value.cpp_name] = value.name
-
-
-def _validate_type_cpp_name_collisions(files: dict[str, FileModel]) -> None:
-    seen_cpp_names: dict[tuple[str, ...], dict[str, str]] = {}
-    for file_model in files.values():
-        package_names = seen_cpp_names.setdefault(
-            _cpp_package_key(file_model.package), {}
-        )
-        for full_name, cpp_name in _file_type_cpp_items(file_model):
-            _reserve_type_cpp_name(package_names, full_name, cpp_name)
-
-
-def _file_type_cpp_names(file_model: FileModel) -> set[str]:
-    return {cpp_name for _, cpp_name in _file_type_cpp_items(file_model)}
-
-
-def _file_type_cpp_items(file_model: FileModel) -> Iterable[tuple[str, str]]:
-    for enum in file_model.enums:
-        yield enum.full_name, enum.cpp_name
-    for message in _walk_messages(file_model.messages):
-        if not message.is_map_entry:
-            yield message.full_name, message.cpp_name
-        for enum in message.nested_enums:
-            yield enum.full_name, enum.cpp_name
-
-
-def _reserve_type_cpp_name(
-    seen_cpp_names: dict[str, str], full_name: str, cpp_name: str
+def _allocate_namespace_cpp_names(
+    files: dict[str, FileModel],
+    enums: Iterable[EnumModel],
+    *,
+    namespace_prefix: str | None,
 ) -> None:
-    if not cpp_name or cpp_name == "_":
-        raise ProtocyteError(f"{full_name}: type name is not a valid C++ identifier")
-    if cpp_name in seen_cpp_names:
-        first = seen_cpp_names[cpp_name]
-        raise ProtocyteError(
-            f"{full_name}: type collides with {first!r} after C++ identifier normalization"
+    allocator = EmittedNameAllocator()
+    type_owners: dict[str, MessageModel | EnumModel] = {}
+    constant_owners: dict[str, ConstantModel] = {}
+    requests: dict[tuple[str, ...], dict[str, list[EmittedNameRequest]]] = {}
+
+    for file_model in files.values():
+        package_key = _cpp_symbol_scope_key(file_model.package, namespace_prefix)
+        file_requests = requests.setdefault(package_key, {}).setdefault(
+            file_model.name, []
         )
-    seen_cpp_names[cpp_name] = full_name
-
-
-def _validate_nested_alias_collisions(message: MessageModel) -> None:
-    seen_cpp_names: dict[str, str] = {}
-    for name, cpp_name in _nested_alias_cpp_items(message):
-        if not cpp_name or cpp_name == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{name}: nested type alias is not a valid C++ identifier"
+        for enum in file_model.enums:
+            owner = f"type:{enum.full_name}"
+            type_owners[owner] = enum
+            file_requests.append(
+                EmittedNameRequest(
+                    owner=owner,
+                    preferred=enum.cpp_name,
+                    members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                    hash_fallback=True,
+                )
             )
-        if cpp_name in seen_cpp_names:
-            first = seen_cpp_names[cpp_name]
-            raise ProtocyteError(
-                f"{message.full_name}.{name}: nested type alias collides with {first!r} after C++ identifier normalization"
+        for message in _walk_messages(file_model.messages):
+            if message.is_map_entry:
+                pass
+            else:
+                owner = f"type:{message.full_name}"
+                type_owners[owner] = message
+                file_requests.append(
+                    EmittedNameRequest(
+                        owner=owner,
+                        preferred=message.cpp_name,
+                        members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                        hash_fallback=True,
+                    )
+                )
+            for enum in message.nested_enums:
+                owner = f"type:{enum.full_name}"
+                type_owners[owner] = enum
+                file_requests.append(
+                    EmittedNameRequest(
+                        owner=owner,
+                        preferred=enum.cpp_name,
+                        members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                        hash_fallback=True,
+                    )
+                )
+        for constant in file_model.constants:
+            owner = f"constant:{constant.full_name}"
+            constant_owners[owner] = constant
+            file_requests.append(
+                EmittedNameRequest(
+                    owner=owner,
+                    preferred=constant.cpp_name,
+                    members=(EmittedNameMember(kind=CppNameKind.CONSTANT),),
+                )
             )
-        seen_cpp_names[cpp_name] = name
 
-
-def _validate_oneof_collisions(message: MessageModel) -> None:
-    if message.is_map_entry:
-        return
-    seen_cpp_names: dict[str, str] = {}
-
-    for oneof in message.oneofs:
-        lower = cpp_identifier(oneof.name)
-        if not lower or lower == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{oneof.name}: oneof name is not a valid C++ identifier"
+    for package_key, package_files in requests.items():
+        for file_name, file_requests in package_files.items():
+            scope = allocator.scope(
+                f"namespace:{'::'.join(package_key) or '<global>'}:file:{file_name}"
             )
-        if lower in seen_cpp_names:
-            first = seen_cpp_names[lower]
-            raise ProtocyteError(
-                f"{message.full_name}.{oneof.name}: oneof collides with {first!r} after C++ identifier normalization"
+            scope.reserve(
+                "protocyte_reflection",
+                owner=f"namespace:{file_name}:reflection",
+                kind=CppNameKind.NAMESPACE,
             )
-        seen_cpp_names[lower] = oneof.name
+            if package_key == ("protocyte",):
+                for runtime_name in sorted(PROTOCYTE_RUNTIME_CPP_SYMBOLS):
+                    scope.reserve(
+                        runtime_name,
+                        owner=f"runtime:{runtime_name}",
+                        kind=CppNameKind.TYPE,
+                    )
+            allocated = scope.allocate(file_requests)
+            for owner, cpp_name in allocated.items():
+                if owner in type_owners:
+                    type_owners[owner].cpp_name = cpp_name
+                else:
+                    constant = constant_owners[owner]
+                    constant.cpp_name = cpp_name
+                    constant.emitted_names["declaration"] = cpp_name
 
-
-def _nested_alias_cpp_items(message: MessageModel) -> Iterable[tuple[str, str]]:
-    for enum in message.nested_enums:
-        yield enum.name, cpp_identifier(enum.name)
-    for nested in message.nested_messages:
-        if not nested.is_map_entry:
-            yield nested.name, cpp_identifier(nested.name)
-
-
-def _validate_field_collisions(message: MessageModel) -> None:
-    if message.is_map_entry:
-        return
-    seen_cpp_names: dict[str, str] = {}
-
-    for field_model in message.fields:
-        if not field_model.cpp_name or field_model.cpp_name == "_":
-            raise ProtocyteError(
-                f"{message.full_name}.{field_model.name}: field name is not a valid C++ identifier"
+    for enum in enums:
+        scope = allocator.scope(f"enum:{enum.full_name}")
+        value_requests = [
+            EmittedNameRequest(
+                owner=f"enum-value:{enum.full_name}.{value.name}",
+                preferred=value.cpp_name,
+                members=(EmittedNameMember(kind=CppNameKind.ENUM_VALUE),),
             )
-        if field_model.cpp_name in seen_cpp_names:
-            first = seen_cpp_names[field_model.cpp_name]
-            raise ProtocyteError(
-                f"{message.full_name}.{field_model.name}: field collides with {first!r} after C++ identifier normalization"
-            )
-        seen_cpp_names[field_model.cpp_name] = field_model.name
+            for value in enum.values
+        ]
+        allocated = scope.allocate(value_requests)
+        for value in enum.values:
+            value.cpp_name = allocated[f"enum-value:{enum.full_name}.{value.name}"]
+            value.emitted_names["declaration"] = value.cpp_name
 
 
 def _cpp_package_key(package: str) -> tuple[str, ...]:
     if not package:
         return ()
     return tuple(cpp_identifier(part) for part in package.split("."))
+
+
+def _cpp_symbol_scope_key(
+    package: str, namespace_prefix: str | None
+) -> tuple[str, ...]:
+    parts = tuple(namespace_prefix.split("::")) if namespace_prefix else ()
+    return (*parts, *_cpp_package_key(package))
 
 
 def _build_field(
@@ -1911,6 +3120,7 @@ def _build_field(
     messages: dict[str, MessageModel],
     enums: dict[str, EnumModel],
     custom_options: _CustomOptions,
+    documentation: SourceDocumentation | None = None,
 ) -> FieldModel:
     if proto.extendee:
         raise ProtocyteError(
@@ -2024,7 +3234,7 @@ def _build_field(
 
     return FieldModel(
         name=proto.name,
-        cpp_name=cpp_identifier(proto.name),
+        cpp_name=cpp_derivable_identifier(proto.name),
         number=proto.number,
         proto_type=proto.type,
         label=proto.label,
@@ -2050,7 +3260,8 @@ def _build_field(
         required=required,
         default_cpp=default_cpp,
         default_byte_size=default_byte_size,
-        enum_closed=kind == "enum" and file_model.syntax == "proto2",
+        enum_closed=kind == "enum" and enum_type is not None and enum_type.closed,
+        documentation=documentation or SourceDocumentation(),
     )
 
 
@@ -2184,21 +3395,142 @@ def _integer_default_cpp(value: str, kind: str, label: str) -> str:
 
 
 def _floating_default_cpp(value: str, cpp_type: str, label: str) -> str:
-    if value == "inf":
-        return f"::std::numeric_limits<{cpp_type}>::infinity()"
-    if value == "-inf":
-        return f"-::std::numeric_limits<{cpp_type}>::infinity()"
-    if value == "nan":
+    field_type = (
+        FieldDescriptorProto.TYPE_FLOAT
+        if cpp_type == "::protocyte::f32"
+        else FieldDescriptorProto.TYPE_DOUBLE
+    )
+    numeric = _parse_protobuf_floating_default(value, field_type, label)
+    if math.isinf(numeric):
+        infinity = f"::std::numeric_limits<{cpp_type}>::infinity()"
+        return f"-{infinity}" if numeric < 0 else infinity
+    if math.isnan(numeric):
         return f"::std::numeric_limits<{cpp_type}>::quiet_NaN()"
-    try:
-        numeric = float(value)
-    except ValueError as exc:
-        raise ProtocyteError(
-            f"{label}: invalid floating-point default value {value!r}"
-        ) from exc
-    if cpp_type == "::protocyte::f32":
+    if field_type == FieldDescriptorProto.TYPE_FLOAT:
         return _cpp_constant_value(CONSTANT_KIND_FLOAT, numeric)
     return _cpp_constant_value(CONSTANT_KIND_DOUBLE, numeric)
+
+
+def _parse_protobuf_floating_default(value: str, field_type: int, label: str) -> float:
+    if len(value) > _MAX_FLOATING_DEFAULT_TEXT_LENGTH:
+        _raise_invalid_floating_default(value, label)
+    nonfinite = _NONFINITE_FLOATING_DEFAULT_RE.fullmatch(value)
+    if nonfinite is not None:
+        if nonfinite.group("infinity") is not None:
+            return -math.inf if nonfinite.group("sign") == "-" else math.inf
+        return math.nan
+
+    finite = _FINITE_FLOATING_DEFAULT_RE.fullmatch(value)
+    if finite is None:
+        _raise_invalid_floating_default(value, label)
+    # Protobuf accepts signed zero regardless of exponent size.  Recognize it
+    # before Decimal, whose implementation-specific exponent limit would
+    # otherwise reject a valid zero such as ``0e999...``.
+    significand_digits = finite.group("significand").replace(".", "")
+    if not significand_digits.strip("0"):
+        negative = finite.group("sign") == "-"
+        if field_type == FieldDescriptorProto.TYPE_FLOAT:
+            return _f32_from_bits(0x80000000 if negative else 0)
+        return -0.0 if negative else 0.0
+    try:
+        exact = Decimal(value)
+    except (InvalidOperation, ValueError) as exc:
+        _raise_invalid_floating_default(value, label, exc)
+    if field_type == FieldDescriptorProto.TYPE_FLOAT:
+        return _protobuf_f32(exact, value, label)
+    try:
+        numeric = float(exact)
+    except (OverflowError, ValueError) as exc:
+        _raise_invalid_floating_default(value, label, exc)
+    if not math.isfinite(numeric) or (
+        not exact.is_zero() and abs(numeric) < _MIN_NORMAL_F64
+    ):
+        _raise_invalid_floating_default(value, label)
+    return numeric
+
+
+def _protobuf_f32(exact: Decimal, value: str, label: str) -> float:
+    """Round descriptor text directly to IEEE-754 binary32.
+
+    FieldDescriptorProto.default_value carries the original source text.  In
+    particular, a hand-built CodeGeneratorRequest has not necessarily passed
+    through protoc's binary64 parser, so converting through Python float would
+    introduce a second rounding step and can choose the wrong binary32 value.
+    """
+    sign_bit = 0x80000000 if exact.is_signed() else 0
+    if exact.is_zero():
+        return _f32_from_bits(sign_bit)
+
+    magnitude = exact.copy_abs()
+    if magnitude.adjusted() < -38 or magnitude.adjusted() > 38:
+        _raise_invalid_floating_default(value, label)
+    numerator, denominator = magnitude.as_integer_ratio()
+    exponent = _rational_floor_log2(numerator, denominator)
+
+    if exponent < -126:
+        significand = _round_ratio_to_integer(numerator, denominator, 149)
+        if significand < 1 << 23:
+            _raise_invalid_floating_default(value, label)
+        exponent = -126
+    else:
+        if exponent > 127:
+            _raise_invalid_floating_default(value, label)
+        significand = _round_ratio_to_integer(numerator, denominator, 23 - exponent)
+        if significand == 1 << 24:
+            significand >>= 1
+            exponent += 1
+            if exponent > 127:
+                _raise_invalid_floating_default(value, label)
+
+    exponent_bits = (exponent + 127) << 23
+    fraction_bits = significand - (1 << 23)
+    return _f32_from_bits(sign_bit | exponent_bits | fraction_bits)
+
+
+def _rational_floor_log2(numerator: int, denominator: int) -> int:
+    exponent = numerator.bit_length() - denominator.bit_length()
+    if exponent >= 0:
+        if numerator < denominator << exponent:
+            exponent -= 1
+    elif numerator << -exponent < denominator:
+        exponent -= 1
+    return exponent
+
+
+def _round_ratio_to_integer(numerator: int, denominator: int, binary_shift: int) -> int:
+    if binary_shift >= 0:
+        numerator <<= binary_shift
+    else:
+        denominator <<= -binary_shift
+    quotient, remainder = divmod(numerator, denominator)
+    doubled_remainder = remainder << 1
+    if doubled_remainder > denominator or (
+        doubled_remainder == denominator and quotient & 1
+    ):
+        quotient += 1
+    return quotient
+
+
+def _f32_from_bits(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+def _raise_invalid_floating_default(
+    value: str, label: str, cause: Exception | None = None
+) -> NoReturn:
+    error = ProtocyteError(
+        f"{label}: invalid floating-point default value "
+        f"{_render_floating_default(value)}"
+    )
+    if cause is None:
+        raise error
+    raise error from cause
+
+
+def _render_floating_default(value: str) -> str:
+    if len(value) <= _MAX_FLOATING_DEFAULT_TEXT_LENGTH:
+        return repr(value)
+    return f"{value[:48]!r}... ({len(value)} characters)"
 
 
 def _is_packed(proto: descriptor_pb2.FieldDescriptorProto, file_syntax: str) -> bool:

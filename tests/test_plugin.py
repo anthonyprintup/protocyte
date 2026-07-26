@@ -1,8 +1,16 @@
+import errno
+import hashlib
+from io import BytesIO
 import math
+import os
 from pathlib import Path
+from shutil import which as find_executable
+import shlex
 import struct
 import subprocess
 import sys
+import threading
+import time
 from decimal import ROUND_UP, localcontext
 from types import SimpleNamespace
 
@@ -10,6 +18,7 @@ import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf.compiler import plugin_pb2
 
+import protocyte._formatter_supervisor as formatter_supervisor
 import protocyte.cpp as protocyte_cpp
 import protocyte.plugin as protocyte_plugin
 from protocyte.cpp import CppWriter
@@ -32,9 +41,18 @@ from protocyte.model import (
     _coerce_expression_value,
     _coerce_literal,
     _is_packed,
+    _parse_protobuf_floating_default,
+    _validate_message_cpp_name_allocations,
     build_model,
+    cpp_derivable_identifier,
+    cpp_identifier,
+    cpp_pascal_identifier,
 )
 from protocyte.plugin import GeneratorPolicy, generate_response
+from protocyte.paths import (
+    MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    generated_file_base,
+)
 from protocyte.runtime import runtime_files
 
 
@@ -47,6 +65,32 @@ def _basic_request(*, parameter: str = "") -> plugin_pb2.CodeGeneratorRequest:
     request.parameter = parameter
     request.proto_file.append(_simple_file())
     return request
+
+
+def _request_with_enum(
+    *, syntax: str = "proto3", nested: bool = False
+) -> tuple[plugin_pb2.CodeGeneratorRequest, descriptor_pb2.EnumDescriptorProto]:
+    request = _basic_request(parameter="format=off")
+    request.proto_file[0].syntax = syntax
+    owner = request.proto_file[0].message_type[0] if nested else request.proto_file[0]
+    enum = owner.enum_type.add(name="State")
+    enum.value.add(name="STATE_UNSPECIFIED", number=0)
+    return request, enum
+
+
+def _add_source_documentation(
+    file: descriptor_pb2.FileDescriptorProto,
+    path: list[int],
+    *,
+    leading: str = "",
+    trailing: str = "",
+    detached: tuple[str, ...] = (),
+) -> None:
+    location = file.source_code_info.location.add()
+    location.path.extend(path)
+    location.leading_comments = leading
+    location.trailing_comments = trailing
+    location.leading_detached_comments.extend(detached)
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +128,383 @@ def test_response_file_names_keep_valid_runtime_prefix_relative() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("descriptor_name", "generated_base"),
+    [
+        ('api/bad"name.proto', "api/bad~22name.protocyte"),
+        ("api/control-\n.proto", "api/control-~0A.protocyte"),
+        ("api/demo;legacy.proto", "api/demo~3Blegacy.protocyte"),
+        ("a:b.proto", "a~3Ab.protocyte"),
+        ("CON.proto", "~43ON.protocyte"),
+        ("api/literal~22.proto", "api/literal~7E22.protocyte"),
+    ],
+)
+def test_response_file_names_normalize_nonportable_descriptor_paths(
+    descriptor_name: str, generated_base: str
+) -> None:
+    request = _basic_request(parameter="format=off")
+    request.file_to_generate[0] = descriptor_name
+    request.proto_file[0].name = descriptor_name
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {file.name for file in response.file} == {
+        f"{generated_base}.cpp",
+        f"{generated_base}.hpp",
+    }
+
+
+def test_response_file_names_bound_long_escaped_path_components() -> None:
+    long_segment = "é" * 50
+    request = _basic_request(parameter="format=off")
+    request.file_to_generate[0] = f"{long_segment}/{long_segment}.proto"
+    request.proto_file[0].name = request.file_to_generate[0]
+
+    response = generate_response(request)
+
+    assert not response.error
+    digest = hashlib.sha256(long_segment.encode("utf-8")).hexdigest().upper()
+    for generated_file in response.file:
+        directory, filename = generated_file.name.split("/")
+        assert len(directory.encode("ascii")) == 255
+        assert directory.endswith(f"~{digest}")
+        assert len(filename.encode("ascii")) == 255
+        filename_stem, separator, extension = filename.rpartition(".protocyte.")
+        assert separator
+        assert extension in {"cpp", "hpp"}
+        assert filename_stem.endswith(f"~{digest}")
+
+
+@pytest.mark.parametrize(
+    "path_budget",
+    [MIN_HASHED_GENERATED_FILE_PATH_BYTES, 120, 510, 511],
+)
+def test_response_file_names_respect_complete_path_budget(path_budget: int) -> None:
+    long_segment = "é" * 50
+    descriptor_name = f"{long_segment}/{long_segment}.proto"
+    raw_parameter = f"format=off,_protocyte_generated_path_max_bytes={path_budget}"
+    request = _basic_request(
+        parameter=f"_protocyte_options_hex={raw_parameter.encode('utf-8').hex()}"
+    )
+    request.file_to_generate[0] = descriptor_name
+    request.proto_file[0].name = descriptor_name
+
+    response = generate_response(request)
+
+    assert not response.error
+    expected_base = generated_file_base(
+        descriptor_name, max_output_path_bytes=path_budget
+    )
+    assert {file.name for file in response.file} == {
+        f"{expected_base}.cpp",
+        f"{expected_base}.hpp",
+    }
+    assert all(len(file.name.encode("ascii")) <= path_budget for file in response.file)
+    digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
+    assert "/" not in expected_base
+    assert expected_base.endswith(f"~{digest}.protocyte")
+
+
+def test_imported_header_name_is_stable_across_separate_path_budgets() -> None:
+    descriptor_name = f"{'nested/' * 10}dependency.proto"
+    dependency = descriptor_pb2.FileDescriptorProto(
+        name=descriptor_name,
+        package="dependency",
+        syntax="proto3",
+    )
+    dependency.message_type.add(name="Dependency")
+    consumer = descriptor_pb2.FileDescriptorProto(
+        name="consumer.proto",
+        package="consumer",
+        syntax="proto3",
+    )
+    consumer.dependency.append(descriptor_name)
+    consumer_message = consumer.message_type.add(name="Consumer")
+    consumer_message.field.add(
+        name="dependency",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".dependency.Dependency",
+    )
+
+    def generate(
+        generated_file: str,
+        *,
+        path_budget: int,
+        directory_budget: int,
+    ) -> plugin_pb2.CodeGeneratorResponse:
+        raw_parameter = (
+            "format=off,"
+            f"_protocyte_generated_path_max_bytes={path_budget},"
+            f"_protocyte_generated_directory_max_bytes={directory_budget}"
+        )
+        request = plugin_pb2.CodeGeneratorRequest(
+            file_to_generate=[generated_file],
+            parameter=f"_protocyte_options_hex={raw_parameter.encode('utf-8').hex()}",
+            proto_file=[dependency, consumer],
+        )
+        return generate_response(request)
+
+    dependency_response = generate(
+        descriptor_name,
+        path_budget=MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+        directory_budget=MIN_HASHED_GENERATED_FILE_PATH_BYTES - 12,
+    )
+    consumer_response = generate(
+        consumer.name,
+        path_budget=160,
+        directory_budget=148,
+    )
+
+    assert not dependency_response.error
+    assert not consumer_response.error
+    dependency_header = next(
+        file.name for file in dependency_response.file if file.name.endswith(".hpp")
+    )
+    consumer_header = next(
+        file.content
+        for file in consumer_response.file
+        if file.name == "consumer.protocyte.hpp"
+    )
+    assert f'#include "{dependency_header}"' in consumer_header
+
+
+def test_complete_path_budget_distinguishes_matching_leaf_names() -> None:
+    first = generated_file_base(
+        f"{'first/' * 20}shared.proto",
+        max_output_path_bytes=MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    )
+    second = generated_file_base(
+        f"{'second/' * 20}shared.proto",
+        max_output_path_bytes=MIN_HASHED_GENERATED_FILE_PATH_BYTES,
+    )
+
+    assert first != second
+    assert len(first + ".hpp") == MIN_HASHED_GENERATED_FILE_PATH_BYTES
+    assert len(second + ".hpp") == MIN_HASHED_GENERATED_FILE_PATH_BYTES
+
+
+def test_budgeted_generated_file_name_is_stable_across_directory_budgets() -> None:
+    descriptor_name = f"{'readable/' * 12}leaf.proto"
+    ordinary_base = generated_file_base(descriptor_name)
+    ordinary_directory = ordinary_base.rpartition("/")[0]
+
+    roomy = generated_file_base(
+        descriptor_name,
+        max_output_path_bytes=255,
+        max_output_directory_bytes=len(ordinary_directory),
+    )
+    tight = generated_file_base(
+        descriptor_name,
+        max_output_path_bytes=255,
+        max_output_directory_bytes=len(ordinary_directory) - 1,
+    )
+
+    assert roomy == tight
+    assert "/" not in tight
+    digest = hashlib.sha256(descriptor_name.encode("utf-8")).hexdigest().upper()
+    assert tight.endswith(f"~{digest}.protocyte")
+
+
+def test_response_rejects_portable_generated_path_collisions() -> None:
+    request = _basic_request(parameter="format=off")
+    second = request.proto_file.add()
+    second.name = "SIMPLE.proto"
+    second.package = "other_demo"
+    second.syntax = "proto3"
+    second.message_type.add().name = "OtherSample"
+    request.file_to_generate.append(second.name)
+
+    response = generate_response(request)
+
+    assert "generated file name collision" in response.error
+    assert "simple.proto" in response.error
+    assert "SIMPLE.proto" in response.error
+    assert not response.file
+
+
+def test_response_rejects_protoc_option_descriptor_name() -> None:
+    request = _basic_request(parameter="format=off")
+    request.file_to_generate[0] = "--descriptor_set_out=escaped.proto"
+    request.proto_file[0].name = request.file_to_generate[0]
+
+    response = generate_response(request)
+
+    assert "descriptor file name must not begin with '-'" in response.error
+    assert not response.file
+
+
+def test_generation_emits_source_documentation_and_field_deprecation_by_default() -> (
+    None
+):
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    file.message_type[0].field[0].options.deprecated = True
+    _add_source_documentation(file, [4, 0], leading="A documented sample.\r\n")
+    _add_source_documentation(
+        file,
+        [4, 0, 2, 0],
+        detached=("Detached field context.\n",),
+        leading="Primary identifier.\nContains */ safely.\nEnds with slash \\\n",
+        trailing="Trailing field detail.\n",
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert header.count("A documented sample.") == 1
+    assert header.count("Primary identifier.") == 5
+    assert "Contains * / safely." in header
+    assert "Ends with slash \\\n" in header
+    assert header.count("[[deprecated]]") == 3
+    assert '#pragma clang diagnostic ignored "-Wdeprecated-declarations"' in header
+    assert "#pragma warning(disable : 4996)" in header
+    assert "#pragma clang diagnostic pop" in header
+
+
+def test_comments_off_suppresses_documentation_but_not_deprecation() -> None:
+    request = _basic_request(parameter="format=off,comments=off")
+    file = request.proto_file[0]
+    file.message_type[0].field[0].options.deprecated = True
+    _add_source_documentation(file, [4, 0], leading="Hidden message docs.\n")
+    _add_source_documentation(file, [4, 0, 2, 0], leading="Hidden field docs.\n")
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "Hidden message docs." not in header
+    assert "Hidden field docs." not in header
+    assert "/**" not in header
+    assert header.count("[[deprecated]]") == 3
+
+
+def test_generation_preserves_enum_value_deprecation() -> None:
+    request = _basic_request(parameter="format=off,comments=off")
+    file = request.proto_file[0]
+
+    mode = file.enum_type.add(name="Mode")
+    mode.value.add(name="MODE_CURRENT", number=0)
+    mode.value.add(name="MODE_LEGACY", number=1).options.deprecated = True
+
+    nested_mode = file.message_type[0].enum_type.add(name="NestedMode")
+    nested_mode.value.add(name="NESTED_MODE_CURRENT", number=0)
+    nested_mode.value.add(name="NESTED_MODE_LEGACY", number=1).options.deprecated = True
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "MODE_CURRENT = 0," in header
+    assert "MODE_LEGACY [[deprecated]] = 1," in header
+    assert "NESTED_MODE_CURRENT = 0," in header
+    assert "NESTED_MODE_LEGACY [[deprecated]] = 1," in header
+    assert header.count("[[deprecated]]") == 2
+
+
+def test_generation_preserves_message_and_enum_deprecation() -> None:
+    request = _basic_request(parameter="format=off,comments=off")
+    file = request.proto_file[0]
+
+    deprecated_enum = file.enum_type.add(name="LegacyMode")
+    deprecated_enum.options.deprecated = True
+    deprecated_enum.value.add(name="LEGACY_MODE_UNSPECIFIED", number=0)
+
+    deprecated_message = file.message_type.add(name="LegacyPayload")
+    deprecated_message.options.deprecated = True
+
+    carrier = file.message_type.add(name="Carrier")
+    enum_field = carrier.field.add(
+        name="legacy_mode",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_ENUM,
+        type_name=".demo.LegacyMode",
+    )
+    message_field = carrier.field.add(
+        name="legacy_payload",
+        number=2,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".demo.LegacyPayload",
+    )
+    assert enum_field and message_field
+
+    nested_enum = carrier.enum_type.add(name="NestedLegacyMode")
+    nested_enum.options.deprecated = True
+    nested_enum.value.add(name="NESTED_LEGACY_MODE_UNSPECIFIED", number=0)
+    nested_message = carrier.nested_type.add(name="NestedLegacyPayload")
+    nested_message.options.deprecated = True
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "enum struct [[deprecated]] LegacyMode" in header
+    assert "struct [[deprecated]] LegacyPayload;" in header
+    assert "struct [[deprecated]] LegacyPayload {" in header
+    assert "using NestedLegacyMode [[deprecated]] = Carrier_NestedLegacyMode;" in header
+    assert (
+        "using NestedLegacyPayload [[deprecated]] = Carrier_NestedLegacyPayload<NestedConfig>;"
+        in header
+    )
+    assert '#pragma clang diagnostic ignored "-Wdeprecated-declarations"' in header
+    assert "#pragma warning(disable : 4996)" in header
+
+
+def test_generation_maps_nested_enum_and_oneof_documentation() -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    message = file.message_type[0]
+
+    enum = file.enum_type.add()
+    enum.name = "Mode"
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    _add_source_documentation(file, [5, 0], leading="Operating mode.\n")
+    _add_source_documentation(file, [5, 0, 2, 0], leading="No mode selected.\n")
+
+    nested_index = len(message.nested_type)
+    nested = message.nested_type.add()
+    nested.name = "Child"
+    _add_source_documentation(
+        file, [4, 0, 3, nested_index], leading="Nested child payload.\n"
+    )
+
+    choice_message_index = len(file.message_type)
+    choice_message = file.message_type.add()
+    choice_message.name = "ChoiceHolder"
+    choice_message.oneof_decl.add().name = "choice"
+    field = choice_message.field.add()
+    field.name = "choice_id"
+    field.number = 100
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+    field.oneof_index = 0
+    _add_source_documentation(
+        file,
+        [4, choice_message_index, 8, 0],
+        leading="Selects one payload.\n",
+    )
+    _add_source_documentation(
+        file,
+        [4, choice_message_index, 2, 0],
+        leading="Selected identifier.\n",
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "Operating mode." in header
+    assert "No mode selected." in header
+    assert header.count("Nested child payload.") == 2
+    assert header.count("Selects one payload.") == 3
+    assert header.count("Selected identifier.") == 6
+
+
 def test_rejects_obsolete_protocyte_options_schema() -> None:
     response = generate_response(_obsolete_fixed_size_request())
 
@@ -99,7 +520,9 @@ def test_rejects_protocyte_options_from_noncanonical_descriptor() -> None:
         for message in forged_options.message_type
         if message.name == "ArrayOptions"
     )
-    next(field for field in array_options.field if field.name == "max").type = F.TYPE_UINT64
+    next(
+        field for field in array_options.field if field.name == "max"
+    ).type = F.TYPE_UINT64
     array_extension = descriptor_pb2.FieldDescriptorProto()
     array_extension.CopyFrom(
         next(
@@ -160,12 +583,440 @@ def test_invalid_oneof_indices_return_descriptor_errors(oneof_index: int) -> Non
     assert not response.file
 
 
+@pytest.mark.parametrize(
+    ("number", "error"),
+    [
+        (0, "field number 0 is outside the valid range"),
+        (19_000, "field number 19000 is reserved by the protobuf implementation"),
+        (536_870_912, "field number 536870912 is outside the valid range"),
+    ],
+)
+def test_invalid_field_numbers_return_descriptor_errors(
+    number: int, error: str
+) -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[0].number = number
+
+    response = generate_response(request)
+
+    assert response.error.startswith(f"demo.Sample.id: {error}")
+    assert not response.file
+
+
+def test_duplicate_field_numbers_return_descriptor_errors() -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[1].number = 1
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample.opt_name: field number 1 is already used by 'id'"
+    )
+    assert not response.file
+
+
+def test_duplicate_control_character_field_names_are_safe_in_public_errors() -> None:
+    request = _basic_request(parameter="format=off")
+    control_name = "duplicate\n\x1b[2J\x85"
+    message = request.proto_file[0].message_type[0]
+    message.field[0].name = control_name
+    message.field[1].name = control_name
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample.duplicate\\u000a\\u001b[2J\\u0085: duplicate field name"
+    )
+    assert all(char.isprintable() for char in response.error)
+    assert not response.file
+
+
+def test_overlapping_reserved_field_ranges_return_sorted_diagnostic() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for start, end in [(12, 16), (10, 14)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample: reserved field ranges [10, 14) and [12, 16) overlap"
+    )
+    assert not response.file
+
+
+def test_reserved_field_intersection_uses_declared_field_order() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for name, number in [("twenty", 20), ("nine", 9)]:
+        message.field.add(
+            name=name,
+            number=number,
+            label=F.LABEL_OPTIONAL,
+            type=F.TYPE_INT32,
+        )
+    for start, end in [(19, 22), (8, 11)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.twenty: field number 20 is reserved"
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("field_number", "expected_error"),
+    [
+        (8, "demo.Sample.boundary: field number 8 is reserved"),
+        (9, ""),
+    ],
+)
+def test_reserved_field_range_end_is_exclusive(
+    field_number: int,
+    expected_error: str,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    message.field.add(
+        name="boundary",
+        number=field_number,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    reserved_range = message.reserved_range.add()
+    reserved_range.start = 8
+    reserved_range.end = 9
+
+    response = generate_response(request)
+
+    assert response.error == expected_error
+    assert bool(response.file) is not bool(expected_error)
+
+
+def test_adjacent_reserved_field_ranges_do_not_overlap() -> None:
+    request = _basic_request(parameter="format=off")
+    message = request.proto_file[0].message_type[0]
+    for start, end in [(8, 9), (9, 10)]:
+        reserved_range = message.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+def test_missing_field_label_returns_descriptor_error() -> None:
+    request = _basic_request()
+    request.proto_file[0].message_type[0].field[0].ClearField("label")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.id: field label is missing or invalid"
+    assert not response.file
+
+
+def test_proto3_optional_field_requires_single_member_synthetic_oneof() -> None:
+    request = _basic_request()
+    message = request.proto_file[0].message_type[0]
+    message.field[0].oneof_index = 0
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample._opt_name: a synthetic oneof must contain exactly one "
+        "proto3_optional field"
+    )
+    assert not response.file
+
+
+def test_malformed_map_entry_returns_descriptor_error() -> None:
+    request = _basic_request()
+    entry = request.proto_file[0].message_type[0].nested_type[0]
+    del entry.field[:]
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample.ItemsEntry: map entry must contain exactly key and value fields"
+    )
+    assert not response.file
+
+
+def test_map_field_must_be_repeated() -> None:
+    request = _basic_request()
+    items = next(
+        field
+        for field in request.proto_file[0].message_type[0].field
+        if field.name == "items"
+    )
+    items.label = F.LABEL_OPTIONAL
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample.items: map fields must be repeated"
+    assert not response.file
+
+
+def test_empty_enum_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.ClearField("value")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State: enum must declare at least one value"
+    assert not response.file
+
+
+def test_empty_enum_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.ClearField("name")
+
+    response = generate_response(request)
+
+    assert response.error == "simple.proto: enum name must not be empty"
+    assert not response.file
+
+
+def test_empty_nested_enum_name_identifies_its_owner() -> None:
+    request, enum = _request_with_enum(nested=True)
+    enum.ClearField("name")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.Sample: enum name must not be empty"
+    assert not response.file
+
+
+def test_empty_enum_value_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.value[0].ClearField("name")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State: enum value at index 0 has no name"
+    assert not response.file
+
+
+def test_missing_enum_value_number_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.value[0].ClearField("number")
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State.STATE_UNSPECIFIED: enum number is missing"
+    assert not response.file
+
+
+def test_proto3_enum_first_value_must_be_zero() -> None:
+    request, enum = _request_with_enum()
+    enum.value[0].number = 1
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State.STATE_UNSPECIFIED: first value in a proto3 enum must have number 0"
+    )
+    assert not response.file
+
+
+def test_proto2_enum_first_value_may_be_nonzero() -> None:
+    request, enum = _request_with_enum(syntax="proto2")
+    request.proto_file[0].message_type[0].field[1].proto3_optional = False
+    enum.value[0].number = 1
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+def test_duplicate_enum_value_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.options.allow_alias = True
+    enum.value.add(name="STATE_UNSPECIFIED", number=1)
+
+    response = generate_response(request)
+
+    assert response.error == ("demo.State.STATE_UNSPECIFIED: duplicate enum value name")
+    assert not response.file
+
+
+def test_duplicate_enum_number_requires_allow_alias() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_DEFAULT", number=0)
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State.STATE_DEFAULT: enum number 0 is already used by "
+        "'STATE_UNSPECIFIED'; set option allow_alias = true to allow aliases"
+    )
+    assert not response.file
+
+
+def test_duplicate_enum_number_is_allowed_with_allow_alias() -> None:
+    request, enum = _request_with_enum()
+    enum.options.allow_alias = True
+    enum.value.add(name="STATE_DEFAULT", number=0)
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+@pytest.mark.parametrize("reserved_name", ["", "STATE_UNSPECIFIED"])
+def test_invalid_reserved_enum_names_return_descriptor_errors(
+    reserved_name: str,
+) -> None:
+    request, enum = _request_with_enum(nested=True)
+    enum.reserved_name.append(reserved_name)
+
+    response = generate_response(request)
+
+    if reserved_name:
+        assert response.error == (
+            "demo.Sample.State.STATE_UNSPECIFIED: enum value name is reserved"
+        )
+    else:
+        assert response.error == (
+            "demo.Sample.State: reserved enum value name must not be empty"
+        )
+    assert not response.file
+
+
+def test_duplicate_reserved_enum_name_returns_descriptor_error() -> None:
+    request, enum = _request_with_enum()
+    enum.reserved_name.extend(["STATE_RETIRED", "STATE_RETIRED"])
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State: duplicate reserved enum value name 'STATE_RETIRED'"
+    )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("ranges", "error"),
+    [
+        ([(2, 1)], "invalid reserved enum range [2, 1]"),
+        (
+            [(2, 4), (4, 5)],
+            "reserved enum ranges [2, 4] and [4, 5] overlap",
+        ),
+        (
+            [(4, 5), (2, 4)],
+            "reserved enum ranges [2, 4] and [4, 5] overlap",
+        ),
+    ],
+)
+def test_invalid_reserved_enum_ranges_return_descriptor_errors(
+    ranges: list[tuple[int, int]], error: str
+) -> None:
+    request, enum = _request_with_enum()
+    for start, end in ranges:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == f"demo.State: {error}"
+    assert not response.file
+
+
+def test_reserved_enum_range_requires_both_endpoints() -> None:
+    request, enum = _request_with_enum()
+    reserved_range = enum.reserved_range.add()
+    reserved_range.start = 1
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.State: reserved enum range must specify start and end"
+    )
+    assert not response.file
+
+
+def test_reserved_enum_range_is_inclusive() -> None:
+    request, enum = _request_with_enum()
+    reserved_range = enum.reserved_range.add()
+    reserved_range.start = 0
+    reserved_range.end = 0
+
+    response = generate_response(request)
+
+    assert response.error == ("demo.State.STATE_UNSPECIFIED: enum number 0 is reserved")
+    assert not response.file
+
+
+def test_reserved_enum_value_intersection_uses_declared_value_order() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_TWENTY", number=20)
+    enum.value.add(name="STATE_NINE", number=9)
+    for start, end in [(19, 21), (8, 10)]:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert response.error == "demo.State.STATE_TWENTY: enum number 20 is reserved"
+    assert not response.file
+
+
+def test_adjacent_reserved_enum_ranges_do_not_overlap() -> None:
+    request, enum = _request_with_enum()
+    for start, end in [(1, 1), (2, 2)]:
+        reserved_range = enum.reserved_range.add()
+        reserved_range.start = start
+        reserved_range.end = end
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
+
+
+def test_large_disjoint_reserved_range_sets_validate_without_pairwise_work() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("many_ranges.proto")
+    file = request.proto_file.add(
+        name="many_ranges.proto",
+        package="demo",
+        syntax="proto2",
+    )
+    enum = file.enum_type.add(name="State")
+    enum.value.add(name="STATE_UNSPECIFIED", number=0)
+    message = file.message_type.add(name="Payload")
+
+    # Cardinality is the regression oracle; a wall-clock threshold would be flaky.
+    for index in range(20_000):
+        enum_start = index * 2 + 1
+        enum_range = enum.reserved_range.add()
+        enum_range.start = enum_start
+        enum_range.end = enum_start
+        message_range = message.reserved_range.add()
+        message_range.start = enum_start
+        message_range.end = enum_start + 1
+
+    model = build_model(request)
+
+    assert "demo.State" in model.enums
+    assert "demo.Payload" in model.messages
+
+
 def test_malformed_recognized_option_payload_returns_descriptor_error() -> None:
     source = _simple_file()
     source.dependency.append("protocyte/options.proto")
-    source.message_type[0].field[0].options.ParseFromString(
-        bytes.fromhex("82b5180180")
-    )
+    source.message_type[0].field[0].options.ParseFromString(bytes.fromhex("82b5180180"))
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append(source.name)
     request.proto_file.extend([_options_file(), source])
@@ -184,7 +1035,7 @@ def test_unexpected_generator_exception_returns_diagnostic_response(
 ) -> None:
     def fail_build_model(request: object) -> None:
         del request
-        raise RuntimeError("descriptor registry exploded")
+        raise RuntimeError("descriptor registry\n\x1b[2J exploded")
 
     monkeypatch.setattr(protocyte_plugin, "build_model", fail_build_model)
 
@@ -192,8 +1043,9 @@ def test_unexpected_generator_exception_returns_diagnostic_response(
 
     assert response.error == (
         "internal Protocyte error while building the descriptor model (RuntimeError): "
-        "descriptor registry exploded"
+        "descriptor registry\\u000a\\u001b[2J exploded"
     )
+    assert all(char.isprintable() for char in response.error)
     assert not response.file
 
 
@@ -573,10 +1425,23 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     ].split("template<class Reader> Result<u64> read_varint", maxsplit=1)[0]
 
     assert "#include <cstring>" in runtime_header
+    assert "concept ReaderLike = requires(Reader &reader" in runtime_header
+    assert "concept WriterLike = requires(Writer &writer" in runtime_header
     assert (
         "#if PROTOCYTE_ENABLE_STD_FORMAT\n#include <version>\n#if defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\n#include <format>\n#endif\n#endif"
         in runtime_header
     )
+    for feature in (
+        "STD_FORMAT",
+        "STD_STRING_VIEW",
+        "FMT_FORMAT",
+        "HOSTED_ALLOCATOR",
+        "REFLECTION",
+    ):
+        assert (
+            f"#ifndef PROTOCYTE_ENABLE_{feature}\n#define PROTOCYTE_ENABLE_{feature} 0\n#endif"
+            in runtime_header
+        )
     assert (
         "#if PROTOCYTE_ENABLE_STD_STRING_VIEW || PROTOCYTE_ENABLE_STD_FORMAT || PROTOCYTE_ENABLE_FMT_FORMAT\n#include <string_view>\n#endif"
         in runtime_header
@@ -584,6 +1449,8 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "#ifdef PROTOCYTE_ENABLE_STD_STRING_VIEW" not in runtime_header
     assert "#ifdef PROTOCYTE_ENABLE_STD_FORMAT" not in runtime_header
     assert "#ifdef PROTOCYTE_ENABLE_FMT_FORMAT" not in runtime_header
+    assert "#ifdef PROTOCYTE_ENABLE_HOSTED_ALLOCATOR" not in runtime_header
+    assert "#if PROTOCYTE_ENABLE_HOSTED_ALLOCATOR" in runtime_header
     assert (
         "inline void copy_bytes(u8 *dst, const u8 *src, const usize count) noexcept"
         in runtime_header
@@ -604,7 +1471,9 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
     assert "template<usize Max> using ByteArray = Array<u8, Max>;" in runtime_header
     assert "ByteArray(ByteArray &&other) noexcept" not in runtime_header
     assert "Status assign(const Span<const u8> view) noexcept" in array_body
-    assert "copy_bytes(data(), view.data(), view.size());" in array_body
+    assert (
+        "copy_bytes(data(), checked_view->data(), checked_view->size());" in array_body
+    )
     assert "Span<const u8> view() const noexcept" in array_body
     assert "Span<u8> mutable_view() noexcept" in array_body
     assert "const usize old_size {size_};" in array_body
@@ -617,11 +1486,16 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
         in fixed_byte_array_body
     )
     assert "return bytes_.resize_for_overwrite(count);" in bytes_body
-    assert "copy_bytes(temp.data(), view.data(), view.size());" in bytes_body
+    assert (
+        "copy_bytes(temp.data(), checked_view->data(), checked_view->size());"
+        in bytes_body
+    )
     assert "constexpr operator ::std::string_view() const noexcept" in span_body
     assert "requires(::std::same_as<::std::remove_cv_t<T>, char>)" in span_body
-    assert "return ::std::string_view {data_, size_};" in span_body
-    assert "data_ == nullptr ? ::std::string_view {}" not in span_body
+    assert (
+        "return size_ == 0u ? ::std::string_view {} : ::std::string_view {data_, size_};"
+        in span_body
+    )
     assert (
         "#if PROTOCYTE_ENABLE_STD_STRING_VIEW\n    using StringView = ::std::string_view;\n#else\n    using StringView = Span<const char>;\n#endif"
         in runtime_header
@@ -638,7 +1512,10 @@ def test_runtime_byte_containers_use_bulk_copy_helpers() -> None:
         "#if PROTOCYTE_ENABLE_FMT_FORMAT\n    template<class Config> std::string_view format_as(const String<Config> &value) noexcept"
         in runtime_header
     )
-    assert "return ::std::string_view {value.data(), value.size()};" in runtime_header
+    assert (
+        "return value.empty() ? ::std::string_view {} : ::std::string_view {value.data(), value.size()};"
+        in runtime_header
+    )
     assert (
         "#if PROTOCYTE_ENABLE_STD_FORMAT && defined(__cpp_lib_format) && __cpp_lib_format >= 201907L\nnamespace std {"
         in runtime_header
@@ -674,8 +1551,10 @@ def test_runtime_discriminators_follow_payload_storage() -> None:
     runtime_header = runtime_files()["protocyte/runtime/runtime.hpp"]
 
     result_body = runtime_header.split(
-        "template<class T, class E = Error> struct Result {", maxsplit=1
-    )[1].split("template<class E> struct Result<void, E> {", maxsplit=1)[0]
+        "template<class T, class E = Error> struct [[nodiscard]] Result {", maxsplit=1
+    )[1].split("template<class E> struct [[nodiscard]] Result<void, E> {", maxsplit=1)[
+        0
+    ]
     result_storage = result_body.split("protected:", maxsplit=1)[1]
     assert ": value_ {}, ok_ {true}" in result_body
     assert ": error_ {unexpected_value.error()}, ok_ {false}" in result_body
@@ -684,7 +1563,7 @@ def test_runtime_discriminators_follow_payload_storage() -> None:
     ) < result_storage.index("bool ok_;")
 
     void_result_body = runtime_header.split(
-        "template<class E> struct Result<void, E> {", maxsplit=1
+        "template<class E> struct [[nodiscard]] Result<void, E> {", maxsplit=1
     )[1].split("using Status = Result<void>;", maxsplit=1)[0]
     void_result_storage = void_result_body.split("protected:", maxsplit=1)[1]
     assert void_result_storage.index("Storage storage_;") < void_result_storage.index(
@@ -707,6 +1586,13 @@ def test_runtime_discriminators_follow_payload_storage() -> None:
         "bool has_ {};"
     )
 
+    array_storage = runtime_header.split(
+        "template<class T, usize Max> struct Array {", maxsplit=1
+    )[1].split("template<usize Max> using ByteArray = Array<u8, Max>;", maxsplit=1)[0]
+    assert array_storage.index(
+        "alignas(T) unsigned char storage_[sizeof(T) * Max];"
+    ) < array_storage.index("ContextStorage ctx_;")
+
 
 def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
     writer = CppWriter()
@@ -718,6 +1604,317 @@ def test_cpp_writer_indent_context_manager_restores_indentation() -> None:
     writer.line("tail")
 
     assert writer.render() == "root\n  child\n      grandchild\ntail\n"
+
+
+def test_reflection_tables_are_strict_standard_for_empty_and_nonempty_messages() -> (
+    None
+):
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection.proto", package="demo", syntax="proto3"
+    )
+    file.message_type.add(name="Empty")
+    nonempty = file.message_type.add(name="NonEmpty")
+    nonempty.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.hpp"
+    )
+    source = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.cpp"
+    )
+    assert "PROTOCYTE_REFLECTION_API_" not in header
+    assert "__declspec" not in header
+    assert "PROTOCYTE_REFLECTION_API_" not in source
+    assert "#if PROTOCYTE_ENABLE_REFLECTION\n#include <array>" in header
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> "
+        "Empty_fields;" in header
+    )
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> "
+        "NonEmpty_fields;" in header
+    )
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> "
+        "Empty_fields {{\n  }};" in source
+    )
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> "
+        "NonEmpty_fields {{\n"
+        '    {"value", 1u, "scalar", '
+        "::protocyte::ReflectionFieldLabel::optional, false, false},\n"
+        "  }};" in source
+    )
+
+
+def test_reflection_escapes_untrusted_field_names_as_complete_cpp_literals() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection_untrusted.proto", package="demo", syntax="proto3"
+    )
+    message = file.message_type.add(name="Message")
+    message.field.add(
+        name='payload"\n#define P2_INJECTED 1\r\\\x1b\x7f\x85',
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    source = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection_untrusted.protocyte.cpp"
+    )
+    assert "\n#define P2_INJECTED" not in source
+    assert "\r#define P2_INJECTED" not in source
+    assert "\x1b" not in source
+    assert "\x7f" not in source
+    assert "\x85" not in source
+    assert r"payload\"\n#define P2_INJECTED 1\r\\" in source
+    assert r'"\x1b""\x7f""\xc2""\x85"' in source
+
+
+def test_reflection_rejects_embedded_null_field_names() -> None:
+    request = _basic_request(parameter="format=off")
+    request.proto_file[0].message_type[0].field[0].name = "visible\0hidden"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        "demo.Sample: field at index 0 name contains a null character"
+    )
+    assert not response.file
+
+
+def test_reflection_symbols_distinguish_trailing_underscores_across_files_and_packages() -> (
+    None
+):
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, package, message_names in (
+        ("reflection_symbols.proto", "demo.reflection", ("Foo", "Foo_fields")),
+        (
+            "reflection_symbols_other.proto",
+            "demo.reflection",
+            ("Foo_", "Foo_fields_"),
+        ),
+        ("reflection_symbols_package.proto", "demo.reflection_", ("Foo", "Foo_")),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(name=file_name, package=package, syntax="proto3")
+        for message_name in message_names:
+            file.message_type.add(name=message_name)
+
+    response = generate_response(request)
+
+    assert not response.error
+    sources = {
+        file.name: file.content for file in response.file if file.name.endswith(".cpp")
+    }
+    assert "Foo_fields {{" in sources["reflection_symbols.protocyte.cpp"]
+    assert "Foo_fields_fields {{" in sources["reflection_symbols.protocyte.cpp"]
+    assert "Foo_fields_ {{" in sources["reflection_symbols_other.protocyte.cpp"]
+    assert "Foo_fields_fields_ {{" in sources["reflection_symbols_other.protocyte.cpp"]
+    assert (
+        "namespace demo::reflection_ {"
+        in sources["reflection_symbols_package.protocyte.cpp"]
+    )
+    assert "Foo_fields {{" in sources["reflection_symbols_package.protocyte.cpp"]
+    assert "Foo_fields_ {{" in sources["reflection_symbols_package.protocyte.cpp"]
+
+
+def test_reflection_symbol_validation_rejects_colliding_table_symbols(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, message_name in (
+        ("first_reflection.proto", "First"),
+        ("second_reflection.proto", "Second"),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(
+            name=file_name, package="demo.reflection", syntax="proto3"
+        )
+        file.message_type.add(name=message_name)
+
+    monkeypatch.setattr(protocyte_cpp, "_reflection_name", lambda message: "Fields")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "demo.reflection.Second" in response.error
+    assert (
+        "generated reflection symbol 'Fields' collides with 'demo.reflection.First'"
+        in response.error
+    )
+
+
+def test_reflection_symbol_validation_rejects_type_in_reflection_package() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(
+        ["reflection_namespace.proto", "reflection_namespace_type.proto"]
+    )
+    reflection_file = request.proto_file.add(
+        name="reflection_namespace.proto", package="demo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Foo")
+    type_file = request.proto_file.add(
+        name="reflection_namespace_type.proto",
+        package="demo.protocyte_reflection",
+        syntax="proto3",
+    )
+    type_file.message_type.add(name="Foo_fields")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "demo.Foo: generated reflection symbol 'Foo_fields' collides with generated "
+        "type 'demo.protocyte_reflection.Foo_fields'" in response.error
+    )
+
+
+def test_reflection_symbol_validation_rejects_package_constant_in_reflection_package() -> (
+    None
+):
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(
+        ["reflection_constant.proto", "reflection_package_constant.proto"]
+    )
+    reflection_file = request.proto_file.add(
+        name="reflection_constant.proto", package="demo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Foo")
+    constant_file = request.proto_file.add(
+        name="reflection_package_constant.proto",
+        package="demo.protocyte_reflection",
+        syntax="proto3",
+    )
+    constant_file.dependency.append("protocyte/options.proto")
+    constant_file.options.ParseFromString(
+        _package_constant_options_bytes([("Foo_fields", "i32", 1)])
+    )
+    request.proto_file.append(_options_file())
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "demo.Foo: generated reflection symbol 'Foo_fields' collides with generated "
+        "package constant 'demo.protocyte_reflection.Foo_fields'" in response.error
+    )
+
+
+def test_reflection_tables_use_opt_in_windows_shared_library_api_macro() -> None:
+    macro = f"PROTOCYTE_REFLECTION_API_{'A1' * 32}"
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection.proto", package="demo", syntax="proto3"
+    )
+    message = file.message_type.add(name="Message")
+    message.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name],
+        parameter=f"format=off,_protocyte_reflection_api_macro={macro}",
+        proto_file=[file],
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.hpp"
+    )
+    source = next(
+        item.content
+        for item in response.file
+        if item.name == "reflection.protocyte.cpp"
+    )
+    assert f"#if !defined({macro})" in header
+    assert f"#if defined({macro}_EXPORTS)" in header
+    assert f"#define {macro} __declspec(dllexport)" in header
+    assert f"#define {macro} __declspec(dllimport)" in header
+    assert (
+        f"extern {macro} const "
+        "::std::array<::protocyte::ReflectionFieldInfo, 1> Message_fields;" in header
+    )
+    assert (
+        f"extern {macro} const "
+        "::std::array<::protocyte::ReflectionFieldInfo, 1> Message_fields {{" in source
+    )
+
+
+def test_reflection_distinguishes_label_from_presence() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="reflection_presence.proto", package="demo", syntax="proto2"
+    )
+    child = file.message_type.add(name="Child")
+    child.field.add(name="id", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32)
+    carrier = file.message_type.add(name="Carrier")
+    carrier.field.add(
+        name="optional_scalar",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_INT32,
+    )
+    carrier.field.add(
+        name="required_scalar",
+        number=2,
+        label=F.LABEL_REQUIRED,
+        type=F.TYPE_INT32,
+    )
+    carrier.field.add(
+        name="repeated_child",
+        number=3,
+        label=F.LABEL_REPEATED,
+        type=F.TYPE_MESSAGE,
+        type_name=".demo.Child",
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    source = next(item.content for item in response.file if item.name.endswith(".cpp"))
+    assert (
+        '{"optional_scalar", 1u, "scalar", '
+        "::protocyte::ReflectionFieldLabel::optional, true, false}," in source
+    )
+    assert (
+        '{"required_scalar", 2u, "scalar", '
+        "::protocyte::ReflectionFieldLabel::required, true, false}," in source
+    )
+    assert (
+        '{"repeated_child", 3u, "message", '
+        "::protocyte::ReflectionFieldLabel::repeated, false, false}," in source
+    )
 
 
 def test_generates_proto3_files_and_runtime() -> None:
@@ -737,6 +1934,8 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "simple.protocyte.hpp" in files
     assert "simple.protocyte.cpp" in files
     assert "protocyte/runtime/runtime.hpp" in files
+    assert "#if PROTOCYTE_ENABLE_REFLECTION" in files["simple.protocyte.cpp"]
+    assert "#ifdef PROTOCYTE_ENABLE_REFLECTION" not in files["simple.protocyte.cpp"]
     assert "struct Sample;" in files["simple.protocyte.hpp"]
     assert files["simple.protocyte.hpp"].startswith(
         "#pragma once\n\n#ifndef PROTOCYTE_GENERATED_SIMPLE_PROTO_"
@@ -793,12 +1992,14 @@ def test_generates_proto3_files_and_runtime() -> None:
         "return static_cast<Reader *>(reader)->consume_map_entries(count, field_number);"
         in files["protocyte/runtime/runtime.hpp"]
     )
-    assert "if constexpr (requires { inner_->consume_repeated_elements" not in files[
-        "protocyte/runtime/runtime.hpp"
-    ]
-    assert "if constexpr (requires { inner_->consume_map_entries" not in files[
-        "protocyte/runtime/runtime.hpp"
-    ]
+    assert (
+        "if constexpr (requires { inner_->consume_repeated_elements"
+        not in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "if constexpr (requires { inner_->consume_map_entries"
+        not in files["protocyte/runtime/runtime.hpp"]
+    )
     assert (
         "protocyte Config::Context must expose recursion_depth for recursion-limited parsing"
         in files["protocyte/runtime/runtime.hpp"]
@@ -813,17 +2014,46 @@ def test_generates_proto3_files_and_runtime() -> None:
     assert "protected:" in files["protocyte/runtime/runtime.hpp"]
     assert "protected:" in files["simple.protocyte.hpp"]
     assert "enum class ErrorCode : u32" in files["protocyte/runtime/runtime.hpp"]
+    assert (
+        "struct Error {\n        ErrorCode code {};\n        usize offset {};\n        u32 field_number {};\n    };"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "constexpr Error with_field(Error error, const u32 field_number) noexcept"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    error_body = (
+        files["protocyte/runtime/runtime.hpp"]
+        .split("struct Error {", maxsplit=1)[1]
+        .split("};", maxsplit=1)[0]
+    )
+    assert "String" not in error_body
+    assert "char" not in error_body
+    assert "path" not in error_body
+    assert "name" not in error_body
     assert "enum class WireType : u32" in files["protocyte/runtime/runtime.hpp"]
     assert "VARINT = 0u" in files["protocyte/runtime/runtime.hpp"]
     assert "I64 = 1u" in files["protocyte/runtime/runtime.hpp"]
     assert "LEN = 2u" in files["protocyte/runtime/runtime.hpp"]
     assert "using Status = Result<void>;" in files["protocyte/runtime/runtime.hpp"]
     assert (
-        "template<class T, class E = Error> struct Result {"
+        "template<class T, class E> struct [[nodiscard]] Result;"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "template<class E> struct Result<void, E> {"
+        "template<class T, class E = Error> struct [[nodiscard]] Result {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "template<class T, class E> struct [[nodiscard]] Result<T &, E> {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "template<class E> struct [[nodiscard]] Result<void, E> {"
+        in files["protocyte/runtime/runtime.hpp"]
+    )
+    assert (
+        "template<class E> struct [[nodiscard]] Result<void, E> {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert "using value_type = T;" in files["protocyte/runtime/runtime.hpp"]
@@ -925,15 +2155,16 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "void bind(Context *ctx) noexcept { ctx_ = ctx; }"
-        in files["protocyte/runtime/runtime.hpp"]
+        "Status bind(Context *ctx) noexcept {" in files["protocyte/runtime/runtime.hpp"]
     )
+    assert "if (ctx_ == ctx) {" in files["protocyte/runtime/runtime.hpp"]
+    assert "if (data_ != nullptr) {" in files["protocyte/runtime/runtime.hpp"]
     assert (
         "constexpr usize capacity() const noexcept { return Max; }"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "if (ctx_ != nullptr && view.size() > ctx_->limits.max_string_bytes) {"
+        "if (ctx_ != nullptr && checked_view->size() > ctx_->limits.max_string_bytes) {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1061,7 +2292,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "template<class T, class E> struct Result<T &, E> {"
+        "template<class T, class E> struct [[nodiscard]] Result<T &, E> {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1069,7 +2300,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "template<class T, class E> struct Result<T &&, E> {"
+        "template<class T, class E> struct [[nodiscard]] Result<T &&, E> {"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1161,7 +2392,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "return checked_add(*prefix_size, payload_size);"
+        "return with_field(checked_add(*prefix_size, payload_size), field_number);"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1177,7 +2408,7 @@ def test_generates_proto3_files_and_runtime() -> None:
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
-        "return length_delimited_field_size(field_number, *size);"
+        "return with_field(length_delimited_field_size(field_number, *size), field_number);"
         in files["protocyte/runtime/runtime.hpp"]
     )
     assert (
@@ -1200,10 +2431,13 @@ def test_runtime_string_assign_checks_size_limit_before_utf8_validation() -> Non
     )[1]
     assign_body = assign_body.split("Status validate() const noexcept", maxsplit=1)[0]
 
-    assert "if (const auto st = check_size_limit(view.size()); !st)" in assign_body
-    assert assign_body.index("check_size_limit(view.size())") < assign_body.index(
-        "validate_utf8(view)"
+    assert (
+        "if (const auto st = check_size_limit(checked_view->size()); !st)"
+        in assign_body
     )
+    assert assign_body.index(
+        "check_size_limit(checked_view->size())"
+    ) < assign_body.index("validate_utf8(*checked_view)")
     assert "Status assign_owned" not in header
 
 
@@ -1369,7 +2603,10 @@ def test_rejects_selected_group_fields() -> None:
 
     response = generate_response(request)
 
-    assert "legacy.Legacy.Payload: groups are not supported" in response.error
+    assert response.error == (
+        'target file "legacy_group.proto": field "legacy.Legacy.Payload" '
+        "uses unsupported groups"
+    )
 
 
 def test_rejects_selected_edition_files() -> None:
@@ -1378,6 +2615,7 @@ def test_rejects_selected_edition_files() -> None:
     file = request.proto_file.add()
     file.name = "edition.proto"
     file.package = "demo"
+    file.syntax = "editions"
     file.edition = descriptor_pb2.EDITION_2023
     file.message_type.add().name = "EditionMessage"
 
@@ -1387,6 +2625,261 @@ def test_rejects_selected_edition_files() -> None:
         "target file edition.proto: protobuf Editions are not supported in v1"
         in response.error
     )
+
+
+def test_rejects_fields_that_require_internal_generated_headers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("consumer.proto")
+    consumer = request.proto_file.add()
+    consumer.name = "consumer.proto"
+    consumer.package = "demo"
+    consumer.syntax = "proto3"
+    consumer.dependency.append("protocyte/options.proto")
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    field = message.field.add()
+    field.name = "options"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".protocyte.ArrayOptions"
+    request.proto_file.extend(
+        [
+            descriptor_pb2.FileDescriptorProto.FromString(
+                descriptor_pb2.DESCRIPTOR.serialized_pb
+            ),
+            _options_file(),
+        ]
+    )
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'descriptor "consumer.proto": field "demo.Consumer.options" references type '
+        '".protocyte.ArrayOptions" from "protocyte/options.proto", but '
+        '"protocyte/options.proto" cannot have a generated header because it is '
+        "reserved for Protocyte generator internals"
+    )
+    assert not response.file
+
+
+def test_rejects_fields_that_depend_on_unselected_non_generatable_headers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("consumer.proto")
+    dependency = request.proto_file.add()
+    dependency.name = "legacy_group.proto"
+    dependency.package = "legacy"
+    dependency.syntax = "proto2"
+    dependency.message_type.add().name = "Dependency"
+    unsupported = dependency.message_type.add()
+    unsupported.name = "Unsupported"
+    group = unsupported.field.add()
+    group.name = "Payload"
+    group.number = 1
+    group.label = F.LABEL_OPTIONAL
+    group.type = F.TYPE_GROUP
+    consumer = request.proto_file.add()
+    consumer.name = "consumer.proto"
+    consumer.package = "demo"
+    consumer.syntax = "proto3"
+    consumer.dependency.append(dependency.name)
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    field = message.field.add()
+    field.name = "value"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".legacy.Dependency"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'descriptor "consumer.proto": field "demo.Consumer.value" references type '
+        '".legacy.Dependency" from "legacy_group.proto", but "legacy_group.proto" '
+        'cannot have a generated header because field "legacy.Unsupported.Payload" '
+        "uses unsupported groups"
+    )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    ("capability", "blocker"),
+    [
+        (
+            "group",
+            'field "google.protobuf.Unsupported.Payload" uses unsupported groups',
+        ),
+        ("edition", "protobuf Editions are not supported in v1"),
+        (
+            "proto3-extension",
+            'extension "google.protobuf.marker" extends unsupported proto3 target '
+            '".google.protobuf.Unsupported"',
+        ),
+    ],
+)
+def test_rejects_unsupported_import_only_runtime_descriptors(
+    capability: str,
+    blocker: str,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("api/request.proto")
+    dependency = request.proto_file.add()
+    dependency.name = "google/protobuf/unsupported.proto"
+    dependency.package = "google.protobuf"
+    dependency.syntax = "proto3"
+    unsupported = dependency.message_type.add()
+    unsupported.name = "Unsupported"
+
+    if capability == "group":
+        dependency.syntax = "proto2"
+        group = unsupported.field.add()
+        group.name = "Payload"
+        group.number = 1
+        group.label = F.LABEL_OPTIONAL
+        group.type = F.TYPE_GROUP
+    elif capability == "edition":
+        dependency.syntax = "editions"
+        dependency.edition = descriptor_pb2.EDITION_2023
+    else:
+        extension = dependency.extension.add()
+        extension.name = "marker"
+        extension.number = 1000
+        extension.label = F.LABEL_OPTIONAL
+        extension.type = F.TYPE_INT32
+        extension.extendee = ".google.protobuf.Unsupported"
+
+    bridge = request.proto_file.add()
+    bridge.name = "google/protobuf/bridge.proto"
+    bridge.package = "google.protobuf"
+    bridge.syntax = "proto3"
+    bridge.dependency.append(dependency.name)
+    bridge.message_type.add().name = "Bridge"
+
+    root = request.proto_file.add()
+    root.name = "api/request.proto"
+    root.package = "api"
+    root.syntax = "proto3"
+    root.dependency.append(bridge.name)
+    root.message_type.add().name = "Request"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'target file "api/request.proto" imports unsupported descriptor '
+        '"google/protobuf/unsupported.proto" through "api/request.proto" -> '
+        '"google/protobuf/bridge.proto" -> '
+        f'"google/protobuf/unsupported.proto": {blocker}'
+    )
+    assert not response.file
+
+
+def test_rejects_cross_file_generated_header_dependency_cycles() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("a.proto")
+    first = request.proto_file.add()
+    first.name = "a.proto"
+    first.package = "cycle"
+    first.syntax = "proto3"
+    first.dependency.append("b.proto")
+    first_message = first.message_type.add()
+    first_message.name = "A"
+    first_field = first_message.field.add()
+    first_field.name = "b"
+    first_field.number = 1
+    first_field.label = F.LABEL_OPTIONAL
+    first_field.type = F.TYPE_MESSAGE
+    first_field.type_name = ".cycle.B"
+
+    second = request.proto_file.add()
+    second.name = "b.proto"
+    second.package = "cycle"
+    second.syntax = "proto3"
+    second.dependency.append("a.proto")
+    second_message = second.message_type.add()
+    second_message.name = "B"
+    second_field = second_message.field.add()
+    second_field.name = "a"
+    second_field.number = 1
+    second_field.label = F.LABEL_OPTIONAL
+    second_field.type = F.TYPE_MESSAGE
+    second_field.type_name = ".cycle.A"
+
+    response = generate_response(request)
+
+    assert response.error == (
+        'generated header dependency cycle: "a.proto" field "cycle.A.b" references '
+        'type ".cycle.B" from "b.proto"; "b.proto" field "cycle.B.a" references '
+        'type ".cycle.A" from "a.proto"'
+    )
+    assert not response.file
+
+
+def _deep_cross_file_type_chain(
+    length: int,
+    *,
+    cycle_target: int | None = None,
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("deep/node_0000.proto")
+    for index in range(length):
+        file = request.proto_file.add()
+        file.name = f"deep/node_{index:04}.proto"
+        file.package = "deep"
+        file.syntax = "proto3"
+        message = file.message_type.add()
+        message.name = f"Node{index:04}"
+
+        target = index + 1 if index + 1 < length else cycle_target
+        if target is None:
+            continue
+        target_file = f"deep/node_{target:04}.proto"
+        file.dependency.append(target_file)
+        field = message.field.add()
+        field.name = "next"
+        field.number = 1
+        field.label = F.LABEL_OPTIONAL
+        field.type = F.TYPE_MESSAGE
+        field.type_name = f".deep.Node{target:04}"
+    return request
+
+
+_DEEP_TYPE_CHAIN_LENGTH = 1100
+
+
+def test_accepts_deep_acyclic_generated_header_dependency_chain() -> None:
+    assert _DEEP_TYPE_CHAIN_LENGTH > sys.getrecursionlimit()
+
+    response = generate_response(_deep_cross_file_type_chain(_DEEP_TYPE_CHAIN_LENGTH))
+
+    assert not response.error
+    assert response.file
+
+
+def test_rejects_deep_generated_header_dependency_cycle_precisely() -> None:
+    cycle_target = _DEEP_TYPE_CHAIN_LENGTH - 5
+    response = generate_response(
+        _deep_cross_file_type_chain(
+            _DEEP_TYPE_CHAIN_LENGTH,
+            cycle_target=cycle_target,
+        )
+    )
+
+    cycle_edges = [
+        (
+            index,
+            index + 1 if index + 1 < _DEEP_TYPE_CHAIN_LENGTH else cycle_target,
+        )
+        for index in range(cycle_target, _DEEP_TYPE_CHAIN_LENGTH)
+    ]
+    details = "; ".join(
+        f'"deep/node_{source:04}.proto" field "deep.Node{source:04}.next" '
+        f'references type ".deep.Node{target:04}" from '
+        f'"deep/node_{target:04}.proto"'
+        for source, target in cycle_edges
+    )
+    assert response.error == f"generated header dependency cycle: {details}"
+    assert not response.file
 
 
 def test_proto2_model_tracks_presence_defaults_required_and_unpacked_repeated() -> None:
@@ -1533,6 +3026,477 @@ def test_proto2_default_semantics_follow_protobuf_spec() -> None:
     assert fields["required_int32"].default_cpp == "17"
 
 
+@pytest.mark.parametrize(
+    ("field_type", "default_value", "expected_cpp"),
+    [
+        (
+            F.TYPE_FLOAT,
+            "inf",
+            "::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "+Infinity",
+            "::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "INF",
+            "::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "-Infinity",
+            "-::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_FLOAT,
+            "-inf",
+            "-::std::numeric_limits<::protocyte::f32>::infinity()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "nan",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "NaN",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "-NaN",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "nan(1)",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "NAN(payload_1)",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+        (
+            F.TYPE_DOUBLE,
+            "nan()",
+            "::std::numeric_limits<::protocyte::f64>::quiet_NaN()",
+        ),
+    ],
+)
+def test_proto2_nonfinite_defaults_accept_protobuf_supported_spellings(
+    field_type: int, default_value: str, expected_cpp: str
+) -> None:
+    request = _proto2_floating_default_request(field_type, default_value)
+
+    model = build_model(request)
+    field = model.messages["defaults.FloatingDefault"].fields[0]
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert field.default_cpp == expected_cpp
+    assert not response.error
+    assert expected_cpp in files["floating_default.protocyte.hpp"]
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value", "expected_cpp"),
+    [
+        (F.TYPE_FLOAT, "-0", "-0.0f"),
+        (F.TYPE_DOUBLE, "+0.0", "0.0"),
+        (F.TYPE_FLOAT, "1.00000001", "1.0f"),
+        (F.TYPE_FLOAT, "1.1754943508222875e-38", "1.17549435e-38f"),
+        (F.TYPE_FLOAT, "3.4028234663852886e38", "3.40282347e+38f"),
+        (F.TYPE_FLOAT, "3.4028235e38", "3.40282347e+38f"),
+        (F.TYPE_FLOAT, "3.4028235677973366e38", "3.40282347e+38f"),
+        (F.TYPE_DOUBLE, "2.2250738585072014e-308", "2.2250738585072014e-308"),
+        (F.TYPE_DOUBLE, "1.7976931348623157e308", "1.7976931348623157e+308"),
+        (F.TYPE_DOUBLE, "1.7976931348623158e308", "1.7976931348623157e+308"),
+    ],
+)
+def test_proto2_finite_floating_defaults_apply_ieee_rounding_and_boundaries(
+    field_type: int, default_value: str, expected_cpp: str
+) -> None:
+    request = _proto2_floating_default_request(field_type, default_value)
+
+    model = build_model(request)
+    field = model.messages["defaults.FloatingDefault"].fields[0]
+    response = generate_response(request)
+    files = {item.name: item.content for item in response.file}
+
+    assert field.default_cpp == expected_cpp
+    assert not response.error
+    assert expected_cpp in files["floating_default.protocyte.hpp"]
+
+
+@pytest.mark.parametrize(
+    ("default_value", "expected_bits"),
+    [
+        ("1.0000000596046447753906249", 0x3F800000),
+        ("1.000000059604644775390625", 0x3F800000),
+        ("1.0000000596046447753906251", 0x3F800001),
+        ("1.0000000596046448031468009", 0x3F800001),
+        ("1.17549428075736429173E-38", 0x00800000),
+        ("340282356779733661637539395458142568447", 0x7F7FFFFF),
+    ],
+)
+def test_proto2_f32_defaults_round_directly_from_original_decimal_text(
+    default_value: str, expected_bits: int
+) -> None:
+    parsed = _parse_protobuf_floating_default(
+        default_value, F.TYPE_FLOAT, "defaults.FloatingDefault.value"
+    )
+
+    assert struct.unpack("<I", struct.pack("<f", parsed))[0] == expected_bits
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value", "value_format", "bits_format", "expected_bits"),
+    [
+        (F.TYPE_FLOAT, "0e" + "9" * 60, "<f", "<I", 0),
+        (F.TYPE_FLOAT, "0e-" + "9" * 59, "<f", "<I", 0),
+        (F.TYPE_FLOAT, "-0e+" + "9" * 58, "<f", "<I", 0x80000000),
+        (F.TYPE_FLOAT, "0.0e" + "9" * 58, "<f", "<I", 0),
+        (F.TYPE_DOUBLE, "0e" + "9" * 60, "<d", "<Q", 0),
+        (F.TYPE_DOUBLE, "0e-" + "9" * 59, "<d", "<Q", 0),
+        (F.TYPE_DOUBLE, "-0e+" + "9" * 58, "<d", "<Q", 0x8000000000000000),
+        (F.TYPE_DOUBLE, "0.0e" + "9" * 58, "<d", "<Q", 0),
+    ],
+)
+def test_proto2_huge_exponent_zero_defaults_preserve_signed_zero(
+    field_type: int,
+    default_value: str,
+    value_format: str,
+    bits_format: str,
+    expected_bits: int,
+) -> None:
+    parsed = _parse_protobuf_floating_default(
+        default_value, field_type, "defaults.FloatingDefault.value"
+    )
+
+    assert len(default_value) == 62
+    assert (
+        struct.unpack(bits_format, struct.pack(value_format, parsed))[0]
+        == expected_bits
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_type", "default_value"),
+    [
+        (F.TYPE_FLOAT, "1e999"),
+        (F.TYPE_FLOAT, "3.5e38"),
+        (F.TYPE_FLOAT, "3.402823567797337e38"),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568448"),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568449"),
+        (F.TYPE_FLOAT, "1.1754942106924411e-38"),
+        (F.TYPE_FLOAT, "1.17549428075736429172E-38"),
+        (F.TYPE_FLOAT, "1.17549428075736425910E-38"),
+        (F.TYPE_FLOAT, "1e-45"),
+        (F.TYPE_DOUBLE, "1e999"),
+        (F.TYPE_DOUBLE, "1.7976931348623159e308"),
+        (F.TYPE_DOUBLE, "2.2250738585072009e-308"),
+        (F.TYPE_DOUBLE, "4.9406564584124654e-324"),
+        (F.TYPE_DOUBLE, "1e-999"),
+        (F.TYPE_DOUBLE, ""),
+        (F.TYPE_DOUBLE, "1e"),
+        (F.TYPE_DOUBLE, " 1"),
+        (F.TYPE_DOUBLE, "1 "),
+        (F.TYPE_DOUBLE, "0x1p0"),
+        (F.TYPE_DOUBLE, "nan("),
+        (F.TYPE_DOUBLE, "infinity!"),
+        (F.TYPE_FLOAT, "1e" + "9" * 60),
+        (F.TYPE_FLOAT, "1e-" + "9" * 59),
+        (F.TYPE_FLOAT, "-1e+" + "9" * 58),
+        (F.TYPE_FLOAT, "1.0e" + "9" * 58),
+        (F.TYPE_DOUBLE, "1e" + "9" * 60),
+        (F.TYPE_DOUBLE, "1e-" + "9" * 59),
+        (F.TYPE_DOUBLE, "-1e+" + "9" * 58),
+        (F.TYPE_DOUBLE, "1.0e" + "9" * 58),
+    ],
+)
+def test_rejects_proto2_floating_defaults_outside_range_or_grammar(
+    field_type: int, default_value: str
+) -> None:
+    response = generate_response(
+        _proto2_floating_default_request(field_type, default_value)
+    )
+
+    assert (
+        "defaults.FloatingDefault.value: invalid floating-point default value "
+        f"{default_value!r}" in response.error
+    )
+
+
+@pytest.mark.parametrize(
+    ("field_type", "maximum", "overlong"),
+    [
+        (F.TYPE_FLOAT, "1." + "0" * 60, "1." + "0" * 61),
+        (F.TYPE_DOUBLE, "1." + "0" * 60, "1." + "0" * 61),
+        (F.TYPE_FLOAT, "nan(" + "x" * 57 + ")", "nan(" + "x" * 58 + ")"),
+        (F.TYPE_DOUBLE, "nan(" + "x" * 57 + ")", "nan(" + "x" * 58 + ")"),
+    ],
+)
+def test_proto2_floating_default_text_has_a_backend_independent_bound(
+    field_type: int, maximum: str, overlong: str
+) -> None:
+
+    accepted = generate_response(_proto2_floating_default_request(field_type, maximum))
+    rejected = generate_response(_proto2_floating_default_request(field_type, overlong))
+
+    assert len(maximum) == 62
+    assert not accepted.error
+    assert len(overlong) == 63
+    assert "invalid floating-point default value" in rejected.error
+    assert "(63 characters)" in rejected.error
+    assert overlong not in rejected.error
+    assert len(rejected.error) < 200
+
+
+def test_proto2_floating_defaults_match_upb_descriptor_validation() -> None:
+    cases = [
+        (F.TYPE_FLOAT, "1.0000000596046447753906249", 0x3F800000),
+        (F.TYPE_FLOAT, "1.000000059604644775390625", 0x3F800000),
+        (F.TYPE_FLOAT, "1.0000000596046447753906251", 0x3F800001),
+        (F.TYPE_FLOAT, "1.0000000596046448031468009", 0x3F800001),
+        (F.TYPE_FLOAT, "1.17549428075736429172E-38", None),
+        # Some supported upb wheels reject the exact minimum-normal spelling
+        # that stock protoc accepts. The protoc differential below remains
+        # authoritative for that compatibility boundary.
+        (F.TYPE_FLOAT, "1.17549428075736425910E-38", None),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568447", 0x7F7FFFFF),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568448", None),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568449", None),
+        (F.TYPE_FLOAT, "0e" + "9" * 60, 0),
+        (F.TYPE_FLOAT, "-0e+" + "9" * 58, 0x80000000),
+        (F.TYPE_FLOAT, "1e" + "9" * 60, None),
+        (F.TYPE_DOUBLE, "0.0e" + "9" * 58, 0),
+        (F.TYPE_DOUBLE, "-0e+" + "9" * 58, 0x8000000000000000),
+        (F.TYPE_DOUBLE, "1.0e" + "9" * 58, None),
+    ]
+    script = f"""
+import struct
+from google.protobuf import descriptor_pb2, descriptor_pool
+from protocyte.errors import ProtocyteError
+from protocyte.model import _parse_protobuf_floating_default
+
+F = descriptor_pb2.FieldDescriptorProto
+for field_type, default_value, expected_bits in {cases!r}:
+    file = descriptor_pb2.FileDescriptorProto(name="upb.proto", syntax="proto2")
+    message = file.message_type.add(name="FloatingDefault")
+    message.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=field_type,
+        default_value=default_value,
+    )
+    pool = descriptor_pool.DescriptorPool()
+    if expected_bits is None:
+        try:
+            pool.Add(file)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError(f"upb accepted {{default_value}}")
+        try:
+            _parse_protobuf_floating_default(
+                default_value, field_type, "FloatingDefault.value"
+            )
+        except ProtocyteError:
+            continue
+        raise AssertionError(f"Protocyte accepted {{default_value}}")
+    pool.Add(file)
+    upb_default = pool.FindMessageTypeByName(
+        "FloatingDefault"
+    ).fields_by_name["value"].default_value
+    protocyte_default = _parse_protobuf_floating_default(
+        default_value, field_type, "FloatingDefault.value"
+    )
+    value_format = "<f" if field_type == F.TYPE_FLOAT else "<d"
+    bits_format = "<I" if field_type == F.TYPE_FLOAT else "<Q"
+    assert struct.unpack(bits_format, struct.pack(value_format, upb_default))[0] == expected_bits
+    assert struct.unpack(bits_format, struct.pack(value_format, protocyte_default))[0] == expected_bits
+"""
+    environment = os.environ.copy()
+    environment["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "upb"
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parent.parent,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_proto2_floating_default_parser_accepts_protoc_descriptor_text(
+    tmp_path: Path,
+) -> None:
+    configured_protoc = os.environ.get("PROTOCYTE_CI_PROTOC_EXECUTABLE")
+    protoc = configured_protoc or find_executable("protoc")
+    if protoc is None:
+        pytest.skip("protoc is required for descriptor-text differential testing")
+
+    source = tmp_path / "floating_defaults.proto"
+    descriptor_set = tmp_path / "floating_defaults.pb"
+    source.write_text(
+        'syntax = "proto2";\n'
+        "message FloatingDefaults {\n"
+        "  optional float ordinary_below = 1 "
+        "[default = 1.0000000596046447753906249];\n"
+        "  optional float ordinary_above = 2 "
+        "[default = 1.0000000596046447753906251];\n"
+        "  optional float minimum_normal = 3 "
+        "[default = 1.17549428075736429173E-38];\n"
+        "  optional float maximum_finite = 4 "
+        "[default = 340282356779733661637539395458142568447];\n"
+        "  optional double minimum_double = 5 "
+        "[default = 2.2250738585072014e-308];\n"
+        "  optional double maximum_double = 6 "
+        "[default = 1.7976931348623158e308];\n"
+        "  optional float positive_infinity = 7 [default = inf];\n"
+        "  optional double not_a_number = 8 [default = nan];\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            protoc,
+            f"--proto_path={tmp_path}",
+            f"--descriptor_set_out={descriptor_set}",
+            source.name,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    descriptors = descriptor_pb2.FileDescriptorSet.FromString(
+        descriptor_set.read_bytes()
+    )
+    fields = {field.name: field for field in descriptors.file[0].message_type[0].field}
+    expected_f32_bits = {
+        "ordinary_below": 0x3F800000,
+        # protoc has already passed this source literal through binary64 and
+        # canonicalized the descriptor text to "1".  Directly constructed
+        # FieldDescriptorProto values retain their original text and are
+        # intentionally rounded without that lossy intermediate; the focused
+        # direct-text test above covers that distinct contract.
+        "ordinary_above": 0x3F800000,
+        "minimum_normal": 0x00800000,
+        "maximum_finite": 0x7F7FFFFF,
+    }
+    assert fields["ordinary_above"].default_value == "1"
+    for name, expected_bits in expected_f32_bits.items():
+        parsed = _parse_protobuf_floating_default(
+            fields[name].default_value, F.TYPE_FLOAT, f"FloatingDefaults.{name}"
+        )
+        assert struct.unpack("<I", struct.pack("<f", parsed))[0] == expected_bits
+    assert _parse_protobuf_floating_default(
+        fields["minimum_double"].default_value,
+        F.TYPE_DOUBLE,
+        "FloatingDefaults.minimum_double",
+    ) == float.fromhex("0x1.0p-1022")
+    assert _parse_protobuf_floating_default(
+        fields["maximum_double"].default_value,
+        F.TYPE_DOUBLE,
+        "FloatingDefaults.maximum_double",
+    ) == float.fromhex("0x1.fffffffffffffp+1023")
+    assert math.isinf(
+        _parse_protobuf_floating_default(
+            fields["positive_infinity"].default_value,
+            F.TYPE_FLOAT,
+            "FloatingDefaults.positive_infinity",
+        )
+    )
+    assert math.isnan(
+        _parse_protobuf_floating_default(
+            fields["not_a_number"].default_value,
+            F.TYPE_DOUBLE,
+            "FloatingDefaults.not_a_number",
+        )
+    )
+
+
+def test_proto2_floating_default_regressions_pass_with_python_backend() -> None:
+    environment = os.environ.copy()
+    environment["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(Path(__file__)),
+            "-q",
+            "-k",
+            "proto2_nonfinite_defaults or "
+            "proto2_finite_floating_defaults or "
+            "proto2_f32_defaults_round_directly or "
+            "proto2_huge_exponent_zero_defaults or "
+            "proto2_floating_default_text_has_a_backend_independent_bound or "
+            "rejects_proto2_floating_defaults_outside_range_or_grammar",
+        ],
+        cwd=Path(__file__).parent.parent,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_proto2_floating_default_cpp_expressions_compile() -> None:
+    compiler = find_executable("clang++") or find_executable("g++")
+    if compiler is None:
+        pytest.skip("clang++ or g++ is required for C++ literal validation")
+
+    cases = [
+        (F.TYPE_FLOAT, "-0"),
+        (F.TYPE_FLOAT, "1.0000000596046448031468009"),
+        (F.TYPE_FLOAT, "1.1754943508222875e-38"),
+        (F.TYPE_FLOAT, "1.17549428075736429173E-38"),
+        (F.TYPE_FLOAT, "3.4028235677973366e38"),
+        (F.TYPE_FLOAT, "340282356779733661637539395458142568447"),
+        (F.TYPE_DOUBLE, "2.2250738585072014e-308"),
+        (F.TYPE_DOUBLE, "1.7976931348623158e308"),
+        (F.TYPE_DOUBLE, "nan(1)"),
+    ]
+    expressions = [
+        build_model(_proto2_floating_default_request(field_type, default_value))
+        .messages["defaults.FloatingDefault"]
+        .fields[0]
+        .default_cpp
+        for field_type, default_value in cases
+    ]
+    declarations = "\n".join(
+        f"auto floating_default_{index} = {expression};"
+        for index, expression in enumerate(expressions)
+    )
+    source = (
+        "#include <limits>\n"
+        "namespace protocyte { using f32 = float; using f64 = double; }\n"
+        f"{declarations}\n"
+    )
+
+    result = subprocess.run(
+        [compiler, "-x", "c++", "-std=c++20", "-fsyntax-only", "-"],
+        input=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_empty_syntax_default_semantics_follow_proto2_spec() -> None:
     request = _proto2_default_semantics_request()
     request.proto_file[0].ClearField("syntax")
@@ -1635,6 +3599,44 @@ def test_generates_closed_enum_validation_for_proto2_enums() -> None:
     assert (
         "explicit_oneof_choice_value != 5 && explicit_oneof_choice_value != 9" in header
     )
+    assert "packed_implicit_choices_unknown_fields" in header
+    assert "merged_implicit_choices_unknown_fields" in header
+    assert "::protocyte::prepare_unknown_field_merge<Config>" in header
+    assert "staged_choices_by_name_entry" in header
+    assert "entry_is_unknown = false;" in header
+
+
+def test_cross_syntax_enum_openness_follows_the_declaring_file() -> None:
+    request = _cross_syntax_enum_request()
+
+    model = build_model(request)
+    consumer = model.files["legacy_consumer.proto"].messages[0]
+    fields = {field.name: field for field in consumer.fields}
+    assert not fields["imported_open_enum"].enum_closed
+    assert not fields["imported_open_unpacked"].enum_closed
+    assert not fields["imported_open_packed"].enum_closed
+    assert not fields["imported_open_oneof"].enum_closed
+    assert fields["imported_open_by_name"].map_value is not None
+    assert not fields["imported_open_by_name"].map_value.enum_closed
+    assert fields["local_closed_enum"].enum_closed
+
+    response = generate_response(request)
+
+    assert not response.error
+    files = {item.name: item.content for item in response.file}
+    header = files["legacy_consumer.protocyte.hpp"]
+    assert '#include "open_enum.protocyte.hpp"' in header
+    assert (
+        "set_imported_open_enum_raw(const ::protocyte::i32 value) noexcept {\n    imported_open_enum_ = value;"
+        in header
+    )
+    assert (
+        "set_imported_open_oneof_raw(const ::protocyte::i32 value) noexcept {\n    clear_imported_open_choice();"
+        in header
+    )
+    assert "packed_imported_open_packed_unknown_fields" not in header
+    assert "staged_imported_open_by_name_entry" not in header
+    assert "if (value != 0 && value != 1) {" in header
 
 
 def test_generated_proto3_file_can_reference_imported_proto2_message() -> None:
@@ -1670,6 +3672,98 @@ def test_generation_succeeds_without_clang_format_on_path(
     assert files["simple.protocyte.hpp"].startswith("#pragma once\n")
 
 
+def test_generation_skips_clang_format_when_formatting_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        protocyte_cpp.shutil, "which", lambda name: "/usr/bin/clang-format"
+    )
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("clang-format must not be launched"),
+    )
+
+    response = generate_response(_basic_request(parameter="format=off"))
+
+    assert not response.error
+    assert response.file
+
+
+def test_generation_reports_missing_required_clang_format() -> None:
+    response = generate_response(_basic_request(parameter="format=required"))
+
+    assert response.error == (
+        "clang-format is required but was not found on PATH; "
+        "set clang_format=<executable-or-path> or use format=auto or format=off"
+    )
+    assert not response.file
+
+
+def test_explicit_clang_format_config_requires_formatter(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / ".clang-format"
+    config_path.write_text("BasedOnStyle: LLVM\n", encoding="utf-8")
+
+    response = generate_response(
+        _basic_request(parameter=f"clang_format_config={config_path.as_posix()}")
+    )
+
+    assert "clang-format is required but was not found on PATH" in response.error
+    assert not response.file
+
+
+def test_required_formatting_cannot_be_disabled_by_generator_policy() -> None:
+    response = generate_response(
+        _basic_request(parameter="format=required"),
+        policy=GeneratorPolicy(format_outputs=False),
+    )
+
+    assert response.error == (
+        "output formatting is required but disabled by the generator policy"
+    )
+    assert not response.file
+
+
+def test_implicit_formatting_anchors_style_lookup_to_invocation_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "consumer"
+    invocation_dir = project_root / "schemas"
+    invocation_dir.mkdir(parents=True)
+    (project_root / ".clang-format").write_text(
+        "BasedOnStyle: LLVM\n", encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0, stdout=kwargs["input"], stderr=b"")
+
+    monkeypatch.chdir(invocation_dir)
+    monkeypatch.setattr(
+        protocyte_cpp.shutil, "which", lambda name: "/usr/bin/clang-format"
+    )
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    response = generate_response(_basic_request())
+
+    assert not response.error
+    assert commands
+    expected_root = invocation_dir.resolve()
+    for command in commands:
+        assert "--style=file" in command
+        assert not any(part.startswith("--style=file:") for part in command)
+        assume_filename = next(
+            part.split("=", 1)[1]
+            for part in command
+            if part.startswith("--assume-filename=")
+        )
+        assert Path(assume_filename).is_relative_to(expected_root)
+
+
 def test_generation_uses_explicit_clang_format_override_verbatim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1677,7 +3771,7 @@ def test_generation_uses_explicit_clang_format_override_verbatim(
 
     def fake_run(command: list[str], **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout="formatted\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout=b"formatted\n", stderr=b"")
 
     monkeypatch.setattr(protocyte_cpp.shutil, "which", lambda name: None)
     monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
@@ -1688,6 +3782,147 @@ def test_generation_uses_explicit_clang_format_override_verbatim(
     assert commands
     assert all(command[0] == "my-format" for command in commands)
     assert all(item.content == "formatted\n" for item in response.file)
+
+
+def test_unbounded_formatter_uses_utf8_despite_non_utf8_locale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import locale
+
+    source = "// café 🧪\nint value;\n"
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        locale, "getpreferredencoding", lambda _setlocale=True: "cp1252"
+    )
+    if hasattr(locale, "getencoding"):
+        monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        del command
+        calls.append(kwargs)
+        input_bytes = kwargs["input"]
+        assert isinstance(input_bytes, bytes)
+        assert input_bytes == source.encode("utf-8")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=b"// formatted \xf0\x9f\x9a\x80\nint value;\n",
+            stderr=b"formatter diagnostic \xcf\x80\n",
+        )
+
+    monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
+
+    formatted = protocyte_cpp._format_cpp_outputs(
+        {"sample.cpp": source},
+        protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+    )
+
+    assert formatted == {"sample.cpp": "// formatted 🚀\nint value;\n"}
+    assert calls == [
+        {
+            "input": source.encode("utf-8"),
+            "capture_output": True,
+            "check": False,
+        }
+    ]
+
+
+def test_unbounded_formatter_preserves_utf8_stderr_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import locale
+
+    monkeypatch.setattr(
+        locale, "getpreferredencoding", lambda _setlocale=True: "cp1252"
+    )
+    if hasattr(locale, "getencoding"):
+        monkeypatch.setattr(locale, "getencoding", lambda: "cp1252")
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=7,
+            stdout=b"partial \xf0\x9f\x9a\x80\n",
+            stderr=b"formatter rejected schema comment: caf\xc3\xa9 \xf0\x9f\xa7\xaa\n",
+        ),
+    )
+
+    with pytest.raises(
+        ProtocyteError,
+        match="formatter rejected schema comment: café 🧪",
+    ):
+        protocyte_cpp._format_cpp_outputs(
+            {"sample.cpp": "// 🧪\nint value;\n"},
+            protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+        )
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds",
+    [pytest.param(None, id="unbounded"), pytest.param(2.0, id="bounded")],
+)
+def test_formatter_rejects_invalid_utf8_output_from_real_process(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float | None,
+) -> None:
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'\\xff'); sys.stdout.buffer.flush(); "
+        "sys.stderr.buffer.write(b'formatter diagnostic \\xff\\n'); sys.stderr.buffer.flush()"
+    )
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_clang_format_style_args",
+        lambda options: ["-c", script],
+    )
+
+    with pytest.raises(
+        ProtocyteError,
+        match="clang-format produced invalid UTF-8 output for sample.cpp",
+    ) as error:
+        protocyte_cpp._format_cpp_outputs(
+            {"sample.cpp": "int value;\n"},
+            protocyte_cpp.GeneratorOptions(clang_format=sys.executable),
+            timeout_seconds=timeout_seconds,
+        )
+
+    assert isinstance(error.value.__cause__, UnicodeDecodeError)
+    assert "UnicodeDecodeError" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds",
+    [pytest.param(None, id="unbounded"), pytest.param(2.0, id="bounded")],
+)
+def test_formatter_rejects_invalid_utf8_input_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float | None,
+) -> None:
+    if timeout_seconds is None:
+        monkeypatch.setattr(
+            protocyte_cpp.subprocess,
+            "run",
+            lambda *args, **kwargs: pytest.fail("formatter must not be launched"),
+        )
+    else:
+        monkeypatch.setattr(
+            protocyte_cpp,
+            "_start_formatter_process",
+            lambda command: pytest.fail("formatter must not be launched"),
+        )
+
+    with pytest.raises(
+        ProtocyteError,
+        match="clang-format input for sample.cpp is not valid UTF-8",
+    ) as error:
+        protocyte_cpp._format_cpp_outputs(
+            {"sample.cpp": "// \udcff\nint value;\n"},
+            protocyte_cpp.GeneratorOptions(clang_format="my-format"),
+            timeout_seconds=timeout_seconds,
+        )
+
+    assert isinstance(error.value.__cause__, UnicodeEncodeError)
+    assert "UnicodeEncodeError" not in str(error.value)
 
 
 def test_generator_policy_rejects_tenant_formatter_parameters(
@@ -1733,13 +3968,16 @@ def test_generator_policy_can_disable_all_formatting(
 def test_generator_policy_applies_formatter_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def time_out(command: list[str], **kwargs):
-        raise protocyte_cpp.subprocess.TimeoutExpired(command, kwargs["timeout"])
+    def time_out(command: list[str], content: str, **kwargs: object):
+        del content
+        raise protocyte_cpp.subprocess.TimeoutExpired(
+            command, kwargs["timeout_seconds"]
+        )
 
     monkeypatch.setattr(
         protocyte_cpp.shutil, "which", lambda name: "/operator/bin/clang-format"
     )
-    monkeypatch.setattr(protocyte_cpp.subprocess, "run", time_out)
+    monkeypatch.setattr(protocyte_cpp, "_run_formatter_bounded", time_out)
 
     response = generate_response(
         _basic_request(), policy=GeneratorPolicy(formatter_timeout_seconds=0.5)
@@ -1750,6 +3988,657 @@ def test_generator_policy_applies_formatter_timeout(
         in response.error
     )
     assert not response.file
+
+
+def test_command_line_plugin_formatter_timeout_stops_hanging_process_tree(
+    tmp_path: Path,
+) -> None:
+    grandchild_ready = tmp_path / "formatter-grandchild-ready"
+    child_survived = tmp_path / "formatter-child-survived"
+    grandchild = (
+        "from pathlib import Path; import time; "
+        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
+        f"Path({str(child_survived)!r}).touch()"
+    )
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); time.sleep(30)"
+    )
+    formatter_script = tmp_path / "hanging_formatter.py"
+    formatter_script.write_text(
+        "\n".join(
+            [
+                "import subprocess",
+                "import sys",
+                "import time",
+                f"subprocess.Popen([sys.executable, '-c', {child!r}])",
+                "time.sleep(30)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        formatter = tmp_path / "hanging-formatter.cmd"
+        formatter.write_text(
+            f'@echo off\r\n"{sys.executable}" "{formatter_script}"\r\n',
+            encoding="utf-8",
+        )
+    else:
+        formatter = tmp_path / "hanging-formatter"
+        formatter.write_text(
+            "#!/usr/bin/env sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(formatter_script))}\n",
+            encoding="utf-8",
+        )
+        formatter.chmod(0o755)
+
+    response = generate_response(
+        _basic_request(
+            parameter=(
+                f"clang_format={formatter.as_posix()},formatter_timeout_seconds=0.5"
+            )
+        ),
+        use_plugin_defaults=True,
+    )
+
+    assert (
+        "clang-format timed out for simple.protocyte.hpp after 0.5 seconds"
+        in response.error
+    )
+    assert not response.file
+    assert grandchild_ready.is_file()
+    time.sleep(1.25)
+    assert not child_survived.exists()
+
+
+def test_formatter_timeout_terminates_descendants_that_inherit_pipes(
+    tmp_path: Path,
+) -> None:
+    ready = tmp_path / "child-ready"
+    release = tmp_path / "release-child"
+    survived = tmp_path / "child-survived"
+    child = "\n".join(
+        (
+            "from pathlib import Path",
+            "import sys",
+            "import time",
+            "Path(sys.argv[1]).touch()",
+            "sys.stderr.write('child retained formatter stderr\\n')",
+            "sys.stderr.flush()",
+            "deadline = time.monotonic() + 3",
+            "while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+            "Path(sys.argv[2]).touch() if Path(sys.argv[3]).exists() else None",
+        )
+    )
+    parent = "\n".join(
+        (
+            "from pathlib import Path",
+            "import subprocess",
+            "import sys",
+            "import time",
+            f"subprocess.Popen([sys.executable, '-c', {child!r}, {str(ready)!r}, {str(survived)!r}, {str(release)!r}])",
+            "deadline = time.monotonic() + 2",
+            f"while not Path({str(ready)!r}).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+            "sys.stderr.write('parent spawned child\\n')",
+            "sys.stderr.flush()",
+            "time.sleep(3)",
+        )
+    )
+
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired) as error:
+        protocyte_cpp._run_formatter_bounded(
+            [sys.executable, "-c", parent],
+            "",
+            timeout_seconds=1.0,
+            max_output_bytes=None,
+        )
+
+    assert time.monotonic() - started < 2.0
+    assert ready.is_file()
+    assert b"child retained formatter stderr" in error.value.stderr
+    release.touch()
+    time.sleep(0.25)
+    assert not survived.exists()
+
+
+def test_formatter_parent_exit_terminates_descendant_that_inherits_pipes(
+    tmp_path: Path,
+) -> None:
+    child_ready = tmp_path / "child-ready"
+    child_release = tmp_path / "release-child"
+    child_survived = tmp_path / "child-survived"
+    unrelated_ready = tmp_path / "unrelated-ready"
+    unrelated_release = tmp_path / "release-unrelated"
+    child = "\n".join(
+        (
+            "from pathlib import Path",
+            "import sys",
+            "import time",
+            "Path(sys.argv[1]).touch()",
+            "sys.stderr.write('child retained formatter stderr\\n')",
+            "sys.stderr.flush()",
+            "deadline = time.monotonic() + 3",
+            "while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+            "Path(sys.argv[2]).touch() if Path(sys.argv[3]).exists() else None",
+        )
+    )
+    parent = "\n".join(
+        (
+            "from pathlib import Path",
+            "import subprocess",
+            "import sys",
+            "import time",
+            f"subprocess.Popen([sys.executable, '-c', {child!r}, {str(child_ready)!r}, {str(child_survived)!r}, {str(child_release)!r}])",
+            "deadline = time.monotonic() + 2",
+            f"while not Path({str(child_ready)!r}).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+            "sys.stderr.write('parent exited after spawning child\\n')",
+            "sys.stderr.flush()",
+        )
+    )
+    unrelated_script = "\n".join(
+        (
+            "from pathlib import Path",
+            "import sys",
+            "import time",
+            "Path(sys.argv[1]).touch()",
+            "deadline = time.monotonic() + 5",
+            "while not Path(sys.argv[2]).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+        )
+    )
+    unrelated = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            unrelated_script,
+            str(unrelated_ready),
+            str(unrelated_release),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 2
+        while (
+            not unrelated_ready.exists()
+            and unrelated.poll() is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        assert unrelated_ready.is_file()
+
+        started = time.monotonic()
+        if sys.platform == "win32":
+            with pytest.raises(OSError, match="descendant") as error:
+                protocyte_cpp._run_formatter_bounded(
+                    [sys.executable, "-c", parent],
+                    "",
+                    timeout_seconds=2.0,
+                    max_output_bytes=None,
+                )
+            stderr = str(error.value)
+        else:
+            result = protocyte_cpp._run_formatter_bounded(
+                [sys.executable, "-c", parent],
+                "",
+                timeout_seconds=2.0,
+                max_output_bytes=None,
+            )
+            assert result.returncode == 0
+            stderr = result.stderr
+
+        assert time.monotonic() - started < 1.5
+        assert "child retained formatter stderr" in stderr
+        assert "parent exited after spawning child" in stderr
+        assert unrelated.poll() is None
+        child_release.touch()
+        time.sleep(0.25)
+        assert not child_survived.exists()
+        formatter_thread_names = {
+            "protocyte-formatter-stdin",
+            "protocyte-formatter-stdout",
+            "protocyte-formatter-stderr",
+        }
+        assert not formatter_thread_names.intersection(
+            thread.name for thread in threading.enumerate()
+        )
+    finally:
+        child_release.touch(exist_ok=True)
+        unrelated_release.touch(exist_ok=True)
+        try:
+            unrelated.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            unrelated.kill()
+            unrelated.wait(timeout=2)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="requires POSIX process groups")
+def test_posix_formatter_parent_exit_terminates_grouped_descriptor_closed_child(
+    tmp_path: Path,
+) -> None:
+    parent_group = tmp_path / "parent-group"
+    child_ready = tmp_path / "silent-child-group"
+    child_release = tmp_path / "release-silent-child"
+    child_survived = tmp_path / "silent-child-survived"
+    child = "\n".join(
+        (
+            "from pathlib import Path",
+            "import os",
+            "import sys",
+            "import time",
+            "Path(sys.argv[1]).write_text(str(os.getpgrp()), encoding='utf-8')",
+            "deadline = time.monotonic() + 3",
+            "while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+            "Path(sys.argv[2]).touch() if Path(sys.argv[3]).exists() else None",
+        )
+    )
+    parent = "\n".join(
+        (
+            "from pathlib import Path",
+            "import os",
+            "import subprocess",
+            "import sys",
+            "import time",
+            f"Path({str(parent_group)!r}).write_text(str(os.getpgrp()), encoding='utf-8')",
+            f"subprocess.Popen([sys.executable, '-c', {child!r}, {str(child_ready)!r}, {str(child_survived)!r}, {str(child_release)!r}], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)",
+            "deadline = time.monotonic() + 2",
+            f"while not Path({str(child_ready)!r}).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.005)",
+            "sys.stdout.write('formatted output\\n')",
+            "sys.stderr.write('formatter diagnostic\\n')",
+        )
+    )
+
+    try:
+        result = protocyte_cpp._run_formatter_bounded(
+            [sys.executable, "-c", parent],
+            "",
+            timeout_seconds=2.0,
+            max_output_bytes=None,
+        )
+
+        assert result == protocyte_cpp._FormatterResult(
+            0,
+            "formatted output\n",
+            "formatter diagnostic\n",
+        )
+        assert child_ready.read_text(encoding="utf-8") == parent_group.read_text(
+            encoding="utf-8"
+        )
+        child_release.touch()
+        time.sleep(0.25)
+        assert not child_survived.exists()
+    finally:
+        child_release.touch(exist_ok=True)
+
+
+def test_bounded_formatter_preserves_successful_output() -> None:
+    script = (
+        "import sys; "
+        "content = sys.stdin.buffer.read(); "
+        "sys.stdout.buffer.write(content); sys.stdout.buffer.flush(); "
+        "sys.stderr.buffer.write(b'formatter diagnostic\\n'); sys.stderr.buffer.flush()"
+    )
+
+    result = protocyte_cpp._run_formatter_bounded(
+        [sys.executable, "-c", script],
+        "int value;\n",
+        timeout_seconds=1.0,
+        max_output_bytes=None,
+    )
+
+    assert result == protocyte_cpp._FormatterResult(
+        0, "int value;\n", "formatter diagnostic\n"
+    )
+
+
+def test_bounded_formatter_preserves_failure_status_and_stderr() -> None:
+    script = (
+        "import sys; "
+        "sys.stdout.buffer.write(b'partial output\\n'); "
+        "sys.stderr.buffer.write(b'formatter failed\\n'); "
+        "raise SystemExit(7)"
+    )
+
+    result = protocyte_cpp._run_formatter_bounded(
+        [sys.executable, "-c", script],
+        "",
+        timeout_seconds=1.0,
+        max_output_bytes=None,
+    )
+
+    assert result == protocyte_cpp._FormatterResult(
+        7,
+        "partial output\n",
+        "formatter failed\n",
+    )
+
+
+def test_bounded_formatter_preserves_launch_error(tmp_path: Path) -> None:
+    missing_formatter = tmp_path / "missing-formatter"
+
+    with pytest.raises(FileNotFoundError) as error:
+        protocyte_cpp._run_formatter_bounded(
+            [str(missing_formatter)],
+            "",
+            timeout_seconds=1.0,
+            max_output_bytes=None,
+        )
+
+    assert error.value.errno == errno.ENOENT
+    if sys.platform != "win32":
+        assert error.value.filename == str(missing_formatter)
+
+
+@pytest.mark.parametrize(
+    ("failing_start", "expected_joined"),
+    [
+        pytest.param(1, [], id="first-thread"),
+        pytest.param(2, ["protocyte-formatter-stdout"], id="partial-start"),
+    ],
+)
+def test_formatter_worker_start_failure_cleans_up_process_and_pipes(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_start: int,
+    expected_joined: list[str],
+) -> None:
+    original_start_process = protocyte_cpp._start_formatter_process
+    original_thread_start = threading.Thread.start
+    original_thread_join = threading.Thread.join
+    captured: dict[str, object] = {}
+    start_count = 0
+    joined: list[str] = []
+
+    def capture_start(command: list[str]):
+        process, job = original_start_process(command)
+        captured["process"] = process
+        captured["job"] = job
+        return process, job
+
+    def fail_worker_start(thread: threading.Thread) -> None:
+        nonlocal start_count
+        start_count += 1
+        if start_count == failing_start:
+            raise RuntimeError(f"injected thread start failure {failing_start}")
+        original_thread_start(thread)
+
+    def track_worker_join(
+        thread: threading.Thread,
+        timeout: float | None = None,
+    ) -> None:
+        joined.append(thread.name)
+        original_thread_join(thread, timeout=timeout)
+
+    monkeypatch.setattr(protocyte_cpp, "_start_formatter_process", capture_start)
+    monkeypatch.setattr(threading.Thread, "start", fail_worker_start)
+    monkeypatch.setattr(threading.Thread, "join", track_worker_join)
+
+    with pytest.raises(
+        RuntimeError, match=rf"injected thread start failure {failing_start}"
+    ):
+        protocyte_cpp._run_formatter_bounded(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            "",
+            timeout_seconds=2.0,
+            max_output_bytes=None,
+        )
+
+    process = captured["process"]
+    assert isinstance(process, subprocess.Popen)
+    assert process.poll() is not None
+    assert process.stdin is not None and process.stdin.closed
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is not None and process.stderr.closed
+    job = captured["job"]
+    if isinstance(job, protocyte_cpp._WindowsFormatterJob):
+        assert job._handle is None
+    else:
+        assert isinstance(job, protocyte_cpp._PosixFormatterGroup)
+        assert job.status_stream.closed
+        with pytest.raises(ProcessLookupError):
+            protocyte_cpp.os.killpg(job.process_group_id, 0)
+    assert joined == expected_joined
+    assert not {
+        "protocyte-formatter-stdin",
+        "protocyte-formatter-stdout",
+        "protocyte-formatter-stderr",
+    }.intersection(thread.name for thread in threading.enumerate())
+
+
+def test_formatter_popen_kwargs_support_posix_process_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_is_windows_formatter_platform",
+        lambda: False,
+    )
+
+    assert protocyte_cpp._formatter_popen_kwargs() == {"start_new_session": True}
+    assert protocyte_cpp._formatter_popen_kwargs(7) == {
+        "start_new_session": True,
+        "pass_fds": (7,),
+    }
+
+
+def test_posix_formatter_path_does_not_require_macos_missing_wait_features(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_read_fd, status_write_fd = os.pipe()
+    status_stream = os.fdopen(status_read_fd, "rb", buffering=0)
+    os.write(status_write_fd, b'{"returncode":0}\n')
+    os.close(status_write_fd)
+    monkeypatch.delattr(protocyte_cpp.os, "waitid", raising=False)
+    monkeypatch.delattr(protocyte_cpp.os, "WNOWAIT", raising=False)
+    if sys.platform == "win32":
+        monkeypatch.setattr(
+            protocyte_cpp.select,
+            "select",
+            lambda readable, writable, exceptional, timeout: (
+                readable,
+                writable,
+                exceptional,
+            ),
+        )
+    group = protocyte_cpp._PosixFormatterGroup(123, status_stream)
+    try:
+        returncode = group.wait_for_formatter_exit(["formatter"], 1.0)
+    finally:
+        group.close()
+
+    assert returncode == 0
+
+
+def test_formatter_supervisor_command_uses_packaged_script() -> None:
+    command = protocyte_cpp._formatter_supervisor_command(["formatter", "--fix"], 7)
+
+    assert command == [
+        sys.executable,
+        str(protocyte_cpp._FORMATTER_SUPERVISOR_PATH),
+        "7",
+        "formatter",
+        "--fix",
+    ]
+    assert protocyte_cpp._FORMATTER_SUPERVISOR_PATH.is_file()
+
+
+def test_formatter_supervisor_reports_exact_formatter_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[object] = []
+
+    class FormatterProcess:
+        def wait(self) -> int:
+            events.append("wait-formatter")
+            return -9
+
+    def popen(command: list[str], *, close_fds: bool) -> FormatterProcess:
+        events.append((command, close_fds))
+        return FormatterProcess()
+
+    monkeypatch.setattr(
+        formatter_supervisor.os,
+        "set_inheritable",
+        lambda descriptor, inheritable: events.append(
+            ("control-inheritable", descriptor, inheritable)
+        ),
+    )
+    monkeypatch.setattr(formatter_supervisor.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        formatter_supervisor,
+        "_redirect_standard_streams",
+        lambda: events.append("redirect-supervisor-stdio"),
+    )
+    monkeypatch.setattr(
+        formatter_supervisor,
+        "_write_status",
+        lambda descriptor, payload: events.append((descriptor, payload)) or False,
+    )
+
+    assert formatter_supervisor.main(["7", "formatter", "--fix"]) == 0
+    assert events == [
+        ("control-inheritable", 7, False),
+        (["formatter", "--fix"], True),
+        "redirect-supervisor-stdio",
+        "wait-formatter",
+        (7, {"returncode": -9}),
+    ]
+
+
+def test_formatter_popen_kwargs_support_windows_process_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_is_windows_formatter_platform",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False
+    )
+
+    assert protocyte_cpp._formatter_popen_kwargs() == {"creationflags": 0x204}
+
+
+def test_windows_formatter_is_assigned_while_suspended_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeProcess:
+        pid = 123
+
+    class FakeJob:
+        def assign(self, process: FakeProcess) -> None:
+            assert process.pid == 123
+            events.append("assign")
+
+    process = FakeProcess()
+    job = FakeJob()
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_is_windows_formatter_platform",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "CREATE_NEW_PROCESS_GROUP",
+        0x200,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        protocyte_cpp._WindowsFormatterJob,
+        "create",
+        classmethod(lambda cls: job),
+    )
+
+    def popen(command: list[str], **kwargs: object) -> FakeProcess:
+        assert command == ["formatter"]
+        assert kwargs["creationflags"] & protocyte_cpp._WINDOWS_CREATE_SUSPENDED
+        events.append("spawn-suspended")
+        return process
+
+    monkeypatch.setattr(protocyte_cpp.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_resume_windows_formatter_process",
+        lambda resumed_process: events.append(f"resume-{resumed_process.pid}"),
+    )
+
+    started_process, started_job = protocyte_cpp._start_formatter_process(["formatter"])
+
+    assert started_process is process
+    assert started_job is job
+    assert events == ["spawn-suspended", "assign", "resume-123"]
+
+
+class _FormatterProcess:
+    pid = 123
+
+    def __init__(self) -> None:
+        self.killed = False
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_formatter_termination_kills_posix_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FormatterProcess()
+    killed_groups: list[tuple[int, int]] = []
+    monkeypatch.setattr(protocyte_cpp.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(
+        protocyte_cpp.os,
+        "killpg",
+        lambda pid, signal_number: killed_groups.append((pid, signal_number)),
+        raising=False,
+    )
+
+    protocyte_cpp._terminate_formatter_process_tree(
+        process,
+        protocyte_cpp._PosixFormatterGroup(123, BytesIO()),  # type: ignore[arg-type]
+    )
+
+    assert killed_groups == [(123, protocyte_cpp.signal.SIGKILL)]
+    assert process.killed
+
+
+def test_formatter_termination_kills_windows_process_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = _FormatterProcess()
+    closures = 0
+
+    class FormatterJob(protocyte_cpp._WindowsFormatterJob):
+        def __init__(self) -> None:
+            pass
+
+        def close(self) -> None:
+            nonlocal closures
+            closures += 1
+
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("PID-based taskkill must not be used"),
+    )
+
+    protocyte_cpp._terminate_formatter_process_tree(
+        process,
+        FormatterJob(),  # type: ignore[arg-type]
+    )
+
+    assert closures == 1
+    assert process.killed
 
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
@@ -1779,7 +4668,7 @@ def test_formatter_policy_uses_live_output_cap(
         content: str,
         *,
         timeout_seconds: float | None,
-        max_output_bytes: int,
+        max_output_bytes: int | None,
     ) -> protocyte_cpp._FormatterResult:
         del content, timeout_seconds
         calls.append((command, max_output_bytes))
@@ -1803,7 +4692,14 @@ def test_formatter_policy_uses_live_output_cap(
 
     assert formatted == {"sample.cpp": "formatted\n"}
     assert calls == [
-        (["my-format", "--style=file", "--assume-filename=sample.cpp"], 64)
+        (
+            [
+                "my-format",
+                "--style=file",
+                f"--assume-filename={(Path.cwd() / 'sample.cpp').resolve()}",
+            ],
+            64,
+        )
     ]
 
 
@@ -1813,7 +4709,13 @@ def test_formatter_policy_uses_live_output_cap(
         (GeneratorPolicy(max_request_bytes=0), "serialized request bytes"),
         (GeneratorPolicy(max_files_to_generate=0), "files to generate"),
         (GeneratorPolicy(max_proto_files=0), "proto files"),
-        (GeneratorPolicy(max_descriptor_nodes=1), "descriptor nodes"),
+        (
+            GeneratorPolicy(
+                max_descriptor_nodes=1,
+                max_descriptor_metadata_bytes=1_000_000,
+            ),
+            "descriptor nodes",
+        ),
         (GeneratorPolicy(max_nesting_depth=0), "message nesting depth"),
         (GeneratorPolicy(max_generated_bytes=1), "generated output bytes"),
     ],
@@ -1866,11 +4768,405 @@ def test_generator_policy_short_circuits_genuinely_deep_descriptors() -> None:
     assert not response.file
 
 
-def test_generator_policy_rejects_invalid_limit_configuration() -> None:
+@pytest.mark.parametrize(
+    "dependency_field",
+    ["dependency", "public_dependency", "weak_dependency"],
+)
+def test_generator_policy_metadata_limit_covers_dependency_surfaces(
+    dependency_field: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    baseline = _metadata_limit(request)
+    if dependency_field == "dependency":
+        file.dependency.extend(f"dependency/{index}.proto" for index in range(4_096))
+    else:
+        getattr(file, dependency_field).extend(range(4_096))
+
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail(
+            "dependency metadata must be rejected before model construction"
+        ),
+    )
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=baseline,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {baseline}"
+    )
+    assert not response.file
+
+
+def _metadata_limit(request: plugin_pb2.CodeGeneratorRequest) -> int:
+    return request.ByteSize()
+
+
+@pytest.mark.parametrize("surface", ["locations", "comments", "path and span"])
+def test_generator_policy_rejects_source_metadata_before_model_construction(
+    surface: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    baseline = _metadata_limit(request)
+
+    if surface == "locations":
+        for _ in range(8_192):
+            file.source_code_info.location.add()
+    else:
+        location = file.source_code_info.location.add()
+        if surface == "comments":
+            location.leading_detached_comments.extend(("detached",) * 128)
+            location.leading_comments = "documentation " * 8_192
+            location.trailing_comments = "trailing " * 8_192
+        else:
+            location.path.extend(range(8_192))
+            location.span.extend(range(8_192))
+
+    assert _metadata_limit(request) > baseline
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail(
+            "source metadata must be rejected before model construction"
+        ),
+    )
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=baseline,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {baseline}"
+    )
+    assert not response.file
+
+
+def test_metadata_limit_precedes_all_descriptor_traversal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    file = request.proto_file[0]
+    for index in range(4_096):
+        file.message_type.add().name = f"M{index}"
+        file.source_code_info.location.add()
+    limit = 0
+
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "_request_descriptor_complexity",
+        lambda *args, **kwargs: pytest.fail(
+            "metadata rejection must precede descriptor traversal"
+        ),
+    )
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail("metadata rejection must precede model construction"),
+    )
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=limit,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {limit}"
+    )
+    assert not response.file
+
+
+def test_generator_policy_source_metadata_exact_boundary_preserves_documentation() -> (
+    None
+):
+    request = _basic_request(parameter="format=off")
+    _add_source_documentation(
+        request.proto_file[0],
+        [4, 0],
+        detached=("Context.\n",),
+        leading="A bounded documented message.\n",
+        trailing="More detail.\n",
+    )
+    limit = _metadata_limit(request)
+
+    accepted = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=limit,
+        ),
+    )
+    rejected = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=limit - 1,
+        ),
+    )
+
+    assert not accepted.error
+    assert "A bounded documented message." in next(
+        file.content for file in accepted.file if file.name.endswith(".hpp")
+    )
+    assert rejected.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{limit} > {limit - 1}"
+    )
+    assert not rejected.file
+
+
+def test_descriptor_node_limit_also_bounds_source_metadata_by_default() -> None:
+    request = _basic_request(parameter="format=off")
+    _add_source_documentation(
+        request.proto_file[0],
+        [4, 0],
+        leading="source documentation " * 1_024,
+    )
+    nodes, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    metadata_bytes = _metadata_limit(request)
+    assert metadata_bytes > nodes
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(max_descriptor_nodes=nodes, format_outputs=False),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{metadata_bytes} > {nodes}"
+    )
+    assert not response.file
+
+
+def _wire_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def test_generator_policy_counts_unknown_descriptor_wire_payload_before_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _basic_request(parameter="format=off")
+    baseline = _metadata_limit(request)
+    unknown_payload = b"x" * 65_536
+    request.proto_file[0].MergeFromString(
+        _wire_varint((50_000 << 3) | 2)
+        + _wire_varint(len(unknown_payload))
+        + unknown_payload
+    )
+    assert _metadata_limit(request) > baseline
+    monkeypatch.setattr(
+        protocyte_plugin,
+        "build_model",
+        lambda _: pytest.fail(
+            "unknown descriptor payload must be rejected before model construction"
+        ),
+    )
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            format_outputs=False,
+            max_descriptor_metadata_bytes=baseline,
+        ),
+    )
+
+    assert response.error == (
+        "generator policy limit exceeded for descriptor metadata bytes: "
+        f"{_metadata_limit(request)} > {baseline}"
+    )
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "entry_kind",
+    [
+        "enum reserved names",
+        "enum reserved ranges",
+        "message reserved names",
+        "message reserved ranges",
+        "message extension ranges",
+    ],
+)
+def test_descriptor_node_policy_counts_reserved_and_extension_entries(
+    entry_kind: str,
+) -> None:
+    request, enum = _request_with_enum()
+    message = request.proto_file[0].message_type[0]
+    baseline, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    entry_count = 32
+
+    if entry_kind == "enum reserved names":
+        enum.reserved_name.extend(
+            f"STATE_RETIRED_{index}" for index in range(entry_count)
+        )
+    elif entry_kind == "enum reserved ranges":
+        for index in range(entry_count):
+            reserved_range = enum.reserved_range.add()
+            reserved_range.start = index * 2 + 100
+            reserved_range.end = index * 2 + 100
+    elif entry_kind == "message reserved names":
+        message.reserved_name.extend(f"retired_{index}" for index in range(entry_count))
+    elif entry_kind == "message reserved ranges":
+        for index in range(entry_count):
+            reserved_range = message.reserved_range.add()
+            reserved_range.start = index * 2 + 100
+            reserved_range.end = index * 2 + 101
+    else:
+        for index in range(entry_count):
+            extension_range = message.extension_range.add()
+            extension_range.start = index * 2 + 100
+            extension_range.end = index * 2 + 101
+
+    total, _ = protocyte_plugin._request_descriptor_complexity(
+        request,
+        max_descriptor_nodes=None,
+        max_nesting_depth=None,
+    )
+    assert total == baseline + entry_count
+
+    response = generate_response(
+        request,
+        policy=GeneratorPolicy(
+            max_descriptor_nodes=baseline,
+            max_descriptor_metadata_bytes=request.ByteSize(),
+            format_outputs=False,
+        ),
+    )
+
+    error_prefix = "generator policy limit exceeded for descriptor nodes: "
+    assert response.error.startswith(error_prefix)
+    reported, limit = (
+        int(part) for part in response.error.removeprefix(error_prefix).split(" > ")
+    )
+    assert baseline < reported <= total
+    assert limit == baseline
+    assert not response.file
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "max_request_bytes",
+        "max_files_to_generate",
+        "max_proto_files",
+        "max_descriptor_nodes",
+        "max_descriptor_metadata_bytes",
+        "max_nesting_depth",
+        "max_generated_bytes",
+    ],
+)
+@pytest.mark.parametrize("invalid_value", [True, 1.0, "1", float("nan")])
+def test_generator_policy_rejects_non_integer_limits(
+    field_name: str, invalid_value: object
+) -> None:
+    with pytest.raises(TypeError, match=rf"{field_name} must be an integer or None"):
+        GeneratorPolicy(**{field_name: invalid_value})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field_name", ["allow_formatter_parameters", "format_outputs"])
+@pytest.mark.parametrize("invalid_value", [0, 1, "false", None, []])
+def test_generator_policy_rejects_non_boolean_flags(
+    field_name: str, invalid_value: object
+) -> None:
+    with pytest.raises(TypeError, match=rf"{field_name} must be a boolean"):
+        GeneratorPolicy(**{field_name: invalid_value})  # type: ignore[arg-type]
+
+
+def test_generator_policy_rejects_negative_limit_configuration() -> None:
     with pytest.raises(ValueError, match="max_request_bytes must not be negative"):
         GeneratorPolicy(max_request_bytes=-1)
+
+
+@pytest.mark.parametrize("invalid_value", [True, "1", 1 + 0j])
+def test_generator_policy_rejects_non_real_formatter_timeout(
+    invalid_value: object,
+) -> None:
+    with pytest.raises(
+        TypeError,
+        match="formatter_timeout_seconds must be a real number or None",
+    ):
+        GeneratorPolicy(formatter_timeout_seconds=invalid_value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), -float("inf")])
+def test_generator_policy_rejects_non_finite_formatter_timeout(
+    invalid_value: float,
+) -> None:
+    with pytest.raises(ValueError, match="formatter_timeout_seconds must be finite"):
+        GeneratorPolicy(formatter_timeout_seconds=invalid_value)
+
+
+@pytest.mark.parametrize("invalid_value", [0, 0.0, -1, -0.5])
+def test_generator_policy_rejects_non_positive_formatter_timeout(
+    invalid_value: float,
+) -> None:
     with pytest.raises(ValueError, match="formatter_timeout_seconds must be positive"):
-        GeneratorPolicy(formatter_timeout_seconds=0)
+        GeneratorPolicy(formatter_timeout_seconds=invalid_value)
+
+
+@pytest.mark.parametrize("value", ["1e-9999", "-0", "1e9999"])
+def test_plugin_rejects_nonrepresentable_formatter_timeout(value: str) -> None:
+    response = generate_response(
+        _basic_request(parameter=f"formatter_timeout_seconds={value}"),
+        use_plugin_defaults=True,
+    )
+
+    assert (
+        "formatter_timeout_seconds must be a finite non-negative number"
+        in response.error
+    )
+    assert not response.file
+
+
+def test_generator_policy_preserves_valid_limits_and_timeout() -> None:
+    policy = GeneratorPolicy(
+        formatter_timeout_seconds=0.5,
+        max_request_bytes=0,
+        max_files_to_generate=1,
+        max_proto_files=2,
+        max_descriptor_nodes=3,
+        max_descriptor_metadata_bytes=4,
+        max_nesting_depth=5,
+        max_generated_bytes=6,
+    )
+
+    assert policy.formatter_timeout_seconds == 0.5
+    assert policy.max_request_bytes == 0
+    assert policy.max_files_to_generate == 1
+    assert policy.max_proto_files == 2
+    assert policy.max_descriptor_nodes == 3
+    assert policy.max_descriptor_metadata_bytes == 4
+    assert policy.max_nesting_depth == 5
+    assert policy.max_generated_bytes == 6
 
 
 def test_generation_decodes_explicit_clang_format_override_from_transport_parameter(
@@ -1883,7 +5179,7 @@ def test_generation_decodes_explicit_clang_format_override_from_transport_parame
 
     def fake_run(command: list[str], **kwargs):
         commands.append(command)
-        return SimpleNamespace(returncode=0, stdout="formatted\n", stderr="")
+        return SimpleNamespace(returncode=0, stdout=b"formatted\n", stderr=b"")
 
     monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
 
@@ -1931,7 +5227,7 @@ def test_generation_reports_explicit_clang_format_failure(
         protocyte_cpp.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
-            returncode=1, stdout="", stderr="broken style"
+            returncode=1, stdout=b"", stderr=b"broken style"
         ),
     )
 
@@ -1954,7 +5250,11 @@ def test_generation_passes_explicit_clang_format_config(
         assume_filename = next(
             part for part in command if part.startswith("--assume-filename=")
         )
-        return SimpleNamespace(returncode=0, stdout=assume_filename + "\n", stderr="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(assume_filename + "\n").encode("utf-8"),
+            stderr=b"",
+        )
 
     monkeypatch.setattr(protocyte_cpp.subprocess, "run", fake_run)
 
@@ -1998,9 +5298,11 @@ def test_generation_uses_clang_format_found_on_path(
         assume_filename = next(
             part for part in command if part.startswith("--assume-filename=")
         )
-        filename = assume_filename.split("=", 1)[1]
+        filename = Path(assume_filename.split("=", 1)[1]).name
         return SimpleNamespace(
-            returncode=0, stdout=f"formatted:{filename}\n", stderr=""
+            returncode=0,
+            stdout=f"formatted:{filename}\n".encode("utf-8"),
+            stderr=b"",
         )
 
     monkeypatch.setattr(
@@ -2058,7 +5360,10 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "ctx_{&ctx}" in header
     assert "items_{&ctx}" in header
     assert "samples_{&ctx}" in header
-    assert "::protocyte::Status set_id(const ::protocyte::i32 value) noexcept" in header
+    assert "static Sample create(Context& ctx) noexcept" in header
+    assert "static ::protocyte::Result<Sample> create" not in header
+    assert "void set_id(const ::protocyte::i32 value) noexcept" in header
+    assert "set_id(source.id());" in header
     assert "const auto tag = ::protocyte::read_tag(reader);" in header
     assert "const auto [field_number, wire_type] = *tag;" in header
     assert (
@@ -2068,26 +5373,45 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert (
         "insert_or_assign(::protocyte::move(key), ::protocyte::move(value))" in header
     )
-    assert "template <typename Reader>" in header
+    assert "template <::protocyte::ReaderLike Reader>" in header
     assert "::protocyte::Status merge_from(Reader& reader) noexcept" in header
     assert (
-        "::protocyte::Status merge_partial_from(InputReader& reader) noexcept" in header
+        "static ::protocyte::Result<Sample> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept"
+        in header
+    )
+    assert "const auto checked_input = ::protocyte::checked_span_of(input);" in header
+    assert (
+        "if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }"
+        in header
     )
     assert (
-        "::protocyte::Status merge_partial_from(::protocyte::ReaderRef& reader) noexcept"
-        not in header
+        "::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};"
+        in header
     )
+    assert "template <::protocyte::WriterLike Writer>" in header
+    assert (
+        "::protocyte::Result<::protocyte::usize> serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept"
+        in header
+    )
+    assert "return ::protocyte::serialize(*this, output);" in header
+    assert "merge_partial_from" not in header
     assert "friend class ::protocyte::MessageParseAccess;" in header
     assert "ctx_->recursion_depth != 0u" not in header
+    assert "::protocyte::Status merge_field_from_(" in header
+    assert "const auto field_status = [&]" not in header
     assert "::protocyte::Status merge_fields_from(Reader& reader) noexcept" in header
     assert (
-        "::protocyte::ParseBudgetReader<InputReader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
+        "::protocyte::ParseBudgetReader<Reader> budget_reader{reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};"
         in header
     )
     assert "::protocyte::Status validate() const noexcept" in header
     assert "if (const auto st = validate(); !st) { return st; }" in header
     assert (
-        "if (const auto st = ::protocyte::write_fixed_width_packed_values(writer, samples_.data(), samples_.size()); !st) { return st; }"
+        "::protocyte::write_fixed_width_packed_values(writer, samples_.data(), samples_.size())"
+        in header
+    )
+    assert (
+        "return ::protocyte::with_field(st, static_cast<::protocyte::u32>(FieldNumber::samples));"
         in header
     )
     assert "for (const auto &packed_value_samples : samples_) {" not in header
@@ -2096,7 +5420,25 @@ def test_generated_header_contains_expected_field_api() -> None:
         not in header
     )
     assert "for (const auto &packed_value_signed_samples : signed_samples_) {" in header
-    assert "if (const auto st = out->copy_from(*this); !st)" in header
+    assert "if (const auto st = clone(output); !st)" in header
+    assert "copy_from(const Sample& source, Sample& staging_message)" in header
+    assert "Sample staging_message{*ctx_};" in header
+    assert "staging_message.copy_from_in_place_(source)" in header
+    assert "*this = ::protocyte::move(staging_message);" in header
+    assert "::protocyte::Status clone(Sample& output) const noexcept" in header
+    assert "Context* const output_ctx = output.context();" in header
+    assert "reset_for_reuse_(output, *output_ctx);" in header
+    assert "output.copy_from_in_place_(*this)" in header
+    assert (
+        "static ::protocyte::Status parse(Reader& reader, Sample& output) noexcept"
+        in header
+    )
+    assert (
+        "static ::protocyte::Status parse(Context& ctx, Reader& reader, Sample& output) noexcept"
+        not in header
+    )
+    assert "if (const auto st = parse(reader, output); !st)" in header
+    assert "if (const auto st = output.merge_from(reader); !st)" in header
     assert "if (wire_type != ::protocyte::WireType::LEN)" in header
     assert "enum struct FieldNumber : ::protocyte::u32 {" in header
     assert "id = 1u," in header
@@ -2123,8 +5465,7 @@ def test_generated_header_contains_expected_field_api() -> None:
         "if (const auto st = reader.consume_map_entries(1u, field_number); !st)"
     ) < header.index("open_nested_message<Config>(*ctx_, reader, field_number)")
     assert (
-        "read_fixed_width_packed_values(reader, *len, field_number, samples_)"
-        in header
+        "read_fixed_width_packed_values(reader, *len, field_number, samples_)" in header
     )
     assert (
         "read_fixed_width_packed_values(reader, *len, packed_signed_samples_values)"
@@ -2181,9 +5522,9 @@ def test_generated_header_contains_expected_field_api() -> None:
     assert "case 2u: {" in header
     assert "*ctx_, entry_reader, 2u," in header
     assert "::protocyte::skip_field<Config>(*ctx_, entry_reader, entry_wire," in header
-    assert "mutable_items().copy_from(other.items())" in header
-    assert "mutable_samples().copy_from(other.samples())" in header
-    assert "mutable_message_items().copy_from(other.message_items())" in header
+    assert "mutable_items().copy_from(source.items())" in header
+    assert "mutable_samples().copy_from(source.samples())" in header
+    assert "mutable_message_items().copy_from(source.message_items())" in header
     assert "const auto packed_reserve_samples = *len / 4u;" not in header
     assert "packed_samples_values.reserve(packed_reserve_samples)" not in header
     signed_reserve_index = header.index(
@@ -2206,6 +5547,92 @@ def test_generated_header_contains_expected_field_api() -> None:
     )
 
 
+def test_generated_validation_checks_every_string_storage_shape() -> None:
+    source = descriptor_pb2.FileDescriptorProto()
+    source.name = "string_validation.proto"
+    source.package = "demo"
+    source.syntax = "proto3"
+
+    message = source.message_type.add()
+    message.name = "StringFields"
+
+    field = message.field.add()
+    field.name = "name"
+    field.number = 1
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+
+    field = message.field.add()
+    field.name = "aliases"
+    field.number = 2
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_STRING
+
+    message.oneof_decl.add().name = "choice"
+    field = message.field.add()
+    field.name = "choice_text"
+    field.number = 3
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_STRING
+    field.oneof_index = 0
+
+    entry = message.nested_type.add()
+    entry.name = "LabelsEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_STRING
+
+    field = message.field.add()
+    field.name = "labels"
+    field.number = 4
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".demo.StringFields.LabelsEntry"
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append(source.name)
+    request.proto_file.append(source)
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(
+        file.content
+        for file in response.file
+        if file.name == "string_validation.protocyte.hpp"
+    )
+    assert "if (const auto st = name_.validate(); !st) {" in header
+    assert (
+        "st.error().code, {}, static_cast<::protocyte::u32>(FieldNumber::name)"
+    ) in header
+    assert "for (const auto &aliases_value : aliases_) {" in header
+    assert "if (const auto st = aliases_value.validate(); !st) {" in header
+    assert (
+        "st.error().code, {}, static_cast<::protocyte::u32>(FieldNumber::aliases)"
+    ) in header
+    assert "if (choice_case_ == ChoiceCase::choice_text) {" in header
+    assert "if (const auto st = choice_.choice_text_.validate(); !st) {" in header
+    assert (
+        "st.error().code, {}, static_cast<::protocyte::u32>(FieldNumber::choice_text)"
+    ) in header
+    assert "for (const auto &labels_entry : labels_) {" in header
+    assert "if (const auto st = labels_entry.key.validate(); !st) {" in header
+    assert "if (const auto st = labels_entry.value.validate(); !st) {" in header
+    assert (
+        header.count(
+            "st.error().code, {}, static_cast<::protocyte::u32>(FieldNumber::labels)"
+        )
+        == 2
+    )
+
+
 def test_checked_smoke_output_reflects_copy_propagation() -> None:
     header = (
         Path(__file__).resolve().parents[1]
@@ -2222,17 +5649,23 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
         / "cross_package.protocyte.hpp"
     ).read_text(encoding="utf-8")
 
-    assert "copy_from(const UltimateComplexMessage &other) noexcept" in header
-    assert "if (this == &other) {" in header
-    assert "mutable_r_int32_unpacked().copy_from(other.r_int32_unpacked())" in header
-    assert "mutable_r_int32_packed().copy_from(other.r_int32_packed())" in header
-    assert "mutable_r_double().copy_from(other.r_double())" in header
-    assert "mutable_map_str_int32().copy_from(other.map_str_int32())" in header
-    assert "mutable_map_uint64_msg().copy_from(other.map_uint64_msg())" in header
+    assert "copy_from(const UltimateComplexMessage &source) noexcept" in header
+    assert "copy_from(const UltimateComplexMessage &source," in header
+    assert "UltimateComplexMessage &staging_message) noexcept" in header
+    assert "if (this == &source) {" in header
+    assert "mutable_r_int32_unpacked().copy_from(source.r_int32_unpacked())" in header
+    assert "mutable_r_int32_packed().copy_from(source.r_int32_packed())" in header
+    assert "mutable_r_double().copy_from(source.r_double())" in header
+    assert "mutable_map_str_int32().copy_from(source.map_str_int32())" in header
+    assert "mutable_map_uint64_msg().copy_from(source.map_uint64_msg())" in header
     assert (
         "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     )
-    assert "if (const auto st = out->copy_from(*this); !st) {" in header
+    assert "if (const auto st = clone(output); !st) {" in header
+    assert (
+        "::protocyte::Status clone(UltimateComplexMessage &output) const noexcept"
+        in header
+    )
     assert (
         "return has_recursive_self() ? recursive_self_.operator->() : nullptr;"
         in header
@@ -2325,7 +5758,7 @@ def test_model_decodes_constants_and_array_options() -> None:
     assert nested_fields["payload"].array_cpp_max == "16u"
 
 
-def test_rejects_field_cpp_name_collisions() -> None:
+def test_allocates_distinct_field_cpp_names() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("field_collision.proto")
     file = request.proto_file.add()
@@ -2334,7 +5767,7 @@ def test_rejects_field_cpp_name_collisions() -> None:
     file.syntax = "proto3"
     message = file.message_type.add()
     message.name = "Broken"
-    for number, name in enumerate(("class", "class_"), start=1):
+    for number, name in enumerate(("class", "class_protocyte"), start=1):
         field = message.field.add()
         field.name = name
         field.number = number
@@ -2342,11 +5775,15 @@ def test_rejects_field_cpp_name_collisions() -> None:
         field.type = F.TYPE_INT32
 
     response = generate_response(request)
+    model = build_model(request)
 
-    assert (
-        "field collides with 'class' after C++ identifier normalization"
-        in response.error
-    )
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    fields = model.messages["demo.Broken"].fields
+    assert fields[0].cpp_name == "class_protocyte"
+    assert fields[1].cpp_name == "class_protocyte_"
+    assert f"{fields[0].cpp_name}() const noexcept" in header
+    assert f"{fields[1].cpp_name}() const noexcept" in header
 
 
 def test_field_collision_checks_only_emitted_accessors() -> None:
@@ -2380,13 +5817,10 @@ def test_field_collision_checks_only_emitted_accessors() -> None:
         if file.name == "accessor_names.protocyte.hpp"
     )
     assert "void clear_values() noexcept" in header
-    assert (
-        "::protocyte::Status set_set_values(const ::protocyte::i32 value) noexcept"
-        in header
-    )
+    assert "void set_set_values(const ::protocyte::i32 value) noexcept" in header
 
 
-def test_rejects_top_level_cpp_type_name_collisions() -> None:
+def test_preserves_case_for_top_level_cpp_type_names() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("type_collision.proto")
     file = request.proto_file.add()
@@ -2399,11 +5833,13 @@ def test_rejects_top_level_cpp_type_name_collisions() -> None:
 
     response = generate_response(request)
 
-    assert "type collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "struct foo;" in header
+    assert "struct Foo;" in header
 
 
-def test_rejects_enum_value_cpp_name_collisions() -> None:
+def test_enum_value_keyword_escape_is_injective() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("enum_value_collision.proto")
     file = request.proto_file.add()
@@ -2419,11 +5855,13 @@ def test_rejects_enum_value_cpp_name_collisions() -> None:
 
     response = generate_response(request)
 
-    assert "enum value collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "class_ = 0," in header
+    assert "protocyte_escaped_636c6173735f = 1," in header
 
 
-def test_rejects_cpp_namespace_type_collisions() -> None:
+def test_cpp_namespace_keyword_escape_is_injective() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     for proto_name, package in (("and.proto", "and"), ("and_.proto", "and_")):
         request.file_to_generate.append(proto_name)
@@ -2436,8 +5874,391 @@ def test_rejects_cpp_namespace_type_collisions() -> None:
 
     response = generate_response(request)
 
-    assert "type collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    headers = "\n".join(
+        item.content for item in response.file if item.name.endswith(".hpp")
+    )
+    assert "namespace and_ {" in headers
+    assert "namespace protocyte_escaped_616e645f {" in headers
+
+
+@pytest.mark.parametrize(
+    ("symbol_kind", "expected_kind"),
+    [
+        ("message", "type"),
+        ("enum", "type"),
+        ("package_constant", "package constant"),
+    ],
+)
+def test_rejects_child_package_namespace_colliding_with_generated_symbol(
+    symbol_kind: str, expected_kind: str
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("symbol.proto")
+
+    symbol_file = request.proto_file.add(
+        name="symbol.proto", package="foo", syntax="proto3"
+    )
+    symbol_file.dependency.append("child_package.proto")
+    if symbol_kind == "message":
+        symbol_file.message_type.add(name="Bar")
+    elif symbol_kind == "enum":
+        enum = symbol_file.enum_type.add(name="Bar")
+        enum.value.add(name="BAR_UNSPECIFIED", number=0)
+    else:
+        symbol_file.dependency.append("protocyte/options.proto")
+        symbol_file.options.ParseFromString(
+            _package_constant_options_bytes([("Bar", "i32", 1)])
+        )
+        request.proto_file.append(_options_file())
+
+    consumer = symbol_file.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".foo.Bar.Payload",
+    )
+
+    child_file = request.proto_file.add(
+        name="child_package.proto", package="foo.Bar", syntax="proto3"
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        f"foo.Bar: generated {expected_kind} 'Bar' collides with generated "
+        "namespace ::foo::Bar" in response.error
+    )
+    assert "protoc may accept this schema" in response.error
+    assert "compilation may fail" in response.error
+    assert "separately generated headers must agree on their spelling" in response.error
+
+
+def test_namespace_scope_preserves_case_with_prefixes() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(
+        parameter="format=off,namespace_prefix=project::wire"
+    )
+    request.file_to_generate.append("symbol.proto")
+
+    symbol_file = request.proto_file.add(
+        name="symbol.proto", package="foo", syntax="proto3"
+    )
+    symbol_file.message_type.add(name="class")
+    symbol_file.dependency.append("child_package.proto")
+    consumer = symbol_file.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".foo.Class_.Payload",
+    )
+    child_file = request.proto_file.add(
+        name="child_package.proto", package="foo.Class_", syntax="proto3"
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "struct class_;" in header
+    assert "::project::wire::foo::Class_" in header
+    assert "::project::wire::foo::Class_protocyte_" not in header
+    assert "::Payload<Config>" in header
+
+
+def test_rejects_reflection_symbol_collision_with_child_package_namespace() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("reflection.proto")
+
+    reflection_file = request.proto_file.add(
+        name="reflection.proto", package="foo", syntax="proto3"
+    )
+    reflection_file.message_type.add(name="Bar")
+    reflection_file.dependency.append("child_package.proto")
+    consumer = reflection_file.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".foo.protocyte_reflection.Bar_fields.Payload",
+    )
+    child_file = request.proto_file.add(
+        name="child_package.proto",
+        package="foo.protocyte_reflection.Bar_fields",
+        syntax="proto3",
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "foo.Bar: generated reflection symbol 'Bar_fields'" in response.error
+    assert (
+        "collides with generated namespace "
+        "::foo::protocyte_reflection::Bar_fields" in response.error
+    )
+
+
+def test_namespace_scope_validation_ignores_unused_and_custom_option_imports() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("target.proto")
+    target = request.proto_file.add(name="target.proto", package="foo", syntax="proto3")
+    target.dependency.extend(["unused.proto", "custom_options.proto"])
+    target.message_type.add(name="Bar")
+
+    request.proto_file.add(name="unused.proto", package="foo.Bar", syntax="proto3")
+    custom_options = request.proto_file.add(
+        name="custom_options.proto", package="foo.Bar", syntax="proto2"
+    )
+    custom_options.dependency.append("google/protobuf/descriptor.proto")
+    custom_options.extension.add(
+        name="note",
+        number=50000,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_STRING,
+        extendee=".google.protobuf.FileOptions",
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {file.name for file in response.file} == {
+        "target.protocyte.cpp",
+        "target.protocyte.hpp",
+    }
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert '"unused.protocyte.hpp"' not in header
+    assert '"custom_options.protocyte.hpp"' not in header
+
+
+def test_unused_import_cannot_change_generated_type_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("selected.proto")
+    selected = request.proto_file.add(
+        name="selected.proto", package="p", syntax="proto3"
+    )
+    selected.message_type.add(name="A_B")
+
+    baseline = generate_response(request)
+
+    selected.dependency.append("unused.proto")
+    unused = request.proto_file.add(name="unused.proto", package="p", syntax="proto3")
+    outer = unused.message_type.add(name="A")
+    outer.nested_type.add(name="B")
+
+    with_unused_import = generate_response(request)
+
+    assert not baseline.error
+    assert not with_unused_import.error
+    assert [(file.name, file.content) for file in with_unused_import.file] == [
+        (file.name, file.content) for file in baseline.file
+    ]
+
+
+def test_rejects_cross_file_generated_type_name_collision() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("selected.proto")
+    selected = request.proto_file.add(
+        name="selected.proto", package="p", syntax="proto3"
+    )
+    selected.dependency.append("dependency.proto")
+    selected.message_type.add(name="A_B")
+    consumer = selected.message_type.add(name="Consumer")
+    consumer.field.add(
+        name="payload",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_MESSAGE,
+        type_name=".p.A.B",
+    )
+
+    dependency = request.proto_file.add(
+        name="dependency.proto", package="p", syntax="proto3"
+    )
+    outer = dependency.message_type.add(name="A")
+    outer.nested_type.add(name="B")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        "p.A.B: generated type 'A_B' collides with generated type 'p.A_B' "
+        "in namespace ::p" in response.error
+    )
+    assert "protoc may accept this schema" in response.error
+    assert "compilation may fail" in response.error
+    assert "separately generated headers must agree on their spelling" in response.error
+
+
+def test_unused_import_cannot_change_generated_namespace_names() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("child.proto")
+    child = request.proto_file.add(name="child.proto", package="a.B", syntax="proto3")
+    child.message_type.add(name="C")
+
+    baseline = generate_response(request)
+
+    child.dependency.append("unused.proto")
+    unused = request.proto_file.add(name="unused.proto", package="a", syntax="proto3")
+    unused.message_type.add(name="B")
+
+    with_unused_import = generate_response(request)
+
+    assert not baseline.error
+    assert not with_unused_import.error
+    assert [(file.name, file.content) for file in with_unused_import.file] == [
+        (file.name, file.content) for file in baseline.file
+    ]
+
+
+def test_namespace_scope_validation_allows_distinct_symbols_and_packages() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.extend(["symbol.proto", "child_package.proto"])
+
+    symbol_file = request.proto_file.add(
+        name="symbol.proto", package="foo", syntax="proto3"
+    )
+    symbol_file.message_type.add(name="Bar")
+    child_file = request.proto_file.add(
+        name="child_package.proto", package="foo.Baz", syntax="proto3"
+    )
+    child_file.message_type.add(name="Payload")
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert {file.name for file in response.file} == {
+        "child_package.protocyte.cpp",
+        "child_package.protocyte.hpp",
+        "symbol.protocyte.cpp",
+        "symbol.protocyte.hpp",
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("class", "class_"),
+        ("__LINE__", "protocyte_escaped_5f5f4c494e455f5f"),
+        ("value__gap", "protocyte_escaped_76616c75655f5f676170"),
+        ("_Upper", "protocyte_escaped_5f5570706572"),
+        ("trailing_", "trailing_"),
+        ("_", "protocyte_escaped_5f"),
+        ("", "protocyte_escaped_"),
+        ("1", "protocyte_escaped_31"),
+    ],
+)
+def test_cpp_identifier_escapes_problematic_cpp_spellings(
+    name: str, expected: str
+) -> None:
+    actual = cpp_identifier(name)
+
+    assert actual == expected
+    assert not actual.startswith("_")
+    assert "__" not in actual
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("class", "class_protocyte"),
+        ("trailing_", "trailing_protocyte"),
+        ("ordinary", "ordinary"),
+    ],
+)
+def test_cpp_derivable_identifier_avoids_reserved_derived_names(
+    name: str, expected: str
+) -> None:
+    actual = cpp_derivable_identifier(name)
+
+    assert actual == expected
+    assert not actual.startswith("_")
+    assert not actual.endswith("_")
+    assert "__" not in actual
+
+
+@pytest.mark.parametrize(
+    "symbol_kind",
+    ["constant", "enum_value", "field", "nested_type", "oneof", "package", "type"],
+)
+def test_reserved_cpp_identifier_escape_is_injective(
+    symbol_kind: str,
+) -> None:
+    reserved = "__LINE__"
+    escaped = (
+        cpp_pascal_identifier(reserved)
+        if symbol_kind in {"nested_type", "type"}
+        else cpp_identifier(reserved)
+    )
+
+    if symbol_kind == "constant":
+        request = _constant_collision_request(
+            "reserved_escape_collision.proto",
+            [(reserved, "i32", 1), (escaped, "i32", 2)],
+        )
+    else:
+        request = plugin_pb2.CodeGeneratorRequest()
+        if symbol_kind == "package":
+            package_escaped = cpp_identifier(reserved)
+            for index, package in enumerate((reserved, package_escaped), start=1):
+                file = request.proto_file.add()
+                file.name = f"reserved_package_collision_{index}.proto"
+                file.package = package
+                file.syntax = "proto3"
+                file.message_type.add().name = "Payload"
+                request.file_to_generate.append(file.name)
+            escaped = package_escaped
+        else:
+            request.file_to_generate.append("reserved_escape_collision.proto")
+            file = request.proto_file.add()
+            file.name = "reserved_escape_collision.proto"
+            file.package = "demo"
+            file.syntax = "proto3"
+
+            if symbol_kind == "type":
+                for name in (reserved, escaped):
+                    file.message_type.add().name = name
+            elif symbol_kind == "enum_value":
+                enum = file.enum_type.add()
+                enum.name = "Values"
+                for number, name in enumerate((reserved, escaped)):
+                    value = enum.value.add()
+                    value.name = name
+                    value.number = number
+            else:
+                message = file.message_type.add()
+                message.name = "Payload"
+                if symbol_kind == "field":
+                    for number, name in enumerate((reserved, escaped), start=1):
+                        field = message.field.add()
+                        field.name = name
+                        field.number = number
+                        field.label = F.LABEL_OPTIONAL
+                        field.type = F.TYPE_INT32
+                elif symbol_kind == "nested_type":
+                    for name in (reserved, escaped):
+                        message.nested_type.add().name = name
+                else:
+                    for index, name in enumerate((reserved, escaped)):
+                        message.oneof_decl.add().name = name
+                        field = message.field.add()
+                        field.name = f"choice_{index}"
+                        field.number = index + 1
+                        field.label = F.LABEL_OPTIONAL
+                        field.type = F.TYPE_INT32
+                        field.oneof_index = index
+
+    response = generate_response(request)
+
+    assert not response.error
+    assert response.file
 
 
 def test_generated_include_guards_are_unique_for_normalized_path_collisions() -> None:
@@ -2471,6 +6292,46 @@ def test_generated_include_guards_are_unique_for_normalized_path_collisions() ->
     )
 
 
+def test_generated_include_guards_use_portable_ascii_for_unicode_paths() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("².proto")
+    file = request.proto_file.add()
+    file.name = "².proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    message = file.message_type.add()
+    message.name = "Example"
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    guard = header.split("#ifndef ", maxsplit=1)[1].splitlines()[0]
+    assert guard.isascii()
+    assert all(
+        character == "_" or character.isascii() and character.isalnum()
+        for character in guard
+    )
+
+
+def test_generated_include_guards_do_not_emit_reserved_macro_identifiers() -> None:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("__LINE__.proto")
+    file = request.proto_file.add()
+    file.name = "__LINE__.proto"
+    file.package = "demo"
+    file.syntax = "proto3"
+    file.message_type.add().name = "Payload"
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    guard = header.split("#ifndef ", maxsplit=1)[1].splitlines()[0]
+    assert "__" not in guard
+    assert not guard.startswith("_")
+
+
 def test_nested_aliases_use_cpp_identifiers() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("nested_alias.proto")
@@ -2495,8 +6356,8 @@ def test_nested_aliases_use_cpp_identifiers() -> None:
     assert not response.error
     files = {item.name: item.content for item in response.file}
     header = files["nested_alias.protocyte.hpp"]
-    assert "using enum_ = HasNested_Enum_;" in header
-    assert "using class_ = HasNested_Class_<NestedConfig>;" in header
+    assert "using enum_ = HasNested_enum_;" in header
+    assert "using class_ = HasNested_class_<NestedConfig>;" in header
     assert "using enum = " not in header
     assert "using class = " not in header
 
@@ -2524,9 +6385,7 @@ def test_array_expression_emits_validated_numeric_bound_for_cpp_semantics() -> N
     request.proto_file.extend(
         [
             _options_file(),
-            _array_bound_expr_file(
-                "negative_mod_bound.proto", "(u32(-5) % 3) + 1"
-            ),
+            _array_bound_expr_file("negative_mod_bound.proto", "(u32(-5) % 3) + 1"),
         ]
     )
 
@@ -2633,13 +6492,9 @@ def test_destination_conversion_happens_after_cpp_expression_evaluation() -> Non
 
     assert divided.value == 0
     assert divided.numeric_kind == CONSTANT_KIND_INT32
-    assert (
-        _coerce_expression_value(CONSTANT_KIND_UINT32, divided, "u32 division") == 0
-    )
+    assert _coerce_expression_value(CONSTANT_KIND_UINT32, divided, "u32 division") == 0
     with pytest.raises(ProtocyteError, match="value -1 is out of range for uint32"):
-        _coerce_expression_value(
-            CONSTANT_KIND_UINT32, complemented, "u32 complement"
-        )
+        _coerce_expression_value(CONSTANT_KIND_UINT32, complemented, "u32 complement")
 
 
 @pytest.mark.parametrize(
@@ -3168,9 +7023,7 @@ def test_string_destinations_reject_non_utf8_values_before_emission() -> None:
 @pytest.mark.parametrize(
     "expression",
     [
-        "(" * (_MAX_EXPRESSION_NESTING + 1)
-        + "1"
-        + ")" * (_MAX_EXPRESSION_NESTING + 1),
+        "(" * (_MAX_EXPRESSION_NESTING + 1) + "1" + ")" * (_MAX_EXPRESSION_NESTING + 1),
         "i32(" * (_MAX_EXPRESSION_NESTING + 1)
         + "1"
         + ")" * (_MAX_EXPRESSION_NESTING + 1),
@@ -3186,11 +7039,7 @@ def test_expression_nesting_limit_returns_a_stable_error(expression: str) -> Non
 
 
 def test_expression_nesting_limit_accepts_the_boundary() -> None:
-    expression = (
-        "(" * _MAX_EXPRESSION_NESTING
-        + "1"
-        + ")" * _MAX_EXPRESSION_NESTING
-    )
+    expression = "(" * _MAX_EXPRESSION_NESTING + "1" + ")" * _MAX_EXPRESSION_NESTING
 
     parsed = _ExprParser(expression, lambda name: None, expression).parse()
 
@@ -3557,9 +7406,7 @@ def test_pow_has_deterministic_binary64_results(
         ("pow(3, -35)", 0x3C770B3C7BC7EE0D),
     ],
 )
-def test_pow_rounds_exact_results_directly(
-    expression: str, expected_bits: int
-) -> None:
+def test_pow_rounds_exact_results_directly(expression: str, expected_bits: int) -> None:
     parsed = _ExprParser(expression, lambda name: None, expression).parse()
 
     assert struct.unpack("<Q", struct.pack("<d", parsed.value))[0] == expected_bits
@@ -3902,7 +7749,7 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "::protocyte::Array<::protocyte::i32, 4u> values_;" in header
     assert "bool has_digest() const noexcept { return digest_.has_value(); }" in header
     assert "::protocyte::Span<::protocyte::u8> mutable_digest() noexcept {" in header
-    assert "if (ctx_->limits.max_string_bytes < 32u) {" in header
+    assert "max_string_bytes" not in header
     assert "::protocyte::usize digest_size() const noexcept" not in header
     assert "digest_max_size" not in header
     assert (
@@ -3951,7 +7798,8 @@ def test_generated_header_emits_constants_and_array_storage() -> None:
     assert "const auto view = ::protocyte::cstring_byte_span_of(value);" not in header
     assert "const auto view = ::protocyte::text_byte_span_of(value);" not in header
     assert "if (!view)" in header
-    assert "return view.status();" in header
+    assert "return ::protocyte::with_field(view.status()," in header
+    assert "FieldNumber::blob" in header
     assert "if (const auto st = blob_.assign(*view); !st)" in header
     assert "if (*len != 32u)" in header
     assert "if (!values_.empty() && values_.size() != 4u) {" in header
@@ -3996,12 +7844,12 @@ def test_generated_header_copies_and_moves_bounded_arrays() -> None:
     header = files["arrays.protocyte.hpp"]
     runtime_header = files["protocyte/runtime/runtime.hpp"]
 
-    assert "if (other.has_digest()) {" in header
-    assert "set_digest(other.digest())" in header
-    assert "set_blob(other.blob())" in header
-    assert "set_hex_blob(other.hex_blob())" in header
+    assert "if (source.has_digest()) {" in header
+    assert "set_digest(source.digest())" in header
+    assert "set_blob(source.blob())" in header
+    assert "set_hex_blob(source.hex_blob())" in header
     assert "values_{&ctx}" in header
-    assert "mutable_values().copy_from(other.values())" in header
+    assert "mutable_values().copy_from(source.values())" in header
     assert "Array(Array &&other) noexcept" in runtime_header
     assert "Array &operator=(Array &&other) noexcept" in runtime_header
     assert "Status copy_from(const Array &other) noexcept" in runtime_header
@@ -4091,7 +7939,7 @@ def test_rejects_internal_typed_constant_literal_overflow_and_array_exclusivity(
     constant = _build_constants(
         owner,
         SimpleNamespace(
-                message_constants=lambda options, *, label: [
+            message_constants=lambda options, *, label: [
                 SimpleNamespace(
                     name="BROKEN",
                     kind=CONSTANT_KIND_UINT32,
@@ -4123,10 +7971,12 @@ def test_rejects_internal_typed_constant_literal_overflow_and_array_exclusivity(
         )
 
 
-def test_rejects_invalid_constant_cpp_identifier() -> None:
+def test_encodes_invalid_constant_cpp_identifier() -> None:
     response = generate_response(_invalid_cpp_identifier_request())
 
-    assert "constant name is not a valid C++ identifier" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "protocyte_escaped_31 {1}" in header
 
 
 def test_generated_header_copies_oneof_state() -> None:
@@ -4137,21 +7987,24 @@ def test_generated_header_copies_oneof_state() -> None:
         item.content for item in response.file if item.name == "oneof.protocyte.hpp"
     )
 
-    assert "if (this == &other) {" in header
+    assert "if (this == &source) {" in header
     assert "return {};" in header
-    assert "switch (other.choice_case_) {" in header
+    assert "switch (source.choice_case_) {" in header
     assert "case ChoiceCase::text: {" in header
-    assert "if (const auto st = set_text(other.text()); !st) {" in header
+    assert "if (const auto st = set_text(source.text()); !st) {" in header
     assert "return st;" in header
     assert "const auto ensured_inner = ensure_inner();" in header
-    assert "if (!ensured_inner) { return ensured_inner.status(); }" in header
+    assert "if (!ensured_inner) {" in header
+    assert "return ::protocyte::with_field(ensured_inner.status()," in header
+    assert "FieldNumber::inner" in header
     assert (
-        "if (const auto st = ensured_inner->copy_from(*other.inner()); !st) {" in header
+        "if (const auto st = ensured_inner->copy_from(*source.inner()); !st) {"
+        in header
     )
     assert "clear_choice();" in header
 
 
-def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
+def test_generated_header_uses_source_for_repeated_array_only_copy() -> None:
     response = generate_response(_repeated_array_only_request())
 
     assert not response.error
@@ -4161,13 +8014,13 @@ def test_generated_header_uses_other_for_repeated_array_only_copy() -> None:
         if item.name == "repeated_array_only.protocyte.hpp"
     )
 
-    assert "copy_from(const OnlyArrays& other) noexcept" in header
-    assert "if (this == &other) {" in header
+    assert "copy_from(const OnlyArrays& source) noexcept" in header
+    assert "if (this == &source) {" in header
     assert "return {};" in header
-    assert "mutable_values().copy_from(other.values())" in header
+    assert "mutable_values().copy_from(source.values())" in header
 
 
-def test_generated_header_uses_real_other_for_map_only_copy() -> None:
+def test_generated_header_uses_real_source_for_map_only_copy() -> None:
     response = generate_response(_map_only_request())
 
     assert not response.error
@@ -4175,11 +8028,11 @@ def test_generated_header_uses_real_other_for_map_only_copy() -> None:
         item.content for item in response.file if item.name == "map_only.protocyte.hpp"
     )
 
-    assert "copy_from(const OnlyMaps& other) noexcept" in header
-    assert "if (this == &other) {" in header
-    assert "const auto& source = other;" in header
-    assert "mutable_items().copy_from(source.items())" in header
-    assert "if (const auto st = out->copy_from(*this); !st) {" in header
+    assert "copy_from(const OnlyMaps& source) noexcept" in header
+    assert "if (this == &source) {" in header
+    assert "const auto& map_source = source;" in header
+    assert "mutable_items().copy_from(map_source.items())" in header
+    assert "if (const auto st = clone(output); !st) {" in header
 
 
 def test_rejects_invalid_hex_numeric_literals() -> None:
@@ -4217,9 +8070,7 @@ def test_expression_parser_failures_are_public_generator_errors(
     assert not response.file
 
 
-@pytest.mark.parametrize(
-    "package_scope", [False, True], ids=["message", "package"]
-)
+@pytest.mark.parametrize("package_scope", [False, True], ids=["message", "package"])
 def test_constant_dependency_nesting_accepts_the_boundary(
     package_scope: bool,
 ) -> None:
@@ -4238,9 +8089,7 @@ def test_constant_dependency_nesting_accepts_the_boundary(
     assert constants[0].value == 1
 
 
-@pytest.mark.parametrize(
-    "package_scope", [False, True], ids=["message", "package"]
-)
+@pytest.mark.parametrize("package_scope", [False, True], ids=["message", "package"])
 def test_constant_dependency_nesting_returns_a_public_error(
     package_scope: bool,
 ) -> None:
@@ -4268,9 +8117,7 @@ def test_constant_dependency_nesting_returns_a_public_error(
     assert not response.file
 
 
-@pytest.mark.parametrize(
-    "package_scope", [False, True], ids=["message", "package"]
-)
+@pytest.mark.parametrize("package_scope", [False, True], ids=["message", "package"])
 def test_constant_dependency_nesting_is_independent_of_declaration_order(
     package_scope: bool,
 ) -> None:
@@ -4300,17 +8147,11 @@ def test_constant_dependency_nesting_is_independent_of_declaration_order(
     assert not response.file
 
 
-@pytest.mark.parametrize(
-    "package_scope", [False, True], ids=["message", "package"]
-)
+@pytest.mark.parametrize("package_scope", [False, True], ids=["message", "package"])
 def test_expression_and_dependency_nesting_boundaries_compose(
     package_scope: bool,
 ) -> None:
-    expression = (
-        "(" * _MAX_EXPRESSION_NESTING
-        + "1"
-        + ")" * _MAX_EXPRESSION_NESTING
-    )
+    expression = "(" * _MAX_EXPRESSION_NESTING + "1" + ")" * _MAX_EXPRESSION_NESTING
     request = _constant_dependency_chain_request(
         _MAX_CONSTANT_DEPENDENCY_DEPTH,
         package_scope=package_scope,
@@ -4329,21 +8170,14 @@ def test_expression_and_dependency_nesting_boundaries_compose(
     assert not response.error
 
 
-@pytest.mark.parametrize(
-    "package_scope", [False, True], ids=["message", "package"]
-)
+@pytest.mark.parametrize("package_scope", [False, True], ids=["message", "package"])
 def test_composed_nesting_failure_is_a_public_generator_error(
     package_scope: bool,
 ) -> None:
     expression = (
-        "(" * (_MAX_EXPRESSION_NESTING + 1)
-        + "1"
-        + ")" * (_MAX_EXPRESSION_NESTING + 1)
+        "(" * (_MAX_EXPRESSION_NESTING + 1) + "1" + ")" * (_MAX_EXPRESSION_NESTING + 1)
     )
-    expected = (
-        "expression nesting exceeds maximum depth of "
-        f"{_MAX_EXPRESSION_NESTING}"
-    )
+    expected = f"expression nesting exceeds maximum depth of {_MAX_EXPRESSION_NESTING}"
     with pytest.raises(ProtocyteError, match=expected):
         build_model(
             _constant_dependency_chain_request(
@@ -4412,11 +8246,15 @@ def test_generated_header_emits_cross_message_constant_arrays() -> None:
     header = files["cross.protocyte.hpp"]
 
     assert "static constexpr ::protocyte::u32 ROOT_CAP {6u};" in header
-    assert 'static constexpr ::protocyte::StringView ROOT_LABEL {"cross", 5u};' in header
+    assert (
+        'static constexpr ::protocyte::StringView ROOT_LABEL {"cross", 5u};' in header
+    )
     assert "static constexpr bool ROOT_ENABLED {true};" in header
     assert "static constexpr ::protocyte::u32 MIRRORED_CAP {18u};" in header
     assert "static constexpr ::protocyte::u32 DIRECT_CAP {8u};" in header
-    assert 'static constexpr ::protocyte::StringView PREFIX {"cross-sink", 10u};' in header
+    assert (
+        'static constexpr ::protocyte::StringView PREFIX {"cross-sink", 10u};' in header
+    )
     assert "static constexpr bool READY {true};" in header
     assert "::protocyte::ByteArray<8u> payload_;" in header
     assert "::protocyte::Array<::protocyte::i32, 18u> values_;" in header
@@ -4450,7 +8288,9 @@ def test_generated_header_emits_cross_package_package_constant_arrays() -> None:
 
     assert "inline constexpr ::protocyte::u32 FROM_EXTERNAL {15u};" in header
     assert "static constexpr ::protocyte::u32 MIRROR {30u};" in header
-    assert 'static constexpr ::protocyte::StringView NAME {"pkg-label-ok", 12u};' in header
+    assert (
+        'static constexpr ::protocyte::StringView NAME {"pkg-label-ok", 12u};' in header
+    )
     assert "::protocyte::ByteArray<8u> payload_;" in header
     assert "::protocyte::Array<::protocyte::i32, 15u> values_;" in header
 
@@ -4530,7 +8370,7 @@ def test_rejects_invalid_array_targets_and_constant_cycles() -> None:
     assert "cycle detected" in cycle_response.error
 
 
-def test_rejects_constant_name_collisions() -> None:
+def test_allocates_constant_name_collisions() -> None:
     duplicate_response = generate_response(
         _constant_collision_request(
             "duplicate.proto", [("dup", "i32", 1), ("dup", "i32", 2)]
@@ -4549,9 +8389,27 @@ def test_rejects_constant_name_collisions() -> None:
     )
 
     assert "constant cannot be redefined" in duplicate_response.error
-    assert "collides after C++ identifier normalization" in normalized_response.error
-    assert "collides with generated API" in reserved_response.error
-    assert "collides with generated API" in validate_reserved_response.error
+    for response in (
+        normalized_response,
+        reserved_response,
+        validate_reserved_response,
+    ):
+        assert not response.error
+    normalized_header = next(
+        item.content for item in normalized_response.file if item.name.endswith(".hpp")
+    )
+    assert "protocyte_escaped_6361702d76616c7565" in normalized_header
+    assert "cap_value" in normalized_header
+    reserved_header = next(
+        item.content for item in reserved_response.file if item.name.endswith(".hpp")
+    )
+    validate_header = next(
+        item.content
+        for item in validate_reserved_response.file
+        if item.name.endswith(".hpp")
+    )
+    assert "create_ {1}" in reserved_header
+    assert "validate_ {1}" in validate_header
 
 
 def test_generated_header_emits_tagged_union_oneofs() -> None:
@@ -4600,9 +8458,9 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
         "return has_inner() && choice_.inner_.has_value() ? choice_.inner_.operator->() : nullptr;"
         in header
     )
-    assert (
-        "if (const auto st = choice_.inner_->validate(); !st) { return st; }" in header
-    )
+    assert "if (const auto st = choice_.inner_->validate(); !st) {" in header
+    assert "return ::protocyte::with_field(st," in header
+    assert "FieldNumber::inner" in header
     assert "(*choice_.inner_).validate()" not in header
     assert (
         "::protocyte::Result<::demo::Carrier_Inner<Config>&> ensure_inner() noexcept"
@@ -4612,7 +8470,8 @@ def test_generated_header_emits_tagged_union_oneofs() -> None:
     assert "new (&choice_.none_)::protocyte::u8(0u);" not in header
     assert "::protocyte::u8 none_;" not in header
     assert "if (const auto st = choice_.inner_.emplace(*ctx_); !st) {" in header
-    assert "return ::protocyte::unexpected(st.error());" in header
+    assert "return ::protocyte::unexpected(" in header
+    assert "::protocyte::with_field(st.error()," in header
     assert "return *choice_.inner_;" in header
     assert "clear_choice();" in header
     assert "choice_case_ == ChoiceCase::text" in header
@@ -4648,44 +8507,195 @@ def test_generated_header_suffixes_shadow_prone_oneof_storage() -> None:
         "constexpr bool bool_value() const noexcept { return has_bool_value() ? value_.bool_value_ : false; }"
         in header
     )
-    assert "::protocyte::Status set_bool_value(const bool value) noexcept" in header
+    assert "void set_bool_value(const bool value) noexcept" in header
     assert (
         "constexpr ValueCase value_case() const noexcept { return value_case_; }"
         in header
     )
 
 
-def test_cpp_name_registry_tracks_generated_names_by_emitted_scope() -> None:
+def test_model_stores_allocated_names_by_emitted_scope() -> None:
     model = build_model(_oneof_request())
-    registry = protocyte_cpp._build_message_cpp_name_registry(
-        model.messages["demo.Carrier"], protocyte_cpp.GeneratorOptions()
-    )
+    message = model.messages["demo.Carrier"]
+    oneof = message.oneofs[0]
+    text = oneof.fields[0]
 
-    class_scope = registry.scope("demo.Carrier")
-    choice_scope = registry.scope("demo.Carrier::ChoiceStorage")
-    choice_case_scope = registry.scope("demo.Carrier::ChoiceCase")
-    field_number_scope = registry.scope("demo.Carrier::FieldNumber")
+    assert message.emitted_names["context_storage"] == "ctx_"
+    assert message.emitted_names["unknown_storage"] == "unknown_fields_"
+    assert message.emitted_names["merge_field_from_"] == "merge_field_from_"
+    assert oneof.emitted_names == {
+        "case_type": "ChoiceCase",
+        "case_accessor": "choice_case",
+        "clear": "clear_choice",
+        "case_storage": "choice_case_",
+        "storage_type": "ChoiceStorage",
+        "storage": "choice_",
+    }
+    assert text.emitted_names["oneof_case"] == "text"
+    assert text.emitted_names["oneof_storage"] == "text_"
 
-    assert class_scope.owner("ctx_") == "generated context storage"
-    assert class_scope.owner("choice_") == "oneof choice storage"
-    assert class_scope.owner("choice_case_") == "oneof choice case storage"
-    assert class_scope.owner("ChoiceStorage") == "oneof choice storage type"
-    assert class_scope.owner("text_") is None
-    assert choice_scope.owner("text_") == "oneof field text storage"
-    assert choice_case_scope.owner("none") == "oneof choice empty case"
-    assert choice_case_scope.owner("text") == "oneof field text case"
-    assert field_number_scope.owner("text") == "field text number"
 
-
-def test_cpp_function_registry_rejects_parameters_that_shadow_visible_storage() -> None:
-    function_scope = protocyte_cpp._CppFunctionScope(
-        "demo.Message::set_flag", visible_storage={"value"}
-    )
+def test_model_rejects_missing_allocated_cpp_name() -> None:
+    model = build_model(_oneof_request())
+    message = model.messages["demo.Carrier"]
+    text = message.oneofs[0].fields[0]
+    del text.emitted_names["setter"]
 
     with pytest.raises(
-        ProtocyteError, match="parameter 'value' shadows visible generated storage"
+        AssertionError,
+        match=r"demo\.Carrier\.text: missing allocated C\+\+ names: setter",
     ):
-        function_scope.parameter("value")
+        _validate_message_cpp_name_allocations(message)
+
+
+def test_model_allocates_names_for_synthetic_map_fields() -> None:
+    model = build_model(_basic_request(parameter="format=off"))
+    message = model.messages["demo.Sample"]
+    items = next(item for item in message.fields if item.name == "items")
+    assert items.map_key is not None
+    assert items.map_value is not None
+
+    assert items.map_key.emitted_names["implementation:decoded"] == "decoded_key"
+    assert items.map_key.emitted_names["storage"] == "key_"
+    assert items.map_value.emitted_names["implementation:decoded"] == "decoded_value"
+    assert items.map_value.emitted_names["storage"] == "value_"
+
+
+def test_header_emission_requires_an_allocated_cpp_namespace() -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    request.file_to_generate.append("runtime_namespace.proto")
+    file = request.proto_file.add(
+        name="runtime_namespace.proto",
+        package="protocyte.Span",
+        syntax="proto3",
+    )
+    file.message_type.add(name="Payload")
+
+    model = build_model(request)
+    file_model = model.files["runtime_namespace.proto"]
+    assert file_model.cpp_namespace is None
+
+    with pytest.raises(
+        AssertionError,
+        match="runtime_namespace.proto: missing allocated C\\+\\+ namespace spelling",
+    ):
+        protocyte_cpp.generate_header(
+            file_model,
+            protocyte_cpp.GeneratorOptions(format_mode="off"),
+        )
+
+    response = generate_response(request)
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "namespace protocyte::Span_protocyte_" in header
+
+
+def test_generated_internal_template_names_do_not_shadow_legal_message_names() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="internal_names.proto", package="demo", syntax="proto3"
+    )
+    config = file.message_type.add(name="Config")
+    config.field.add(name="text", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_STRING)
+    file.message_type.add(name="Reader")
+    file.message_type.add(name="Writer")
+    value = file.message_type.add(name="Value")
+    value.field.add(name="text", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_STRING)
+    generic = file.message_type.add(name="T")
+    generic.oneof_decl.add(name="choice")
+    generic.field.add(
+        name="text",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_STRING,
+        oneof_index=0,
+    )
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "template <typename Config_ = ::protocyte::DefaultConfig>" in header
+    assert "struct Config;" in header
+    assert "typename Config_::String text_;" in header
+    assert "template <::protocyte::ReaderLike Reader_>" in header
+    assert "struct Reader" in header
+    assert "template <::protocyte::WriterLike Writer_>" in header
+    assert "struct Writer" in header
+    assert "template<class Value_>" in header
+    assert "struct Value" in header
+    assert "template <typename T_>" in header
+    assert "struct T" in header
+
+
+@pytest.mark.parametrize("collision_kind", ["field", "nested_message", "nested_enum"])
+def test_allocates_injected_class_name_collisions(collision_kind: str) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="injected_name.proto", package="demo", syntax="proto3"
+    )
+    message = file.message_type.add(name="Payload")
+    if collision_kind == "field":
+        message.field.add(
+            name="Payload", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32
+        )
+    elif collision_kind == "nested_message":
+        message.nested_type.add(name="Payload")
+    else:
+        nested_enum = message.enum_type.add(name="Payload")
+        nested_enum.value.add(name="PAYLOAD_UNSPECIFIED", number=0)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "Payload_" in header
+
+
+def test_allows_serialize_to_field_after_span_overload_rename() -> None:
+    request = _basic_request()
+    message = request.proto_file[0].message_type[0]
+    field = message.field.add()
+    field.name = "serialize_to"
+    field.number = 100
+    field.label = F.LABEL_OPTIONAL
+    field.type = F.TYPE_INT32
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(file.content for file in response.file if file.name.endswith(".hpp"))
+    assert "serialize_to() const noexcept" in header
+
+
+@pytest.mark.parametrize("nested_name", ["merge_field_from_", "merge_fields_from"])
+def test_allocates_nested_messages_that_collide_with_generated_merge_helpers(
+    nested_name: str,
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="merge_helper_collision.proto", package="demo", syntax="proto3"
+    )
+    parent = file.message_type.add(name="Container")
+    nested = parent.nested_type.add(name=nested_name)
+    nested.field.add(name="value", number=1, label=F.LABEL_OPTIONAL, type=F.TYPE_INT32)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    if nested_name == "merge_field_from_":
+        assert "using merge_field_from_ = " in header
+        assert "merge_field_from_protocyte(" in header
+    else:
+        assert "using merge_fields_from_ = " in header
+        assert "merge_fields_from(" in header
 
 
 def test_generated_header_uses_normalized_oneof_case_type() -> None:
@@ -4702,52 +8712,55 @@ def test_generated_header_uses_normalized_oneof_case_type() -> None:
         if file.name == "keyword_oneof.protocyte.hpp"
     )
     assert "enum struct And_Case" in header
-    assert "constexpr And_Case and__case() const noexcept" in header
-    assert "and__case_ == And_Case::value" in header
+    assert "constexpr And_Case and_protocyte_case() const noexcept" in header
+    assert "and_protocyte_case_ == And_Case::value" in header
     assert "AndCase" not in header
 
 
-def test_rejects_oneof_cpp_name_collisions() -> None:
+def test_allocates_oneof_cpp_name_collisions() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_collision.proto")
     request.proto_file.append(_oneof_collision_file())
 
     response = generate_response(request)
 
-    assert "oneof collides with" in response.error
-    assert "after C++ identifier normalization" in response.error
+    assert not response.error
+    assert response.file
 
 
 @pytest.mark.parametrize("oneof_name", ["ctx", "context", "destroy_at"])
-def test_rejects_oneof_fixed_generated_name_collisions(oneof_name: str) -> None:
+def test_allocates_oneof_fixed_generated_name_collisions(oneof_name: str) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_internal_collision.proto")
     request.proto_file.append(_oneof_internal_collision_file(oneof_name))
 
     response = generate_response(request)
 
-    assert "oneof collides with generated API" in response.error
+    assert not response.error
+    assert response.file
 
 
-@pytest.mark.parametrize("field_name", ["choice_case_", "none"])
-def test_rejects_oneof_generated_member_collisions(field_name: str) -> None:
+@pytest.mark.parametrize("field_name", ["none"])
+def test_allocates_oneof_generated_member_collisions(field_name: str) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("oneof_member_collision.proto")
     request.proto_file.append(_oneof_member_collision_file(field_name))
 
     response = generate_response(request)
 
-    assert "field collides with generated API" in response.error
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "none_ = " in header
 
 
 @pytest.mark.parametrize(
     ("oneof_name", "field_name"),
     [
-        ("class", "class_"),
+        ("class", "class_protocyte"),
         ("choice", "choice"),
     ],
 )
-def test_rejects_field_backing_member_collisions_with_oneof_storage(
+def test_allocates_field_backing_member_collisions_with_oneof_storage(
     oneof_name: str, field_name: str
 ) -> None:
     request = plugin_pb2.CodeGeneratorRequest()
@@ -4756,17 +8769,19 @@ def test_rejects_field_backing_member_collisions_with_oneof_storage(
 
     response = generate_response(request)
 
-    assert "field collides with generated API" in response.error
+    assert not response.error
+    assert response.file
 
 
-def test_rejects_presence_flag_collisions_with_oneof_storage() -> None:
+def test_allocates_presence_flag_collisions_with_oneof_storage() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("presence_flag_collision.proto")
     request.proto_file.append(_presence_flag_collision_file())
 
     response = generate_response(request)
 
-    assert "field collides with generated API" in response.error
+    assert not response.error
+    assert response.file
 
 
 def test_generated_header_parses_bounded_oneof_bytes() -> None:
@@ -4810,7 +8825,14 @@ def test_generated_header_parses_bounded_oneof_bytes() -> None:
         "static_cast<void>(choice_.data_.resize_for_overwrite(old_data_size));"
         not in header
     )
-    assert "if (*len > ctx_->limits.max_string_bytes) {" in header
+    data_setter = header.split("set_data(const Value &value) noexcept", maxsplit=1)[
+        1
+    ].split("template<typename Reader>", maxsplit=1)[0]
+    data_parse_case = header.split("case FieldNumber::data:", maxsplit=1)[1].split(
+        "default:", maxsplit=1
+    )[0]
+    assert "max_string_bytes" not in data_setter
+    assert "max_string_bytes" not in data_parse_case
     assert "new (&choice_.data_)::protocyte::ByteArray<8u> {ctx_};" not in header
 
 
@@ -4830,19 +8852,22 @@ def test_recursive_oneof_box_sets_case_after_successful_ensure() -> None:
     ensure_body = header.split(
         "Result<::demo::Node<Config>&> ensure_child()", maxsplit=1
     )[1]
-    ensure_body = ensure_body.split("template <typename Reader>", maxsplit=1)[0]
+    ensure_body = ensure_body.split(
+        "template <::protocyte::ReaderLike Reader>", maxsplit=1
+    )[0]
 
     assert "auto ensured = choice_.child_.ensure();" in ensure_body
     assert (
-        "if (!ensured) {\n      destroy_at_(&choice_.child_);\n      return ensured;\n    }"
+        "if (!ensured) {\n      destroy_at_(&choice_.child_);\n      return ::protocyte::with_field("
         in ensure_body
     )
+    assert "FieldNumber::child" in ensure_body
     assert ensure_body.index(
         "auto ensured = choice_.child_.ensure();"
     ) < ensure_body.index("choice_case_ = ChoiceCase::child;")
 
 
-def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
+def test_empty_message_accounts_for_unknown_fields() -> None:
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append("empty.proto")
     request.proto_file.append(_empty_file())
@@ -4854,15 +8879,43 @@ def test_empty_message_comments_unused_writer_and_returns_zero_size() -> None:
         file.content for file in response.file if file.name == "empty.protocyte.hpp"
     )
 
-    assert (
-        "::protocyte::Status serialize(Writer& /* writer */) const noexcept {" in header
-    )
+    assert "::protocyte::Status serialize(Writer& writer) const noexcept {" in header
+    assert "const auto unknown_bytes = unknown_fields_.bytes();" in header
     assert (
         "::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {"
         in header
     )
-    assert "::protocyte::usize total {};" not in header
-    assert "return ::protocyte::usize {};" in header
+    assert "::protocyte::usize total {};" in header
+    assert "::protocyte::checked_add(total, unknown_fields_.size())" in header
+    assert "return *total_with_unknown;" in header
+
+
+def test_generated_message_exposes_opt_in_unknown_field_api() -> None:
+    response = generate_response(_basic_request())
+
+    assert not response.error
+    header = next(
+        file.content for file in response.file if file.name == "simple.protocyte.hpp"
+    )
+
+    assert "::protocyte::UnknownFieldRange unknown_fields() const noexcept" in header
+    assert "::protocyte::usize unknown_field_count() const noexcept" in header
+    assert "unknown_field_bytes() const noexcept" in header
+    assert "void clear_unknown_fields() noexcept" in header
+    assert (
+        "::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields()" in header
+    )
+    assert "requires(::protocyte::preserve_unknown_fields_v<Config>)" in header
+    assert (
+        "PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;"
+        in header
+    )
+    assert "::protocyte::read_unknown_field<Config>" in header
+    assert "if constexpr (::protocyte::preserve_unknown_fields_v<Config>)" in header
+    assert "ctx_->limits.max_recursion_depth" in header
+    assert "ctx_->limits.max_unknown_field_bytes" in header
+    assert "staged_items_entry" not in header
+    assert "staged_message_items_entry" not in header
 
 
 def test_generated_encoded_size_omits_redundant_uint64_varint_casts() -> None:
@@ -4932,6 +8985,35 @@ def test_generated_header_keeps_runtime_status_globally_qualified() -> None:
     assert "namespace test::protocyte {" in header
     assert "::protocyte::Status merge_from(Reader& reader) noexcept {" in header
     assert "::protocyte::Status serialize(Writer& writer) const noexcept {" in header
+
+
+@pytest.mark.parametrize(
+    ("package", "parameter"),
+    [
+        ("protocyte", "format=off"),
+        ("protocyte.user", "format=off"),
+        ("demo", "format=off,namespace_prefix=protocyte"),
+        ("demo", "format=off,namespace_prefix=protocyte::generated"),
+    ],
+)
+def test_allows_generation_into_runtime_owned_namespace(
+    package: str, parameter: str
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="runtime_namespace.proto", package=package, syntax="proto3"
+    )
+    file.message_type.add(name="Status")
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter=parameter, proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "namespace protocyte" in header
+    if package == "protocyte":
+        assert "Status_protocyte_" in header
 
 
 def test_packaged_options_proto_is_the_only_repo_copy() -> None:
@@ -5182,9 +9264,7 @@ def _constant_scope_identity_collision_request() -> plugin_pb2.CodeGeneratorRequ
     message_file.dependency.append("protocyte/options.proto")
     message = message_file.message_type.add()
     message.name = "Foo"
-    message.options.ParseFromString(
-        _constant_options_bytes([("C", "i32_expr", "1")])
-    )
+    message.options.ParseFromString(_constant_options_bytes([("C", "i32_expr", "1")]))
 
     request = plugin_pb2.CodeGeneratorRequest()
     request.file_to_generate.append(message_file.name)
@@ -6244,7 +10324,7 @@ def _oneof_collision_file() -> descriptor_pb2.FileDescriptorProto:
 
     message = file.message_type.add()
     message.name = "Broken"
-    for name in ("and", "and_"):
+    for name in ("and", "and_protocyte"):
         message.oneof_decl.add().name = name
 
     for index, name in enumerate(("first", "second")):
@@ -6394,6 +10474,27 @@ def _proto2_request() -> plugin_pb2.CodeGeneratorRequest:
     return request
 
 
+def _proto2_floating_default_request(
+    field_type: int, default_value: str
+) -> plugin_pb2.CodeGeneratorRequest:
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.file_to_generate.append("floating_default.proto")
+    file = request.proto_file.add()
+    file.name = "floating_default.proto"
+    file.package = "defaults"
+    file.syntax = "proto2"
+    message = file.message_type.add()
+    message.name = "FloatingDefault"
+    message.field.add(
+        name="value",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=field_type,
+        default_value=default_value,
+    )
+    return request
+
+
 def _proto2_file() -> descriptor_pb2.FileDescriptorProto:
     file = descriptor_pb2.FileDescriptorProto()
     file.name = "legacy.proto"
@@ -6487,6 +10588,15 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     value.number = 5
     value = enum.value.add()
     value.name = "DEFAULT_CHOICE_READY"
+    value.number = 9
+
+    enum = file.enum_type.add()
+    enum.name = "MapChoice"
+    value = enum.value.add()
+    value.name = "MAP_CHOICE_UNKNOWN"
+    value.number = 0
+    value = enum.value.add()
+    value.name = "MAP_CHOICE_READY"
     value.number = 9
 
     nested = file.message_type.add()
@@ -6610,7 +10720,116 @@ def _proto2_default_semantics_file() -> descriptor_pb2.FileDescriptorProto:
     field.type = F.TYPE_INT32
     field.default_value = "17"
 
+    entry = message.nested_type.add()
+    entry.name = "ChoicesByNameEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_ENUM
+    value.type_name = ".defaults.MapChoice"
+
+    field = message.field.add()
+    field.name = "choices_by_name"
+    field.number = 16
+    field.label = F.LABEL_REPEATED
+    field.type = F.TYPE_MESSAGE
+    field.type_name = ".defaults.Defaults.ChoicesByNameEntry"
+
     return file
+
+
+def _cross_syntax_enum_request() -> plugin_pb2.CodeGeneratorRequest:
+    open_enum = descriptor_pb2.FileDescriptorProto()
+    open_enum.name = "open_enum.proto"
+    open_enum.package = "open"
+    open_enum.syntax = "proto3"
+    enum = open_enum.enum_type.add()
+    enum.name = "Mode"
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    enum.value.add(name="MODE_READY", number=1)
+
+    consumer = descriptor_pb2.FileDescriptorProto()
+    consumer.name = "legacy_consumer.proto"
+    consumer.package = "legacy"
+    consumer.syntax = "proto2"
+    consumer.dependency.append(open_enum.name)
+
+    local_enum = consumer.enum_type.add()
+    local_enum.name = "ClosedMode"
+    local_enum.value.add(name="CLOSED_MODE_UNSPECIFIED", number=0)
+    local_enum.value.add(name="CLOSED_MODE_READY", number=1)
+
+    message = consumer.message_type.add()
+    message.name = "Consumer"
+    message.oneof_decl.add(name="imported_open_choice")
+
+    def add_open_enum_field(
+        name: str,
+        number: int,
+        *,
+        label: int = F.LABEL_OPTIONAL,
+        packed: bool | None = None,
+        oneof_index: int | None = None,
+    ) -> None:
+        field = message.field.add()
+        field.name = name
+        field.number = number
+        field.label = label
+        field.type = F.TYPE_ENUM
+        field.type_name = ".open.Mode"
+        if packed is not None:
+            field.options.packed = packed
+        if oneof_index is not None:
+            field.oneof_index = oneof_index
+
+    add_open_enum_field("imported_open_enum", 1)
+    add_open_enum_field(
+        "imported_open_unpacked", 2, label=F.LABEL_REPEATED, packed=False
+    )
+    add_open_enum_field("imported_open_packed", 3, label=F.LABEL_REPEATED, packed=True)
+    add_open_enum_field("imported_open_oneof", 4, oneof_index=0)
+
+    entry = message.nested_type.add()
+    entry.name = "ImportedOpenByNameEntry"
+    entry.options.map_entry = True
+    key = entry.field.add()
+    key.name = "key"
+    key.number = 1
+    key.label = F.LABEL_OPTIONAL
+    key.type = F.TYPE_STRING
+    value = entry.field.add()
+    value.name = "value"
+    value.number = 2
+    value.label = F.LABEL_OPTIONAL
+    value.type = F.TYPE_ENUM
+    value.type_name = ".open.Mode"
+
+    map_field = message.field.add()
+    map_field.name = "imported_open_by_name"
+    map_field.number = 5
+    map_field.label = F.LABEL_REPEATED
+    map_field.type = F.TYPE_MESSAGE
+    map_field.type_name = ".legacy.Consumer.ImportedOpenByNameEntry"
+
+    closed_field = message.field.add()
+    closed_field.name = "local_closed_enum"
+    closed_field.number = 6
+    closed_field.label = F.LABEL_OPTIONAL
+    closed_field.type = F.TYPE_ENUM
+    closed_field.type_name = ".legacy.ClosedMode"
+
+    request = plugin_pb2.CodeGeneratorRequest()
+    request.parameter = "format=off"
+    request.file_to_generate.append(consumer.name)
+    request.proto_file.extend([open_enum, consumer])
+    return request
 
 
 def _proto2_dependency_file() -> descriptor_pb2.FileDescriptorProto:

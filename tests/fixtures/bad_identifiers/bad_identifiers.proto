@@ -1,0 +1,71 @@
+syntax = "proto3";
+
+package compat.bad;
+
+import "protocyte/options.proto";
+import "types.proto";
+
+message HelperFields {
+  option (protocyte.constant) = { name: "create" i32: 1 };
+  option (protocyte.constant) = { name: "validate" i32: 2 };
+  option (protocyte.constant) = { name: "merge_field_from_" i32: 3 };
+  option (protocyte.constant) = { name: "cap-value" i32: 4 };
+  option (protocyte.constant) = { name: "cap_value" i32: 5 };
+  option (protocyte.constant) = { name: "class" i32: 6 };
+  option (protocyte.constant) = { name: "class_" i32: 7 };
+
+  int32 serialize = 1;
+  int32 parse = 2;
+  int32 context = 3;
+  int32 unknown_fields = 4;
+  int32 validate = 5;
+  int32 copy_from = 6;
+  foo lower = 7;
+  Foo upper = 8;
+  payload lowercase_type = 9;
+  Container.serialize nested_serialize = 10;
+  Container.parse nested_parse = 11;
+  Container.context nested_context = 12;
+  Container.unknown_fields nested_unknown_fields = 13;
+  Container.validate nested_validate = 14;
+  Container.copy_from nested_copy_from = 15;
+  Container.std nested_std = 16;
+  Container.while nested_enum = 17;
+  _Private private_type = 18;
+  proto__reserved reserved_type = 19;
+  config lowercase_config = 22;
+  Container.NestedConfig nested_config = 23;
+  Container.compatibilityConfig nested_compatibility_config = 24;
+  state lower_enum_type = 25;
+  State upper_enum_type = 26;
+
+  oneof helper_choice {
+    int32 none = 20;
+    int32 context_oneof = 21;
+  }
+}
+
+message ImplementationNames {
+  int32 input = 1;
+  int32 output = 2;
+  string length = 3;
+  repeated int32 i = 4;
+  repeated string new_element = 5;
+  int32 total_size = 6;
+  int32 tag = 7;
+  int32 source = 8;
+  int32 value = 9;
+  int32 file = 10;
+  int32 from = 11;
+  int32 handle_uninterpreted = 12;
+  repeated int32 index = 13;
+  int32 controller = 14;
+  int32 already_here = 15;
+  int32 cached_size = 16;
+  int32 extensions = 17;
+  int32 bit = 18;
+  int32 bits = 19;
+  int32 offsets = 20;
+  int32 reflection = 21;
+  string target = 22;
+}

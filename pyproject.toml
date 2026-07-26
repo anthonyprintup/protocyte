@@ -1,7 +1,7 @@
 [project]
 name = "protocyte"
 dynamic = ["version"]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "protobuf>=6.30.0",
 ]
@@ -11,12 +11,14 @@ protoc-gen-protocyte = "protocyte.main:main"
 
 [dependency-groups]
 dev = [
+    "clang-format==22.1.4",
     "pytest>=8.0.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.11.0",
 ]
 
 [build-system]
-requires = ["setuptools>=69.0"]
+requires = ["setuptools==80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -30,6 +32,10 @@ protocyte = ["proto/**/*.proto"]
 "protocyte.runtime" = ["*.hpp"]
 
 [tool.pytest.ini_options]
+addopts = '-m "not cmake_integration"'
+markers = [
+    "cmake_integration: slow tests that configure or build temporary CMake projects",
+]
 testpaths = ["tests"]
 norecursedirs = [
     ".git",

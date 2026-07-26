@@ -1,6 +1,13 @@
 name: Protobuf Fallback
 
 on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Exact source revision tested by a release caller
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -14,19 +21,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.14"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          enable-cache: true
-
-      - name: Sync dependencies
-        run: uv sync --locked --group dev
+          python-version: "3.12"
 
       - name: Configure protocyte install tree
         run: cmake -S . -B build/protocyte-install
@@ -34,11 +35,13 @@ jobs:
       - name: Install protocyte package
         run: cmake --install build/protocyte-install --prefix build/protocyte-prefix
 
+      - name: Make installed prefix read-only
+        run: chmod -R a-w build/protocyte-prefix
+
       - name: Configure find_package fallback integration test
         run: >
           cmake -S tests/find_package -B tests/find_package/build
           -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
-          -DPython3_EXECUTABLE=${{ github.workspace }}/.venv/bin/python
           -DPROTOCYTE_FETCH_PROTOBUF=ON
 
       - name: Build find_package fallback integration test
@@ -46,3 +49,90 @@ jobs:
 
       - name: Run find_package fallback integration test
         run: ctest --test-dir tests/find_package/build --output-on-failure
+
+      - name: Install find_package fallback consumer
+        run: >
+          cmake --install tests/find_package/build
+          --prefix tests/find_package/install
+
+      - name: Verify fetched protobuf install isolation
+        run: |
+          test -f tests/find_package/install/share/protocyte-integration/find-package-consumer.txt
+          test "$(awk 'END { print NR }' tests/find_package/build/install_manifest.txt)" -eq 1
+          test ! -e tests/find_package/install/include/google/protobuf
+          test ! -e tests/find_package/install/include/absl
+          test ! -e tests/find_package/install/include/upb
+          test ! -e tests/find_package/install/include/utf8_range.h
+          test ! -e tests/find_package/install/lib/cmake/protobuf
+          test ! -e tests/find_package/install/bin/protoc
+
+  find-package-fallback-windows:
+    name: Find Package Fallback Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: Configure protocyte install tree
+        run: cmake -S . -B build/protocyte-install -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Install protocyte package
+        run: cmake --install build/protocyte-install --prefix build/protocyte-prefix
+
+      - name: Configure find_package fallback integration test
+        run: >
+          cmake -S tests/find_package -B tests/find_package/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/build/protocyte-prefix
+          -DPROTOCYTE_FETCH_PROTOBUF=ON
+
+      - name: Build find_package fallback integration test
+        run: cmake --build tests/find_package/build
+
+      - name: Run find_package fallback integration test
+        run: ctest --test-dir tests/find_package/build --output-on-failure
+
+      - name: Install find_package fallback consumer
+        run: >
+          cmake --install tests/find_package/build
+          --prefix tests/find_package/install
+
+      - name: Verify fetched protobuf install isolation
+        shell: pwsh
+        run: |
+          $marker = "tests/find_package/install/share/protocyte-integration/find-package-consumer.txt"
+          if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+              throw "Missing installed consumer marker: $marker"
+          }
+
+          $manifest = @(Get-Content -LiteralPath "tests/find_package/build/install_manifest.txt")
+          if ($manifest.Count -ne 1) {
+              throw "Expected one consumer install entry, found $($manifest.Count)"
+          }
+
+          $forbidden = @(
+              "tests/find_package/install/include/google/protobuf",
+              "tests/find_package/install/include/absl",
+              "tests/find_package/install/include/upb",
+              "tests/find_package/install/include/utf8_range.h",
+              "tests/find_package/install/lib/cmake/protobuf",
+              "tests/find_package/install/bin/protoc",
+              "build/protocyte-prefix/share/protocyte/python/build",
+              "build/protocyte-prefix/share/protocyte/python/src/protocyte.egg-info"
+          )
+          foreach ($path in $forbidden) {
+              if (Test-Path -LiteralPath $path) {
+                  throw "Fallback provisioning leaked into an install tree: $path"
+              }
+          }

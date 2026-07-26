@@ -7,6 +7,7 @@
 #endif
 #include <iterator>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -73,6 +74,10 @@ namespace {
         }
     };
 
+    struct PreservingConfig: protocyte::DefaultConfig {
+        static constexpr bool preserve_unknown_fields = true;
+    };
+
     struct RequiredVectorConfig {
         struct Context {
             protocyte::Allocator allocator;
@@ -94,7 +99,7 @@ namespace {
             Vector(const Vector &) = delete;
             Vector &operator=(const Vector &) = delete;
 
-            void bind(Context *ctx) noexcept { inner_.bind(ctx); }
+            protocyte::Status bind(Context *ctx) noexcept { return inner_.bind(ctx); }
             protocyte::usize size() const noexcept { return inner_.size(); }
             protocyte::usize capacity() const noexcept { return inner_.capacity(); }
             bool empty() const noexcept { return inner_.empty(); }
@@ -194,13 +199,17 @@ namespace {
     using Color = test::ultimate::UltimateComplexMessage_Color;
     using InnerMode = test::ultimate::UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum;
     using CompatMessage = protocyte_smoke::test::compat::EncodingMatrix<>;
+    using PreservingCompatMessage = protocyte_smoke::test::compat::EncodingMatrix<PreservingConfig>;
     using CompatNested = protocyte_smoke::test::compat::EncodingMatrix_Inner<>;
     using CompatMode = protocyte_smoke::test::compat::EncodingMatrix_Mode;
     using RequiredChild = test::required::RequiredChild<>;
     using RequiredParent = test::required::RequiredParent<>;
     using Proto2ArrayDefaults = test::required::Proto2ArrayDefaults<>;
     using Proto2DefaultMode = test::required::Proto2DefaultMode;
+    using Proto2MapMode = test::required::Proto2MapMode;
+    using Proto3OpenMode = test::open::Mode;
     using Proto2DefaultValues = test::required::Proto2DefaultValues<>;
+    using PreservingProto2DefaultValues = test::required::Proto2DefaultValues<PreservingConfig>;
     using OneofShadowingValue = test::required::OneofShadowingValue<>;
     using CustomMessage = test::ultimate::UltimateComplexMessage<CustomConfig>;
     using CustomNested1 = test::ultimate::UltimateComplexMessage_NestedLevel1<CustomConfig>;
@@ -379,6 +388,20 @@ namespace {
             probe.largest = size;
         }
         return nullptr;
+    }
+
+    struct FailingAllocationProbe {
+        size_t calls {};
+        size_t successful_calls_before_failure {};
+    };
+
+    void *fail_after_allocations(void *state, const size_t size, size_t) noexcept {
+        auto &probe = *static_cast<FailingAllocationProbe *>(state);
+        const size_t call {probe.calls++};
+        if (call >= probe.successful_calls_before_failure) {
+            return nullptr;
+        }
+        return malloc(size);
     }
 
     void ignore_deallocation(void *, void *, size_t, size_t) noexcept {}
@@ -703,6 +726,30 @@ namespace {
         REQUIRE(error.code == expected);
     }
 
+    void overwrite_with_invalid_utf8(Config::String &value) {
+        require_success(value.resize_for_overwrite(1u));
+        auto bytes = value.mutable_view_for_overwrite();
+        REQUIRE(bytes.size() == 1u);
+        bytes[0] = 0xffu;
+    }
+
+    template<class TMessage> void require_invalid_utf8(const TMessage &message, const protocyte::u32 field_number) {
+        const auto validation = message.validate();
+        require_failure(validation, protocyte::ErrorCode::invalid_utf8);
+        CHECK(validation.error().field_number == field_number);
+
+        const auto size = message.encoded_size();
+        require_failure(size, protocyte::ErrorCode::invalid_utf8);
+        CHECK(size.error().field_number == field_number);
+
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        const auto serialization = message.serialize(writer);
+        require_failure(serialization, protocyte::ErrorCode::invalid_utf8);
+        CHECK(serialization.error().field_number == field_number);
+        CHECK(writer.position() == 0u);
+    }
+
     void assign_string(Config::String &out, protocyte::Span<const protocyte::u8> view) {
         require_success(protocyte_smoke::fixture::assign_string(out, view));
     }
@@ -714,6 +761,23 @@ namespace {
     template<class Container>
     void append_bytes(Container &out, Config::Context &ctx, protocyte::Span<const protocyte::u8> view) {
         require_success(protocyte_smoke::fixture::append_bytes(out, ctx, view));
+    }
+
+    template<class Map> void insert_bytes(Map &out, Config::Context &ctx, const protocyte::i32 key,
+                                          const protocyte::Span<const protocyte::u8> view) {
+        Config::Bytes value(&ctx);
+        assign_bytes(value, view);
+        require_success(out.insert_or_assign(protocyte::i32 {key}, protocyte::move(value)));
+    }
+
+    template<class Map> bool contains_bytes(const Map &values, const protocyte::i32 key,
+                                            const protocyte::Span<const protocyte::u8> expected) noexcept {
+        for (const auto entry : values) {
+            if (entry.key == key && view_equal(entry.value.view(), expected)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     template<class Container, class T, size_t N>
@@ -783,8 +847,9 @@ namespace {
         return parsed;
     }
 
-    bool compat_map_str_int32_contains(const CompatMessage &message, protocyte::Span<const protocyte::u8> key,
-                                       const int32_t expected_value) noexcept {
+    template<class TMessage> bool compat_map_str_int32_contains(const TMessage &message,
+                                                                protocyte::Span<const protocyte::u8> key,
+                                                                const int32_t expected_value) noexcept {
         for (const auto entry : message.map_str_int32()) {
             if (view_equal(entry.key.view(), key) && entry.value == expected_value) {
                 return true;
@@ -805,7 +870,7 @@ namespace {
 
     void populate_compat_nested(CompatNested &nested, const int32_t value,
                                 const protocyte::Span<const protocyte::u8> label) {
-        require_success(nested.set_value(value));
+        nested.set_value(value);
         require_success(nested.set_label(label));
     }
 
@@ -1106,7 +1171,7 @@ namespace {
 
         SECTION("int32 alternative round trips") {
             Message message(ctx);
-            require_success(message.set_oneof_int32(2700));
+            message.set_oneof_int32(2700);
             populate_required_fixed_array(message, ctx);
 
             uint8_t encoded[128] = {};
@@ -1157,7 +1222,7 @@ namespace {
 
         SECTION("deep oneof alternative round trips") {
             Deep deep(ctx);
-            require_success(deep.set_val(4000));
+            deep.set_val(4000);
 
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -1174,7 +1239,7 @@ namespace {
             Message first(ctx);
             require_success(first.set_oneof_string(view_of(oneof_string)));
             populate_required_fixed_array(first, ctx);
-            require_success(first.set_oneof_int32(2701));
+            first.set_oneof_int32(2701);
 
             uint8_t encoded[256] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
@@ -1704,7 +1769,7 @@ namespace {
             CHECK_FALSE(parsed.has_oneof_bytes());
         }
 
-        SECTION("malformed map entries are rejected while parsing") {
+        SECTION("map entries with incompatible known wire types retain defaults") {
             uint8_t encoded[128] = {};
             protocyte::SliceWriter writer(encoded, sizeof(encoded));
             require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_str_int32),
@@ -1715,7 +1780,11 @@ namespace {
 
             Message parsed(ctx);
             protocyte::SliceReader reader(encoded, writer.position());
-            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
+            require_success(parsed.merge_from(reader));
+            REQUIRE(parsed.map_str_int32().size() == 1u);
+            const auto entry = *parsed.map_str_int32().begin();
+            CHECK(entry.key.empty());
+            CHECK(entry.value == 0);
         }
 
         SECTION("overlong UTF-8 is rejected while parsing") {
@@ -1899,12 +1968,151 @@ namespace {
 
 TEST_CASE("UltimateComplexMessage round-trips", "[smoke][roundtrip]") {
     auto ctx = make_context();
-    auto created = Message::create(ctx);
-    require_success(created);
-
-    auto &message = *created;
+    auto message = Message::create(ctx);
     populate_message(message, ctx);
     round_trip_and_check(message, ctx);
+}
+
+TEST_CASE("generated message staging overloads control full-object storage", "[smoke][copy][storage]") {
+    SECTION("copy_from commits caller-staged copies transactionally") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        source.set_f_int32(42);
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        auto destination_ctx = make_context();
+        Message destination(destination_ctx);
+        destination.set_f_int32(7);
+        Message staging_message(destination_ctx);
+
+        require_success(destination.copy_from(source, staging_message));
+        CHECK(destination.f_int32() == 42);
+        CHECK(view_equal(destination.f_string(), view_of(string_bytes)));
+    }
+
+    SECTION("copy_from preserves the destination when staging allocation fails") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        source.set_f_int32(42);
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto destination_ctx = make_context();
+        Message destination(destination_ctx);
+        destination.set_f_int32(7);
+        Message staging_message(destination_ctx);
+        destination_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+
+        require_failure(destination.copy_from(source, staging_message), protocyte::ErrorCode::no_memory);
+        CHECK(destination.f_int32() == 7);
+        CHECK(destination.f_string().empty());
+        CHECK(staging_message.f_int32() == 0);
+        CHECK(staging_message.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
+
+    SECTION("copy_from convenience overload is also transactional") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        source.set_f_int32(42);
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto destination_ctx = make_context();
+        Message destination(destination_ctx);
+        destination.set_f_int32(7);
+        destination_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+        CHECK(destination.f_int32() == 7);
+        CHECK(destination.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
+
+    SECTION("copy_from rejects aliased staging messages") {
+        auto ctx = make_context();
+        Message source(ctx);
+        Message destination(ctx);
+        source.set_f_int32(42);
+        destination.set_f_int32(7);
+
+        require_failure(destination.copy_from(source, destination), protocyte::ErrorCode::invalid_argument);
+        require_failure(destination.copy_from(source, source), protocyte::ErrorCode::invalid_argument);
+        CHECK(destination.f_int32() == 7);
+        CHECK(source.f_int32() == 42);
+    }
+
+    SECTION("clone writes directly into caller-owned output using its context") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        source.set_f_int32(42);
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        auto output_ctx = make_context();
+        Message output(output_ctx);
+        output.set_f_int32(7);
+        require_success(source.clone(output));
+        CHECK(output.context() == &output_ctx);
+        CHECK(output.f_int32() == 42);
+        CHECK(view_equal(output.f_string(), view_of(string_bytes)));
+    }
+
+    SECTION("clone applies caller-owned output allocation policy") {
+        auto source_ctx = make_context();
+        Message source(source_ctx);
+        source.set_f_int32(42);
+        require_success(source.set_f_string(view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto output_ctx = make_context();
+        output_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        Message output(output_ctx);
+        output.set_f_int32(7);
+
+        require_failure(source.clone(output), protocyte::ErrorCode::no_memory);
+        CHECK(output.context() == &output_ctx);
+        CHECK(output.f_int32() == 0);
+        CHECK(output.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
+
+    SECTION("parse writes directly into caller-owned output using its context") {
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_int32_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_int32), 42));
+        require_success(protocyte::write_string_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
+                                                      view_of(string_bytes)));
+
+        auto output_ctx = make_context();
+        Message output(output_ctx);
+        output.set_f_int32(7);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_success(Message::parse(reader, output));
+        CHECK(reader.eof());
+        CHECK(output.context() == &output_ctx);
+        CHECK(output.f_int32() == 42);
+        CHECK(view_equal(output.f_string(), view_of(string_bytes)));
+    }
+
+    SECTION("parse applies caller-owned output allocation policy") {
+        uint8_t encoded[64] = {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(protocyte::write_string_field(writer, static_cast<uint32_t>(Message::FieldNumber::f_string),
+                                                      view_of(string_bytes)));
+
+        AllocationProbe probe {};
+        auto output_ctx = make_context();
+        output_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, ignore_deallocation};
+        Message output(output_ctx);
+        output.set_f_int32(7);
+        protocyte::SliceReader reader(encoded, writer.position());
+
+        require_failure(Message::parse(reader, output), protocyte::ErrorCode::no_memory);
+        CHECK(output.context() == &output_ctx);
+        CHECK(output.f_int32() == 0);
+        CHECK(output.f_string().empty());
+        CHECK(probe.calls > 0u);
+    }
 }
 
 TEST_CASE("UltimateComplexMessage oneofs merge correctly", "[smoke][oneof]") {
@@ -2025,7 +2233,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
     }
 
-    SECTION("oneof scalar parsing preserves the previous case after invalid wire type") {
+    SECTION("oneof scalar parsing treats an incompatible wire type as unknown") {
         uint8_t encoded[128] = {};
         protocyte::SliceWriter writer(encoded, sizeof(encoded));
         require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::oneof_int32),
@@ -2036,7 +2244,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         Message parsed(ctx);
         require_success(parsed.set_oneof_string(view_of(oneof_string)));
         protocyte::SliceReader reader(encoded, writer.position());
-        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
+        require_success(parsed.merge_from(reader));
         REQUIRE(parsed.has_oneof_string());
         CHECK(view_equal(parsed.oneof_string(), view_of(oneof_string)));
     }
@@ -2050,7 +2258,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         require_success(writer.write(oneof_string, 2u));
 
         Message parsed(ctx);
-        require_success(parsed.set_oneof_int32(2701));
+        parsed.set_oneof_int32(2701);
         protocyte::SliceReader reader(encoded, writer.position());
         require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
         REQUIRE(parsed.has_oneof_int32());
@@ -2210,7 +2418,7 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         check_byte_entry_sequence(parsed.repeated_byte_array(), expected);
     }
 
-    SECTION("malformed map entries do not replace existing entries") {
+    SECTION("wrong-wire map members are discarded and the default entry is retained") {
         uint8_t encoded[128] = {};
         protocyte::SliceWriter writer(encoded, sizeof(encoded));
         require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Message::FieldNumber::map_str_int32),
@@ -2222,20 +2430,89 @@ TEST_CASE("merge_from keeps field state after malformed field occurrences", "[sm
         Message parsed(ctx);
         insert_map_str_int32(parsed, ctx);
         protocyte::SliceReader reader(encoded, writer.position());
-        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::invalid_wire_type);
-        CHECK(parsed.map_str_int32().size() == 1u);
-        bool saw_entry = false;
+        require_success(parsed.merge_from(reader));
+        CHECK(parsed.map_str_int32().size() == 2u);
+        bool saw_existing = false;
+        bool saw_default = false;
         for (const auto entry : parsed.map_str_int32()) {
             if (view_equal(entry.key.view(), view_of(map_key)) && entry.value == 301) {
-                saw_entry = true;
+                saw_existing = true;
+            }
+            if (entry.key.empty() && entry.value == 0) {
+                saw_default = true;
             }
         }
-        CHECK(saw_entry);
+        CHECK(saw_existing);
+        CHECK(saw_default);
+    }
+}
+
+TEST_CASE("message validation rejects invalid UTF-8 introduced by mutable access", "[smoke][utf8]") {
+    auto ctx = make_context();
+
+    SECTION("singular string") {
+        Message message(ctx);
+        overwrite_with_invalid_utf8(message.mutable_f_string());
+
+        require_invalid_utf8(message, static_cast<protocyte::u32>(Message::FieldNumber::f_string));
+    }
+
+    SECTION("map string key") {
+        Message message(ctx);
+        Config::String key {&ctx};
+        overwrite_with_invalid_utf8(key);
+        require_success(message.mutable_map_str_int32().insert_or_assign(protocyte::move(key), protocyte::i32 {301}));
+
+        require_invalid_utf8(message, static_cast<protocyte::u32>(Message::FieldNumber::map_str_int32));
+    }
+
+    SECTION("map string value") {
+        Message message(ctx);
+        Config::String value {&ctx};
+        overwrite_with_invalid_utf8(value);
+        require_success(message.mutable_map_int32_str().insert_or_assign(protocyte::i32 {302}, protocyte::move(value)));
+
+        require_invalid_utf8(message, static_cast<protocyte::u32>(Message::FieldNumber::map_int32_str));
     }
 }
 
 TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
     auto ctx = make_context();
+
+    SECTION("empty dynamic views and containers have stable iterator and subview endpoints") {
+        constexpr protocyte::Span<const protocyte::u8> empty_view {};
+        static_assert(empty_view.begin() == empty_view.end());
+        static_assert(empty_view.cbegin() == empty_view.cend());
+        static_assert(empty_view.last<0u>().data() == nullptr);
+        static_assert(empty_view.last(0u).data() == nullptr);
+        static_assert(empty_view.subspan<0u>().data() == nullptr);
+        static_assert(empty_view.subspan(0u).data() == nullptr);
+
+        Config::Vector<protocyte::i32> values(&ctx);
+        CHECK(values.begin() == values.end());
+        size_t visits {};
+        for ([[maybe_unused]] const auto value : values) { ++visits; }
+        CHECK(visits == 0u);
+
+        Config::Bytes bytes(&ctx);
+        CHECK(bytes.begin() == bytes.end());
+        for ([[maybe_unused]] const auto value : bytes) { ++visits; }
+
+        Config::String text(&ctx);
+        CHECK(text.begin() == text.end());
+        for ([[maybe_unused]] const auto value : text) { ++visits; }
+
+        Config::Map<protocyte::i32, protocyte::i32> entries(&ctx);
+        CHECK(entries.begin() == entries.end());
+        for ([[maybe_unused]] const auto entry : entries) { ++visits; }
+        CHECK(visits == 0u);
+
+        const auto allocated_before = ctx.total_allocated_bytes;
+        require_success(values.reserve(1u));
+        CHECK(values.empty());
+        CHECK(values.capacity() >= 1u);
+        CHECK(ctx.total_allocated_bytes > allocated_before);
+    }
 
     SECTION("vector and array support range and reverse traversal") {
         Config::Vector<protocyte::i32> values(&ctx);
@@ -2440,6 +2717,951 @@ TEST_CASE("Runtime containers expose iterator APIs", "[smoke][iterators]") {
     }
 }
 
+TEST_CASE("Runtime containers preserve aliased insertion arguments", "[smoke][runtime][alias]") {
+    struct LifetimeProbe {
+        size_t copies {};
+        size_t moves {};
+        size_t destructions {};
+        size_t live {};
+    };
+
+    struct AliasedValue {
+        LifetimeProbe *probe {};
+        int value {};
+
+        explicit AliasedValue(const int initial_value, LifetimeProbe *lifetime_probe = nullptr) noexcept:
+            probe {lifetime_probe}, value {initial_value} {
+            if (probe != nullptr) {
+                ++probe->live;
+            }
+        }
+        AliasedValue(const AliasedValue &other) noexcept: probe {other.probe}, value {other.value} {
+            if (probe != nullptr) {
+                ++probe->copies;
+                ++probe->live;
+            }
+        }
+        AliasedValue(AliasedValue &&other) noexcept: probe {other.probe}, value {other.value} {
+            if (probe != nullptr) {
+                ++probe->moves;
+                ++probe->live;
+            }
+            other.value = -1;
+        }
+        AliasedValue &operator=(const AliasedValue &) = delete;
+        AliasedValue &operator=(AliasedValue &&) = delete;
+        ~AliasedValue() noexcept {
+            if (probe != nullptr) {
+                ++probe->destructions;
+                --probe->live;
+            }
+            value = -99;
+        }
+    };
+
+    struct CopyableMoveTracked {
+        int value {};
+
+        explicit CopyableMoveTracked(const int initial_value = 0) noexcept: value {initial_value} {}
+        CopyableMoveTracked(const CopyableMoveTracked &) noexcept = default;
+        CopyableMoveTracked(CopyableMoveTracked &&other) noexcept: value {other.value} { other.value = -1; }
+        CopyableMoveTracked &operator=(const CopyableMoveTracked &) noexcept = default;
+        CopyableMoveTracked &operator=(CopyableMoveTracked &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+
+        bool operator==(const CopyableMoveTracked other) const noexcept { return value == other.value; }
+    };
+
+    struct MovePoisoningPart {
+        int value {};
+
+        explicit MovePoisoningPart(const int initial_value = 0) noexcept: value {initial_value} {}
+        MovePoisoningPart(const MovePoisoningPart &) noexcept = default;
+        MovePoisoningPart(MovePoisoningPart &&other) noexcept: value {other.value} { other.value = -1; }
+        MovePoisoningPart &operator=(const MovePoisoningPart &) noexcept = default;
+        MovePoisoningPart &operator=(MovePoisoningPart &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+
+        MovePoisoningPart *operator&() = delete;
+        const MovePoisoningPart *operator&() const = delete;
+    };
+
+    struct MemberCompositeKey {
+        int identity {};
+        MovePoisoningPart part {};
+
+        MemberCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            identity {initial_identity}, part {initial_part} {}
+        MemberCompositeKey(const MemberCompositeKey &) noexcept = default;
+        MemberCompositeKey(MemberCompositeKey &&other) noexcept:
+            identity {other.identity}, part {protocyte::move(other.part)} {}
+        MemberCompositeKey &operator=(const MemberCompositeKey &) noexcept = default;
+        MemberCompositeKey &operator=(MemberCompositeKey &&other) noexcept {
+            identity = other.identity;
+            part = protocyte::move(other.part);
+            return *this;
+        }
+
+        bool operator==(const MemberCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    struct BaseCompositeKey: MovePoisoningPart {
+        int identity {};
+
+        BaseCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            MovePoisoningPart {initial_part}, identity {initial_identity} {}
+        BaseCompositeKey(const BaseCompositeKey &) noexcept = default;
+        BaseCompositeKey(BaseCompositeKey &&other) noexcept:
+            MovePoisoningPart {protocyte::move(other)}, identity {other.identity} {}
+        BaseCompositeKey &operator=(const BaseCompositeKey &) noexcept = default;
+        BaseCompositeKey &operator=(BaseCompositeKey &&other) noexcept {
+            static_cast<MovePoisoningPart &>(*this) = protocyte::move(other);
+            identity = other.identity;
+            return *this;
+        }
+
+        BaseCompositeKey *operator&() noexcept { return this; }
+        const BaseCompositeKey *operator&() const noexcept { return this; }
+        bool operator==(const BaseCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    struct UncopyablePart {
+        int value {};
+
+        explicit UncopyablePart(const int initial_value = 0) noexcept: value {initial_value} {}
+        UncopyablePart(const UncopyablePart &) = delete;
+        UncopyablePart(UncopyablePart &&other) noexcept: value {other.value} { other.value = -1; }
+        UncopyablePart &operator=(const UncopyablePart &) = delete;
+        UncopyablePart &operator=(UncopyablePart &&other) noexcept {
+            value = other.value;
+            other.value = -1;
+            return *this;
+        }
+    };
+
+    struct UncopyableCompositeKey {
+        int identity {};
+        UncopyablePart part {};
+
+        UncopyableCompositeKey(const int initial_identity, const int initial_part) noexcept:
+            identity {initial_identity}, part {initial_part} {}
+        UncopyableCompositeKey(const UncopyableCompositeKey &other) noexcept:
+            identity {other.identity}, part {other.part.value} {}
+        UncopyableCompositeKey(UncopyableCompositeKey &&other) noexcept:
+            identity {other.identity}, part {protocyte::move(other.part)} {}
+        UncopyableCompositeKey &operator=(const UncopyableCompositeKey &) = delete;
+        UncopyableCompositeKey &operator=(UncopyableCompositeKey &&other) noexcept {
+            identity = other.identity;
+            part = protocyte::move(other.part);
+            return *this;
+        }
+
+        bool operator==(const UncopyableCompositeKey other) const noexcept { return identity == other.identity; }
+    };
+
+    const auto free_retained_allocations = [](RetainedAllocationProbe &probe) noexcept {
+        for (size_t index {}; index < probe.count; ++index) { free(probe.pointers[index]); }
+    };
+
+    const auto mapped_value = [](auto &values, const protocyte::i32 key) noexcept -> AliasedValue * {
+        for (auto entry : values) {
+            if (entry.key == key) {
+                return &entry.value;
+            }
+        }
+        return nullptr;
+    };
+
+    constexpr protocyte::i32 aliased_key {1};
+    const protocyte::i32 colliding_new_key = [aliased_key]() noexcept {
+        for (protocyte::i32 candidate {100};; ++candidate) {
+            if ((Config::hash(candidate) & 15u) == (Config::hash(aliased_key) & 15u)) {
+                return candidate;
+            }
+        }
+    }();
+
+    const auto populate_rehash_map = [aliased_key](auto &values, LifetimeProbe &probe) {
+        require_success(values.insert_or_assign(aliased_key, AliasedValue {41, &probe}));
+        for (protocyte::i32 key {2}; key <= 5; ++key) {
+            require_success(values.insert_or_assign(key, AliasedValue {static_cast<int>(key)}));
+        }
+    };
+
+    SECTION("Vector consumes lvalue and rvalue elements before reallocation invalidates them") {
+        RetainedAllocationProbe allocation_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+
+        LifetimeProbe lvalue_probe {};
+        {
+            Config::Vector<AliasedValue> lvalue_values(&ctx);
+            require_success(lvalue_values.reserve(1u));
+            require_success(lvalue_values.emplace_back(41, &lvalue_probe));
+            require_success(lvalue_values.emplace_back(lvalue_values[0]));
+            REQUIRE(lvalue_values.size() == 2u);
+            CHECK(lvalue_values[0].value == 41);
+            CHECK(lvalue_values[1].value == 41);
+            CHECK(lvalue_probe.copies == 1u);
+            CHECK(lvalue_probe.moves == 1u);
+            CHECK(lvalue_probe.destructions == 1u);
+            CHECK(lvalue_probe.live == 2u);
+        }
+        CHECK(lvalue_probe.destructions == 3u);
+        CHECK(lvalue_probe.live == 0u);
+
+        LifetimeProbe rvalue_probe {};
+        {
+            Config::Vector<AliasedValue> rvalue_values(&ctx);
+            require_success(rvalue_values.reserve(1u));
+            require_success(rvalue_values.emplace_back(42, &rvalue_probe));
+            require_success(rvalue_values.push_back(protocyte::move(rvalue_values[0])));
+            REQUIRE(rvalue_values.size() == 2u);
+            CHECK(rvalue_values[0].value == -1);
+            CHECK(rvalue_values[1].value == 42);
+            CHECK(rvalue_probe.copies == 0u);
+            CHECK(rvalue_probe.moves == 2u);
+            CHECK(rvalue_probe.destructions == 1u);
+            CHECK(rvalue_probe.live == 2u);
+        }
+        CHECK(rvalue_probe.destructions == 3u);
+        CHECK(rvalue_probe.live == 0u);
+
+        CHECK(allocation_probe.count == 4u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("Vector leaves an aliased rvalue untouched when growth allocation fails") {
+        AllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        {
+            Config::Vector<AliasedValue> values(&ctx);
+            require_success(values.reserve(1u));
+            require_success(values.emplace_back(41, &lifetime_probe));
+            ctx.allocator = protocyte::Allocator {&allocation_probe, reject_allocation, smoke_deallocate};
+
+            require_failure(values.push_back(protocyte::move(values[0])), protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 1u);
+            CHECK(values[0].value == 41);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == 0u);
+            CHECK(lifetime_probe.destructions == 0u);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(allocation_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.destructions == 1u);
+        CHECK(lifetime_probe.live == 0u);
+    }
+
+    SECTION("HashMap replacement consumes aliased mapped values before resetting the bucket") {
+        auto ctx = make_context();
+        Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+        require_success(values.insert_or_assign(7, AliasedValue {41}));
+
+        auto lvalue_entry = *values.begin();
+        require_success(values.insert_or_assign(lvalue_entry.key, lvalue_entry.value));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).value.value == 41);
+
+        auto rvalue_entry = *values.begin();
+        require_success(values.insert_or_assign(rvalue_entry.key, protocyte::move(rvalue_entry.value)));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).value.value == 41);
+    }
+
+    SECTION("HashMap replacement stages a same-subobject mapped key before moving it") {
+        auto ctx = make_context();
+        Config::Map<CopyableMoveTracked, CopyableMoveTracked> values(&ctx);
+        require_success(values.insert_or_assign(CopyableMoveTracked {41}, CopyableMoveTracked {7}));
+
+        auto source = *values.begin();
+        require_success(values.insert_or_assign(source.key, source.key));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.value == 41);
+        CHECK((*values.begin()).value.value == 41);
+
+        CopyableMoveTracked equivalent_key {41};
+        const auto replacement_source = *values.begin();
+        require_success(values.insert_or_assign(equivalent_key, replacement_source.key));
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.value == 41);
+        CHECK((*values.begin()).value.value == 41);
+        CHECK(equivalent_key.value == 41);
+    }
+
+    SECTION("HashMap replacement stages member and base subobject mapped arguments") {
+        auto ctx = make_context();
+
+        Config::Map<MemberCompositeKey, MovePoisoningPart> member_values(&ctx);
+        require_success(member_values.insert_or_assign(MemberCompositeKey {7, 41}, MovePoisoningPart {99}));
+        const auto member_source = *member_values.begin();
+        require_success(member_values.insert_or_assign(member_source.key, member_source.key.part));
+        REQUIRE(member_values.size() == 1u);
+        CHECK((*member_values.begin()).key.identity == 7);
+        CHECK((*member_values.begin()).key.part.value == 41);
+        CHECK((*member_values.begin()).value.value == 41);
+
+        auto &member_rvalue = const_cast<MovePoisoningPart &>(member_source.key.part);
+        require_success(member_values.insert_or_assign(member_source.key, protocyte::move(member_rvalue)));
+        REQUIRE(member_values.size() == 1u);
+        CHECK((*member_values.begin()).key.part.value == 41);
+        CHECK((*member_values.begin()).value.value == 41);
+
+        Config::Map<BaseCompositeKey, MovePoisoningPart> base_values(&ctx);
+        require_success(base_values.insert_or_assign(BaseCompositeKey {8, 51}, MovePoisoningPart {99}));
+        const auto base_source = *base_values.begin();
+        const auto &base_subobject = static_cast<const MovePoisoningPart &>(base_source.key);
+        require_success(base_values.insert_or_assign(base_source.key, base_subobject));
+        REQUIRE(base_values.size() == 1u);
+        CHECK((*base_values.begin()).key.identity == 8);
+        CHECK(static_cast<const MovePoisoningPart &>((*base_values.begin()).key).value == 51);
+        CHECK((*base_values.begin()).value.value == 51);
+    }
+
+    SECTION("HashMap rejects a noncopyable overlapping rvalue before replacement") {
+        auto ctx = make_context();
+        Config::Map<UncopyableCompositeKey, UncopyablePart> values(&ctx);
+        require_success(values.insert_or_assign(UncopyableCompositeKey {9, 61}, UncopyablePart {99}));
+
+        const auto source = *values.begin();
+        auto &overlapping_part = const_cast<UncopyablePart &>(source.key.part);
+        require_failure(values.insert_or_assign(source.key, protocyte::move(overlapping_part)),
+                        protocyte::ErrorCode::invalid_argument);
+        REQUIRE(values.size() == 1u);
+        CHECK((*values.begin()).key.identity == 9);
+        CHECK((*values.begin()).key.part.value == 61);
+        CHECK((*values.begin()).value.value == 99);
+    }
+
+    SECTION("HashMap copies an aliased lvalue before a colliding rehash") {
+        RetainedAllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto copies_before = lifetime_probe.copies;
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+
+            require_success(values.insert_or_assign(colliding_new_key, *source));
+            REQUIRE(values.size() == 6u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            REQUIRE(mapped_value(values, colliding_new_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key)->value == 41);
+            CHECK(lifetime_probe.copies == copies_before + 1u);
+            CHECK(lifetime_probe.moves == moves_before + 1u);
+            CHECK(lifetime_probe.destructions == destructions_before + 1u);
+            CHECK(lifetime_probe.live == 2u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(allocation_probe.count == 2u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("HashMap moves an aliased rvalue before a colliding rehash") {
+        RetainedAllocationProbe allocation_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&allocation_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+
+            require_success(values.insert_or_assign(colliding_new_key, protocyte::move(*source)));
+            REQUIRE(values.size() == 6u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            REQUIRE(mapped_value(values, colliding_new_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == -1);
+            CHECK(mapped_value(values, colliding_new_key)->value == 41);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == moves_before + 2u);
+            CHECK(lifetime_probe.destructions == destructions_before + 1u);
+            CHECK(lifetime_probe.live == 2u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(allocation_probe.count == 2u);
+        free_retained_allocations(allocation_probe);
+    }
+
+    SECTION("HashMap leaves an aliased lvalue untouched when a colliding rehash allocation fails") {
+        RetainedAllocationProbe retained_probe {};
+        AllocationProbe failure_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&retained_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto copies_before = lifetime_probe.copies;
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+            ctx.allocator = protocyte::Allocator {&failure_probe, reject_allocation, nullptr};
+
+            require_failure(values.insert_or_assign(colliding_new_key, *source), protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 5u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key) == nullptr);
+            CHECK(lifetime_probe.copies == copies_before);
+            CHECK(lifetime_probe.moves == moves_before);
+            CHECK(lifetime_probe.destructions == destructions_before);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(failure_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(retained_probe.count == 1u);
+        free_retained_allocations(retained_probe);
+    }
+
+    SECTION("HashMap leaves an aliased rvalue untouched when a colliding rehash allocation fails") {
+        RetainedAllocationProbe retained_probe {};
+        AllocationProbe failure_probe {};
+        LifetimeProbe lifetime_probe {};
+        auto ctx = make_context();
+        ctx.allocator = protocyte::Allocator {&retained_probe, retain_allocation, nullptr};
+        {
+            Config::Map<protocyte::i32, AliasedValue> values(&ctx);
+            populate_rehash_map(values, lifetime_probe);
+            auto *source = mapped_value(values, aliased_key);
+            REQUIRE(source != nullptr);
+            const auto moves_before = lifetime_probe.moves;
+            const auto destructions_before = lifetime_probe.destructions;
+            ctx.allocator = protocyte::Allocator {&failure_probe, reject_allocation, nullptr};
+
+            require_failure(values.insert_or_assign(colliding_new_key, protocyte::move(*source)),
+                            protocyte::ErrorCode::no_memory);
+            REQUIRE(values.size() == 5u);
+            REQUIRE(mapped_value(values, aliased_key) != nullptr);
+            CHECK(mapped_value(values, aliased_key)->value == 41);
+            CHECK(mapped_value(values, colliding_new_key) == nullptr);
+            CHECK(lifetime_probe.copies == 0u);
+            CHECK(lifetime_probe.moves == moves_before);
+            CHECK(lifetime_probe.destructions == destructions_before);
+            CHECK(lifetime_probe.live == 1u);
+            CHECK(failure_probe.calls == 1u);
+        }
+        CHECK(lifetime_probe.live == 0u);
+        CHECK(retained_probe.count == 1u);
+        free_retained_allocations(retained_probe);
+    }
+}
+
+TEST_CASE("HashMap deep-copies noncopyable String lvalue arguments transactionally", "[smoke][runtime][map]") {
+    using String = Config::String;
+    using StringMap = Config::Map<String, String>;
+
+    const auto assign_text = [](String &out, const std::string_view text) {
+        require_success(out.assign(protocyte::Span<const char> {text.data(), text.size()}));
+    };
+    const auto contains = [](const StringMap &values, const std::string_view expected_key,
+                             const std::string_view expected_value) noexcept {
+        for (const auto entry : values) {
+            if (view_equal(entry.key.view(), expected_key) && view_equal(entry.value.view(), expected_value)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    SECTION("lvalue strings are cloned into the map context") {
+        RetainedAllocationProbe destination_probe {};
+        auto source_ctx = make_context();
+        auto destination_ctx = make_context();
+        destination_ctx.allocator = protocyte::Allocator {&destination_probe, retain_allocation, nullptr};
+        {
+            StringMap values(&destination_ctx);
+            String key(&source_ctx);
+            String value(&source_ctx);
+            assign_text(key, "lvalue-key");
+            assign_text(value, "lvalue-value");
+
+            require_success(values.insert_or_assign(key, value));
+            REQUIRE(values.size() == 1u);
+            CHECK(contains(values, "lvalue-key", "lvalue-value"));
+            CHECK(view_equal(key.view(), std::string_view {"lvalue-key"}));
+            CHECK(view_equal(value.view(), std::string_view {"lvalue-value"}));
+            for (const auto entry : values) {
+                CHECK(entry.key.context() == &destination_ctx);
+                CHECK(entry.value.context() == &destination_ctx);
+            }
+
+            key.clear();
+            value.clear();
+            CHECK(contains(values, "lvalue-key", "lvalue-value"));
+        }
+        for (size_t index {}; index < destination_probe.count; ++index) { free(destination_probe.pointers[index]); }
+    }
+
+    SECTION("all key and value categories work with noncopyable strings") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+
+        String lvalue_key(&ctx);
+        String lvalue_value(&ctx);
+        assign_text(lvalue_key, "both-lvalues");
+        assign_text(lvalue_value, "both-lvalue-value");
+        require_success(values.insert_or_assign(lvalue_key, lvalue_value));
+        CHECK(contains(values, "both-lvalues", "both-lvalue-value"));
+        CHECK(view_equal(lvalue_key.view(), std::string_view {"both-lvalues"}));
+        CHECK(view_equal(lvalue_value.view(), std::string_view {"both-lvalue-value"}));
+
+        String lvalue_key_rvalue_value(&ctx);
+        String rvalue_value(&ctx);
+        assign_text(lvalue_key_rvalue_value, "lvalue-key");
+        assign_text(rvalue_value, "rvalue-value");
+        require_success(values.insert_or_assign(lvalue_key_rvalue_value, protocyte::move(rvalue_value)));
+        CHECK(contains(values, "lvalue-key", "rvalue-value"));
+        CHECK(view_equal(lvalue_key_rvalue_value.view(), std::string_view {"lvalue-key"}));
+        CHECK(rvalue_value.empty());
+
+        String rvalue_key_lvalue_value(&ctx);
+        String lvalue_value_rvalue_key(&ctx);
+        assign_text(rvalue_key_lvalue_value, "rvalue-key");
+        assign_text(lvalue_value_rvalue_key, "lvalue-value");
+        require_success(values.insert_or_assign(protocyte::move(rvalue_key_lvalue_value), lvalue_value_rvalue_key));
+        CHECK(contains(values, "rvalue-key", "lvalue-value"));
+        CHECK(view_equal(lvalue_value_rvalue_key.view(), std::string_view {"lvalue-value"}));
+        CHECK(rvalue_key_lvalue_value.empty());
+
+        String rvalue_key(&ctx);
+        String rvalue_mapped_value(&ctx);
+        assign_text(rvalue_key, "both-rvalues");
+        assign_text(rvalue_mapped_value, "both-rvalue-value");
+        require_success(values.insert_or_assign(protocyte::move(rvalue_key), protocyte::move(rvalue_mapped_value)));
+        CHECK(contains(values, "both-rvalues", "both-rvalue-value"));
+        CHECK(rvalue_key.empty());
+        CHECK(rvalue_mapped_value.empty());
+
+        String replacement(&ctx);
+        assign_text(replacement, "replacement-value");
+        require_success(values.insert_or_assign(lvalue_key, replacement));
+        REQUIRE(values.size() == 4u);
+        CHECK(contains(values, "both-lvalues", "replacement-value"));
+        CHECK(view_equal(lvalue_key.view(), std::string_view {"both-lvalues"}));
+        CHECK(view_equal(replacement.view(), std::string_view {"replacement-value"}));
+    }
+
+    SECTION("colliding lvalue strings survive rehash") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+        const auto insert_owned = [&ctx, &assign_text, &values](const std::string_view key_text,
+                                                                const std::string_view value_text) {
+            String key(&ctx);
+            String value(&ctx);
+            assign_text(key, key_text);
+            assign_text(value, value_text);
+            require_success(values.insert_or_assign(protocyte::move(key), protocyte::move(value)));
+        };
+
+        String seed_key(&ctx);
+        assign_text(seed_key, "rehash-seed");
+        const auto seed_bucket = Config::hash(seed_key) & 7u;
+        String seed_value(&ctx);
+        assign_text(seed_value, "seed-value");
+        require_success(values.insert_or_assign(protocyte::move(seed_key), protocyte::move(seed_value)));
+        insert_owned("rehash-one", "one");
+        insert_owned("rehash-two", "two");
+        insert_owned("rehash-three", "three");
+        insert_owned("rehash-four", "four");
+
+        String colliding_key(&ctx);
+        bool found_collision {};
+        for (char suffix {'0'}; suffix <= 'z'; ++suffix) {
+            const char candidate[] {'c', 'o', 'l', 'l', 'i', 'd', 'e', '-', suffix};
+            require_success(colliding_key.assign(protocyte::Span<const char> {candidate, std::size(candidate)}));
+            if ((Config::hash(colliding_key) & 7u) == seed_bucket) {
+                found_collision = true;
+                break;
+            }
+        }
+        REQUIRE(found_collision);
+        String colliding_value(&ctx);
+        assign_text(colliding_value, "colliding-lvalue-value");
+
+        require_success(values.insert_or_assign(colliding_key, colliding_value));
+        REQUIRE(values.size() == 6u);
+        CHECK(contains(values, "rehash-seed", "seed-value"));
+        CHECK(
+            contains(values, std::string_view {colliding_key.data(), colliding_key.size()}, "colliding-lvalue-value"));
+        CHECK(view_equal(colliding_value.view(), std::string_view {"colliding-lvalue-value"}));
+
+        colliding_key.clear();
+        colliding_value.clear();
+        CHECK(contains(values, "rehash-seed", "seed-value"));
+    }
+
+    SECTION("failed overlapping rvalue copy leaves the map and source unchanged") {
+        auto ctx = make_context();
+        StringMap values(&ctx);
+        String key(&ctx);
+        String value(&ctx);
+        assign_text(key, "stable-key");
+        assign_text(value, "stable-value");
+        require_success(values.insert_or_assign(protocyte::move(key), protocyte::move(value)));
+
+        auto source = *values.begin();
+        FailingAllocationProbe failure_probe {.successful_calls_before_failure = 1u};
+        ctx.allocator = protocyte::Allocator {&failure_probe, fail_after_allocations, smoke_deallocate};
+        auto &overlapping_key = const_cast<String &>(source.key);
+
+        require_failure(values.insert_or_assign(source.key, protocyte::move(overlapping_key)),
+                        protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(contains(values, "stable-key", "stable-value"));
+        CHECK(view_equal(source.key.view(), std::string_view {"stable-key"}));
+        CHECK(view_equal(source.value.view(), std::string_view {"stable-value"}));
+        CHECK(failure_probe.calls == 2u);
+    }
+}
+
+TEST_CASE("Sequence containers deep-copy noncopyable String lvalues transactionally", "[smoke][runtime][sequence]") {
+    using String = Config::String;
+
+    const auto assign_text = [](String &out, const std::string_view text) {
+        require_success(out.assign(protocyte::Span<const char> {text.data(), text.size()}));
+    };
+
+    SECTION("Vector clones lvalues into its context before self-aliasing growth") {
+        auto source_ctx = make_context();
+        String source(&source_ctx);
+        assign_text(source, "vector-lvalue");
+
+        auto destination_ctx = make_context();
+        Config::Vector<String> values(&destination_ctx);
+        require_success(values.push_back(source));
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+
+        source.clear();
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+
+        require_success(values.push_back(values[0]));
+        REQUIRE(values.size() == 2u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(values[1].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-lvalue"}));
+        CHECK(view_equal(values[1].view(), std::string_view {"vector-lvalue"}));
+    }
+
+    SECTION("fixed Array clones lvalues into its context before self-aliasing insertion") {
+        auto source_ctx = make_context();
+        String source(&source_ctx);
+        assign_text(source, "array-lvalue");
+
+        auto destination_ctx = make_context();
+        protocyte::Array<String, 2u> values(&destination_ctx);
+        require_success(values.push_back(source));
+        REQUIRE(values.size() == 1u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+
+        source.clear();
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+
+        require_success(values.push_back(values[0]));
+        REQUIRE(values.size() == 2u);
+        CHECK(values[0].context() == &destination_ctx);
+        CHECK(values[1].context() == &destination_ctx);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-lvalue"}));
+        CHECK(view_equal(values[1].view(), std::string_view {"array-lvalue"}));
+    }
+
+    SECTION("Vector leaves an aliased lvalue unchanged when cloning or growth fails") {
+        auto ctx = make_context();
+        Config::Vector<String> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "vector-stable");
+        require_success(values.push_back(source));
+        const auto baseline_allocation = ctx.total_allocated_bytes;
+
+        FailingAllocationProbe clone_failure {};
+        ctx.allocator = protocyte::Allocator {&clone_failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(clone_failure.calls == 1u);
+
+        FailingAllocationProbe growth_failure {.successful_calls_before_failure = 1u};
+        ctx.allocator = protocyte::Allocator {&growth_failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"vector-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(growth_failure.calls == 2u);
+    }
+
+    SECTION("fixed Array leaves an aliased lvalue unchanged when cloning fails") {
+        auto ctx = make_context();
+        protocyte::Array<String, 2u> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "array-stable");
+        require_success(values.push_back(source));
+        const auto baseline_allocation = ctx.total_allocated_bytes;
+
+        FailingAllocationProbe failure {};
+        ctx.allocator = protocyte::Allocator {&failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(values[0]), protocyte::ErrorCode::no_memory);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-stable"}));
+        CHECK(ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(failure.calls == 1u);
+    }
+
+    SECTION("fixed Array reports full capacity without cloning") {
+        auto ctx = make_context();
+        protocyte::Array<String, 1u> values(&ctx);
+        String source(&ctx);
+        assign_text(source, "array-full");
+        require_success(values.push_back(source));
+
+        FailingAllocationProbe failure {};
+        ctx.allocator = protocyte::Allocator {&failure, fail_after_allocations, smoke_deallocate};
+        require_failure(values.push_back(source), protocyte::ErrorCode::count_limit);
+        REQUIRE(values.size() == 1u);
+        CHECK(view_equal(values[0].view(), std::string_view {"array-full"}));
+        CHECK(failure.calls == 0u);
+    }
+}
+
+TEST_CASE("Runtime context rebinding preserves allocator ownership", "[smoke][runtime][allocator][bind]") {
+    SECTION("unallocated vectors can bind and live vectors reject context changes") {
+        auto first_ctx = make_context();
+        auto second_ctx = make_context();
+        {
+            Config::Vector<protocyte::i32> values;
+            require_success(values.bind(&first_ctx));
+            require_success(values.push_back(41));
+            REQUIRE(first_ctx.total_allocated_bytes != 0u);
+            const auto first_allocation = first_ctx.total_allocated_bytes;
+
+            require_success(values.bind(&first_ctx));
+            require_failure(values.bind(&second_ctx), protocyte::ErrorCode::invalid_argument);
+            require_failure(values.bind(nullptr), protocyte::ErrorCode::invalid_argument);
+            REQUIRE(values.size() == 1u);
+            CHECK(values[0] == 41);
+            CHECK(first_ctx.total_allocated_bytes == first_allocation);
+            CHECK(second_ctx.total_allocated_bytes == 0u);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+
+        {
+            Config::Vector<protocyte::i32> values(&first_ctx);
+            require_success(values.reserve(4u));
+            values.clear();
+            require_failure(values.bind(&second_ctx), protocyte::ErrorCode::invalid_argument);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+    }
+
+    SECTION("bytes rebinding is transactional and fresh bytes use the new context") {
+        auto first_ctx = make_context();
+        auto second_ctx = make_context();
+        {
+            Config::Bytes bytes(&first_ctx);
+            require_success(bytes.assign(view_of(bytes_data)));
+            const auto first_allocation = first_ctx.total_allocated_bytes;
+
+            require_success(bytes.bind(&first_ctx));
+            require_failure(bytes.bind(&second_ctx), protocyte::ErrorCode::invalid_argument);
+            require_failure(bytes.bind(nullptr), protocyte::ErrorCode::invalid_argument);
+            CHECK(bytes.context() == &first_ctx);
+            CHECK(view_equal(bytes.view(), view_of(bytes_data)));
+            CHECK(first_ctx.total_allocated_bytes == first_allocation);
+            CHECK(second_ctx.total_allocated_bytes == 0u);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+
+        {
+            Config::Bytes bytes(&first_ctx);
+            require_success(bytes.bind(&second_ctx));
+            CHECK(bytes.context() == &second_ctx);
+            require_success(bytes.assign(view_of(bytes_data)));
+            CHECK(first_ctx.total_allocated_bytes == 0u);
+            CHECK(second_ctx.total_allocated_bytes != 0u);
+        }
+        CHECK(first_ctx.total_allocated_bytes == 0u);
+        CHECK(second_ctx.total_allocated_bytes == 0u);
+    }
+}
+
+TEST_CASE("Runtime container copies commit only after complete success", "[smoke][runtime][copy][atomic]") {
+    SECTION("Vector preserves its destination after a later element allocation fails") {
+        auto source_ctx = make_context();
+        Config::Vector<Config::Bytes> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Vector<Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(4u));
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+        const auto destination_capacity = destination.capacity();
+        const auto baseline_allocation = destination_ctx.total_allocated_bytes;
+        FailingAllocationProbe probe {.successful_calls_before_failure = 2u};
+        destination_ctx.allocator = protocyte::Allocator {&probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+
+        const protocyte::Span<const protocyte::u8> expected[] = {view_of(repeated_bytes_0)};
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.capacity() == destination_capacity);
+        CHECK(destination[0].context() == &destination_ctx);
+        CHECK(destination_ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(probe.calls == 3u);
+    }
+
+    SECTION("Vector commits a successful copy in the destination context") {
+        auto source_ctx = make_context();
+        Config::Vector<Config::Bytes> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Vector<Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(4u));
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+        const auto destination_capacity = destination.capacity();
+
+        require_success(destination.copy_from(source));
+        const protocyte::Span<const protocyte::u8> expected[] = {
+            view_of(repeated_bytes_1),
+            view_of(repeated_bytes_2),
+        };
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.capacity() == destination_capacity);
+        for (const auto &value : destination) { CHECK(value.context() == &destination_ctx); }
+
+        require_success(destination.copy_from(destination));
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.capacity() == destination_capacity);
+    }
+
+    SECTION("Array preserves its destination after a later element allocation fails") {
+        auto source_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> destination(&destination_ctx);
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+        const auto baseline_allocation = destination_ctx.total_allocated_bytes;
+        FailingAllocationProbe probe {.successful_calls_before_failure = 1u};
+        destination_ctx.allocator = protocyte::Allocator {&probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+
+        const protocyte::Span<const protocyte::u8> expected[] = {view_of(repeated_bytes_0)};
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.context() == &destination_ctx);
+        CHECK(destination[0].context() == &destination_ctx);
+        CHECK(destination_ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(probe.calls == 2u);
+    }
+
+    SECTION("Array commits a successful copy in the destination context") {
+        auto source_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> source(&source_ctx);
+        append_bytes(source, source_ctx, view_of(repeated_bytes_1));
+        append_bytes(source, source_ctx, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        protocyte::Array<Config::Bytes, 3u> destination(&destination_ctx);
+        append_bytes(destination, destination_ctx, view_of(repeated_bytes_0));
+
+        require_success(destination.copy_from(source));
+        const protocyte::Span<const protocyte::u8> expected[] = {
+            view_of(repeated_bytes_1),
+            view_of(repeated_bytes_2),
+        };
+        check_byte_entry_sequence(destination, expected);
+        CHECK(destination.context() == &destination_ctx);
+        for (const auto &value : destination) { CHECK(value.context() == &destination_ctx); }
+
+        require_success(destination.copy_from(destination));
+        check_byte_entry_sequence(destination, expected);
+    }
+
+    SECTION("HashMap preserves its destination after a later value allocation fails") {
+        auto source_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> source(&source_ctx);
+        insert_bytes(source, source_ctx, 1, view_of(repeated_bytes_1));
+        insert_bytes(source, source_ctx, 2, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(8u));
+        insert_bytes(destination, destination_ctx, 7, view_of(repeated_bytes_0));
+        const auto baseline_allocation = destination_ctx.total_allocated_bytes;
+        FailingAllocationProbe probe {.successful_calls_before_failure = 2u};
+        destination_ctx.allocator = protocyte::Allocator {&probe, fail_after_allocations, smoke_deallocate};
+
+        require_failure(destination.copy_from(source), protocyte::ErrorCode::no_memory);
+
+        REQUIRE(destination.size() == 1u);
+        CHECK(contains_bytes(destination, 7, view_of(repeated_bytes_0)));
+        CHECK_FALSE(contains_bytes(destination, 1, view_of(repeated_bytes_1)));
+        CHECK_FALSE(contains_bytes(destination, 2, view_of(repeated_bytes_2)));
+        CHECK(destination_ctx.total_allocated_bytes == baseline_allocation);
+        CHECK(probe.calls == 3u);
+    }
+
+    SECTION("HashMap commits a successful copy in the destination context") {
+        auto source_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> source(&source_ctx);
+        insert_bytes(source, source_ctx, 1, view_of(repeated_bytes_1));
+        insert_bytes(source, source_ctx, 2, view_of(repeated_bytes_2));
+
+        auto destination_ctx = make_context();
+        Config::Map<protocyte::i32, Config::Bytes> destination(&destination_ctx);
+        require_success(destination.reserve(8u));
+        insert_bytes(destination, destination_ctx, 7, view_of(repeated_bytes_0));
+
+        require_success(destination.copy_from(source));
+        REQUIRE(destination.size() == 2u);
+        CHECK(contains_bytes(destination, 1, view_of(repeated_bytes_1)));
+        CHECK(contains_bytes(destination, 2, view_of(repeated_bytes_2)));
+        CHECK_FALSE(contains_bytes(destination, 7, view_of(repeated_bytes_0)));
+        for (const auto entry : destination) { CHECK(entry.value.context() == &destination_ctx); }
+
+        require_success(destination.copy_from(destination));
+        REQUIRE(destination.size() == 2u);
+        CHECK(contains_bytes(destination, 1, view_of(repeated_bytes_1)));
+        CHECK(contains_bytes(destination, 2, view_of(repeated_bytes_2)));
+
+        AllocationProbe probe {};
+        destination_ctx.allocator = protocyte::Allocator {&probe, reject_allocation, smoke_deallocate};
+        for (protocyte::i32 key {3}; key <= 8; ++key) {
+            Config::Bytes empty_value(&destination_ctx);
+            require_success(destination.insert_or_assign(protocyte::i32 {key}, protocyte::move(empty_value)));
+        }
+        CHECK(probe.calls == 0u);
+    }
+}
+
 TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
     using DynamicSpan = protocyte::Span<int>;
     using FixedSpan = protocyte::Span<int, 5u>;
@@ -2538,6 +3760,74 @@ TEST_CASE("Span exposes std::span-style API", "[smoke][runtime][span]") {
     writable_bytes[0u] = readonly_bytes[0u];
 }
 
+TEST_CASE("generated messages adapt byte ranges to slice readers and writers", "[smoke][runtime][span]") {
+    using Encoded = std::array<protocyte::u8, 3u>;
+
+    static_assert(protocyte::ReaderLike<protocyte::SliceReader>);
+    static_assert(protocyte::WriterLike<protocyte::SliceWriter>);
+    static_assert(!protocyte::ReaderLike<Encoded>);
+    static_assert(!protocyte::WriterLike<Encoded>);
+    static_assert(std::is_convertible_v<Encoded &, protocyte::Span<protocyte::u8>>);
+    static_assert(std::is_convertible_v<const Encoded &, protocyte::Span<const protocyte::u8>>);
+
+    auto ctx = make_context();
+    CompatMessage message {ctx};
+    message.set_f_int32(150);
+
+    const auto size = message.encoded_size();
+    require_success(size);
+    REQUIRE(*size == 3u);
+
+    Encoded encoded {};
+    const auto written = message.serialize(encoded);
+    require_success(written);
+    CHECK(*written == encoded.size());
+
+    auto array_ctx = make_context();
+    const auto parsed_array = CompatMessage::parse(array_ctx, encoded);
+    require_success(parsed_array);
+    CHECK((*parsed_array).f_int32() == 150);
+
+    std::span<protocyte::u8> standard_output {encoded};
+    const auto standard_written = message.serialize(standard_output);
+    require_success(standard_written);
+    CHECK(*standard_written == standard_output.size());
+
+    auto span_ctx = make_context();
+    const std::span<const protocyte::u8> standard_input {encoded};
+    const auto parsed_span = CompatMessage::parse(span_ctx, standard_input);
+    require_success(parsed_span);
+    CHECK((*parsed_span).f_int32() == 150);
+
+    std::vector<protocyte::u8> dynamic_encoded(*size);
+    const auto dynamic_written = message.serialize(dynamic_encoded);
+    require_success(dynamic_written);
+    CHECK(*dynamic_written == dynamic_encoded.size());
+
+    auto vector_ctx = make_context();
+    const auto parsed_vector = CompatMessage::parse(vector_ctx, dynamic_encoded);
+    require_success(parsed_vector);
+    CHECK((*parsed_vector).f_int32() == 150);
+
+    Encoded short_output {0xa5u, 0x5au, 0xc3u};
+    const auto short_result = message.serialize(protocyte::Span<protocyte::u8> {short_output.data(), 2u});
+    require_failure(short_result, protocyte::ErrorCode::size_limit);
+    CHECK(short_result.error().offset == 0u);
+    const Encoded expected_short_output {0xa5u, 0x5au, 0xc3u};
+    CHECK(short_output == expected_short_output);
+
+    CompatMessage empty_message {ctx};
+    std::vector<protocyte::u8> empty_output;
+    const auto empty_written = empty_message.serialize(empty_output);
+    require_success(empty_written);
+    CHECK(*empty_written == 0u);
+
+    auto empty_ctx = make_context();
+    const auto parsed_empty = CompatMessage::parse(empty_ctx, empty_output);
+    require_success(parsed_empty);
+    CHECK((*parsed_empty).f_int32() == 0);
+}
+
 TEST_CASE("HashMap iterators expose key/value proxies", "[smoke][iterators][map]") {
     auto ctx = make_context();
     Message message(ctx);
@@ -2609,13 +3899,13 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("varint scalars") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_f_int32(std::numeric_limits<int32_t>::min()));
-        require_success(protocyte_message.set_f_int64(std::numeric_limits<int64_t>::min()));
-        require_success(protocyte_message.set_f_uint32(std::numeric_limits<uint32_t>::max()));
-        require_success(protocyte_message.set_f_uint64(std::numeric_limits<uint64_t>::max()));
-        require_success(protocyte_message.set_f_sint32(-17));
-        require_success(protocyte_message.set_f_sint64(-17000000000ll));
-        require_success(protocyte_message.set_f_bool(true));
+        protocyte_message.set_f_int32(std::numeric_limits<int32_t>::min());
+        protocyte_message.set_f_int64(std::numeric_limits<int64_t>::min());
+        protocyte_message.set_f_uint32(std::numeric_limits<uint32_t>::max());
+        protocyte_message.set_f_uint64(std::numeric_limits<uint64_t>::max());
+        protocyte_message.set_f_sint32(-17);
+        protocyte_message.set_f_sint64(-17000000000ll);
+        protocyte_message.set_f_bool(true);
         require_success(protocyte_message.set_mode(CompatMode::SECOND));
 
         require_same_compat_bytes("varint", protocyte_message, compat_cases::varint);
@@ -2634,12 +3924,12 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("fixed scalars") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_f_fixed32(0x11223344u));
-        require_success(protocyte_message.set_f_fixed64(0x1122334455667788ull));
-        require_success(protocyte_message.set_f_sfixed32(-1234567));
-        require_success(protocyte_message.set_f_sfixed64(-1234567890123ll));
-        require_success(protocyte_message.set_f_float(-0.0f));
-        require_success(protocyte_message.set_f_double(123.5));
+        protocyte_message.set_f_fixed32(0x11223344u);
+        protocyte_message.set_f_fixed64(0x1122334455667788ull);
+        protocyte_message.set_f_sfixed32(-1234567);
+        protocyte_message.set_f_sfixed64(-1234567890123ll);
+        protocyte_message.set_f_float(-0.0f);
+        protocyte_message.set_f_double(123.5);
 
         require_same_compat_bytes("fixed", protocyte_message, compat_cases::fixed);
 
@@ -2709,7 +3999,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("oneof int32") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_oneof_int32(-2701));
+        protocyte_message.set_oneof_int32(-2701);
         require_same_compat_bytes("oneof-int32", protocyte_message, compat_cases::oneof_int32);
 
         auto parsed = parse_compat_bytes(ctx, compat_cases::oneof_int32);
@@ -2748,7 +4038,7 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
     SECTION("optional fields") {
         CompatMessage protocyte_message(ctx);
 
-        require_success(protocyte_message.set_opt_int32(-99));
+        protocyte_message.set_opt_int32(-99);
         require_success(protocyte_message.set_opt_string(view_of(optional_string)));
         require_same_compat_bytes("optional", protocyte_message, compat_cases::optional_case);
 
@@ -2766,6 +4056,13 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         CHECK(compat_map_str_int32_contains(parsed, view_of(map_key), 301));
         CHECK(parsed.map_int32_str().size() == 1u);
         CHECK(compat_map_int32_str_contains(parsed, 302, view_of(map_value)));
+
+        PreservingCompatMessage preserving(ctx);
+        protocyte::SliceReader preserving_reader {compat_cases::map_runtime.data(), compat_cases::map_runtime.size()};
+        require_success(preserving.merge_from(preserving_reader));
+        CHECK(preserving.map_str_int32().size() == 1u);
+        CHECK(preserving.map_int32_str().size() == 1u);
+        CHECK(preserving.unknown_fields().empty());
     }
 
     SECTION("map duplicate keys use the last entry") {
@@ -2784,12 +4081,20 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         CHECK(compat_map_int32_str_contains(parsed, 7, protocyte::Span<const protocyte::u8> {}));
     }
 
-    SECTION("unknown fields inside map entries are skipped") {
+    SECTION("unknown fields inside map entries are discarded") {
         auto parsed = parse_compat_bytes(ctx, compat_cases::map_unknown_entry_field);
 
         constexpr uint8_t mystery_key[] = {'m', 'y', 's', 't', 'e', 'r', 'y'};
         CHECK(parsed.map_str_int32().size() == 1u);
         CHECK(compat_map_str_int32_contains(parsed, view_of(mystery_key), 33));
+
+        PreservingCompatMessage preserving(ctx);
+        protocyte::SliceReader preserving_reader {compat_cases::map_unknown_entry_field.data(),
+                                                  compat_cases::map_unknown_entry_field.size()};
+        require_success(preserving.merge_from(preserving_reader));
+        CHECK(preserving.map_str_int32().size() == 1u);
+        CHECK(compat_map_str_int32_contains(preserving, view_of(mystery_key), 33));
+        CHECK(preserving.unknown_fields().empty());
     }
 
     SECTION("mixed packed and unpacked repeated numeric encodings parse") {
@@ -2808,6 +4113,277 @@ TEST_CASE("Protocyte encoding matches protobuf runtime bytes", "[smoke][compat]"
         CHECK(parsed.map_str_int32().empty());
         CHECK(parsed.map_int32_str().empty());
     }
+}
+
+TEST_CASE("unknown fields are opt-in and expose protobuf-style typed views", "[smoke][unknown-fields]") {
+    auto default_ctx = make_context();
+    auto preserving_ctx = make_context();
+
+    static constexpr uint8_t encoded[] = {
+        0x48u, 0x07u,                                                   // Known field 9 with the wrong wire type.
+        0xa0u, 0x06u, 0x96u, 0x01u,                                     // Field 100: varint 150.
+        0xa9u, 0x06u, 0x08u, 0x07u, 0x06u, 0x05u,                       // Field 101: fixed64.
+        0x04u, 0x03u, 0x02u, 0x01u, 0xb2u, 0x06u, 0x03u, 'a', 'b', 'c', // Field 102: length-delimited.
+        0xbbu, 0x06u, 0x08u, 0x2au, 0xbcu, 0x06u,                       // Field 103: group containing field 1.
+        0xc5u, 0x06u, 0x78u, 0x56u, 0x34u, 0x12u,                       // Field 104: fixed32.
+    };
+
+    CompatMessage discarding(default_ctx);
+    protocyte::SliceReader discarding_reader {encoded, sizeof(encoded)};
+    require_success(discarding.merge_from(discarding_reader));
+    CHECK(discarding.unknown_fields().empty());
+    CHECK(discarding.unknown_field_count() == 0u);
+    CHECK(discarding.f_fixed32() == 0u);
+
+    PreservingCompatMessage preserving(preserving_ctx);
+    protocyte::SliceReader preserving_reader {encoded, sizeof(encoded)};
+    require_success(preserving.merge_from(preserving_reader));
+    CHECK(preserving.f_fixed32() == 0u);
+
+    const auto fields = preserving.unknown_fields();
+    REQUIRE(fields.field_count() == 6u);
+
+    const auto wrong_wire = fields.field(0u);
+    REQUIRE(wrong_wire);
+    CHECK(wrong_wire->field_number() == 9u);
+    CHECK(wrong_wire->tag().field_number == 9u);
+    CHECK(wrong_wire->type() == protocyte::UnknownFieldView::Type::TYPE_VARINT);
+    CHECK(wrong_wire->wire_type() == protocyte::WireType::VARINT);
+    const auto wrong_wire_value = wrong_wire->varint();
+    REQUIRE(wrong_wire_value);
+    CHECK(*wrong_wire_value == 7u);
+
+    const auto varint = fields.field(1u);
+    REQUIRE(varint);
+    CHECK(varint->number() == 100u);
+    const auto varint_value = varint->varint();
+    REQUIRE(varint_value);
+    CHECK(*varint_value == 150u);
+    require_failure(varint->fixed32(), protocyte::ErrorCode::invalid_argument);
+
+    const auto fixed64 = fields.field(2u);
+    REQUIRE(fixed64);
+    CHECK(fixed64->wire_type() == protocyte::WireType::I64);
+    const auto fixed64_value = fixed64->fixed64();
+    REQUIRE(fixed64_value);
+    CHECK(*fixed64_value == 0x0102030405060708ull);
+
+    const auto length_delimited = fields.field(3u);
+    REQUIRE(length_delimited);
+    const auto payload = length_delimited->length_delimited();
+    REQUIRE(payload);
+    static constexpr uint8_t expected_payload[] = {'a', 'b', 'c'};
+    CHECK(view_equal(*payload, view_of(expected_payload)));
+
+    const auto group = fields.field(4u);
+    REQUIRE(group);
+    const auto group_fields = group->group();
+    REQUIRE(group_fields);
+    REQUIRE(group_fields->field_count() == 1u);
+    const auto nested = group_fields->field(0u);
+    REQUIRE(nested);
+    CHECK(nested->field_number() == 1u);
+    const auto nested_value = nested->varint();
+    REQUIRE(nested_value);
+    CHECK(*nested_value == 42u);
+
+    const auto fixed32 = fields.field(5u);
+    REQUIRE(fixed32);
+    const auto fixed32_value = fixed32->fixed32();
+    REQUIRE(fixed32_value);
+    CHECK(*fixed32_value == 0x12345678u);
+    require_failure(fields.field(6u), protocyte::ErrorCode::invalid_argument);
+
+    const auto encoded_size = preserving.encoded_size();
+    REQUIRE(encoded_size);
+    REQUIRE(*encoded_size == sizeof(encoded));
+    std::array<uint8_t, sizeof(encoded)> roundtrip {};
+    protocyte::SliceWriter writer {roundtrip.data(), roundtrip.size()};
+    require_success(preserving.serialize(writer));
+    CHECK(view_equal(protocyte::Span<const protocyte::u8> {roundtrip.data(), roundtrip.size()}, view_of(encoded)));
+
+    const auto cloned = preserving.clone();
+    REQUIRE(cloned);
+    CHECK(cloned->unknown_field_count() == fields.field_count());
+    CHECK(view_equal(cloned->unknown_field_bytes(), preserving.unknown_field_bytes()));
+}
+
+TEST_CASE("unknown field mutation is typed, ordered, and transactional", "[smoke][unknown-fields]") {
+    auto ctx = make_context();
+    PreservingCompatMessage message(ctx);
+    auto unknown = message.mutable_unknown_fields();
+
+    require_success(unknown.add_varint(200u, 9u));
+    require_success(unknown.add_fixed32(201u, 0xabcdef01u));
+    static constexpr uint8_t payload[] = {'x', 'y'};
+    require_success(unknown.add_length_delimited(202u, view_of(payload)));
+    REQUIRE(unknown.field_count() == 3u);
+
+    require_success(unknown.replace_fixed64(1u, 203u, 0x0102030405060708ull));
+    REQUIRE(unknown.field_count() == 3u);
+    const auto replaced = unknown.view().field(1u);
+    REQUIRE(replaced);
+    CHECK(replaced->field_number() == 203u);
+    const auto replaced_value = replaced->fixed64();
+    REQUIRE(replaced_value);
+    CHECK(*replaced_value == 0x0102030405060708ull);
+    const auto preserved = unknown.view().field(2u);
+    REQUIRE(preserved);
+    CHECK(preserved->field_number() == 202u);
+    const auto preserved_payload = preserved->length_delimited();
+    REQUIRE(preserved_payload);
+    CHECK(view_equal(*preserved_payload, view_of(payload)));
+
+    CHECK(unknown.delete_by_number(200u) == 1u);
+    REQUIRE(unknown.field_count() == 2u);
+    require_success(unknown.delete_subrange(1u, 1u));
+    REQUIRE(unknown.field_count() == 1u);
+
+    PreservingCompatMessage merged(ctx);
+    auto merged_unknown = merged.mutable_unknown_fields();
+    require_success(merged_unknown.merge_from(unknown.view()));
+    REQUIRE(merged_unknown.field_count() == 1u);
+    require_success(merged_unknown.add_group(204u, unknown.view()));
+    REQUIRE(merged_unknown.field_count() == 2u);
+    const auto group = merged_unknown.view().field(1u);
+    REQUIRE(group);
+    const auto group_fields = group->group();
+    REQUIRE(group_fields);
+    CHECK(group_fields->field_count() == 1u);
+
+    require_success(merged_unknown.erase(0u));
+    REQUIRE(merged_unknown.field_count() == 1u);
+    merged.clear_unknown_fields();
+    CHECK(merged.unknown_fields().empty());
+}
+
+TEST_CASE("unknown field mutation safely accepts views into the same message", "[smoke][unknown-fields]") {
+    auto ctx = make_context();
+    PreservingCompatMessage message(ctx);
+    auto unknown = message.mutable_unknown_fields();
+
+    require_success(unknown.add_varint(1u, 1u));
+    static constexpr uint8_t original_bytes[] = {0x08u, 0x01u};
+    REQUIRE(view_equal(message.unknown_field_bytes(), view_of(original_bytes)));
+
+    const auto aliased_payload = message.unknown_field_bytes();
+    require_success(unknown.add_length_delimited(2u, aliased_payload));
+    REQUIRE(unknown.field_count() == 2u);
+    const auto length_delimited = unknown.view().field(1u);
+    REQUIRE(length_delimited);
+    const auto payload = length_delimited->length_delimited();
+    REQUIRE(payload);
+    CHECK(view_equal(*payload, view_of(original_bytes)));
+
+    const auto aliased_group = unknown.view();
+    require_success(unknown.add_group(3u, aliased_group));
+    REQUIRE(unknown.field_count() == 3u);
+    const auto group = unknown.view().field(2u);
+    REQUIRE(group);
+    const auto group_fields = group->group();
+    REQUIRE(group_fields);
+    CHECK(group_fields->field_count() == 2u);
+}
+
+TEST_CASE("unknown field raw ranges are canonicalized and recursion-limited", "[smoke][unknown-fields][limits]") {
+    auto ctx = make_context();
+    PreservingCompatMessage message(ctx);
+    auto unknown = message.mutable_unknown_fields();
+
+    static constexpr uint8_t noncanonical[] = {0x88u, 0x00u, 0x81u, 0x00u};
+    require_success(unknown.merge_from(protocyte::UnknownFieldRange {view_of(noncanonical)}));
+    static constexpr uint8_t canonical[] = {0x08u, 0x01u};
+    CHECK(view_equal(message.unknown_field_bytes(), view_of(canonical)));
+
+    std::vector<uint8_t> deeply_nested;
+    deeply_nested.reserve((protocyte::Limits::default_max_recursion_depth + 1u) * 2u);
+    for (protocyte::usize i {}; i <= protocyte::Limits::default_max_recursion_depth; ++i) {
+        deeply_nested.push_back(0x0bu);
+    }
+    for (protocyte::usize i {}; i <= protocyte::Limits::default_max_recursion_depth; ++i) {
+        deeply_nested.push_back(0x0cu);
+    }
+    const protocyte::UnknownFieldRange deeply_nested_range {
+        protocyte::Span<const protocyte::u8> {deeply_nested.data(), deeply_nested.size()}};
+    require_failure(deeply_nested_range.field(0u), protocyte::ErrorCode::recursion_limit);
+
+    static constexpr uint8_t malformed_group[] = {0x2bu, 0x80u};
+    const auto malformed = protocyte::UnknownFieldRange {view_of(malformed_group)}.field(0u);
+    require_failure(malformed, protocyte::ErrorCode::unexpected_eof);
+    CHECK(malformed.error().offset == 2u);
+    CHECK(malformed.error().field_number == 5u);
+
+    message.clear_unknown_fields();
+    ctx.limits.max_recursion_depth = 4u;
+    static constexpr uint8_t exceeds_context_depth[] = {
+        0x0bu, 0x0bu, 0x0bu, 0x0bu, 0x0bu, 0x0cu, 0x0cu, 0x0cu, 0x0cu, 0x0cu,
+    };
+    require_failure(unknown.merge_from(protocyte::UnknownFieldRange {view_of(exceeds_context_depth)}),
+                    protocyte::ErrorCode::recursion_limit);
+    CHECK(message.unknown_fields().empty());
+}
+
+TEST_CASE("unknown field copies honor the destination byte limit", "[smoke][unknown-fields][limits]") {
+    auto source_ctx = make_context();
+    auto destination_ctx = make_context();
+    destination_ctx.limits.max_unknown_field_bytes = 2u;
+
+    PreservingCompatMessage source(source_ctx);
+    require_success(source.mutable_unknown_fields().add_varint(100u, 1u));
+    REQUIRE(source.unknown_field_bytes().size() == 3u);
+
+    PreservingCompatMessage destination(destination_ctx);
+    require_success(destination.mutable_unknown_fields().add_varint(1u, 1u));
+    require_failure(destination.copy_from(source), protocyte::ErrorCode::size_limit);
+    REQUIRE(destination.unknown_field_count() == 1u);
+    const auto retained = destination.unknown_fields().field(0u);
+    REQUIRE(retained);
+    CHECK(retained->field_number() == 1u);
+}
+
+TEST_CASE("unknown field byte limits roll back only the failing occurrence", "[smoke][unknown-fields][limits]") {
+    auto ctx = make_context();
+    ctx.limits.max_unknown_field_bytes = 4u;
+    PreservingCompatMessage message(ctx);
+
+    static constexpr uint8_t encoded[] = {
+        0xa0u, 0x06u, 0x01u, // Field 100 fits in three bytes.
+        0xa8u, 0x06u, 0x02u, // Field 101 would take the total past four bytes.
+    };
+    protocyte::SliceReader reader {encoded, sizeof(encoded)};
+    const auto status = message.merge_from(reader);
+    require_failure(status, protocyte::ErrorCode::size_limit);
+    CHECK(status.error().offset == 5u);
+    CHECK(status.error().field_number == 101u);
+
+    REQUIRE(message.unknown_field_count() == 1u);
+    static constexpr uint8_t retained[] = {0xa0u, 0x06u, 0x01u};
+    CHECK(view_equal(message.unknown_field_bytes(), view_of(retained)));
+}
+
+TEST_CASE("unknown length and group capture preserve storage invariants", "[smoke][unknown-fields]") {
+    auto ctx = make_context();
+    PreservingCompatMessage message(ctx);
+
+    static constexpr uint8_t empty_length_delimited[] = {0xb2u, 0x06u, 0x00u};
+    protocyte::SliceReader empty_reader {empty_length_delimited, sizeof(empty_length_delimited)};
+    require_success(message.merge_from(empty_reader));
+    REQUIRE(message.unknown_field_count() == 1u);
+    const auto field = message.unknown_fields().field(0u);
+    REQUIRE(field);
+    const auto payload = field->length_delimited();
+    REQUIRE(payload);
+    CHECK(payload->empty());
+
+    message.clear_unknown_fields();
+    static constexpr uint8_t mismatched_group[] = {
+        0xa3u, 0x06u,               // Start group 100.
+        0x08u, 0x01u, 0xacu, 0x06u, // End group 101.
+    };
+    protocyte::SliceReader group_reader {mismatched_group, sizeof(mismatched_group)};
+    require_failure(message.merge_from(group_reader), protocyte::ErrorCode::invalid_wire_type);
+    CHECK(message.unknown_fields().empty());
+    CHECK(ctx.recursion_depth == 0u);
 }
 
 TEST_CASE("proto2 required validation waits for embedded message merge", "[smoke][proto2][required]") {
@@ -2858,6 +4434,7 @@ TEST_CASE("proto2 required validation waits for embedded message merge", "[smoke
 
 TEST_CASE("proto2 array-backed bytes accessors use defaults when absent", "[smoke][proto2][defaults]") {
     auto ctx = make_context();
+    ctx.limits.max_string_bytes = 0u;
     Proto2ArrayDefaults message(ctx);
 
     CHECK_FALSE(message.has_bounded_bytes());
@@ -2996,63 +4573,63 @@ TEST_CASE("proto2 default accessors cover all supported defaultable types", "[sm
     CHECK_FALSE(message.has_bytes_value());
     CHECK(view_equal(message.bytes_value(), view_of(proto2_default_bytes)));
 
-    require_success(message.set_double_value(3.5));
+    message.set_double_value(3.5);
     CHECK(message.has_double_value());
     CHECK(message.double_value() == 3.5);
     message.clear_double_value();
     CHECK_FALSE(message.has_double_value());
     CHECK(message.double_value() == 1.5);
 
-    require_success(message.set_float_value(4.5f));
+    message.set_float_value(4.5f);
     CHECK(message.has_float_value());
     CHECK(message.float_value() == 4.5f);
     message.clear_float_value();
     CHECK_FALSE(message.has_float_value());
     CHECK(message.float_value() == -2.25f);
 
-    require_success(message.set_int64_value(-77ll));
+    message.set_int64_value(-77ll);
     CHECK(message.has_int64_value());
     CHECK(message.int64_value() == -77ll);
     message.clear_int64_value();
     CHECK_FALSE(message.has_int64_value());
     CHECK(message.int64_value() == -1234567890123ll);
 
-    require_success(message.set_uint64_value(88ull));
+    message.set_uint64_value(88ull);
     CHECK(message.has_uint64_value());
     CHECK(message.uint64_value() == 88ull);
     message.clear_uint64_value();
     CHECK_FALSE(message.has_uint64_value());
     CHECK(message.uint64_value() == 1234567890123ull);
 
-    require_success(message.set_int32_value(-99));
+    message.set_int32_value(-99);
     CHECK(message.has_int32_value());
     CHECK(message.int32_value() == -99);
     message.clear_int32_value();
     CHECK_FALSE(message.has_int32_value());
     CHECK(message.int32_value() == -12345);
 
-    require_success(message.set_fixed64_value(100ull));
+    message.set_fixed64_value(100ull);
     CHECK(message.has_fixed64_value());
     CHECK(message.fixed64_value() == 100ull);
     message.clear_fixed64_value();
     CHECK_FALSE(message.has_fixed64_value());
     CHECK(message.fixed64_value() == 12345678901234ull);
 
-    require_success(message.set_fixed32_value(101u));
+    message.set_fixed32_value(101u);
     CHECK(message.has_fixed32_value());
     CHECK(message.fixed32_value() == 101u);
     message.clear_fixed32_value();
     CHECK_FALSE(message.has_fixed32_value());
     CHECK(message.fixed32_value() == 123456789u);
 
-    require_success(message.set_bool_value(false));
+    message.set_bool_value(false);
     CHECK(message.has_bool_value());
     CHECK_FALSE(message.bool_value());
     message.clear_bool_value();
     CHECK_FALSE(message.has_bool_value());
     CHECK(message.bool_value());
 
-    require_success(message.set_uint32_value(102u));
+    message.set_uint32_value(102u);
     CHECK(message.has_uint32_value());
     CHECK(message.uint32_value() == 102u);
     message.clear_uint32_value();
@@ -3066,28 +4643,28 @@ TEST_CASE("proto2 default accessors cover all supported defaultable types", "[sm
     CHECK_FALSE(message.has_enum_value());
     CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
 
-    require_success(message.set_sfixed32_value(-103));
+    message.set_sfixed32_value(-103);
     CHECK(message.has_sfixed32_value());
     CHECK(message.sfixed32_value() == -103);
     message.clear_sfixed32_value();
     CHECK_FALSE(message.has_sfixed32_value());
     CHECK(message.sfixed32_value() == -54321);
 
-    require_success(message.set_sfixed64_value(-104ll));
+    message.set_sfixed64_value(-104ll);
     CHECK(message.has_sfixed64_value());
     CHECK(message.sfixed64_value() == -104ll);
     message.clear_sfixed64_value();
     CHECK_FALSE(message.has_sfixed64_value());
     CHECK(message.sfixed64_value() == -9876543210ll);
 
-    require_success(message.set_sint32_value(-105));
+    message.set_sint32_value(-105);
     CHECK(message.has_sint32_value());
     CHECK(message.sint32_value() == -105);
     message.clear_sint32_value();
     CHECK_FALSE(message.has_sint32_value());
     CHECK(message.sint32_value() == -23456);
 
-    require_success(message.set_sint64_value(-106ll));
+    message.set_sint64_value(-106ll);
     CHECK(message.has_sint64_value());
     CHECK(message.sint64_value() == -106ll);
     message.clear_sint64_value();
@@ -3106,13 +4683,13 @@ TEST_CASE("oneof scalar setters avoid storage name shadowing", "[smoke][oneof]")
     auto ctx = make_context();
     OneofShadowingValue message(ctx);
 
-    require_success(message.set_bool_value(true));
+    message.set_bool_value(true);
     CHECK(message.value_case() == OneofShadowingValue::ValueCase::bool_value);
     CHECK(message.has_bool_value());
     CHECK(message.bool_value());
 }
 
-TEST_CASE("proto2 enum fields reject undeclared values", "[smoke][proto2][enum]") {
+TEST_CASE("proto2 enum fields preserve undeclared wire values as unknown", "[smoke][proto2][enum]") {
     auto ctx = make_context();
 
     Proto2DefaultValues message(ctx);
@@ -3129,9 +4706,222 @@ TEST_CASE("proto2 enum fields reject undeclared values", "[smoke][proto2][enum]"
         0x07,
     };
     protocyte::SliceReader reader(encoded_unknown_enum.data(), encoded_unknown_enum.size());
-    require_failure(message.merge_from(reader), protocyte::ErrorCode::invalid_argument);
+    require_success(message.merge_from(reader));
     CHECK_FALSE(message.has_enum_value());
     CHECK(message.enum_value() == Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY);
+    CHECK(message.unknown_fields().empty());
+
+    PreservingProto2DefaultValues preserving(ctx);
+    protocyte::SliceReader preserving_reader(encoded_unknown_enum.data(), encoded_unknown_enum.size());
+    require_success(preserving.merge_from(preserving_reader));
+    CHECK_FALSE(preserving.has_enum_value());
+    REQUIRE(preserving.unknown_field_count() == 1u);
+    const auto unknown = preserving.unknown_fields().field(0u);
+    REQUIRE(unknown);
+    CHECK(unknown->field_number() == 12u);
+    const auto value = unknown->varint();
+    REQUIRE(value);
+    CHECK(*value == 7u);
+}
+
+TEST_CASE("proto2 consumers preserve imported proto3 enum values", "[smoke][proto2][enum][cross-syntax]") {
+    static constexpr uint8_t key_bytes[] = {'m', 'o', 'd', 'e'};
+
+    auto source_ctx = make_context();
+    Proto2DefaultValues source(source_ctx);
+    require_success(source.set_imported_open_enum_raw(7));
+    require_success(source.mutable_imported_open_unpacked().push_back(8));
+    require_success(source.mutable_imported_open_unpacked().push_back(9));
+    require_success(source.mutable_imported_open_packed().push_back(10));
+    require_success(source.mutable_imported_open_packed().push_back(11));
+    require_success(source.set_imported_open_oneof_raw(12));
+
+    Config::String key {&source_ctx};
+    assign_string(key, view_of(key_bytes));
+    require_success(source.mutable_imported_open_by_name().insert_or_assign(protocyte::move(key), 13));
+
+    const auto encoded_size = source.encoded_size();
+    require_success(encoded_size);
+    std::vector<uint8_t> encoded(*encoded_size);
+    protocyte::SliceWriter writer {encoded.data(), encoded.size()};
+    require_success(source.serialize(writer));
+    CHECK(writer.position() == encoded.size());
+
+    auto parsed_ctx = make_context();
+    Proto2DefaultValues parsed(parsed_ctx);
+    protocyte::SliceReader reader {encoded.data(), encoded.size()};
+    require_success(parsed.merge_from(reader));
+    CHECK(reader.eof());
+    CHECK(parsed.has_imported_open_enum());
+    CHECK(parsed.imported_open_enum_raw() == 7);
+    CHECK(parsed.imported_open_enum() == static_cast<Proto3OpenMode>(7));
+
+    static constexpr protocyte::i32 unpacked_values[] = {8, 9};
+    static constexpr protocyte::i32 packed_values[] = {10, 11};
+    check_scalar_sequence(parsed.imported_open_unpacked(), unpacked_values);
+    check_scalar_sequence(parsed.imported_open_packed(), packed_values);
+    CHECK(parsed.has_imported_open_oneof());
+    CHECK(parsed.imported_open_oneof_raw() == 12);
+    REQUIRE(parsed.imported_open_by_name().size() == 1u);
+    bool found_map_value {};
+    for (const auto entry : parsed.imported_open_by_name()) {
+        if (view_equal(entry.key.view(), view_of(key_bytes)) && entry.value == 13) {
+            found_map_value = true;
+        }
+    }
+    CHECK(found_map_value);
+    CHECK(parsed.unknown_fields().empty());
+}
+
+TEST_CASE("packed closed enums commit unknown values atomically", "[smoke][proto2][enum][unknown-fields]") {
+    auto ctx = make_context();
+    PreservingProto2DefaultValues message(ctx);
+    require_success(message.mutable_enum_values().push_back(
+        static_cast<protocyte::i32>(Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY)));
+    require_success(message.mutable_unknown_fields().add_varint(200u, 1u));
+    const auto unknown_before = message.unknown_field_bytes();
+    const std::vector<uint8_t> expected_unknown(unknown_before.begin(), unknown_before.end());
+
+    static constexpr uint8_t malformed_packed[] = {0x07u, 0x80u};
+    uint8_t encoded[16] {};
+    protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+    require_success(protocyte::write_tag(writer, static_cast<uint32_t>(Proto2DefaultValues::FieldNumber::enum_values),
+                                         protocyte::WireType::LEN));
+    require_success(protocyte::write_varint(writer, sizeof(malformed_packed)));
+    require_success(writer.write(malformed_packed, sizeof(malformed_packed)));
+
+    protocyte::SliceReader reader {encoded, writer.position()};
+    require_failure(message.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
+    REQUIRE(message.enum_values().size() == 1u);
+    CHECK(message.enum_values()[0] == static_cast<protocyte::i32>(Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY));
+    CHECK(view_equal(message.unknown_field_bytes(),
+                     protocyte::Span<const protocyte::u8> {expected_unknown.data(), expected_unknown.size()}));
+}
+
+TEST_CASE("proto2 enum map entries follow protobuf unknown-field semantics",
+          "[smoke][proto2][enum][map][unknown-fields]") {
+    static constexpr uint8_t key_bytes[] = {'m', 'o', 'd', 'e'};
+
+    SECTION("undeclared closed enum preserves the whole outer entry") {
+        uint8_t entry_bytes[32] {};
+        protocyte::SliceWriter entry_writer {entry_bytes, sizeof(entry_bytes)};
+        require_success(protocyte::write_bytes_field(entry_writer, 1u, view_of(key_bytes)));
+        require_success(protocyte::write_tag(entry_writer, 2u, protocyte::WireType::VARINT));
+        require_success(protocyte::write_varint(entry_writer, 7u));
+
+        uint8_t encoded[48] {};
+        protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+        require_success(protocyte::write_tag(
+            writer, static_cast<uint32_t>(Proto2DefaultValues::FieldNumber::enum_by_name), protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, entry_writer.position()));
+        require_success(writer.write(entry_bytes, entry_writer.position()));
+
+        auto discarding_ctx = make_context();
+        Proto2DefaultValues discarding(discarding_ctx);
+        protocyte::SliceReader discarding_reader {encoded, writer.position()};
+        require_success(discarding.merge_from(discarding_reader));
+        CHECK(discarding.enum_by_name().empty());
+        CHECK(discarding.unknown_fields().empty());
+
+        auto preserving_ctx = make_context();
+        PreservingProto2DefaultValues preserving(preserving_ctx);
+        protocyte::SliceReader preserving_reader {encoded, writer.position()};
+        require_success(preserving.merge_from(preserving_reader));
+        CHECK(preserving.enum_by_name().empty());
+        REQUIRE(preserving.unknown_field_count() == 1u);
+        const auto unknown = preserving.unknown_fields().field(0u);
+        REQUIRE(unknown);
+        CHECK(unknown->field_number() == static_cast<uint32_t>(Proto2DefaultValues::FieldNumber::enum_by_name));
+        const auto payload = unknown->length_delimited();
+        REQUIRE(payload);
+        CHECK(view_equal(*payload, protocyte::Span<const protocyte::u8> {entry_bytes, entry_writer.position()}));
+    }
+
+    SECTION("ordinary unknown entry fields are discarded while the map entry is retained") {
+        uint8_t entry_bytes[32] {};
+        protocyte::SliceWriter entry_writer {entry_bytes, sizeof(entry_bytes)};
+        require_success(protocyte::write_bytes_field(entry_writer, 1u, view_of(key_bytes)));
+        require_success(protocyte::write_tag(entry_writer, 2u, protocyte::WireType::VARINT));
+        require_success(
+            protocyte::write_varint(entry_writer, static_cast<protocyte::u64>(Proto2MapMode::PROTO2_MAP_MODE_READY)));
+        require_success(protocyte::write_tag(entry_writer, 3u, protocyte::WireType::VARINT));
+        require_success(protocyte::write_varint(entry_writer, 123u));
+
+        uint8_t encoded[48] {};
+        protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+        require_success(protocyte::write_tag(
+            writer, static_cast<uint32_t>(Proto2DefaultValues::FieldNumber::enum_by_name), protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, entry_writer.position()));
+        require_success(writer.write(entry_bytes, entry_writer.position()));
+
+        auto ctx = make_context();
+        PreservingProto2DefaultValues preserving(ctx);
+        protocyte::SliceReader reader {encoded, writer.position()};
+        require_success(preserving.merge_from(reader));
+        REQUIRE(preserving.enum_by_name().size() == 1u);
+        bool found {};
+        for (const auto entry : preserving.enum_by_name()) {
+            if (view_equal(entry.key.view(), view_of(key_bytes)) &&
+                entry.value == static_cast<protocyte::i32>(Proto2MapMode::PROTO2_MAP_MODE_READY)) {
+                found = true;
+            }
+        }
+        CHECK(found);
+        CHECK(preserving.unknown_fields().empty());
+    }
+
+    SECTION("the last closed enum value decides whether the entry is unknown") {
+        uint8_t entry_bytes[32] {};
+        protocyte::SliceWriter entry_writer {entry_bytes, sizeof(entry_bytes)};
+        require_success(protocyte::write_bytes_field(entry_writer, 1u, view_of(key_bytes)));
+        require_success(protocyte::write_tag(entry_writer, 2u, protocyte::WireType::VARINT));
+        require_success(protocyte::write_varint(entry_writer, 7u));
+        require_success(protocyte::write_tag(entry_writer, 2u, protocyte::WireType::VARINT));
+        require_success(
+            protocyte::write_varint(entry_writer, static_cast<protocyte::u64>(Proto2MapMode::PROTO2_MAP_MODE_READY)));
+
+        uint8_t encoded[48] {};
+        protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+        require_success(protocyte::write_tag(
+            writer, static_cast<uint32_t>(Proto2DefaultValues::FieldNumber::enum_by_name), protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, entry_writer.position()));
+        require_success(writer.write(entry_bytes, entry_writer.position()));
+
+        auto ctx = make_context();
+        PreservingProto2DefaultValues preserving(ctx);
+        protocyte::SliceReader reader {encoded, writer.position()};
+        require_success(preserving.merge_from(reader));
+        REQUIRE(preserving.enum_by_name().size() == 1u);
+        bool found {};
+        for (const auto entry : preserving.enum_by_name()) {
+            if (view_equal(entry.key.view(), view_of(key_bytes)) &&
+                entry.value == static_cast<protocyte::i32>(Proto2MapMode::PROTO2_MAP_MODE_READY)) {
+                found = true;
+            }
+        }
+        CHECK(found);
+        CHECK(preserving.unknown_fields().empty());
+    }
+
+    SECTION("recursion is rejected before a preserved entry allocates staging storage") {
+        auto ctx = make_context();
+        ctx.limits.max_recursion_depth = 0u;
+        PreservingProto2DefaultValues preserving(ctx);
+
+        static constexpr std::array<uint8_t, 64> payload {};
+        uint8_t encoded[80] {};
+        protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+        require_success(protocyte::write_tag(
+            writer, static_cast<uint32_t>(Proto2DefaultValues::FieldNumber::enum_by_name), protocyte::WireType::LEN));
+        require_success(protocyte::write_varint(writer, payload.size()));
+        require_success(writer.write(payload.data(), payload.size()));
+
+        const auto allocated_before = ctx.total_allocated_bytes;
+        protocyte::SliceReader reader {encoded, writer.position()};
+        require_failure(preserving.merge_from(reader), protocyte::ErrorCode::recursion_limit);
+        CHECK(ctx.total_allocated_bytes == allocated_before);
+        CHECK(ctx.recursion_depth == 0u);
+    }
 }
 
 TEST_CASE("Hosted allocator honors requested alignment", "[smoke][allocator]") {
@@ -3348,6 +5138,204 @@ TEST_CASE("read_varint rejects truncated and overflowing byte sequences", "[smok
     }
 }
 
+TEST_CASE("reader failures retain the top-level absolute coordinate", "[smoke][runtime][diagnostics]") {
+    constexpr std::array<protocyte::u8, 1u> truncated {0x80u};
+
+    SECTION("slice readers can describe a nonzero source base") {
+        protocyte::SliceReader reader(truncated.data(), truncated.size(), 17u);
+
+        const auto value = protocyte::read_varint(reader);
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(value.error().offset == 18u);
+        CHECK(reader.position() == 18u);
+    }
+
+    SECTION("limited-reader boundary failures use the inner coordinate") {
+        protocyte::SliceReader reader(truncated.data(), truncated.size(), 17u);
+        protocyte::LimitedReader limited(reader, truncated.size());
+
+        const auto value = protocyte::read_varint(limited);
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(value.error().offset == 18u);
+        CHECK(limited.position() == 18u);
+    }
+
+    SECTION("limited-reader failures before consumption preserve the source base") {
+        protocyte::SliceReader reader(truncated.data(), truncated.size(), 17u);
+        protocyte::LimitedReader limited(reader, 0u);
+
+        const auto value = limited.read_byte();
+
+        require_failure(value, protocyte::ErrorCode::unexpected_eof);
+        CHECK(value.error().offset == 17u);
+        CHECK(limited.position() == 17u);
+    }
+
+    SECTION("slice writers can describe a nonzero destination base") {
+        std::array<protocyte::u8, 1u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), encoded.size(), 31u);
+        require_success(writer.write_byte(0x01u));
+
+        const auto status = writer.write_byte(0x02u);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 32u);
+        CHECK(writer.position() == 32u);
+    }
+}
+
+TEST_CASE("generated errors identify the containing field", "[smoke][runtime][diagnostics]") {
+    SECTION("nested parse failures retain absolute offsets and the root field") {
+        auto ctx = make_context();
+        constexpr std::array<protocyte::u8, 4u> encoded {0x0au, 0x02u, 0x08u, 0x80u};
+        protocyte::SliceReader reader(encoded.data(), encoded.size(), 40u);
+
+        const auto parsed = RequiredParent::parse(ctx, reader);
+
+        require_failure(parsed, protocyte::ErrorCode::unexpected_eof);
+        CHECK(parsed.error().offset == 44u);
+        CHECK(parsed.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::child));
+    }
+
+    SECTION("nested validation failures identify the root repeated field") {
+        auto ctx = make_context();
+        constexpr std::array<protocyte::u8, 5u> encoded {0x12u, 0x03u, 0x12u, 0x01u, 'x'};
+        protocyte::SliceReader reader(encoded.data(), encoded.size());
+
+        const auto parsed = RequiredParent::parse(ctx, reader);
+
+        require_failure(parsed, protocyte::ErrorCode::invalid_argument);
+        CHECK(parsed.error().offset == 0u);
+        CHECK(parsed.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::children));
+    }
+
+    SECTION("staged map parsing retains the original payload coordinate") {
+        auto ctx = make_context();
+        constexpr std::array<protocyte::u8, 8u> encoded {0x9au, 0x01u, 0x05u, 0x0au, 0x01u, 0xffu, 0x10u, 0x09u};
+        protocyte::SliceReader reader(encoded.data(), encoded.size(), 20u);
+
+        const auto parsed = PreservingProto2DefaultValues::parse(ctx, reader);
+
+        require_failure(parsed, protocyte::ErrorCode::invalid_utf8);
+        CHECK(parsed.error().offset == 26u);
+        CHECK(parsed.error().field_number ==
+              static_cast<protocyte::u32>(PreservingProto2DefaultValues::FieldNumber::enum_by_name));
+    }
+
+    SECTION("serialization failures identify the active output field") {
+        auto ctx = make_context();
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredChild value(ctx);
+        value.set_id(42);
+        require_success(value.set_note(view_of(note)));
+        std::array<protocyte::u8, 2u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), encoded.size());
+
+        const auto status = value.serialize(writer);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 2u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredChild::FieldNumber::note));
+    }
+
+    SECTION("nested serialization failures identify the containing field") {
+        auto ctx = make_context();
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredParent value(ctx);
+        const auto child = value.ensure_child();
+        require_success(child);
+        child->set_id(42);
+        require_success(child->set_note(view_of(note)));
+        std::array<protocyte::u8, 6u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), encoded.size());
+
+        const auto status = value.serialize(writer);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 6u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::child));
+    }
+
+    SECTION("map serialization failures do not expose synthetic entry fields") {
+        auto ctx = make_context();
+        constexpr protocyte::u8 key_bytes[] {'x'};
+        Message value(ctx);
+        Config::String key {&ctx};
+        assign_string(key, view_of(key_bytes));
+        require_success(value.mutable_map_str_int32().insert_or_assign(protocyte::move(key), 1));
+        constexpr auto field_number = static_cast<protocyte::u32>(Message::FieldNumber::map_str_int32);
+        constexpr protocyte::usize entry_payload_size {5u};
+        const protocyte::usize prefix_size {protocyte::tag_size(field_number) +
+                                            protocyte::varint_size(entry_payload_size)};
+        std::array<protocyte::u8, 16u> encoded {};
+        protocyte::SliceWriter writer(encoded.data(), prefix_size, 70u);
+
+        const auto status = value.serialize(writer);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 70u + prefix_size);
+        CHECK(status.error().field_number == field_number);
+    }
+
+    SECTION("deep-copy failures identify the containing field") {
+        auto source_ctx = make_context();
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredParent source(source_ctx);
+        const auto child = source.ensure_child();
+        require_success(child);
+        child->set_id(42);
+        require_success(child->set_note(view_of(note)));
+
+        auto target_ctx = make_context();
+        target_ctx.limits.max_string_bytes = 0u;
+        RequiredParent target(target_ctx);
+
+        const auto status = target.copy_from(source);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 0u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredParent::FieldNumber::child));
+    }
+
+    SECTION("field mutation failures identify the mutated field without inventing an offset") {
+        auto ctx = make_context();
+        ctx.limits.max_string_bytes = 0u;
+        constexpr protocyte::u8 note[] {'x'};
+        RequiredChild value(ctx);
+
+        const auto status = value.set_note(view_of(note));
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 0u);
+        CHECK(status.error().field_number == static_cast<protocyte::u32>(RequiredChild::FieldNumber::note));
+    }
+}
+
+TEST_CASE("non-stream errors do not masquerade as byte offsets", "[smoke][runtime][diagnostics]") {
+    SECTION("range indexes are not byte coordinates") {
+        const protocyte::UnknownFieldRange fields {};
+
+        const auto missing = fields.field(3u);
+
+        require_failure(missing, protocyte::ErrorCode::invalid_argument);
+        CHECK(missing.error().offset == 0u);
+    }
+
+    SECTION("unknown-field mutation does not expose internal storage positions") {
+        auto ctx = make_context();
+        ctx.limits.max_unknown_field_bytes = 1u;
+        PreservingCompatMessage message(ctx);
+
+        const auto status = message.mutable_unknown_fields().add_varint(100u, 1u);
+
+        require_failure(status, protocyte::ErrorCode::size_limit);
+        CHECK(status.error().offset == 0u);
+        CHECK(status.error().field_number == 100u);
+    }
+}
+
 TEST_CASE("length-delimited sizes reject values that do not fit usize", "[smoke][runtime]") {
     if constexpr (sizeof(protocyte::usize) == sizeof(protocyte::u64)) {
         SUCCEED("usize can represent every u64 length on this target");
@@ -3439,9 +5427,7 @@ TEST_CASE("Result<void> carries status without a payload", "[smoke][runtime]") {
 
 TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][bytes]") {
     auto ctx = make_context();
-    auto created = Message::create(ctx);
-    REQUIRE(created);
-    auto &message = *created;
+    auto message = Message::create(ctx);
 
     static_assert(::protocyte::TextSource<const char *>);
     static_assert(!::protocyte::ByteSpanSource<const char *>);
@@ -3568,11 +5554,95 @@ TEST_CASE("byte setters accept contiguous byte containers", "[smoke][runtime][by
     CHECK(view_equal(message.oneof_bytes(), *bounded_view));
 }
 
+TEST_CASE("Direct fallible Span APIs reject non-empty null inputs before mutation", "[smoke][runtime][span][invalid]") {
+    auto ctx = make_context();
+    constexpr protocyte::u8 seed[] {0x10u, 0x20u, 0x30u};
+    const protocyte::Span<const protocyte::u8> invalid_bytes {nullptr, 1u};
+
+    protocyte::ByteArray<4u> bounded;
+    require_success(bounded.assign(view_of(seed)));
+    require_failure(bounded.assign(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(view_equal(bounded.view(), view_of(seed)));
+
+    protocyte::FixedByteArray<sizeof(seed)> fixed;
+    require_success(fixed.assign(view_of(seed)));
+    const protocyte::Span<const protocyte::u8> invalid_fixed {nullptr, sizeof(seed)};
+    require_failure(fixed.assign(invalid_fixed), protocyte::ErrorCode::invalid_argument);
+    CHECK(view_equal(fixed.view(), view_of(seed)));
+
+    Config::Bytes bytes(&ctx);
+    require_success(bytes.assign(view_of(seed)));
+    const auto bytes_allocation = ctx.total_allocated_bytes;
+    require_failure(bytes.assign(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(view_equal(bytes.view(), view_of(seed)));
+    CHECK(ctx.total_allocated_bytes == bytes_allocation);
+
+    Config::String text(&ctx);
+    constexpr char text_seed[] {'o', 'k'};
+    require_success(text.assign(protocyte::Span<const char> {text_seed}));
+    const auto text_allocation = ctx.total_allocated_bytes;
+    require_failure(text.assign(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    require_failure(text.assign(protocyte::Span<const char> {nullptr, 1u}), protocyte::ErrorCode::invalid_argument);
+    CHECK(static_cast<std::string_view>(text) == std::string_view {text_seed, sizeof(text_seed)});
+    CHECK(ctx.total_allocated_bytes == text_allocation);
+
+    const auto parse_allocation = ctx.total_allocated_bytes;
+    require_failure(Message::parse(ctx, invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(ctx.total_allocated_bytes == parse_allocation);
+    require_success(Message::parse(ctx, protocyte::Span<const protocyte::u8> {}));
+
+    auto message = Message::create(ctx);
+    message.set_f_int32(1);
+    const protocyte::Span<protocyte::u8> invalid_output {nullptr, 64u};
+    require_failure(message.serialize(invalid_output), protocyte::ErrorCode::invalid_argument);
+    require_failure(protocyte::serialize(message, invalid_output), protocyte::ErrorCode::invalid_argument);
+
+    protocyte::u8 encoded[8] {};
+    protocyte::SliceWriter writer {encoded, sizeof(encoded)};
+    require_failure(protocyte::write_bytes_field(writer, 1u, invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(writer.position() == 0u);
+    CHECK(encoded[0] == 0u);
+
+    require_failure(protocyte::validate_unknown_field_bytes(invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    require_failure(protocyte::decode_unknown_field_at(invalid_bytes, 0u), protocyte::ErrorCode::invalid_argument);
+    const protocyte::UnknownFieldRange invalid_unknown_fields {invalid_bytes};
+    require_failure(invalid_unknown_fields.field(0u), protocyte::ErrorCode::invalid_argument);
+
+    const protocyte::UnknownFieldView invalid_varint {
+        protocyte::Tag {.field_number = 16u, .wire_type = protocyte::WireType::VARINT}, invalid_bytes, invalid_bytes};
+    require_failure(invalid_varint.varint(), protocyte::ErrorCode::invalid_argument);
+    const protocyte::UnknownFieldView invalid_group {
+        protocyte::Tag {.field_number = 17u, .wire_type = protocyte::WireType::SGROUP}, invalid_bytes, invalid_bytes};
+    require_failure(invalid_group.group(), protocyte::ErrorCode::invalid_argument);
+
+    protocyte::u8 canonical[8] {};
+    protocyte::SliceWriter canonical_writer {canonical, sizeof(canonical)};
+    require_failure(protocyte::write_canonical_unknown_fields(canonical_writer, invalid_bytes,
+                                                              protocyte::Limits::default_max_recursion_depth),
+                    protocyte::ErrorCode::invalid_argument);
+    CHECK(canonical_writer.position() == 0u);
+    CHECK(canonical[0] == 0u);
+
+    PreservingCompatMessage preserving(ctx);
+    auto unknown = preserving.mutable_unknown_fields();
+    require_failure(unknown.add_length_delimited(17u, invalid_bytes), protocyte::ErrorCode::invalid_argument);
+    CHECK(unknown.empty());
+
+    require_success(unknown.add_varint(16u, 23u));
+    const auto unknown_before = preserving.unknown_field_bytes();
+    const std::vector<protocyte::u8> expected_unknown {unknown_before.begin(), unknown_before.end()};
+    const auto unknown_allocation = ctx.total_allocated_bytes;
+    require_failure(unknown.add_group(17u, invalid_unknown_fields), protocyte::ErrorCode::invalid_argument);
+    require_failure(unknown.merge_from(invalid_unknown_fields), protocyte::ErrorCode::invalid_argument);
+    CHECK(unknown.field_count() == 1u);
+    CHECK(view_equal(preserving.unknown_field_bytes(),
+                     protocyte::Span<const protocyte::u8> {expected_unknown.data(), expected_unknown.size()}));
+    CHECK(ctx.total_allocated_bytes == unknown_allocation);
+}
+
 TEST_CASE("generated repeated fields accept contiguous range operations", "[smoke][runtime][repeated]") {
     auto ctx = make_context();
-    auto created = Message::create(ctx);
-    REQUIRE(created);
-    auto &message = *created;
+    auto message = Message::create(ctx);
 
     using RepeatedInt = std::remove_reference_t<decltype(message.mutable_r_int32_unpacked())>;
     static_assert(std::is_trivially_copyable_v<RepeatedInt::value_type>);
@@ -3628,21 +5698,19 @@ TEST_CASE("generated message copy uses memcpyable repeated int storage", "[smoke
     auto ctx = make_context();
     auto source = Message::create(ctx);
     auto target = Message::create(ctx);
-    REQUIRE(source);
-    REQUIRE(target);
 
-    using RepeatedInt = std::remove_reference_t<decltype(source->mutable_r_int32_unpacked())>;
+    using RepeatedInt = std::remove_reference_t<decltype(source.mutable_r_int32_unpacked())>;
     static_assert(std::is_trivially_copyable_v<RepeatedInt::value_type>);
 
     const std::array<int, 4u> values {11, 22, 33, 44};
-    require_success(source->mutable_r_int32_unpacked().assign(values));
-    require_success(source->mutable_r_int32_packed().assign(values));
+    require_success(source.mutable_r_int32_unpacked().assign(values));
+    require_success(source.mutable_r_int32_packed().assign(values));
 
-    require_success(target->copy_from(*source));
+    require_success(target.copy_from(source));
 
     const protocyte::i32 expected_values[] = {11, 22, 33, 44};
-    check_scalar_sequence(target->r_int32_unpacked(), expected_values);
-    check_scalar_sequence(target->r_int32_packed(), expected_values);
+    check_scalar_sequence(target.r_int32_unpacked(), expected_values);
+    check_scalar_sequence(target.r_int32_packed(), expected_values);
 }
 
 TEST_CASE("monadic runtime operations compose for status, result, and optional", "[smoke][runtime]") {
@@ -4388,14 +6456,14 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         exact_ctx.limits.max_total_bytes = writer.position();
         Message exact(exact_ctx);
         protocyte::SliceReader exact_reader(encoded, writer.position());
-        require_success(exact.merge_partial_from(exact_reader));
+        require_success(exact.merge_from(exact_reader));
         CHECK(exact_reader.eof());
 
         auto limited_ctx = make_context();
         limited_ctx.limits.max_total_bytes = writer.position() - 1u;
         Message limited(limited_ctx);
         protocyte::SliceReader limited_reader(encoded, writer.position());
-        require_failure(limited.merge_partial_from(limited_reader), protocyte::ErrorCode::size_limit);
+        require_failure(limited.merge_from(limited_reader), protocyte::ErrorCode::size_limit);
         CHECK(limited_ctx.recursion_depth == 0u);
     }
 
@@ -4416,7 +6484,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         };
         protocyte::ReaderRef erased {prebudgeted};
 
-        require_failure(parsed.merge_partial_from(erased), protocyte::ErrorCode::size_limit);
+        require_failure(parsed.merge_from(erased), protocyte::ErrorCode::size_limit);
         CHECK(ctx.recursion_depth == 0u);
     }
 
@@ -4433,7 +6501,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         RepeatedBytesHolder parsed(ctx);
         protocyte::SliceReader reader(encoded, writer.position());
 
-        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
         CHECK(probe.calls == 0u);
         CHECK(probe.largest == 0u);
     }
@@ -4458,7 +6526,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
         Message parsed(ctx);
         protocyte::SliceReader reader(encoded, writer.position());
 
-        require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::count_limit);
+        require_failure(parsed.merge_from(reader), protocyte::ErrorCode::count_limit);
         CHECK(probe.calls == 0u);
         CHECK(probe.largest == 0u);
         CHECK(ctx.recursion_depth == 0u);
@@ -4621,7 +6689,7 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
 
             CompatMessage parsed(ctx);
             protocyte::SliceReader reader(encoded, writer.position());
-            require_failure(parsed.merge_partial_from(reader), protocyte::ErrorCode::unexpected_eof);
+            require_failure(parsed.merge_from(reader), protocyte::ErrorCode::unexpected_eof);
             CHECK(reader.position() == writer.position());
             CHECK(probe.calls == 0u);
             CHECK(probe.largest == 0u);
@@ -4638,19 +6706,35 @@ TEST_CASE("runtime limits are enforced for mutation and parsing", "[smoke][runti
 
         Message message(ctx);
         require_failure(message.set_f_string(view_of(string_bytes)), protocyte::ErrorCode::size_limit);
+        require_failure(message.set_f_bytes(view_of(bytes_data)), protocyte::ErrorCode::size_limit);
 
         Config::Bytes bytes(&ctx);
         require_failure(bytes.assign(view_of(bytes_data)), protocyte::ErrorCode::size_limit);
     }
 
-    SECTION("mutable fixed bytes respect max_string_bytes") {
+    SECTION("array-backed bytes use their schema bounds instead of max_string_bytes") {
         auto ctx = make_context();
-        ctx.limits.max_string_bytes = sizeof(sha256_bytes) - 1u;
+        ctx.limits.max_string_bytes = 0u;
 
         Message message(ctx);
-        const auto view = message.mutable_sha256();
-        CHECK(view.data() == nullptr);
-        CHECK(view.empty());
+        const auto sha256 = message.mutable_sha256();
+        REQUIRE(sha256.size() == sizeof(sha256_bytes));
+        require_success(message.set_sha256(view_of(sha256_bytes)));
+        require_success(message.set_byte_array(view_of(byte_array)));
+        require_success(message.set_oneof_bytes(view_of(byte_array)));
+        require_success(message.set_crazy_fixed_bytes(view_of(crazy_fixed_bytes)));
+
+        uint8_t encoded[128] {};
+        protocyte::SliceWriter writer(encoded, sizeof(encoded));
+        require_success(message.serialize(writer));
+
+        Message parsed(ctx);
+        protocyte::SliceReader reader(encoded, writer.position());
+        require_success(parsed.merge_from(reader));
+        CHECK(view_equal(parsed.sha256(), view_of(sha256_bytes)));
+        CHECK(view_equal(parsed.byte_array(), view_of(byte_array)));
+        CHECK(view_equal(parsed.oneof_bytes(), view_of(byte_array)));
+        CHECK(view_equal(parsed.crazy_fixed_bytes(), view_of(crazy_fixed_bytes)));
     }
 
     SECTION("nested message fields respect max_message_bytes") {
@@ -4767,7 +6851,7 @@ TEST_CASE("Custom runtime config satisfies the explicit protocyte contract", "[s
     auto nested = message.ensure_nested1();
     require_success(nested);
     require_success(nested->set_name(view_of(nested_name)));
-    require_success(nested->set_id(77));
+    nested->set_id(77);
 
     auto inner = nested->ensure_inner();
     require_success(inner);

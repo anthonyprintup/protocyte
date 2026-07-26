@@ -1,0 +1,6 @@
+# Hash-locked CMake wheel used by the Linux release builder. Keep the version
+# aligned with CMAKE_VERSION in publish-release.yml. The single retained hash
+# deliberately limits this release-only tool environment to the x86-64
+# manylinux wheel selected by ubuntu-latest.
+cmake==4.3.2 \
+    --hash=sha256:339655b93289c1b03c6a72523d46d3b0d19dc51406d3a90f8eefcbec525cb271

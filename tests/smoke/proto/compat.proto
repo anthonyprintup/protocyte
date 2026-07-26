@@ -4,6 +4,7 @@ package test.compat;
 
 option optimize_for = LITE_RUNTIME;
 
+// Exercises protobuf wire compatibility across every supported field shape.
 message EncodingMatrix {
   enum Mode {
     MODE_UNSPECIFIED = 0;
@@ -52,4 +53,7 @@ message EncodingMatrix {
 
   map<string, int32> map_str_int32 = 27;
   map<int32, string> map_int32_str = 28;
+
+  // Legacy field retained to verify generated deprecation diagnostics.
+  string deprecated_unused = 29 [deprecated = true];
 }

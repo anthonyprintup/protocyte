@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+message Span {}
+message Result {}
+message read_varint {}

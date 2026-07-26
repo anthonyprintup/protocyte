@@ -4,6 +4,119 @@ Protocyte is a Python `protoc` plugin that generates C++20 protobuf code for
 freestanding, embedded, or kernel-style environments. The generated C++ avoids
 the STL, exceptions, RTTI, iostreams, and implicit global allocation.
 
+## Quick Start
+
+You need Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), `protoc`,
+CMake 3.24 or newer, and a C++20 compiler. From a Protocyte checkout, choose
+the block for your shell. Each flow builds and installs the wheel into an
+isolated environment, then generates, builds, and runs the checked-in example.
+
+PowerShell:
+
+<!-- quickstart-powershell-start -->
+```powershell
+uv build --wheel
+uv venv build\quickstart-venv --python 3.12
+
+$wheel = (Get-ChildItem dist\protocyte-*.whl | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+$python = "$PWD\build\quickstart-venv\Scripts\python.exe"
+uv pip install --python $python $wheel
+
+$protoc = (Get-Command protoc).Source
+$plugin = "$PWD\build\quickstart-venv\Scripts\protoc-gen-protocyte.exe"
+cmake -S examples/quickstart -B build/quickstart `
+  "-DPROTOC_EXECUTABLE=$protoc" `
+  "-DPROTOCYTE_PLUGIN_EXECUTABLE=$plugin"
+cmake --build build/quickstart --config Release
+ctest --test-dir build/quickstart -C Release --output-on-failure
+```
+<!-- quickstart-powershell-end -->
+
+Bash on Linux, macOS, or another POSIX host:
+
+<!-- quickstart-posix-start -->
+```bash
+uv build --wheel
+uv venv build/quickstart-venv --python 3.12
+
+wheel=$(ls -t dist/protocyte-*.whl | head -n 1)
+python="$PWD/build/quickstart-venv/bin/python"
+uv pip install --python "$python" "$wheel"
+
+protoc=$(command -v protoc)
+plugin="$PWD/build/quickstart-venv/bin/protoc-gen-protocyte"
+cmake -S examples/quickstart -B build/quickstart \
+  "-DPROTOC_EXECUTABLE=$protoc" \
+  "-DPROTOCYTE_PLUGIN_EXECUTABLE=$plugin" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/quickstart --config Release
+ctest --test-dir build/quickstart -C Release --output-on-failure
+```
+<!-- quickstart-posix-end -->
+
+[`examples/quickstart/main.cpp`](examples/quickstart/main.cpp) mutates a
+generated message, serializes it into a byte vector, parses those bytes into a
+new message, and verifies the value. CI compiles and runs this exact source as
+part of the complete install-to-round-trip path:
+
+<!-- quickstart-main-start -->
+```cpp
+#include <cstdio>
+#include <vector>
+
+#include <protocyte/runtime/runtime.hpp>
+
+#include "quickstart.protocyte.hpp"
+
+namespace {
+    int report_error(const char *operation, const protocyte::Error &error, const int exit_code) {
+        std::fprintf(stderr, "%s failed: code=%u offset=%llu field=%u\n", operation, static_cast<unsigned>(error.code),
+                     static_cast<unsigned long long>(error.offset), static_cast<unsigned>(error.field_number));
+        return exit_code;
+    }
+} // namespace
+
+int main() {
+    auto encode_ctx = protocyte::DefaultConfig::Context {
+        protocyte::hosted_allocator(),
+        protocyte::Limits {},
+    };
+    auto reading = demo::quickstart::Reading<>::create(encode_ctx);
+    reading.set_value(42u);
+
+    const auto size = reading.encoded_size();
+    if (!size) {
+        return report_error("encoded_size", size.error(), 1);
+    }
+
+    std::vector<protocyte::u8> encoded(*size);
+    const auto written = reading.serialize(encoded);
+    if (!written) {
+        return report_error("serialize", written.error(), 2);
+    }
+    if (*written != encoded.size()) {
+        std::fputs("serialize returned an unexpected byte count\n", stderr);
+        return 2;
+    }
+
+    auto decode_ctx = protocyte::DefaultConfig::Context {
+        protocyte::hosted_allocator(),
+        protocyte::Limits {},
+    };
+    const auto parsed = demo::quickstart::Reading<>::parse(decode_ctx, encoded);
+    if (!parsed) {
+        return report_error("parse", parsed.error(), 3);
+    }
+    if ((*parsed).value() != 42u) {
+        std::fputs("parsed value did not match the encoded value\n", stderr);
+        return 3;
+    }
+
+    return 0;
+}
+```
+<!-- quickstart-main-end -->
+
 ## AI Disclosure
 
 This repository contains a mix of human-written and AI-assisted work. Some
@@ -17,6 +130,59 @@ validation before production use.
 
 Responsibility for the contents of this repository and its releases remains
 with the human maintainers and contributors.
+
+## Contributing
+
+Enable the tracked privacy hooks once in each checkout before committing:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+The pre-commit hook scans raw staged names and content, every commit, tag, and
+blob in the local Git object database (including unreachable objects), and
+reconstructed stored tree paths. The commit-message hook repeats that scan and
+also checks the pending message, author and committer identities, and configured
+commit-encoding header before Git creates an ordinary unsigned commit object.
+The hook wrappers suppress subprocess diagnostics and emit only a generic,
+redacted failure if the guard is missing, broken, or rejects the operation.
+
+Git produces a signed commit's `gpgsig` header after the commit-message hook, so
+that final signer-produced header cannot be pre-scanned by a standard Git hook.
+The tracked pre-push hook scans finalized local objects and blocks a normal push
+if any finalized commit, signed or unsigned, violates the policy. CI repeats the
+same scan for every object available in its full-history checkout.
+
+Run the same complete check directly at any time:
+
+```bash
+python .github/scripts/check_private_paths.py
+```
+
+Run the default Python test suite with:
+
+```bash
+uv run pytest -q
+```
+
+The CMake integration matrix provisions and builds temporary projects, so it is
+excluded from the default run. Run it explicitly as a final verification step,
+or when CMake behavior changes:
+
+```bash
+uv run pytest -q -m cmake_integration
+```
+
+If the guard finds a private path, remove every reference, reflog entry, staged
+name, and staged file that retains it, then prune the offending unreachable
+object according to the repository's recovery policy. The guard intentionally
+continues to reject content that was unstaged but still exists in the object
+database.
+
+Git hooks are a local safeguard, not an access-control boundary. Contributors
+can bypass them with `--no-verify`, replace or disable `core.hooksPath`, or use
+lower-level object-writing commands. Objects that remain unreachable only in a
+local object database are not transferred for CI to inspect.
 
 ## What It Supports
 
@@ -50,41 +216,71 @@ smaller while preserving protobuf wire behavior.
 - `protocyte.array` cannot be applied to map fields.
 - Services and methods are accepted in descriptor graphs but do not generate
   RPC stubs.
+- C++ name collisions between separately generated headers are rejected.
+  Protocyte remaps representable collisions among declarations within one
+  `.proto` file, but does not rename colliding cross-file types, package
+  constants, reflection symbols, or package namespaces because every generated
+  header must agree on imported symbol spelling.
 
 Protocyte is pre-1.0. Generated C++ APIs, runtime config requirements, plugin
-parameters, and CMake interfaces may change between releases without
-compatibility aliases or migration shims. Pin the intended Protocyte version
-and regenerate checked outputs when updating.
+parameters, and CMake interfaces may change between releases without migration
+shims. Pin the intended Protocyte version and regenerate checked outputs when
+updating.
 
 ## Usage
 
-Protocyte's Python package requires Python 3.14 or newer. That applies to
+Protocyte's Python package requires Python 3.12 or newer. That applies to
 local `uv sync` development, published wheel and sdist installs, and any CMake
 workflow that runs the plugin through `Python3_EXECUTABLE`.
 
 Install the project and make the virtual environment's script directory
-discoverable to `protoc`:
+discoverable to `protoc`. In PowerShell:
 
 ```powershell
 uv sync
 $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
 ```
 
-On other shells, either activate `.venv` first or prepend the matching
-`.venv/bin` directory to `PATH`.
+In Bash on a POSIX host:
+
+```bash
+uv sync
+export PATH="$PWD/.venv/bin:$PATH"
+```
+
+The installed package also exposes the command-line interface as a Python
+module, including its help and version information:
+
+```powershell
+python -m protocyte --help
+python -m protocyte --version
+```
 
 For a ground-zero walkthrough that covers getting `protoc`, building and
 installing the protocyte package, running `protoc` with the plugin, wiring the
 generated files into a CMake target, and setting up automatic regeneration, see
 [tests/smoke/README.md](tests/smoke/README.md).
 
-Generate code:
+Generate code in PowerShell. `protoc` requires the output root to exist before
+the plugin can create files beneath it:
 
 ```powershell
+New-Item -ItemType Directory -Force generated | Out-Null
 protoc `
   --proto_path=. `
   --proto_path=src/protocyte/proto `
   --protocyte_out=runtime=emit:generated `
+  tests/example.proto
+```
+
+The equivalent Bash flow is:
+
+```bash
+mkdir -p generated
+protoc \
+  --proto_path=. \
+  --proto_path=src/protocyte/proto \
+  --protocyte_out=runtime=emit:generated \
   tests/example.proto
 ```
 
@@ -94,20 +290,72 @@ The plugin emits:
 - `foo.protocyte.cpp`
 - `protocyte/runtime/runtime.hpp` when runtime emission is enabled
 
-Generate from a descriptor set when `.proto` source is not the authority:
+Protobuf virtual descriptor names may contain characters that are not portable
+host-file names. Protocyte preserves ordinary path segments and hex-escapes
+nonportable UTF-8 bytes as `~HH` in generated paths; for example,
+`api/bad"name.proto` emits `api/bad~22name.protocyte.hpp`, and semicolons are
+escaped as `~3B` so generated names remain safe in CMake lists. Relative POSIX
+names containing a colon are supported too: `a:b.proto` emits
+`a~3Ab.protocyte.hpp`. A literal `~` is escaped too, so this mapping cannot
+alias an unescaped descriptor name. If
+escaping would exceed a filesystem's common 255-byte component limit,
+Protocyte retains a readable prefix and appends the full SHA-256 digest of the
+original segment. The final segment also reserves room for
+`.protocyte.hpp`/`.protocyte.cpp`. CMake projects generated with Visual Studio
+also budget the complete path below `OUT_DIR` for MSBuild's legacy path limits.
+Budgeted invocations use one canonical compact spelling sized for the smallest
+supported remaining budget, so separately generated dependencies and consumers
+name imported headers identically even when their output roots have different
+lengths. Names that require compaction are folded into a SHA-256 digest of the
+complete descriptor name. Ninja and other non-Visual-Studio generators retain
+the ordinary component-bounded mapping.
+
+Descriptor names beginning with `-` are rejected, including during
+descriptor-set inspection, because protoc interprets selected names as
+command-line options. Distinct descriptor names whose normalized generated
+paths differ only by letter case are also rejected, even on case-sensitive
+hosts, because those outputs would alias on case-insensitive filesystems. The
+collision diagnostic identifies both descriptor names and the shared generated
+path.
+
+The CMake helpers pass protoc options and file names through protoc's UTF-8
+response-file interface. Non-ASCII characters and spaces are retained in
+descriptor names and source, tool, and output paths; semicolons and quotes in
+descriptor names remain literal too. This behavior is consistent on Windows and
+POSIX hosts. Protoc defines each response-file line as one literal argument and
+provides no escaping for line breaks, so the CMake helpers reject descriptor
+names or paths containing carriage returns or line feeds.
+
+Generate from a descriptor set when `.proto` source is not the authority. In
+PowerShell:
 
 ```powershell
+New-Item -ItemType Directory -Force generated | Out-Null
 protoc `
   --descriptor_set_in=descriptor_set.pb `
   --plugin=protoc-gen-protocyte=path\to\protoc-gen-protocyte `
-  --protocyte_out=generated `
+  --protocyte_out=runtime=emit:generated `
+  core.proto messages.proto settings.proto
+```
+
+In Bash:
+
+```bash
+mkdir -p generated
+protoc \
+  --descriptor_set_in=descriptor_set.pb \
+  --plugin=protoc-gen-protocyte="$(command -v protoc-gen-protocyte)" \
+  --protocyte_out=runtime=emit:generated \
   core.proto messages.proto settings.proto
 ```
 
 The names after `--protocyte_out` are descriptor names inside
 `descriptor_set.pb`, not filesystem paths. Imported descriptors from the set are
 available for type and custom-option resolution, but Protocyte only emits files
-listed for generation.
+listed for generation. Generated C++ documentation requires source information;
+when creating a descriptor set that should retain schema comments, pass
+`--include_source_info` to `protoc`. Descriptor sets without source information
+remain valid but cannot reproduce documentation comments.
 
 ## CMake Integration
 
@@ -118,28 +366,153 @@ Protocyte supports two CMake consumption modes:
 
 ### Release Assets
 
-Published GitHub releases contain three different asset types:
+Protocyte has not published its first tag or
+[GitHub release](https://github.com/anthonyprintup/protocyte/releases) yet. The
+release workflow is prepared to publish the following three asset types, but
+they are not currently available for download:
 
 - `protocyte-X.Y.Z-py3-none-any.whl`: the Python wheel for
-  `protoc-gen-protocyte`. Install it into a Python 3.14+ environment when you
+  `protoc-gen-protocyte`. Install it into a Python 3.12+ environment when you
   want the plugin executable.
 - `protocyte-X.Y.Z.tar.gz`: the Python source distribution for the same plugin
-  package. It is also a Python 3.14+ artifact, not a CMake install tree.
+  package. It is also a Python 3.12+ artifact, not a CMake install tree.
 - `protocyte-X.Y.Z-cmake-prefix.tar.gz`: a preinstalled CMake prefix for
   `find_package(protocyte CONFIG REQUIRED)`. Unpack it and add the extracted
   directory to `CMAKE_PREFIX_PATH`.
 
-The CMake prefix archive includes the CMake files, C++ runtime headers, and
-the protocyte Python generator sources, but it does not bundle Python itself.
-Any downstream build that calls `protocyte_generate(...)` or
-`protocyte_add_proto_library(...)` still needs a local Python 3.14+ interpreter
-available to CMake through `Python3_EXECUTABLE` or the normal `find_package(Python3)`
-search path.
+Until the first release is published, use a source checkout, or pin a reviewed
+full commit SHA through `FetchContent`. Do not use a release-tag placeholder as
+though it were an existing tag.
+
+The CMake prefix archive includes the CMake files, C++ runtime headers, and an
+installable copy of the protocyte Python generator project. It does not bundle
+Python itself. The first downstream configuration that needs code generation
+finds a local Python 3.12+ interpreter, creates a fingerprinted virtual
+environment under the build tree, and installs protocyte and its Python
+dependencies there from the bundled hash-locked CMake requirements file. The
+file records the published wheel and source-archive hashes; the installer accepts
+only a recorded wheel, while the
+local staged Protocyte project is installed without resolving further
+dependencies. It deliberately accepts binary packages only: all managed
+dependencies provide universal or supported platform wheels, so provisioning
+does not execute a dependency source build. The install is built from a writable
+staged copy, so it never modifies
+the CMake package prefix, installs packages globally, or changes the selected
+base interpreter. That interpreter must include Python's `venv` module and
+`ensurepip`; on Debian and Ubuntu these may require installing `python3-venv`
+or the version-specific package such as `python3.12-venv`. A stripped Python
+installation without either capability cannot provision the managed
+environment. You can verify a candidate before configuring with
+`python3.12 -c "import ensurepip, venv"`.
+
+The initial configuration may access the configured Python package index.
+Subsequent configurations reuse the environment while the Python interpreter,
+protocyte sources, and package metadata remain unchanged. Set
+`PROTOCYTE_PYTHON_ENV_ROOT` before making protocyte available to choose another
+build-local environment directory. Relative values are normalized against
+`CMAKE_BINARY_DIR`, then the canonical absolute path is published back to the
+consumer scope and CMake cache. The environment root must not contain a semicolon. Set
+`PROTOCYTE_PLUGIN_EXECUTABLE` to a preinstalled plugin when dependency
+provisioning must be managed externally. Its path must also be semicolon-free;
+when the actual tool is beneath such a path, provide a wrapper from a
+semicolon-free location. The override must be version-compatible with the CMake
+package and support `--version` plus `descriptor-set list <file>`;
+descriptor-set `DISCOVER` uses that command so discovery and generation always
+run in the same Python environment.
 
 For prerelease tags `vX.Y.Z-rcN`, the Python packaging artifacts use the
 normalized version spelling `X.Y.ZrcN` in the wheel and sdist filenames,
 while the CMake prefix archive keeps the Git tag spelling
 `protocyte-X.Y.Z-rcN-cmake-prefix.tar.gz`.
+
+Release publication requires GitHub release immutability to be enabled for the
+repository. Create a protected `release` environment and configure its
+`RELEASE_IMMUTABILITY_TOKEN` secret with a fine-grained credential that has only
+`Administration: read` access. Configure a separate
+`RELEASE_POLICY_AUDIT_TOKEN` secret with `Administration: write` and
+`Actions: read`; GitHub returns tag-ruleset bypass actors only to a credential
+with ruleset write visibility, and that credential is used only by the read-only
+preflight. Configure the environment's `RELEASE_TAG_RULESET_ID` variable with
+the numeric ID of the active release-tag ruleset.
+
+The repository previously published from `.github/workflows/release.yml` on tag
+pushes. Source changes cannot retroactively disable copies of that workflow in
+Git history. Before installing this workflow version, record and manually
+disable that legacy workflow identity with an administrator credential that has
+`Actions: write`, then store its ID in the environment's
+`LEGACY_RELEASE_WORKFLOW_ID` variable:
+
+```console
+legacy_id="$(gh api repos/OWNER/REPOSITORY/actions/workflows/release.yml --jq .id)"
+gh api --method PUT "repos/OWNER/REPOSITORY/actions/workflows/$legacy_id/disable"
+```
+
+This version deliberately keeps `.github/workflows/release.yml` as an exact
+inert stub: it has no push, tag, or manual-dispatch trigger, grants
+`contents: none`, and defines only an always-skipped retirement job. Removing or
+renaming the stub would make GitHub report the legacy identity as deleted
+instead of `disabled_manually`. Do not enable or modify that retained workflow.
+
+The trusted-code preflight requires that exact workflow ID and historical path
+to report `disabled_manually`. It also rejects disabled immutability, a stale
+default-branch workflow revision, unsafe environment branch policy, a missing
+non-self reviewer, a nonempty or hidden tag-ruleset bypass list, or another
+write-capable workflow before the release gate and artifact builds run.
+
+GitHub's release API exposes asset upload, asset listing, and draft publication
+as separate operations; its publication `PATCH` has no conditional-write
+precondition. The workflow therefore serializes the complete release pipeline
+for all tags in one repository-wide concurrency group, and repository tests
+reserve `contents: write` for its protected `release`-environment publication
+job. Configure that environment to allow exactly the `main` branch (not tags),
+require reviewers with self-review disabled, and disable administrator bypass.
+Configure the identified ruleset to target exactly `refs/tags/v*`, actively
+prohibit tag updates and deletions, and allow no bypass actors. No user,
+GitHub App, PAT, deploy key, or other automation with `contents: write` may edit
+a release draft while the transaction runs. The REST API exposes most of this
+configuration to the audit preflight, including the exact empty tag-ruleset
+bypass list. It does not expose the environment's administrator-bypass setting;
+that no-bypass setting and the absence of other writers are unavoidable
+administrator prerequisites.
+
+Create the version tag, then dispatch `.github/workflows/publish-release.yml` from
+`main` with the tag name, for example:
+
+```console
+gh workflow run publish-release.yml --ref main -f tag=vX.Y.Z
+```
+
+The new write-capable workflow identity can enter the `release` environment only
+from `main`. The separately enforced `disabled_manually` state prevents a tag
+push from activating the legacy workflow identity from an older commit. The
+preflight and publication client also require the workflow SHA to remain the
+live default-branch target. These controls establish the single-writer boundary
+required because source code cannot make separate GitHub API calls atomic.
+
+The build job has only `contents: read` access. It hands the three tested files
+and their SHA-256 manifest to a separate `release`-environment job as one
+immutable Actions artifact. On a fresh runner, publication checks out the
+trusted workflow revision again, binds the handoff's numeric artifact ID, name,
+workflow run, workflow commit, tag commit, and server-side digest, and verifies
+the downloaded archive and exact file manifest under the runner's temporary
+directory. Only then does the clean checkout's publication script receive the
+short-lived `GITHUB_TOKEN` scoped to
+`contents: write` and the administration-read policy token. The script resolves
+the live tag reference through annotated tags before creation, each upload, and
+publication, and rejects any target that differs from the requested tag commit;
+`target_commitish` is not trusted because GitHub ignores it when a tag exists.
+
+If an external writer violates the required single-writer policy and uploads an
+asset after the client's final list but before GitHub processes the publication
+`PATCH`, the client can detect the extra asset only after the release has become
+public and immutable. There is no conditional release-publication operation to
+close that interval, which is why writer exclusivity is a release prerequisite,
+not merely a client-side check.
+
+The workflow never resumes, repairs, or replaces assets on an existing release.
+If a failed run leaves an unpublished draft, inspect it and manually delete that
+draft before redispatching the release workflow. A published release is
+terminal and must not be deleted merely to retry a workflow run.
 
 ### FetchContent
 
@@ -151,7 +524,7 @@ include(FetchContent)
 FetchContent_Declare(
     protocyte
     GIT_REPOSITORY https://github.com/anthonyprintup/protocyte.git
-    GIT_TAG vX.Y.Z
+    GIT_TAG <full-commit-sha>
 )
 FetchContent_MakeAvailable(protocyte)
 
@@ -168,7 +541,18 @@ add_executable(demo main.cpp)
 target_link_libraries(demo PRIVATE demo::proto)
 ```
 
-Non-runtime generator options can be forwarded through `OPTIONS`:
+When Protocyte is consumed through `FetchContent` or `add_subdirectory`,
+`PROTOCYTE_INSTALL` defaults to `OFF`. This keeps Protocyte's headers, Python
+project, and CMake package out of the parent project's install tree. A parent
+that intentionally packages Protocyte can opt in before making it available:
+
+```cmake
+set(PROTOCYTE_INSTALL ON)
+FetchContent_MakeAvailable(protocyte)
+```
+
+Non-runtime generator options can be forwarded through `OPTIONS`. Each entry
+must use `key=value`; bare entries are rejected during configuration:
 
 ```cmake
 protocyte_add_proto_library(
@@ -220,42 +604,87 @@ option/type resolution; unreferenced runtime descriptors stay dependency-only,
 while referenced runtime message/enum descriptors are generated when selected
 files need their generated types.
 
+Descriptors that Protocyte cannot generate, such as files with unsupported
+message-scoped extension declarations, may remain dependency-only when no
+generated field uses their types. If a selected field references a message or
+enum from such a file, `DISCOVER` fails immediately and identifies the field,
+type, descriptor, and unsupported declaration instead of emitting a header with
+an unavailable generated include.
+
 Formatter executable and config values in `OPTIONS` may use absolute Windows
 or POSIX paths. Generated include and runtime prefixes are not filesystem paths;
 they must use the normalized relative virtual-directory form documented below.
 
-By default, the protocyte CMake project fetches protobuf when protobuf CMake
-targets are not already available, then exposes:
+Every CMake-launched `protoc`, dependency-reader, and import-scan process has a
+wall-clock limit. `PROTOCYTE_TOOL_TIMEOUT_SECONDS` is a cache setting with a
+default of `300`; it accepts a non-negative decimal number of seconds. Set it
+before including Protocyte (for example, `-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=900`)
+when a known-large schema needs more time. Set it to `0` only when another
+supervisor enforces a build timeout. On expiry, Protocyte names the timed-out
+operation and the setting to change; generation stops before publishing its
+ownership transaction, and dependency scans remove their descriptor/depfile
+outputs so a later build cannot consume a partial result.
+
+For its compiler, Protocyte first honors an explicit
+`Protobuf_PROTOC_EXECUTABLE`. Native builds then prefer a package-provided
+`protobuf::protoc` target before a host `protoc` on `PATH`. Cross builds reverse
+those implicit choices: they prefer a host `protoc` found directly on the
+configure process's `PATH`; `CMAKE_PROGRAM_PATH` and `CMAKE_PREFIX_PATH` do not
+participate in that host-tool lookup. They accept a package-provided imported
+compiler only when its mapped concrete executable can run directly on the host.
+Protocyte does not capture an unrelated
+unnamespaced target named `protoc`. Only when no host compiler is available does
+the source project's default `PROTOCYTE_FETCH_PROTOBUF=ON` fallback fetch and
+build protobuf for native builds. The same option can fetch only protobuf's
+import sources when a host compiler exists but
+`google/protobuf/descriptor.proto` is unavailable. Protocyte
+then exposes:
 
 - `protocyte_add_proto_library(...)` for the common target-oriented workflow
+- `protocyte_add_descriptor_set_library(...)` as the descriptor-set-specific wrapper
 - `protocyte_generate(...)` as the lower-level codegen primitive
+- `protocyte_setup_codegen()` to prepare the generator and `protoc` eagerly
 - `protocyte::runtime` and `protocyte::runtime_hosted` for reusable runtime linkage
 
 The fallback protobuf revision is the exact commit recorded in
 `PROTOCYTE_PROTOBUF_GIT_TAG`, rather than a mutable branch or release tag.
+When this fallback owns the protobuf build, Protocyte supplies function-scoped
+defaults for protobuf's build options, including `protobuf_INSTALL=OFF`, so
+protobuf, Abseil, upb, utf8_range, and protoc do not leak into the consumer's
+install tree. Parent-defined protobuf option values remain authoritative and
+Protocyte does not force or persist them in the parent cache.
 
-`TARGET` must be a real CMake target name without `::`. `ALIAS` can use any
-valid alias target name; namespaced aliases like `demo::proto` are recommended
-for downstream linkage.
-
-Pin a published release tag for downstream builds instead of tracking `main`.
+Before the first release, replace `<full-commit-sha>` with the reviewed commit
+you intend to consume. After releases exist, pin a published release tag rather
+than tracking `main`.
 
 ### Installed Package
 
 You can also install protocyte into a prefix and consume it later with
 `find_package`.
 
-For published releases, use the `protocyte-X.Y.Z-cmake-prefix.tar.gz` asset
+After the first release, use the `protocyte-X.Y.Z-cmake-prefix.tar.gz` asset
 described above, unpack it, and point `CMAKE_PREFIX_PATH` at the extracted
 prefix directory. Do not use the plain `protocyte-X.Y.Z.tar.gz` sdist here;
-that archive is only the Python plugin package source.
+that archive is only the Python plugin package source. Until then, install from
+a source checkout.
 
-Install protocyte:
+PowerShell:
 
 ```powershell
 cmake -S . -B build/protocyte
-cmake --install build/protocyte --prefix C:\path\to\protocyte-prefix
+cmake --install build/protocyte --prefix "$PWD\build\protocyte-prefix"
 ```
+
+Bash:
+
+```bash
+cmake -S . -B build/protocyte
+cmake --install build/protocyte --prefix "$PWD/build/protocyte-prefix"
+```
+
+`PROTOCYTE_INSTALL` defaults to `ON` when Protocyte is the top-level project,
+so this standalone installation path remains enabled without extra options.
 
 Minimal consumer setup:
 
@@ -285,26 +714,52 @@ requests; pin the prerelease prefix itself and use the unversioned
 
 The installed CMake package installs:
 
-- the `protocyte_add_proto_library(...)` and `protocyte_generate(...)` CMake integration
+- the complete public CMake API documented below
 - the exported `protocyte::codegen`, `protocyte::runtime`, and `protocyte::runtime_hosted` targets
-- the protocyte Python sources used by the plugin wrapper
+- an installable protocyte Python project and pinned constraints used to provision the managed plugin environment
 - the reusable C++ runtime headers and targets
 - `protocyte/options.proto`
 
 The installed package does not embed Python or protobuf. Consumers that run
-code generation still need a working Python 3.14+ interpreter, and they either
-need protobuf/protoc available already or they can opt into the fetch fallback:
+code generation still need a working Python 3.12+ base interpreter with the
+standard-library `venv` and `ensurepip` modules available. On Debian and Ubuntu,
+install `python3-venv` or the matching version-specific package if those modules
+are absent. Protocyte installs its Python package and Python dependencies into
+an isolated directory under `PROTOCYTE_PYTHON_ENV_ROOT`; `protoc` and the C++
+protobuf files remain caller-supplied unless the fetch fallback is enabled:
 
 ```cmake
 set(PROTOCYTE_FETCH_PROTOBUF ON CACHE BOOL "" FORCE)
 find_package(protocyte CONFIG REQUIRED)
 ```
 
+The fallback can provision the protobuf import sources independently when a
+usable host `protoc` executable or namespaced target is already available; it
+does not replace that selected compiler. Set `PROTOCYTE_FETCH_PROTOBUF=OFF` to
+forbid both fallback downloads. Cross builds must provide a host-runnable
+compiler through a concrete `Protobuf_PROTOC_EXECUTABLE`, `PATH`, or an imported
+package target. Protocyte runs a configure-time `--version` probe for every
+concrete cross-build candidate, including normal, cache, and package-inherited
+`Protobuf_PROTOC_EXECUTABLE` values. For multi-config imported targets, the
+mapped concrete executable is also the file dependency tracked for regeneration.
+Protocyte does not try to build a host tool with the target toolchain and does
+not forward `CROSSCOMPILING_EMULATOR` through its dependency-scan and generation
+scripts. If emulation is required, point `Protobuf_PROTOC_EXECUTABLE` at a
+host-runnable wrapper instead.
+
 Public CMake variables exposed by the package:
 
 - `PROTOCYTE_PROTO_DIR`: the installed directory that contains `protocyte/options.proto`
 - `PROTOCYTE_OPTIONS_PROTO`: the full path to `protocyte/options.proto`
+- `PROTOCYTE_FETCH_PROTOBUF`: whether missing protobuf tools or import sources may be fetched
 - `PROTOCYTE_PROTOBUF_GIT_TAG`: the protobuf revision used when `PROTOCYTE_FETCH_PROTOBUF=ON`
+- `PROTOCYTE_PROTOBUF_IMPORT_DIR`: an optional caller-owned root containing
+  `google/protobuf/descriptor.proto`; Protocyte resolves and validates an
+  explicit value as soon as codegen setup consumes it, while automatically
+  discovered roots remain internal
+- `Protobuf_PROTOC_EXECUTABLE`: an optional explicit host compiler path that takes precedence over ambient CMake targets and `PATH`
+- `PROTOCYTE_PYTHON_ENV_ROOT`: the build-local root for fingerprinted managed Python environments; relative values resolve against `CMAKE_BINARY_DIR`, and semicolons are rejected
+- `PROTOCYTE_PLUGIN_EXECUTABLE`: an optional compatible preinstalled plugin that bypasses managed provisioning; use a semicolon-free executable or wrapper path
 
 `protocyte_add_proto_library(...)` links generated code against
 `protocyte::runtime` by default, or `protocyte::runtime_hosted` when
@@ -321,6 +776,363 @@ Descriptor-set mode intentionally does not require a protobuf include tree for
 descriptors already present in the set. Source-mode generation still uses
 `PROTO_ROOT`/`IMPORT_DIRS` and still needs import roots for source parsing.
 
+### CMake API Reference
+
+These functions are available after either `FetchContent_MakeAvailable(protocyte)`
+or `find_package(protocyte CONFIG REQUIRED)`. Keyword order does not matter.
+In the signatures below, `<value>` is a placeholder, `...` means that a keyword
+accepts multiple values, and commented `or` lines identify mutually exclusive
+choices rather than literal CMake syntax.
+
+#### `protocyte_setup_codegen`
+
+```cmake
+protocyte_setup_codegen()
+```
+
+Prepares the Protocyte plugin and locates or provisions `protoc`. Generation
+helpers call it automatically, so most projects do not need to call it. Use it
+when configuration should perform that setup eagerly, before any generation
+target is declared. It has no options.
+
+An ordinary relative `Protobuf_PROTOC_EXECUTABLE` value is anchored to the
+source directory of the first Protocyte setup call that consumes that exact
+value. Descendant and sibling directories reuse the resolved executable instead
+of rebasing the inherited token. This explicit value takes precedence over
+package-provided targets and `PATH`, and is the recommended way to select a host
+compiler for cross builds. Cross builds require a concrete path here; generator
+expressions and target emulators are not supported, and configuration fails if
+the path does not pass a `--version` probe. Use an absolute path or a distinct
+relative value to select a different compiler in a subdirectory.
+Automatically discovered protobuf imports
+remain internal and associated with their compiler; set the public
+`PROTOCYTE_PROTOBUF_IMPORT_DIR` explicitly when different compilers should
+intentionally share one import root.
+
+#### `protocyte_generate`
+
+```text
+protocyte_generate(
+    TARGET <codegen-target>
+    OUT_DIR <directory>
+
+    PROTO_ROOT <directory>
+    # or: DESCRIPTOR_SET <file>
+
+    DISCOVER
+    # or: PROTOS <source-file-or-descriptor-name>...
+
+    [IMPORT_DIRS <directory>...]
+    [DEPENDS <file-or-target>...]
+    [OPTIONS <plugin-option>...]
+    [EMIT_RUNTIME]
+    [RUNTIME_PREFIX <virtual-directory>]
+    [NAMESPACE_PREFIX <c++-namespace>]
+    [INCLUDE_PREFIX <virtual-directory>]
+    [GENERATED_HEADERS_VAR <variable>]
+    [GENERATED_SOURCES_VAR <variable>]
+    [GENERATED_TARGET_VAR <variable>]
+)
+```
+
+This is the lower-level primitive. It creates the custom target named by
+`TARGET`, but it does not create a C++ library.
+
+- `TARGET` is the required code-generation target name.
+- `OUT_DIR` is required and must be known at configure time; generator
+  expressions are not accepted. A relative path is resolved from
+  `CMAKE_CURRENT_BINARY_DIR`. With a Visual Studio generator, Protocyte
+  automatically compacts overlong descriptor output paths to fit MSBuild's
+  source-item limits. The compact spelling is stable across targets with
+  different output-root lengths. Configuration reports a targeted error if
+  the absolute `OUT_DIR` itself leaves too little room for a
+  collision-resistant generated name; choose a shorter `OUT_DIR` or build
+  directory in that case.
+  Generated files in one configure must have exactly one current target owner,
+  including portable case-insensitive path aliases. One canonical `OUT_DIR`
+  belongs to one canonical CMake build tree. Targets and configurations in that
+  tree may share it, and generation remains protected by cross-process output
+  locks, but a different build tree is rejected before it can change the output.
+  Protocyte records the claim in a hashed sibling `.owner` file containing only
+  a format version and the SHA-256 identity of the owning build tree; no private
+  absolute path is stored. Each concrete generated file also has a path-keyed
+  owner record in the output-lock namespace. That second claim prevents
+  overlapping or nested `OUT_DIR` values from silently naming the same file.
+  Configuration performs a read-only conflict preflight. If multiple trees
+  configure while the outputs are still unclaimed, the first build to acquire
+  the locks may proceed to stage its output. The build revalidates the claims,
+  runs `protoc` into a private staging directory, and validates every expected
+  staged file before it publishes an ownership transaction or replaces a
+  declared generated output. A `protoc` failure, timeout, or invalid staging
+  result attempts to discard staging and publishes no new ownership claim. If
+  cleanup refuses an unsafe staging path or cannot remove it, Protocyte warns
+  that inert staging data outside `OUT_DIR` may remain for manual removal;
+  ownership claims and declared generated files stay unchanged. The failed
+  attempt may still create an empty `OUT_DIR`. After staging succeeds, Protocyte
+  durably records and atomically commits the ownership transaction before
+  publishing generated files, so an interrupted publication is reconciled by a
+  later build before it proceeds, instead of silently handing the outputs to
+  another tree. Configuration itself never publishes a claim, and a later
+  configuration failure cannot leave one. A previously configured tree loses
+  write access at its next build after a deliberate ownership transfer.
+- `PROTO_ROOT` selects source mode. It must name an existing directory. Explicit
+  `PROTOS` entries are source files resolved from `CMAKE_CURRENT_SOURCE_DIR`,
+  must exist during configuration, and must be inside `PROTO_ROOT`.
+- `DESCRIPTOR_SET` selects descriptor-set mode and is mutually exclusive with
+  `PROTO_ROOT`. It must be a concrete, configuration-independent path; generator
+  expressions are rejected because one code-generation declaration owns the
+  same outputs in every configuration. Relative paths are resolved from
+  `CMAKE_CURRENT_SOURCE_DIR`. The file must exist during configuration when
+  using `DISCOVER`. With explicit `PROTOS`, it may instead be a build-generated
+  file when `DEPENDS` names the file or target that produces it. In this mode,
+  `PROTOS` entries are relative virtual descriptor names inside the set rather
+  than filesystem paths.
+- `DISCOVER` is mutually exclusive with `PROTOS`. In source mode it recursively
+  discovers `*.proto` beneath `PROTO_ROOT` and reconfigures when that set changes.
+  In descriptor-set mode it asks the Protocyte plugin to select every supported
+  non-runtime descriptor, including referenced runtime types when required, so
+  the descriptor set must already exist at configure time.
+- `IMPORT_DIRS` adds source-mode protobuf import roots. Entries must be existing
+  directories and are resolved from `CMAKE_CURRENT_SOURCE_DIR`. It is rejected
+  in descriptor-set mode. Each selected source tracks its transitive imports,
+  so changing an imported `.proto` triggers regeneration without requiring the
+  import graph to be repeated through `DEPENDS`. Adding or removing a `.proto`
+  can also change which file wins when import roots contain the same virtual
+  name; Protocyte tracks that topology and regenerates the affected command.
+- `DEPENDS` adds dependencies to the generation custom command. Entries are
+  passed to CMake's `add_custom_command(DEPENDS ...)`; prefer absolute file paths
+  or CMake targets. Use it for project-specific prerequisite files or targets
+  that Protocyte does not otherwise track. This is also how explicit descriptor
+  names can consume a descriptor set produced during the build; its custom
+  command should declare the concrete, configuration-independent descriptor-set
+  file as an output or byproduct.
+- `OPTIONS` forwards non-runtime [plugin parameters](#plugin-parameters).
+  Each entry must use `key=value`; bare entries are rejected during
+  configuration.
+  Do not pass `runtime` or `runtime_prefix` here; use `EMIT_RUNTIME` and
+  `RUNTIME_PREFIX` so CMake can declare the generated runtime output correctly.
+  Names beginning with `_protocyte_` are reserved. Do not pass `include_prefix`
+  here; use `INCLUDE_PREFIX` so CMake can model the generated-header layout.
+  Do not duplicate `NAMESPACE_PREFIX` through `OPTIONS`; duplicate plugin
+  parameter names are rejected.
+- `EMIT_RUNTIME` emits `runtime.hpp` into `OUT_DIR`. The default location is
+  `protocyte/runtime/runtime.hpp`. Each emitted runtime path must have exactly
+  one code-generation owner. Multiple `EMIT_RUNTIME` calls may share `OUT_DIR`
+  only when their `RUNTIME_PREFIX` values select different runtime paths.
+  Otherwise, emit the runtime once or omit `EMIT_RUNTIME` and select a shared
+  runtime target through `RUNTIME_TARGET` in the library helpers.
+- `RUNTIME_PREFIX` changes the runtime's relative virtual directory. With
+  `EMIT_RUNTIME`, it controls both the emitted path and generated include. Without
+  `EMIT_RUNTIME`, it changes only the generated include path.
+- `NAMESPACE_PREFIX` prepends a C++ namespace to generated declarations.
+- `INCLUDE_PREFIX` prepends a relative virtual directory to imported generated
+  header includes. At this lower level it does not move outputs: the caller must
+  arrange its output and include directories so that the virtual prefix resolves.
+- `GENERATED_HEADERS_VAR` receives the generated header paths in the caller's
+  scope.
+- `GENERATED_SOURCES_VAR` receives the generated source paths in the caller's
+  scope.
+- `GENERATED_TARGET_VAR` receives `TARGET` in the caller's scope.
+
+Protocyte records content fingerprints for generated outputs and removes an
+unchanged output when its code-generation owner stops declaring it. Build trees
+created by older Protocyte versions may contain ownership records without
+fingerprints; those outputs are preserved because Protocyte cannot safely
+distinguish generated bytes from user edits. Configuration reports each affected
+output once. Remove an obsolete file manually, or temporarily restore a generation
+target that declares it, back up any edits, delete the output, and build that target
+once to establish a fingerprint before removing the output again.
+
+`PROTOCYTE_OUTPUT_LOCK_ROOT` optionally selects the output-lock namespace. It
+must be an absolute, configure-time path shared by and writable to every build
+tree whose generated outputs could overlap. Using different namespaces opts
+those trees out of cross-tree collision detection and is unsafe for overlapping
+outputs. By default, Protocyte uses the current user's cache directory
+(`LOCALAPPDATA` on Windows, `XDG_CACHE_HOME` or `$HOME/.cache` elsewhere). Lock
+and owner-record names use hashed absolute output identities, so unrelated
+outputs remain concurrent and neither file contains private paths. Stale lock
+files are harmless and may be removed while no Protocyte builds are running.
+
+Deleting a build directory does not silently release its `OUT_DIR`: the hashed
+owner records deliberately remain so a build at a different canonical path
+cannot overwrite the same generated files. The owner identity is path-based, so
+recreating the build directory at the same canonical path is treated as the same
+owner. Malformed records are rejected rather than repaired automatically. To
+transfer an `OUT_DIR`, first stop every build that could use it and preserve any
+files you need. Configure-time preflight reports the exact `OUT_DIR` owner-record
+path and every conflicting generated-output owner-record path for the declared
+outputs. Build-time revalidation also reports the exact conflicting record set
+if ownership changes after configuration. Remove only the listed records, then
+reconfigure the new tree. For a collision that names only generated-output
+records, transfer only those output claims after stopping every build that
+declares them. Do not delete the whole output-lock namespace or cache. The
+`.lock` files may remain; they carry no ownership state. When a target retires
+an unchanged generated file, Protocyte removes that file and its matching owner
+record together while holding the output lock. Edited, malformed, or otherwise
+unverified stale claims remain for explicit manual resolution.
+
+Both `RUNTIME_PREFIX` and the lower-level `INCLUDE_PREFIX` value describe
+virtual include directories rather than host filesystem paths. They must be
+normalized, relative, `/`-separated paths and must not contain `.`/`..`
+segments, Windows device names, or characters unsafe in generated includes.
+
+#### `protocyte_add_proto_library`
+
+```text
+protocyte_add_proto_library(
+    TARGET <library-target>
+    [ALIAS <alias-target>]
+    [TYPE STATIC|SHARED|MODULE|OBJECT]
+    [OUT_DIR <directory>]
+    [INSTALL_INCLUDE_DIR <relative-directory>]
+
+    PROTO_ROOT <directory>
+    # or: DESCRIPTOR_SET <file>
+
+    DISCOVER
+    # or: PROTOS <source-file-or-descriptor-name>...
+
+    [IMPORT_DIRS <directory>...]
+    [DEPENDS <file-or-target>...]
+    [OPTIONS <plugin-option>...]
+    [EMIT_RUNTIME]
+    [HOSTED_ALLOCATOR]
+    [RUNTIME_TARGET <target>]
+    [RUNTIME_PREFIX <virtual-directory>]
+    [NAMESPACE_PREFIX <c++-namespace>]
+    [INCLUDE_PREFIX <virtual-directory>]
+    [GENERATED_HEADERS_VAR <variable>]
+    [GENERATED_SOURCES_VAR <variable>]
+    [GENERATED_TARGET_VAR <variable>]
+)
+```
+
+This is the recommended target-oriented API. It forwards `PROTO_ROOT`,
+`DESCRIPTOR_SET`, `DISCOVER`, `PROTOS`, `IMPORT_DIRS`, `DEPENDS`, `OPTIONS`,
+`EMIT_RUNTIME`, `RUNTIME_PREFIX`, `NAMESPACE_PREFIX`, and `INCLUDE_PREFIX` to
+`protocyte_generate`, then compiles the generated sources as a C++20 library.
+
+- `TARGET` is required and must be a real target name without `::`.
+- `ALIAS` optionally creates an alias for `TARGET`; namespaced aliases such as
+  `demo::proto` are recommended for downstream linkage. The alias must not
+  already exist.
+- `TYPE` accepts `STATIC`, `SHARED`, `MODULE`, or `OBJECT` and defaults to
+  `STATIC`.
+- `OUT_DIR` defaults to
+  `${CMAKE_CURRENT_BINARY_DIR}/<TARGET>_protocyte`. Relative paths are resolved
+  from `CMAKE_CURRENT_BINARY_DIR`; generator expressions are not accepted. It is
+  the library's public build include root. When `INCLUDE_PREFIX` is set,
+  generation is placed beneath `OUT_DIR/INCLUDE_PREFIX`, matching the include
+  spelling emitted by the plugin.
+- `INSTALL_INCLUDE_DIR` opts the target into install/export support. It must be
+  a normalized relative install path such as `${CMAKE_INSTALL_INCLUDEDIR}`.
+  The helper adds that path to the target's install interface and exposes every
+  generated header through the public `protocyte_generated_headers` file set.
+  With `EMIT_RUNTIME`, the file set also contains the emitted `runtime.hpp`.
+- `HOSTED_ALLOCATOR` selects hosted allocation support. With `EMIT_RUNTIME`, it
+  adds `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR=1` to consumers of the emitted runtime.
+  Otherwise, it selects the default `protocyte::runtime_hosted` target when no
+  explicit `RUNTIME_TARGET` is supplied.
+- `RUNTIME_TARGET` selects an existing runtime target instead of the default
+  `protocyte::runtime` or `protocyte::runtime_hosted`. It is mutually exclusive
+  with `EMIT_RUNTIME`; the supplied target owns its allocator configuration.
+- A custom `RUNTIME_PREFIX` requires either `EMIT_RUNTIME` or a matching custom
+  `RUNTIME_TARGET`; this prevents generated includes from disagreeing with the
+  linked reusable runtime.
+- `INCLUDE_PREFIX` gives generated headers a public virtual directory such as
+  `vendor/wire`. The helper preserves that directory in its header file set and
+  exposes the include roots needed by generated sources and emitted runtimes.
+  Install the file set directly to `INSTALL_INCLUDE_DIR`; consumers then include
+  headers as, for example, `vendor/wire/demo.protocyte.hpp`, including after the
+  package is relocated.
+- `GENERATED_HEADERS_VAR` and `GENERATED_SOURCES_VAR` receive the generated path
+  lists in the caller's scope.
+- `GENERATED_TARGET_VAR` receives the internal
+  `<TARGET>__protocyte_codegen` target in the caller's scope.
+
+The created library publicly exposes `OUT_DIR` in its build interface, requires
+C++20, links `protocyte::codegen`, and depends on its generated target. When
+neither `EMIT_RUNTIME` nor `RUNTIME_TARGET` is supplied, it links
+`protocyte::runtime` or `protocyte::runtime_hosted` according to
+`HOSTED_ALLOCATOR`.
+
+Without `INSTALL_INCLUDE_DIR`, the target remains build-only and does not expose
+generated headers in its install interface. For an installable target, install
+the helper's public file set to the same relative directory and export the
+target normally:
+
+```cmake
+include(GNUInstallDirs)
+
+protocyte_add_proto_library(
+    TARGET demo_proto
+    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+    DISCOVER
+    INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+
+install(
+    TARGETS demo_proto
+    EXPORT demoTargets
+    FILE_SET protocyte_generated_headers
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+)
+install(
+    EXPORT demoTargets
+    NAMESPACE demo::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/demo"
+)
+```
+
+The project package config that includes `demoTargets.cmake` must first make
+Protocyte available, normally with `find_dependency(protocyte CONFIG)`, because
+the exported library keeps its public Protocyte runtime/codegen dependencies.
+
+#### `protocyte_add_descriptor_set_library`
+
+```text
+protocyte_add_descriptor_set_library(
+    TARGET <library-target>
+    DESCRIPTOR_SET <file>
+    [ALIAS <alias-target>]
+    [TYPE STATIC|SHARED|MODULE|OBJECT]
+    [OUT_DIR <directory>]
+    [INSTALL_INCLUDE_DIR <relative-directory>]
+
+    DISCOVER
+    # or: FILES <virtual-descriptor-name>...
+
+    [DEPENDS <file-or-target>...]
+    [OPTIONS <plugin-option>...]
+    [EMIT_RUNTIME]
+    [HOSTED_ALLOCATOR]
+    [RUNTIME_TARGET <target>]
+    [RUNTIME_PREFIX <virtual-directory>]
+    [NAMESPACE_PREFIX <c++-namespace>]
+    [INCLUDE_PREFIX <virtual-directory>]
+    [GENERATED_HEADERS_VAR <variable>]
+    [GENERATED_SOURCES_VAR <variable>]
+    [GENERATED_TARGET_VAR <variable>]
+)
+```
+
+This convenience wrapper requires `DESCRIPTOR_SET` and otherwise has the same
+library, runtime, `DEPENDS`, `OPTIONS`, prefix, and output-variable behavior as
+`protocyte_add_proto_library`. `FILES` is the descriptor-set-specific spelling
+of `PROTOS`: each entry is a relative virtual descriptor name inside the set.
+Choose exactly one of `DISCOVER` or `FILES`. `DISCOVER` requires the descriptor
+set during configuration; `FILES` can consume a build-generated descriptor set
+when its producer is listed in `DEPENDS`, but the descriptor-set path must remain
+concrete and configuration-independent. `PROTO_ROOT` and `IMPORT_DIRS` do not
+apply because the descriptor set already carries its dependency descriptors.
+
+All public helpers reject unknown arguments during configuration.
+`protocyte_generate`, `protocyte_add_proto_library`, and
+`protocyte_add_descriptor_set_library` also reject keywords without values and
+duplicate single-value keywords. Missing mode selections are reported by the
+helper the project called and name both valid alternatives, such as
+`PROTO_ROOT` or `DESCRIPTOR_SET` and `DISCOVER` or `PROTOS`/`FILES`.
+
 ## Debugging
 
 LLDB formatters for Protocyte runtime and generated message types are documented
@@ -328,7 +1140,7 @@ in [docs/debugger.md](docs/debugger.md).
 
 ## Plugin Parameters
 
-Supported `--protocyte_out=` parameters:
+Supported Protocyte plugin parameters:
 
 - `runtime=emit`: emit `runtime.hpp` under `protocyte/runtime`.
 - `runtime=emit:<prefix>`: emit `runtime.hpp` under a custom prefix.
@@ -338,48 +1150,149 @@ Supported `--protocyte_out=` parameters:
 - `namespace_prefix=<a::b>`: prepend additional C++ namespaces around the file
   package namespace.
 - `include_prefix=<path>`: prefix includes for imported generated headers.
+- `comments=on|off`: emit schema comments as Doxygen documentation on generated
+  C++ types and field APIs. The default is `on`. This setting does not suppress
+  `[[deprecated]]` attributes derived from protobuf message, enum, field, and
+  enum-value options.
+- `format=auto|off|required`: control generated C++ formatting. `auto` is the
+  default and formats when `clang-format` is available; `off` never launches a
+  formatter; `required` reports an error when no formatter is available.
 - `clang_format=<executable-or-path>`: run an explicit `clang-format`
   executable after generation. The value is passed as one executable argument,
   not interpreted by a shell; do not append command-line options. When
   specified, launch and formatting failures are reported as plugin errors.
 - `clang_format_config=<path>`: use an explicit clang-format config file when
-  formatting runs.
+  formatting runs. Supplying either explicit formatter parameter implies
+  `format=required`; neither can be combined with `format=off`.
+- `formatter_timeout_seconds=<seconds>`: maximum wall-clock time for each
+  `clang-format` invocation in the command-line plugin. The default is `60`.
+  Use a positive finite number for a per-file limit, or `0` to disable the
+  formatter timeout when an external build supervisor owns that limit. On a
+  timeout Protocyte terminates the formatter process tree and returns a plugin
+  error without generated response files.
 
 Runtime and include prefixes are portable protobuf virtual directories, not
 filesystem paths. They must be normalized relative paths using `/`; absolute or
 drive-rooted paths, backslashes, control characters, empty segments, `.` and
-`..` segments, and leading or trailing segment whitespace are rejected. The
-same validation is applied by the CMake helpers before generated outputs are
-declared.
+`..` segments, leading or trailing segment whitespace, C++ include delimiters,
+CMake list separators, Windows-reserved characters, and Windows device names
+are rejected. The same validation is applied by the CMake helpers before
+generated outputs are declared.
 
 Parameter names are exact and case-sensitive. Unknown names, duplicate names,
 and bare tokens without `=` are errors; aliases are not accepted.
 Names beginning with `_protocyte_` are reserved for CMake's parameter transport
 and must not be supplied through CMake `OPTIONS`.
-`namespace_prefix` must be a normalized `::`-separated namespace with no empty
-components, extra colons, surrounding component whitespace, or control
-characters.
+`namespace_prefix` must be a normalized `::`-separated namespace whose
+components are portable, non-reserved C++ identifiers. Empty components, C++
+keywords, leading underscores, extra colons, surrounding component whitespace,
+control characters, and non-ASCII identifier characters are rejected.
+`std` and `protocyte` are valid prefix components. Likewise, schema packages
+such as `std`, `protocyte`, and `protocyte.user` are accepted. When generated
+code extends `::protocyte`, runtime references remain explicitly qualified and
+only a concrete collision with a runtime declaration is remapped. For example,
+a schema `message Span` in `package protocyte` receives a deterministic safe
+spelling because the runtime already declares `::protocyte::Span`; an unrelated
+`message Payload` keeps `::protocyte::Payload`.
 
-Formatting is best-effort by default. If `clang-format` is on `PATH`, protocyte
-uses it for generated C++ output. If it is not available and no explicit
-`clang_format=...` override is supplied, protocyte still emits generated files
-without failing.
+### Generated C++ identifier mapping
+
+Protocyte allocates emitted names by C++ scope and symbol kind. The allocation
+is deterministic, independent of descriptor declaration order, and shared by
+the model and emitter. Message and enum type names preserve descriptor case, so
+`message foo` and `message Foo` become distinct C++ types `foo` and `Foo`.
+Flattened nested types keep the existing `Parent_Child` form. Within one
+`.proto` file, a real collision receives a stable suffix derived from its full
+protobuf name. Cross-file collisions are rejected as described under
+[Current Limits](#current-limits).
+
+C++ keywords retain the familiar trailing underscore for direct symbols
+(`message class` becomes `class_`). Field and oneof accessor stems keep the
+existing `protocyte` suffix when a trailing underscore would combine with their
+derived APIs or storage into a reserved identifier (`class` becomes
+`class_protocyte()` as a field). Leading underscores, double underscores,
+predefined-macro-style names such as `__LINE__`, raw names beginning with
+`protocyte_escaped_`, and raw names that could impersonate a keyword escape are
+encoded as `protocyte_escaped_<utf8-hex>`. Invalid custom-option constant
+spellings are encoded by their UTF-8 bytes as well: `cap-value` and `cap_value`
+can therefore coexist without a diagnostic.
+
+Generated helper collisions are resolved by symbol kind. A nullary field
+accessor can overload a helper with parameters, so fields named `serialize`,
+`parse`, and `copy_from` keep those spellings. A field that conflicts with a
+nullary helper is escaped as a group: `context` exposes `context_()`,
+`set_context_(...)`, and the matching derived APIs. Nested types and constants
+cannot overload functions and receive deterministic escaped spellings instead.
+Generator-owned storage, oneof state, temporaries, and template parameters move
+around schema-owned names and are never emitted as reserved C++ identifiers.
+
+Protocyte does not emit alternate spellings for source compatibility. For
+example, `message payload` defines only `payload`; it does not also define
+`Payload`. Automatic remapping is quiet; diagnostics are reserved for
+descriptor-invalid duplicates or constructs that cannot be represented in C++.
+
+Formatting uses `format=auto` by default. If `clang-format` is on `PATH`,
+protocyte uses it for generated C++ output. If it is unavailable and no
+explicit formatter setting is supplied, protocyte still emits generated files
+without failing. Implicit style discovery is anchored to the caller's working
+directory and delegated to clang-format through `--style=file`; Protocyte never
+searches its own package or source tree for a consumer's `.clang-format`.
+CMake's response-file transport preserves the directory containing the calling
+`CMakeLists.txt` as the plugin invocation directory, so clang-format searches
+that source directory and its ancestors. Direct `protoc` callers should invoke
+it from the intended project directory or pass `clang_format_config` explicitly.
+
+`format=auto` is a convenience mode, not a byte-for-byte reproducibility
+guarantee across machines or clang-format versions. Projects that check
+generated files into source control should either use `format=off`, or use
+`format=required` with a project-pinned formatter version and configuration.
 
 CMake users can forward non-runtime parameters through the existing `OPTIONS`
 argument on `protocyte_generate(...)` or `protocyte_add_proto_library(...)`.
+Every forwarded entry must use `key=value`; CMake rejects bare entries during
+configuration with the name of the public helper that received them.
 Absolute Windows and POSIX formatter paths are safe in `OPTIONS`; include
 prefixes remain relative virtual directories. Runtime state is the exception:
 use the dedicated `EMIT_RUNTIME` and `RUNTIME_PREFIX` arguments so CMake can
 declare the emitted runtime header and runtime linkage consistently. Forwarded
 `runtime` and `runtime_prefix` parameters are rejected.
+For example, a project that needs a slower formatter may set
+`OPTIONS "formatter_timeout_seconds=180"`; `0` retains formatting but disables
+only its per-file timeout.
 
-Example:
+Direct `protoc` callers should pass plugin parameters through
+`--protocyte_opt=...` and keep the output directory in a separate
+`--protocyte_out=<directory>` argument. `protoc` treats the first `:` in a
+combined `--protocyte_out=<parameters>:<directory>` value as the separator, so
+combining that form with values such as `runtime=emit:<prefix>` or
+`namespace_prefix=a::b` misparses the remaining text as the output directory.
+
+For example, size-sensitive builds can disable generated documentation with
+`OPTIONS "comments=off"`. Direct `.proto` generation normally receives source
+information from `protoc`; descriptor-set generation emits comments only when
+the set was created with `--include_source_info`.
+
+PowerShell example:
 
 ```powershell
+New-Item -ItemType Directory -Force out | Out-Null
 protoc `
   --proto_path=. `
   --proto_path=src/protocyte/proto `
-  --protocyte_out=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated:out `
+  --protocyte_out=out `
+  --protocyte_opt=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated `
+  tests/example.proto
+```
+
+Bash example:
+
+```bash
+mkdir -p out
+protoc \
+  --proto_path=. \
+  --proto_path=src/protocyte/proto \
+  --protocyte_out=out \
+  --protocyte_opt=runtime=emit:vendor/protocyte,namespace_prefix=mycorp::wire,include_prefix=generated \
   tests/example.proto
 ```
 
@@ -403,20 +1316,40 @@ policy = GeneratorPolicy(
     max_files_to_generate=256,
     max_proto_files=1_024,
     max_descriptor_nodes=50_000,
+    max_descriptor_metadata_bytes=4 * 1024 * 1024,
     max_nesting_depth=64,
     max_generated_bytes=64 * 1024 * 1024,
 )
 response = generate_response(request, policy=policy)
 ```
 
-`GeneratorPolicy()` preserves normal local plugin behavior: its resource
-budgets are unset, formatter parameters are allowed, and output formatting is
-enabled. An embedding service must pass its own explicit policy; merely calling
-`generate_response()` does not opt into the example limits above.
+`GeneratorPolicy()` preserves the embedding API's opt-in behavior: its resource
+budgets and formatter timeout are unset, formatter parameters are allowed, and
+output formatting is enabled. The command-line plugin separately uses the
+finite `formatter_timeout_seconds` plugin-parameter default described above.
+An embedding service must pass its own explicit policy; merely calling
+`generate_response()` does not opt into the example limits above. When a
+request requires formatting, a policy with `format_outputs=False` rejects the
+request rather than silently returning unformatted output.
+
+Before model construction, `generate_response()` validates structural
+descriptor invariants such as field numbers and uniqueness, labels, oneof and
+proto3-optional membership, reserved ranges, and canonical map-entry shapes.
+Malformed requests return a contextual response error without generated files.
 
 The values above are an example deployment profile, not protobuf format
 limits. Choose budgets for the service workload. `max_request_bytes` is checked
 on the parsed request, so the transport must also cap bytes before parsing.
+`max_descriptor_nodes` retains its declaration-node accounting.
+`max_descriptor_metadata_bytes` bounds the complete serialized request before
+model construction, including source-code locations, paths, spans, comments,
+dependency strings, and unknown descriptor fields. When
+`max_descriptor_metadata_bytes` is omitted, `max_descriptor_nodes` also supplies
+a conservative metadata-byte limit; set both explicitly to tune them
+independently. These Python API policy checks apply to
+`generate_response()`; the command-line plugin and descriptor-set inspection
+commands are intended for trusted local build input and should run with
+process-level resource limits when that assumption does not hold.
 `max_generated_bytes` is enforced cumulatively while generated source lines are
 appended and while formatter stdout and stderr are streamed. Formatter capture
 uses the remaining cumulative byte budget and terminates the process before
@@ -708,6 +1641,13 @@ XOR, bitwise OR, logical AND, then logical OR.
   elements or the exact element count, rather than allowing any count up to the
   bound.
 
+For singular `bytes` fields with `protocyte.array`, the schema bound owns the
+field's storage policy. Bounded fields accept at most the declared size, and
+`fixed: true` fields accept exactly that size. These inline fields do not use
+`Limits::max_string_bytes`; in particular, mutable access to fixed storage is
+infallible and always returns the declared extent. `max_total_bytes` still
+bounds aggregate wire input during parsing.
+
 Examples:
 
 ```proto
@@ -735,9 +1675,26 @@ template <class Config = ::protocyte::DefaultConfig>
 struct Message;
 ```
 
+The displayed `Config` spelling is an implementation parameter name, not a
+reserved schema identifier. If a legal message or generated class-scope name
+would collide with `Config` (or with another internal template parameter such
+as `Reader`), Protocyte automatically chooses a collision-free internal name;
+the generated message type and its public protobuf-derived names stay unchanged.
+Fields or nested aliases that collide with the enclosing C++ class's injected
+name receive a deterministic escaped spelling while the enclosing message name
+stays unchanged.
+
 The default config uses a caller-supplied allocator context. Construction is
-non-allocating. Operations that may allocate return `::protocyte::Status` or
-`::protocyte::Result<T>`.
+non-allocating, so `create(ctx)` returns the message directly. Primitive scalar
+setters also return `void`. Operations that can fail, including allocation,
+parsing, serialization, strings, bytes, containers, and deep copies, return
+`[[nodiscard]]` `::protocyte::Status` or `::protocyte::Result<T>` values.
+
+`::protocyte::Vector::bind(ctx)` and `::protocyte::Bytes::bind(ctx)` also return
+`Status`. Binding the current context again always succeeds. Changing contexts
+succeeds only before backing storage has been allocated; retained capacity is
+still owned even when the container is empty, so a later context change returns
+`invalid_argument` and leaves both the value and its allocator ownership intact.
 
 ```cpp
 protocyte::DefaultConfig::Context ctx{/* allocator */, /* limits */};
@@ -766,18 +1723,44 @@ Readers passed to generated `parse()` or `merge_from()` are required to expose
 `eof()`, `position()`, `can_read(count)`, `read_byte()`, `read(out, count)`, and
 `skip(count)`. `can_read(count)` returns `::protocyte::Status`, does not consume
 input, and is part of the reader contract rather than an optional fast-path
-hook. `SliceReader`, `ReaderRef`, `ParseBudgetReader`, and `LimitedReader` all
-implement this transport contract. Parse readers passed between generated
-nested messages additionally expose `consume_repeated_elements(count,
+hook. The public `::protocyte::ReaderLike` concept checks this contract at the
+generated API boundary. `position()` is an absolute byte coordinate within the
+top-level input; reader adapters must preserve that coordinate rather than
+restarting at zero.
+`SliceReader(data, size, base_offset)` accepts an optional source base for
+subranges. `ReaderRef`, `ParseBudgetReader`, `LimitedReader`, and staged map
+readers preserve the wrapped reader's coordinate. Parse readers passed between
+generated nested messages additionally expose `consume_repeated_elements(count,
 field_number)` and `consume_map_entries(count, field_number)`, both returning
 `::protocyte::Status`. `ParseBudgetReader` owns those counters; `ReaderRef` and
 `LimitedReader` forward them unconditionally.
 
+For contiguous bytes, `parse(ctx, input)` accepts
+`::protocyte::Span<const ::protocyte::u8>` directly. Compatible lvalue ranges
+such as byte arrays, `std::array`, `std::vector`, and `std::span` convert to that
+dynamic span automatically; the overload creates a `SliceReader` and delegates
+to the same reader-based parser.
+
 Writers passed to generated `serialize()` are required to expose
 `can_write(count)`, `write_byte(value)`, and `write(data, count)`.
 `can_write(count)` returns `bool`, does not consume output capacity, and is part
-of the writer contract rather than an optional bulk-write optimization.
-`SliceWriter` implements this contract.
+of the writer contract rather than an optional bulk-write optimization. The
+public `::protocyte::WriterLike` concept checks this contract.
+`SliceWriter(data, size, base_offset)` implements this contract and accepts the
+same optional absolute base for a subrange.
+
+`serialize(writer)` is incremental, not transactional. It validates the message
+before writing, but once writing begins, any later failure (including insufficient
+capacity or a failed `write_byte()` or `write()` call) leaves bytes from earlier
+successful calls committed; Protocyte does not rewind the writer. Callers that
+require all-or-nothing output should serialize into a contiguous staging buffer
+first or provide a writer that stages or rolls back its output.
+
+For contiguous writable bytes, `serialize(output)` accepts
+`::protocyte::Span<::protocyte::u8>` and compatible mutable lvalue ranges. It
+returns the number of bytes written. The helper computes the encoded size first,
+so an undersized output returns `ErrorCode::size_limit` without modifying the
+buffer, then delegates the actual write to `serialize(writer)`.
 
 Generated messages are move-only. Ordinary C++ copying is deleted because it
 cannot report allocation failure.
@@ -785,13 +1768,171 @@ cannot report allocation failure.
 Common generated operations include:
 
 - `create(ctx)`
-- `parse(ctx, reader)`
+- `parse(ctx, reader)`, `parse(ctx, input_bytes)`, and `parse(reader, output)`
 - `merge_from(reader)`
-- `serialize(writer)`
+- `serialize(writer)` and `serialize(output_bytes)`
 - `encoded_size()`
-- `copy_from(other)`
-- `clone()`
+- `copy_from(source)` and `copy_from(source, staging_message)`
+- `clone()` and `clone(output)`
 - field accessors, `has_*()`, `set_*()`, `mutable_*()`, and `ensure_*()` where applicable
+
+### Error Diagnostics
+
+Runtime and generated failures remain allocation-free and reflection-free:
+
+```cpp
+struct Error {
+    ErrorCode code {};
+    usize offset {};
+    u32 field_number {};
+};
+```
+
+Both `Status` and `Result<T>` expose the error through `.error()` after a false
+status check. The compiled [quick-start example](examples/quickstart/main.cpp)
+prints all three members without allocating:
+
+```cpp
+if (!parsed) {
+    const auto &error = parsed.error();
+    return report_error("parse", error, 3);
+}
+```
+
+Access `.error()` only on a failed result. Successful results instead expose
+their value through `*result` or `result.value()`.
+
+The numeric members have these contracts:
+
+- `code` identifies the failure category through `ErrorCode`.
+- `offset` is the absolute reader or writer position in the top-level byte
+  coordinate. It is `0` when the failure has no meaningful I/O position, such
+  as validation, API misuse, or an allocation failure outside parsing. It is
+  never a container size or element index.
+- `field_number` identifies the field on the message operation that returned
+  the failure. Nested message failures are contained by their outer field, and
+  map-entry key/value failures identify the public map field rather than the
+  synthetic entry fields `1` or `2`. It is `0` when no message field is known.
+
+No field names, nested paths, source identifiers, or formatted diagnostic
+strings are stored in `Error`. Applications that need names can map the numeric
+field themselves; doing so is separate from the core runtime and is not needed
+for these diagnostics. Custom field-aware helpers can use
+`::protocyte::with_field(error_or_result, field_number)` to apply the same
+containment rule.
+
+### Unknown Fields
+
+Unknown-field preservation is compile-time configurable and disabled by
+default. Enable it on a config used to instantiate generated messages:
+
+```cpp
+struct ForwardCompatibleConfig : protocyte::DefaultConfig {
+    static constexpr bool preserve_unknown_fields = true;
+};
+
+using Sample = demo::Sample<ForwardCompatibleConfig>;
+```
+
+This is useful for a proxy built against an older schema: it can parse a
+message produced by a newer service, change a field it understands, and
+forward the message without deleting fields introduced by that newer service.
+
+When enabled, each message keeps unknown occurrences in encounter order as
+canonical protobuf wire bytes. Generated messages expose
+`unknown_fields()`, `unknown_field_count()`, `unknown_field_bytes()`, and
+`clear_unknown_fields()`. `UnknownFieldRange::field(index)` and iteration
+provide lazy `UnknownFieldView` values with `field_number()`, `wire_type()`,
+`tag()`, protobuf-style `type()`, `varint()`, `fixed32()`, `fixed64()`,
+`length_delimited()`, and `group()` accessors:
+
+```cpp
+for (const auto field : message.unknown_fields()) {
+    if (field.wire_type() == protocyte::WireType::VARINT) {
+        const auto value = field.varint();
+        // value is Result<uint64_t>
+    }
+}
+```
+
+`mutable_unknown_fields()` is available only when preservation is enabled. It
+returns a typed façade supporting `add_*`, `replace_*`, `erase`,
+`delete_subrange`, `delete_by_number`, `merge_from`, and `clear`; writable raw
+bytes are intentionally not exposed. Mutations and individual parse captures
+roll back on allocation, input, recursion, or size-limit failure. Raw encoded
+ranges passed to `merge_from` or `add_group` are validated against the
+destination context's recursion policy and canonicalized before commit.
+
+Unknown fields serialize after known fields. Their relative encounter order is
+retained, but parsing and serialization canonicalize tags and scalar values, so
+this API does not promise byte-identical forwarding. Unknown fields and
+incompatible wire types inside map-entry messages are discarded while the
+remaining key and value are materialized. An undeclared closed-enum map value
+instead preserves the complete outer map occurrence as unknown and does not
+insert the entry, matching protobuf's native map representation.
+
+The disabled storage specialization is empty and generated messages apply
+`PROTOCYTE_NO_UNIQUE_ADDRESS` (`[[msvc::no_unique_address]]` on MSVC and
+`[[no_unique_address]]` elsewhere), so the default policy adds no message
+object footprint. Enabling preservation uses `Config::Vector<u8>` and is
+bounded independently by `Limits::max_unknown_field_bytes`, including copies
+between messages with different contexts.
+
+### Caller-Controlled Message Storage
+
+Copying, cloning, and parsing each have a convenience form and a
+caller-supplied-storage form:
+
+```cpp
+Status copy_from(const Message& source);
+Status copy_from(const Message& source, Message& staging_message);
+
+Result<Message> clone() const;
+Status clone(Message& output) const;
+
+static Result<Message> parse(Context& ctx, Reader& reader);
+static Status parse(Reader& reader, Message& output);
+```
+
+The convenience forms are concise for hosted applications, but may materialize
+one complete generated message in automatic storage. That can be undesirable
+for large schemas and especially for kernel code with a small stack. The
+reference-taking variants create no full outer-message temporary internally:
+
+```cpp
+demo::Sample<> staging_message{ctx};
+if (const auto st = destination.copy_from(source, staging_message); !st) {
+    // destination is unchanged
+}
+
+demo::Sample<> output{ctx};
+auto clone_status = source.clone(output);
+
+protocyte::SliceReader reader{encoded, encoded_size};
+auto parse_status = demo::Sample<>::parse(reader, output);
+```
+
+The caller decides where `staging_message` and `output` live: stack, static
+storage, an arena, or a kernel-appropriate pool. Protocyte neither allocates nor
+deallocates those outer objects.
+
+`copy_from(source, staging_message)` uses `staging_message` as transactional
+working state. The destination remains unchanged on failure; after success the
+staging message is valid but moved-from. It must not alias either copy operand.
+`clone()` binds its result to the source message's context. `clone(output)` and
+`parse(reader, output)` retain the context supplied when `output` was
+constructed. Both reference-taking operations reset and directly populate
+`output`; on failure, `output` is reset to an empty message bound to that same
+destination context.
+
+A message's context binding is non-owning. The `Context`, its allocator state,
+and any state referenced by its allocator callbacks must outlive every message
+bound to it. Moving or cloning a message does not extend those lifetimes.
+
+This only controls storage for the outer message object. Dynamic strings,
+bytes, vectors, maps, and boxed messages still allocate through `Config` and
+its caller-supplied context. Protocyte uses heap storage only when that context
+is configured with a heap-backed allocator.
 
 ### Parse Resource Limits
 
@@ -799,12 +1940,19 @@ Common generated operations include:
 application resource policy:
 
 - `max_total_bytes` defaults to `0x7fffffff` and bounds all wire bytes read or
-  skipped by one top-level `parse`, `merge_from`, or `merge_partial_from` call,
+  skipped by one top-level `parse` or `merge_from` call,
   including nested and unknown fields. This matches protobuf C++
   `CodedInputStream`'s default `INT_MAX` total-byte limit.
 - `max_recursion_depth` defaults to `100`, matching protobuf C++.
-- `max_message_bytes` and `max_string_bytes` bound individual
-  length-delimited values.
+- `max_message_bytes` bounds individual embedded messages.
+- `max_string_bytes` bounds dynamically stored string and bytes values,
+  including individual elements of repeated bytes fields. Singular inline
+  `bytes` fields using `protocyte.array` instead use their schema-declared
+  bound, or exact extent with `fixed: true`.
+- `max_unknown_field_bytes` defaults to `0x7fffffff` and bounds canonical
+  unknown-field bytes retained by each message when
+  `Config::preserve_unknown_fields` is enabled. The limit is separate from
+  `max_string_bytes`, while all input still counts against `max_total_bytes`.
 - `max_repeated_elements` and `max_map_entries` default to `0x7fffffff` and
   count decoded occurrences across the complete top-level call. Packed chunks,
   expanded values, nested messages, and duplicate map keys share their
@@ -839,8 +1987,17 @@ view API in Protocyte's no-exceptions runtime surface.
 Hosted users who want standard-library interoperability can opt in:
 
 ```cmake
-target_compile_definitions(my_target PRIVATE PROTOCYTE_ENABLE_STD_STRING_VIEW=1)
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_STD_STRING_VIEW=1)
 ```
+
+Apply the definition to the target that compiles the generated sources, such as
+the target passed to `protocyte_add_proto_library`, and propagate it to every
+consumer. `PROTOCYTE_ENABLE_STD_STRING_VIEW` changes the public
+`::protocyte::StringView` type used by generated signatures and constants, so
+all translation units in that target graph must compile with the same value.
+When generated files are added directly to an application target instead of a
+library, define the macro consistently on that owning target and every target
+that includes its generated headers.
 
 When `PROTOCYTE_ENABLE_STD_STRING_VIEW` is set to a nonzero value, the runtime
 includes `<string_view>` and both `::protocyte::Span<char>` / `Span<const char>`
@@ -882,6 +2039,42 @@ namespace std {
 Prefer the default `::protocyte::Span<const char>` API in kernel and
 freestanding builds. It avoids depending on implementation-private STL symbols
 and keeps checked string access out of the generated-code runtime surface.
+
+### String Formatting
+
+`PROTOCYTE_ENABLE_STD_FORMAT` and `PROTOCYTE_ENABLE_FMT_FORMAT` are hosted
+runtime interoperability opt-ins. Both default to `0`. They are unrelated to
+the generator's `format=...` and `clang-format` options: those options style
+generated source files, while these macros let formatting libraries consume
+`::protocyte::String<Config>` values.
+
+For a standard library with C++20 formatting support, enable:
+
+```cmake
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_STD_FORMAT=1)
+```
+
+When the standard library advertises `__cpp_lib_format >= 201907L`, the runtime
+provides `std::formatter<::protocyte::String<Config>, char>` by delegating to
+the existing `std::string_view` formatter. This supports the same string format
+specifiers, including width and alignment, and preserves embedded null bytes by
+using the string's explicit size. The smoke build probes for working
+`std::format` support before enabling this macro. If the feature-test macro is
+unavailable or too old, Protocyte does not emit the formatter specialization.
+
+For the {fmt} library, enable:
+
+```cmake
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_FMT_FORMAT=1)
+```
+
+That opt-in exposes an argument-dependent-lookup `format_as(...)` overload for
+`::protocyte::String<Config>` that returns `std::string_view`. Protocyte does
+not include, provide, or link {fmt}; the consuming target remains responsible
+for its chosen {fmt} headers and target. Define either interoperability macro
+consistently and propagate it to targets that format Protocyte strings, as in
+the `PUBLIC` examples above. Projects may enable both when they use both
+formatting libraries.
 
 ### Parse Atomicity
 
@@ -954,8 +2147,9 @@ The contract is:
 ## Runtime Notes
 
 The default runtime does not call `malloc` or `new` globally. Hosted allocation
-helpers are compiled only when `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR` is defined,
-which is intended for tests and examples rather than kernel builds.
+helpers are compiled only when `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR` is set to a
+nonzero value, which is intended for tests and examples rather than kernel
+builds.
 
 The runtime provides:
 
@@ -965,5 +2159,30 @@ The runtime provides:
 - slice readers and writers
 - protobuf tag, varint, fixed-width, skip, scalar parse, and scalar serialize helpers
 
-Reflection tables are emitted only when `PROTOCYTE_ENABLE_REFLECTION` is
-defined. Release builds do not get descriptor pools or dynamic reflection.
+Reflection tables are emitted only when `PROTOCYTE_ENABLE_REFLECTION` is set to
+a nonzero value. Release builds do not get descriptor pools or dynamic
+reflection. For a generated CMake library, define the macro on its target with
+PUBLIC visibility:
+
+```cmake
+target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_REFLECTION=1)
+```
+
+PUBLIC visibility is required so the generated `.protocyte.cpp` file and every
+consumer of its generated header see the same declaration surface. On Windows,
+`protocyte_add_proto_library(TYPE SHARED)` and
+`protocyte_add_descriptor_set_library(TYPE SHARED)` automatically give the
+reflection data a target-unique import/export macro; the DLL receives the
+private export definition and linked consumers import the data. Raw generator
+invocations do not add DLL visibility decoration, so callers that compile raw
+generated output into a Windows DLL must manage symbol visibility themselves.
+Each message exposes an externally linked
+`std::array<protocyte::ReflectionFieldInfo, N>` in the generated package's
+`protocyte_reflection` namespace, named `<GeneratedMessageName>_fields`.
+
+`ReflectionFieldInfo::label` preserves the protobuf descriptor label as
+`ReflectionFieldLabel::optional`, `required`, or `repeated`.
+`ReflectionFieldInfo::has_presence` is independent: it is true only when the
+field has a singular presence bit according to protobuf semantics, so required
+fields have presence while repeated fields (including repeated messages) do
+not. The remaining members are `name`, `number`, `kind`, and `packed`.
