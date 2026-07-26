@@ -21,6 +21,7 @@ def _fenced_blocks(document: str, language: str) -> list[str]:
 
 def test_wiki_navigation_is_complete_unique_and_title_aligned() -> None:
     sidebar = _page("_Sidebar")
+    footer = _page("_Footer")
     links = re.findall(r"^- \[([^\]]+)\]\(([^)]+)\)$", sidebar, re.MULTILINE)
     names = [name for name, _ in links]
     targets = [target for _, target in links]
@@ -36,6 +37,12 @@ def test_wiki_navigation_is_complete_unique_and_title_aligned() -> None:
         expected_title = "Protocyte" if target == "Home" else name
         assert _page(target).splitlines()[0] == f"# {expected_title}"
     assert names[0] == "Home"
+    assert (
+        "[Apache License 2.0]"
+        "(https://github.com/anthonyprintup/protocyte/blob/main/LICENSE)"
+        in footer
+    )
+    assert "MIT License" not in footer
 
 
 def test_wiki_internal_links_resolve() -> None:
@@ -117,16 +124,36 @@ def test_quickstart_ci_exercises_fetchcontent_from_the_current_checkout() -> Non
     assert "-DPROTOC_EXECUTABLE=" not in workflow
 
 
-def test_retained_readme_matches_the_stage_one_quickstart_and_debugger_links() -> None:
+def test_slim_readme_is_a_wiki_landing_page() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert '#include "reading.protocyte.hpp"' in readme
-    assert "quickstart.protocyte.hpp" not in readme
-    assert "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=" in readme
-    assert "-DProtobuf_PROTOC_EXECUTABLE=" in readme
-    assert "-DPROTOC_EXECUTABLE=" not in readme
-    assert (
-        "https://github.com/anthonyprintup/protocyte/wiki/Debugging" in readme
-    )
+    assert len(readme.encode("utf-8")) < 15_000
+    for destination in (
+        "https://github.com/anthonyprintup/protocyte/wiki/Getting-Started",
+        "https://github.com/anthonyprintup/protocyte/wiki/CMake-Integration",
+        "https://github.com/anthonyprintup/protocyte/wiki/Compatibility-and-Limitations",
+        "https://github.com/anthonyprintup/protocyte/wiki/Contributing",
+        "https://github.com/anthonyprintup/protocyte/wiki/AI-Disclosure",
+        "(LICENSE)",
+    ):
+        assert destination in readme
+    for fragment in (
+        "include(FetchContent)",
+        "FetchContent_Declare(",
+        "9bae6fe8bf78a47a6356dc1fdc1e0ab8baa97d14",
+        "FetchContent_MakeAvailable(protocyte)",
+        "protocyte_add_proto_library(",
+        "HOSTED_ALLOCATOR",
+        "target_link_libraries(application PRIVATE application::proto)",
+    ):
+        assert fragment in readme
+    for legacy_heading in (
+        "## CMake API Reference",
+        "## Plugin Parameters",
+        "## Runtime Notes",
+        "## Maintainer Release Guide",
+    ):
+        assert legacy_heading not in readme
+    assert "README.md#" not in readme
     assert "docs/debugger.md" not in readme
 
 
@@ -356,8 +383,8 @@ def test_wiki_sync_helper_dry_run_apply_and_check(tmp_path: Path) -> None:
     source.mkdir()
     checkout.mkdir()
     (checkout / ".git").mkdir()
-    (source / "Home.md").write_bytes(b"# Home\n")
-    (source / "Guide.md").write_bytes(b"# Guide\n")
+    (source / "Home.md").write_bytes(b"# Home\r\n")
+    (source / "Guide.md").write_bytes(b"# Guide\r")
     (checkout / "Home.md").write_bytes(b"# Old Home\n")
     (checkout / "Stale.md").write_bytes(b"# Stale\n")
     script = ROOT / ".github/scripts/sync_wiki.py"
@@ -390,6 +417,7 @@ def test_wiki_sync_helper_dry_run_apply_and_check(tmp_path: Path) -> None:
     assert (checkout / "Guide.md").read_bytes() == b"# Guide\n"
     assert not (checkout / "Stale.md").exists()
 
+    (checkout / "Home.md").write_bytes(b"# Home\r\n")
     checked = subprocess.run(
         [
             sys.executable,
@@ -405,3 +433,4 @@ def test_wiki_sync_helper_dry_run_apply_and_check(tmp_path: Path) -> None:
     )
     assert checked.returncode == 0
     assert "already matches" in checked.stdout
+    assert (checkout / "Home.md").read_bytes() == b"# Home\r\n"
