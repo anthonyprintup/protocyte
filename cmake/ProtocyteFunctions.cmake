@@ -929,7 +929,7 @@ endfunction()
 
 function(_protocyte_source_path_requires_proxy out_var source_path)
     set(requires_proxy FALSE)
-    if(CMAKE_HOST_WIN32 AND "${source_path}" MATCHES ";")
+    if("${source_path}" MATCHES ";")
         set(requires_proxy TRUE)
     endif()
 

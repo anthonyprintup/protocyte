@@ -9,6 +9,37 @@ function(_protocyte_normalized_path_identity out_var path)
 endfunction()
 
 function(
+    _protocyte_verify_atomic_file_rename
+    out_var
+    source_path
+    destination_path
+)
+    set(${out_var} FALSE PARENT_SCOPE)
+    if(NOT EXISTS "${source_path}" AND NOT IS_SYMLINK "${source_path}")
+        set(${out_var} TRUE PARENT_SCOPE)
+        return()
+    endif()
+    if(
+        IS_DIRECTORY "${source_path}"
+        OR IS_SYMLINK "${source_path}"
+        OR NOT EXISTS "${destination_path}"
+        OR IS_DIRECTORY "${destination_path}"
+        OR IS_SYMLINK "${destination_path}"
+    )
+        return()
+    endif()
+    file(SHA256 "${source_path}" source_hash)
+    file(SHA256 "${destination_path}" destination_hash)
+    if(NOT source_hash STREQUAL destination_hash)
+        return()
+    endif()
+    file(REMOVE "${source_path}")
+    if(NOT EXISTS "${source_path}" AND NOT IS_SYMLINK "${source_path}")
+        set(${out_var} TRUE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(
     _protocyte_owner_transaction_paths
     out_prepared
     out_committed

@@ -3894,6 +3894,7 @@ def test_import_scanner_matches_pinned_protoc_noncanonical_path_rejection(
         check=False,
         capture_output=True,
         text=True,
+        errors="replace",
     )
     assert protoc_result.returncode != 0
     assert expected_protoc_error in protoc_result.stderr, protoc_result.stderr
@@ -10718,7 +10719,8 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
     )
 
     residual_journal_anchor = (
-        "# A successful rename must consume the active journal.  Some supported CMake\n"
+        "_protocyte_verify_atomic_file_rename(\n"
+        "    transaction_complete_consumed_source\n"
     )
     residual_journal_instrumentation = (
         "if(DEFINED PROTOCYTE_TEST_DUPLICATE_ACTIVE_AFTER_COMMIT)\n"

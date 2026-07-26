@@ -340,9 +340,19 @@ function(
         RESULT transaction_write_result
     )
     if("${transaction_write_result}" STREQUAL "0")
-        set(${out_written} TRUE PARENT_SCOPE)
-        set(${out_error} "" PARENT_SCOPE)
-    else()
+        _protocyte_verify_atomic_file_rename(
+            transaction_write_consumed_source
+            "${transaction_staging}"
+            "${transaction_active}"
+        )
+        if(transaction_write_consumed_source)
+            set(${out_written} TRUE PARENT_SCOPE)
+            set(${out_error} "" PARENT_SCOPE)
+            return()
+        endif()
+        set(transaction_write_result "rename retained conflicting source data")
+    endif()
+    if(NOT "${transaction_write_result}" STREQUAL "0")
         set(
             ${out_error}
             "atomic journal publication failed: ${transaction_write_result}"
@@ -1044,14 +1054,34 @@ function(_protocyte_recover_generation_transaction out_recovered)
         if(recovery_restore)
             _protocyte_staged_output_path(backup_generation_output "backups" "${generation_output}")
             file(RENAME "${backup_generation_output}" "${generation_output}" NO_REPLACE RESULT restore_output_result)
-            if(NOT "${restore_output_result}" STREQUAL "0")
+            if("${restore_output_result}" STREQUAL "0")
+                _protocyte_verify_atomic_file_rename(
+                    restore_consumed_source
+                    "${backup_generation_output}"
+                    "${generation_output}"
+                )
+            endif()
+            if(
+                NOT "${restore_output_result}" STREQUAL "0"
+                OR NOT restore_consumed_source
+            )
                 return()
             endif()
         endif()
     endforeach()
     if(transaction_owner_count GREATER 0 AND NOT transaction_is_releasing)
         file(RENAME "${transaction_active}" "${transaction_releasing}" NO_REPLACE RESULT transaction_release_result)
-        if(NOT "${transaction_release_result}" STREQUAL "0")
+        if("${transaction_release_result}" STREQUAL "0")
+            _protocyte_verify_atomic_file_rename(
+                transaction_release_consumed_source
+                "${transaction_active}"
+                "${transaction_releasing}"
+            )
+        endif()
+        if(
+            NOT "${transaction_release_result}" STREQUAL "0"
+            OR NOT transaction_release_consumed_source
+        )
             return()
         endif()
         set(transaction_is_releasing TRUE)

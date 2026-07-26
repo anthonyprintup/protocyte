@@ -522,6 +522,16 @@ function(
         NO_REPLACE
         RESULT transaction_stage_result
     )
+    if("${transaction_stage_result}" STREQUAL "0")
+        _protocyte_verify_atomic_file_rename(
+            transaction_stage_consumed_source
+            "${transaction_staging}"
+            "${transaction_prepared}"
+        )
+        if(NOT transaction_stage_consumed_source)
+            set(transaction_stage_result "rename retained conflicting source data")
+        endif()
+    endif()
     if(NOT "${transaction_stage_result}" STREQUAL "0")
         file(REMOVE "${transaction_staging}")
         message(
@@ -563,6 +573,16 @@ function(
             NO_REPLACE
             RESULT owner_publish_result
         )
+        if("${owner_publish_result}" STREQUAL "0")
+            _protocyte_verify_atomic_file_rename(
+                owner_publish_consumed_source
+                "${owner_staging}"
+                "${owner_marker}"
+            )
+            if(NOT owner_publish_consumed_source)
+                set(owner_publish_result "rename retained conflicting source data")
+            endif()
+        endif()
         if(NOT "${owner_publish_result}" STREQUAL "0")
             _protocyte_recover_published_transaction_owners(
                 all_published_owners_recovered
@@ -589,6 +609,16 @@ function(
         NO_REPLACE
         RESULT transaction_publish_result
     )
+    if("${transaction_publish_result}" STREQUAL "0")
+        _protocyte_verify_atomic_file_rename(
+            transaction_publish_consumed_source
+            "${transaction_prepared}"
+            "${transaction_committed}"
+        )
+        if(NOT transaction_publish_consumed_source)
+            set(transaction_publish_result "rename retained conflicting source data")
+        endif()
+    endif()
     if(NOT "${transaction_publish_result}" STREQUAL "0")
         _protocyte_recover_published_transaction_owners(
             all_published_owners_recovered
@@ -989,7 +1019,17 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
             message(FATAL_ERROR "Protocyte output state changed before backup publication for target '${GENERATION_TARGET}'. Existing output was restored.")
         endif()
         file(RENAME "${generation_output}" "${backup_generation_output}" NO_REPLACE RESULT backup_output_result)
-        if(NOT "${backup_output_result}" STREQUAL "0")
+        if("${backup_output_result}" STREQUAL "0")
+            _protocyte_verify_atomic_file_rename(
+                backup_output_consumed_source
+                "${generation_output}"
+                "${backup_generation_output}"
+            )
+        endif()
+        if(
+            NOT "${backup_output_result}" STREQUAL "0"
+            OR NOT backup_output_consumed_source
+        )
             _protocyte_recover_generation_transaction(recovered_generation_transaction)
             if(recovered_generation_transaction)
                 _protocyte_discard_generation_staging()
@@ -1032,7 +1072,17 @@ foreach(generation_output_index RANGE 0 ${last_generation_output_index})
         message(FATAL_ERROR "Protocyte staged output changed before publication for target '${GENERATION_TARGET}'. Existing output was restored.")
     endif()
     file(RENAME "${staged_generation_output}" "${generation_output}" NO_REPLACE RESULT output_publish_result)
-    if(NOT "${output_publish_result}" STREQUAL "0")
+    if("${output_publish_result}" STREQUAL "0")
+        _protocyte_verify_atomic_file_rename(
+            output_publish_consumed_source
+            "${staged_generation_output}"
+            "${generation_output}"
+        )
+    endif()
+    if(
+        NOT "${output_publish_result}" STREQUAL "0"
+        OR NOT output_publish_consumed_source
+    )
         _protocyte_recover_generation_transaction(recovered_generation_transaction)
         if(recovered_generation_transaction)
             _protocyte_discard_generation_staging()
@@ -1057,43 +1107,18 @@ if(NOT "${transaction_complete_result}" STREQUAL "0")
         "'${GENERATION_TARGET}': ${transaction_complete_result}."
     )
 endif()
-# A successful rename must consume the active journal.  Some supported CMake
-# and filesystem combinations have nevertheless reported success while
-# retaining a byte-identical source entry.  Because every output lock and the
-# OUT_DIR lock are still held, it is safe to remove only that verified duplicate
-# before releasing the transaction.
-if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
-    set(residual_active_matches_committed FALSE)
-    if(
-        NOT IS_DIRECTORY "${transaction_active}"
-        AND NOT IS_SYMLINK "${transaction_active}"
-        AND EXISTS "${transaction_committed}"
-        AND NOT IS_DIRECTORY "${transaction_committed}"
-        AND NOT IS_SYMLINK "${transaction_committed}"
+_protocyte_verify_atomic_file_rename(
+    transaction_complete_consumed_source
+    "${transaction_active}"
+    "${transaction_committed}"
+)
+if(NOT transaction_complete_consumed_source)
+    message(
+        FATAL_ERROR
+        "Protocyte found conflicting generation transaction data after committing target "
+        "'${GENERATION_TARGET}'. Generated outputs were published, but transaction cleanup "
+        "requires manual inspection."
     )
-        file(SHA256 "${transaction_active}" residual_active_hash)
-        file(SHA256 "${transaction_committed}" committed_transaction_hash)
-        if(residual_active_hash STREQUAL committed_transaction_hash)
-            set(residual_active_matches_committed TRUE)
-        endif()
-    endif()
-    if(NOT residual_active_matches_committed)
-        message(
-            FATAL_ERROR
-            "Protocyte found conflicting generation transaction data after committing target "
-            "'${GENERATION_TARGET}'. Generated outputs were published, but transaction cleanup "
-            "requires manual inspection."
-        )
-    endif()
-    file(REMOVE "${transaction_active}")
-    if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
-        message(
-            FATAL_ERROR
-            "Protocyte could not remove duplicate active transaction data after committing target "
-            "'${GENERATION_TARGET}'. Generated outputs were published, but transaction cleanup "
-            "requires manual inspection."
-        )
-    endif()
 endif()
 _protocyte_discard_generation_staging()
 file(REMOVE "${transaction_committed}")
