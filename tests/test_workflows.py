@@ -949,20 +949,22 @@ def test_release_publication_is_the_repository_single_writer() -> None:
         if name != "publish-release.yml":
             assert "contents: write" not in workflow
 
-    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "single-writer boundary" in readme
-    assert "cannot make separate GitHub" in readme
-    assert "API calls atomic" in readme
-    assert "prohibit tag updates and deletions" in readme
-    assert "disable administrator bypass" in readme
-    assert "Source changes cannot retroactively disable copies" in readme
-    assert "actions/workflows/release.yml --jq .id" in readme
-    assert "actions/workflows/$legacy_id/disable" in readme
-    assert "deliberately keeps `.github/workflows/release.yml`" in readme
-    assert "always-skipped retirement job" in readme
-    assert "instead of `disabled_manually`" in readme
-    assert "`disabled_manually`" in readme
-    assert "publish-release.yml" in readme
+    release_guide = (
+        REPO_ROOT / "docs" / "wiki" / "Maintainer-Release-Guide.md"
+    ).read_text(encoding="utf-8")
+    assert "single-writer boundary" in release_guide
+    assert "cannot make separate GitHub" in release_guide
+    assert "API calls atomic" in release_guide
+    assert "prohibit tag updates and deletions" in release_guide
+    assert "disable administrator bypass" in release_guide
+    assert "Source changes cannot retroactively disable copies" in release_guide
+    assert "actions/workflows/release.yml --jq .id" in release_guide
+    assert "actions/workflows/$legacy_id/disable" in release_guide
+    assert "deliberately keeps `.github/workflows/release.yml`" in release_guide
+    assert "always-skipped retirement job" in release_guide
+    assert "instead of `disabled_manually`" in release_guide
+    assert "`disabled_manually`" in release_guide
+    assert "publish-release.yml" in release_guide
 
 
 def test_release_gate_tests_the_requested_tag_with_trusted_workflow_code() -> None:

@@ -18,6 +18,7 @@ int main() {
         protocyte::hosted_allocator(),
         protocyte::Limits {},
     };
+
     auto reading = demo::quickstart::Reading<>::create(encode_ctx);
     reading.set_value(42u);
 
@@ -40,6 +41,7 @@ int main() {
         protocyte::hosted_allocator(),
         protocyte::Limits {},
     };
+
     const auto parsed = demo::quickstart::Reading<>::parse(decode_ctx, encoded);
     if (!parsed) {
         return report_error("parse", parsed.error(), 3);

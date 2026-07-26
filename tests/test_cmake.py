@@ -1831,18 +1831,18 @@ def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> 
     )
 
 
-def test_quickstart_tracks_protoc_as_a_generation_dependency() -> None:
+def test_quickstart_delegates_generation_to_the_public_cmake_helper() -> None:
     quickstart = (
         Path(__file__).resolve().parents[1]
         / "examples"
         / "quickstart"
         / "CMakeLists.txt"
     ).read_text(encoding="utf-8")
-    generation_dependencies = quickstart.split("DEPENDS", 1)[1].split("COMMENT", 1)[0]
 
-    assert '"${PROTOC_EXECUTABLE}"' in generation_dependencies
-    assert '"@${PROTOC_RESPONSE_FILE_RELATIVE}"' in quickstart
-    assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in quickstart
+    assert "FetchContent_MakeAvailable(protocyte)" in quickstart
+    assert "protocyte_add_proto_library(" in quickstart
+    assert "add_custom_command(" not in quickstart
+    assert "PROTOC_EXECUTABLE" not in quickstart
 
 
 def test_cmake_protoc_response_file_preserves_utf8_and_literal_arguments(
@@ -1895,6 +1895,7 @@ def test_quickstart_generates_with_source_relative_tool_paths(tmp_path: Path) ->
     build_dir = tmp_path / "build"
     protoc = _find_real_protoc(repo_root)
     plugin = _installed_protocyte_plugin()
+    protobuf_import = _find_protobuf_import_root(repo_root)
     relative_protoc = Path(os.path.relpath(protoc, source_dir)).as_posix()
     relative_plugin = Path(os.path.relpath(plugin, source_dir)).as_posix()
 
@@ -1907,7 +1908,10 @@ def test_quickstart_generates_with_source_relative_tool_paths(tmp_path: Path) ->
             str(source_dir),
             "-B",
             str(build_dir),
-            f"-DPROTOC_EXECUTABLE:FILEPATH={relative_protoc}",
+            f"-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE:PATH={repo_root}",
+            "-DPROTOCYTE_FETCH_PROTOBUF:BOOL=OFF",
+            f"-DProtobuf_PROTOC_EXECUTABLE:FILEPATH={relative_protoc}",
+            f"-DPROTOCYTE_PROTOBUF_IMPORT_DIR:PATH={protobuf_import}",
             f"-DPROTOCYTE_PLUGIN_EXECUTABLE:FILEPATH={relative_plugin}",
         ],
         cwd=tmp_path,
@@ -1919,12 +1923,16 @@ def test_quickstart_generates_with_source_relative_tool_paths(tmp_path: Path) ->
             "--build",
             str(build_dir),
             "--target",
-            "generated/quickstart.protocyte.hpp",
+            "quickstart_proto__protocyte_codegen",
         ],
         check=True,
     )
 
-    assert (build_dir / "generated" / "quickstart.protocyte.hpp").is_file()
+    assert (
+        build_dir
+        / "quickstart_proto_protocyte"
+        / "reading.protocyte.hpp"
+    ).is_file()
 
 
 @pytest.mark.parametrize(

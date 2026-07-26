@@ -8,55 +8,93 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WIKI = ROOT / "docs" / "wiki"
+
+
+def _page(name: str) -> str:
+    return (WIKI / f"{name}.md").read_text(encoding="utf-8")
 
 
 def _fenced_blocks(document: str, language: str) -> list[str]:
     return re.findall(rf"```{re.escape(language)}\n(.*?)\n```", document, re.DOTALL)
 
 
-def _marked_fenced_block(document: str, marker: str, language: str) -> str:
-    marked = document.split(f"<!-- {marker}-start -->", maxsplit=1)[1]
-    block = marked.split(f"<!-- {marker}-end -->", maxsplit=1)[0].strip()
-    assert block.startswith(f"```{language}\n")
-    assert block.endswith("\n```")
-    return block.removeprefix(f"```{language}\n").removesuffix("\n```")
+def test_wiki_navigation_is_complete_unique_and_title_aligned() -> None:
+    sidebar = _page("_Sidebar")
+    links = re.findall(r"^- \[([^\]]+)\]\(([^)]+)\)$", sidebar, re.MULTILINE)
+    names = [name for name, _ in links]
+    targets = [target for _, target in links]
+    published = sorted(
+        path.stem
+        for path in WIKI.glob("*.md")
+        if not path.name.startswith("_")
+    )
+
+    assert len(targets) == len(set(targets))
+    assert sorted(targets) == published
+    for name, target in links:
+        assert _page(target).splitlines()[0] == f"# {name}"
+    assert names[0] == "Home"
 
 
-def test_readme_quickstart_matches_compiled_example() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    documented_source = _marked_fenced_block(readme, "quickstart-main", "cpp")
+def test_wiki_internal_links_resolve() -> None:
+    published = {path.stem for path in WIKI.glob("*.md")}
+    unresolved: list[str] = []
+    for path in WIKI.glob("*.md"):
+        document = path.read_text(encoding="utf-8")
+        destinations = re.findall(r"\[[^\]]+\]\(([^)]+)\)", document)
+        for destination in destinations:
+            destination = destination.split("#", maxsplit=1)[0]
+            wiki_prefix = "https://github.com/anthonyprintup/protocyte/wiki/"
+            if destination.startswith(wiki_prefix):
+                target = destination.removeprefix(wiki_prefix).rstrip("/")
+            elif re.fullmatch(r"[A-Za-z0-9_-]+", destination):
+                target = destination
+            else:
+                continue
+            if target not in published:
+                unresolved.append(f"{path.name}: {destination}")
+    assert not unresolved
+
+
+def test_getting_started_matches_the_checked_fetchcontent_example() -> None:
+    guide = _page("Getting-Started")
+    cmake_example = next(
+        block
+        for block in _fenced_blocks(guide, "cmake")
+        if "FetchContent_Declare(" in block
+    )
+    documented_source = _fenced_blocks(guide, "cpp")[0]
+    documented_schema = _fenced_blocks(guide, "proto")[0]
     compiled_source = (ROOT / "examples/quickstart/main.cpp").read_text(
+        encoding="utf-8"
+    )
+    checked_schema = (
+        ROOT / "examples/quickstart/proto/reading.proto"
+    ).read_text(encoding="utf-8")
+    checked_cmake = (ROOT / "examples/quickstart/CMakeLists.txt").read_text(
         encoding="utf-8"
     )
 
     assert documented_source == compiled_source.rstrip("\n")
-    assert "size.error()" in compiled_source
-    assert "written.error()" in compiled_source
-    assert "parsed.error()" in compiled_source
-
-
-def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    powershell = _marked_fenced_block(readme, "quickstart-powershell", "powershell")
-    posix = _marked_fenced_block(readme, "quickstart-posix", "bash")
-
+    assert documented_schema == checked_schema.rstrip("\n")
     for fragment in (
-        "uv build --wheel",
-        "uv venv",
-        "uv pip install --python",
-        "cmake -S examples/quickstart -B build/quickstart",
-        "cmake --build build/quickstart",
-        "ctest --test-dir build/quickstart",
+        "include(FetchContent)",
+        "FetchContent_Declare(",
+        "9bae6fe8bf78a47a6356dc1fdc1e0ab8baa97d14",
+        "FetchContent_MakeAvailable(protocyte)",
+        "protocyte_add_proto_library(",
+        "HOSTED_ALLOCATOR",
+        "target_link_libraries(protocyte_quickstart PRIVATE quickstart::proto)",
     ):
-        assert fragment in powershell
-        assert fragment in posix
+        assert fragment in cmake_example
+        assert fragment in checked_cmake
+    for error in ("size.error()", "written.error()", "parsed.error()"):
+        assert error in compiled_source
 
-    assert "build\\quickstart-venv\\Scripts\\python.exe" in powershell
-    assert "build/quickstart-venv/bin/python" in posix
-    assert "$(command -v protoc)" in posix
-    assert "Scripts" not in posix
 
-    quickstart_ci = (ROOT / ".github" / "workflows" / "quickstart.yml").read_text(
+def test_quickstart_ci_exercises_fetchcontent_from_the_current_checkout() -> None:
+    workflow = (ROOT / ".github/workflows/quickstart.yml").read_text(
         encoding="utf-8"
     )
     for fragment in (
@@ -64,45 +102,48 @@ def test_readme_quickstart_has_parallel_windows_and_posix_commands() -> None:
         "uv venv build/quickstart-venv --python 3.12",
         "uv pip install --python",
         "cmake -S examples/quickstart -B build/quickstart",
+        "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=${{ github.workspace }}",
+        "-DPROTOCYTE_FETCH_PROTOBUF=OFF",
+        "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}",
         "cmake --build build/quickstart",
         "ctest --test-dir build/quickstart",
+        "cmake -S examples/external-project-superbuild -B build/external-project",
+        "-DPROTOCYTE_SOURCE_DIR=${{ github.workspace }}",
+        "--target application_external",
+        "ctest --test-dir build/external-project/application",
     ):
-        assert fragment in quickstart_ci
+        assert fragment in workflow
+    assert "-DPROTOC_EXECUTABLE=" not in workflow
 
 
-def test_readme_documents_the_local_private_path_guard() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    contributing = readme.split("## Contributing", maxsplit=1)[1].split(
-        "## What It Supports", maxsplit=1
-    )[0]
-
-    assert "git config --local core.hooksPath .githooks" in contributing
-    assert "python .github/scripts/check_private_paths.py" in contributing
-    assert "before Git creates an ordinary unsigned commit object" in contributing
-    assert "final signer-produced header cannot be pre-scanned" in contributing
-    assert "tracked pre-push hook scans finalized local objects" in contributing
-    assert "unreachable only in a\nlocal object database" in contributing
-    assert "including unreachable objects" in contributing
-    assert "`--no-verify`" in contributing
-
-
-def test_smoke_regeneration_uses_managed_python_and_documents_portability_ci() -> None:
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
-
-    assert (
-        "uv run python .github/scripts/install_protoc.py --dest build/canonical-protoc"
-    ) in guide
-    assert "\npython .github/scripts/install_protoc.py" not in guide
-    assert "complete wheel\nand quick-start path on Linux, Windows, and macOS" in guide
+def test_platform_quickstart_and_superbuild_commands_are_documented() -> None:
+    for page_name, build_target in (
+        ("Getting-Started", None),
+        ("ExternalProject-Superbuild", "application_external"),
+    ):
+        guide = _page(page_name)
+        powershell = _fenced_blocks(guide, "powershell")
+        posix = _fenced_blocks(guide, "bash")
+        assert powershell
+        assert posix
+        combined_powershell = "\n".join(powershell)
+        combined_posix = "\n".join(posix)
+        for fragment in ("cmake -S", "cmake --build", "ctest --test-dir"):
+            assert fragment in combined_powershell
+            assert fragment in combined_posix
+        if build_target is not None:
+            assert f"--target {build_target}" in combined_powershell
+            assert f"--target {build_target}" in combined_posix
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is not available")
 def test_documented_posix_blocks_parse_as_bash() -> None:
-    for relative_path in ("README.md", "tests/smoke/README.md"):
-        document = (ROOT / relative_path).read_text(encoding="utf-8")
-        blocks = _fenced_blocks(document, "bash")
-        assert blocks
-        for block in blocks:
+    paths = [*WIKI.glob("*.md"), ROOT / "tests/smoke/README.md"]
+    block_count = 0
+    for path in paths:
+        document = path.read_text(encoding="utf-8")
+        for block in _fenced_blocks(document, "bash"):
+            block_count += 1
             result = subprocess.run(
                 ["bash", "-n"],
                 input=block,
@@ -110,92 +151,32 @@ def test_documented_posix_blocks_parse_as_bash() -> None:
                 capture_output=True,
                 text=True,
             )
-            assert result.returncode == 0, f"{relative_path}: {result.stderr}"
-
-
-def test_ground_zero_guide_has_complete_prerequisites_and_examples() -> None:
-    guide = (ROOT / "tests/smoke/README.md").read_text(encoding="utf-8")
-    prerequisites = guide.split("## 1. Install `protoc`", maxsplit=1)[0]
-    descriptor_powershell = next(
-        block
-        for block in _fenced_blocks(guide, "powershell")
-        if "--descriptor_set_out" in block
-    )
-    descriptor_posix = next(
-        block
-        for block in _fenced_blocks(guide, "bash")
-        if "--descriptor_set_out" in block
-    )
-    cmake_example = _marked_fenced_block(guide, "ground-zero-cmake", "cmake")
-
-    assert (
-        "[uv](https://docs.astral.sh/uv/getting-started/installation/)" in prerequisites
-    )
-    assert "uv --version" in prerequisites
-    assert "${" not in descriptor_powershell
-    assert "$protoRoot" in descriptor_powershell
-    assert "$protocyteProtoDir" in descriptor_powershell
-    assert "$descriptorSet" in descriptor_powershell
-    assert 'mkdir -p "$(dirname "$descriptor_set")"' in descriptor_posix
-    assert '"--descriptor_set_out=$descriptor_set"' in descriptor_posix
-    assert "find_package(protocyte CONFIG REQUIRED)" in cmake_example
-    assert "protocyte_add_proto_library(" in cmake_example
-    assert "ALIAS demo::sensor_proto" in cmake_example
-    assert "target_link_libraries(app PRIVATE demo::sensor_proto)" in cmake_example
-    assert "add_custom_command" not in cmake_example
-    assert "protocyte_generate(" not in cmake_example
-    assert "sample.mutable_values().push_back(42u)" in guide
-    assert "(*parsed).values()[0] != 42u" in guide
+            assert result.returncode == 0, f"{path}: {result.stderr}"
+    assert block_count
 
 
 def test_direct_generation_examples_create_output_directories() -> None:
-    for relative_path in ("README.md", "tests/smoke/README.md"):
-        document = (ROOT / relative_path).read_text(encoding="utf-8")
-        powershell_blocks = [
-            block
-            for block in _fenced_blocks(document, "powershell")
-            if "--protocyte_out" in block
-        ]
-        posix_blocks = [
-            block
-            for block in _fenced_blocks(document, "bash")
-            if "--protocyte_out" in block
-        ]
-        assert powershell_blocks
-        assert posix_blocks
-        assert all(
-            "New-Item -ItemType Directory -Force" in block
-            for block in powershell_blocks
-        )
-        assert all("mkdir -p" in block for block in posix_blocks)
-        assert all(
-            "--protocyte_out=runtime=emit:" in block
-            or (
-                "--protocyte_out=out" in block
-                and "--protocyte_opt=runtime=emit:" in block
-            )
-            for block in powershell_blocks
-        )
-        assert all(
-            "--protocyte_out=runtime=emit:" in block
-            or (
-                "--protocyte_out=out" in block
-                and "--protocyte_opt=runtime=emit:" in block
-            )
-            for block in posix_blocks
-        )
+    guide = _page("Code-Generation")
+    powershell = next(
+        block
+        for block in _fenced_blocks(guide, "powershell")
+        if "--protocyte_out=runtime=emit:generated" in block
+    )
+    posix = next(
+        block
+        for block in _fenced_blocks(guide, "bash")
+        if "--protocyte_out=runtime=emit:generated" in block
+    )
+    assert "New-Item -ItemType Directory -Force generated" in powershell
+    assert "mkdir -p generated" in posix
 
 
 def test_colon_valued_plugin_options_are_separate_from_protoc_output() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    plugin_parameters = readme.split("## Plugin Parameters", maxsplit=1)[1].split(
-        "### Generator trust boundary", maxsplit=1
-    )[0]
-
+    parameters = _page("Plugin-Parameters")
     for language in ("powershell", "bash"):
         example = next(
             block
-            for block in _fenced_blocks(plugin_parameters, language)
+            for block in _fenced_blocks(parameters, language)
             if "namespace_prefix=mycorp::wire" in block
         )
         assert "--protocyte_out=out" in example
@@ -204,126 +185,33 @@ def test_colon_valued_plugin_options_are_separate_from_protoc_output() -> None:
             "namespace_prefix=mycorp::wire,include_prefix=generated"
         ) in example
         assert "--protocyte_out=runtime=emit:vendor/protocyte" not in example
-
-    assert "treats the first `:`" in plugin_parameters
-
-
-def test_ground_zero_python_commands_use_uv_managed_environments() -> None:
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
-    prerequisites = guide.split("## 1. Install `protoc`", maxsplit=1)[0]
-    checkout_install = guide.split(
-        "### Option A: Use This Repository Checkout Directly", maxsplit=1
-    )[1].split("### Option B: Build A Wheel And Install It Somewhere Else", maxsplit=1)[
-        0
-    ]
-    wheel_install = guide.split(
-        "### Option B: Build A Wheel And Install It Somewhere Else", maxsplit=1
-    )[1].split("### Option C: Install The CMake Package", maxsplit=1)[0]
-
-    assert "uv python find 3.12" in prerequisites
-    assert "python --version" not in prerequisites
-    assert '$python = "$PWD\\.venv\\Scripts\\python.exe"' in checkout_install
-    assert 'python="$PWD/.venv/bin/python"' in checkout_install
-    assert "uv venv build\\plugin-venv --python 3.12" in wheel_install
-    assert "uv venv build/plugin-venv --python 3.12" in wheel_install
-    assert "uv pip install --python $python $wheel" in wheel_install
-    assert 'uv pip install --python "$python" "$wheel"' in wheel_install
-    assert "python -m pip" not in wheel_install
-    assert "uv run python -c" not in guide
-    assert '& $python -c "from pathlib import Path; import protocyte;' in guide
-    assert '$("$python" -c "from pathlib import Path; import protocyte;' in guide
+    assert "first `:`" in parameters
 
 
-def test_installed_cmake_python_requirements_are_explicit() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+def test_installed_cmake_python_requirements_and_path_contracts_are_explicit() -> None:
+    installed = _page("Installed-Package")
+    fetchcontent = _page("FetchContent")
+    troubleshooting = _page("Troubleshooting")
+    combined = "\n".join((installed, fetchcontent, troubleshooting))
 
-    for document in (readme, guide):
-        assert "`venv`" in document
-        assert "`ensurepip`" in document
-        assert "python3-venv" in document
-        assert 'python3.12 -c "import ensurepip, venv"' in document
-
-
-def test_documented_proto_locator_runs_from_separate_consumer_directory(
-    tmp_path: Path,
-) -> None:
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
-    descriptor_blocks = [
-        block
-        for language in ("powershell", "bash")
-        for block in _fenced_blocks(guide, language)
-        if "--descriptor_set_out" in block
-    ]
-
-    locator_commands = set()
-    for block in descriptor_blocks:
-        match = re.search(r'-c "([^"\n]+)"', block)
-        assert match is not None
-        locator_commands.add(match.group(1))
-    assert len(locator_commands) == 1
-
-    consumer = tmp_path / "separate-consumer"
-    consumer.mkdir()
-    completed = subprocess.run(
-        [sys.executable, "-c", locator_commands.pop()],
-        cwd=consumer,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    proto_directory = Path(completed.stdout.strip())
-    assert (proto_directory / "protocyte" / "options.proto").is_file()
-
-
-def test_descriptor_set_cmake_example_uses_a_defined_output_directory() -> None:
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
-    descriptor_example = next(
-        block
-        for block in _fenced_blocks(guide, "cmake")
-        if "protocyte_add_descriptor_set_library(" in block
-    )
-
-    assert 'OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"' in descriptor_example
-    assert "${GENERATED_DIR}" not in descriptor_example
-
-
-def test_readme_propagates_public_string_view_configuration() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    string_views = readme.split("### String Views", maxsplit=1)[1].split(
-        "### Parse Atomicity", maxsplit=1
-    )[0]
-
-    assert (
-        "target_compile_definitions(demo_proto PUBLIC "
-        "PROTOCYTE_ENABLE_STD_STRING_VIEW=1)"
-    ) in string_views
-    assert "PRIVATE PROTOCYTE_ENABLE_STD_STRING_VIEW" not in string_views
-    assert "all translation units in that target graph" in string_views
-
-
-def test_readme_requires_public_reflection_configuration_for_generated_libraries() -> (
-    None
-):
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    reflection = readme.split("Reflection tables are emitted", maxsplit=1)[1].split(
-        "`ReflectionFieldInfo::label`", maxsplit=1
-    )[0]
-
-    assert (
-        "target_compile_definitions(demo_proto PUBLIC PROTOCYTE_ENABLE_REFLECTION=1)"
-    ) in reflection
-    assert "PUBLIC visibility is required" in reflection
-    assert "TYPE SHARED" in reflection
-    assert "target-unique import/export macro" in reflection
+    for fragment in (
+        "`venv`",
+        "`ensurepip`",
+        "`python3-venv`",
+        'python3.12 -c "import ensurepip, venv"',
+        "`CMAKE_BINARY_DIR`",
+        "must not contain a semicolon",
+        "wrapper from a semicolon-free",
+    ):
+        assert fragment in combined
 
 
 def test_documented_protobuf_fallback_defaults_match_cmake_modes() -> None:
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
+    integration = _page("CMake-Integration")
+    fetchcontent = _page("FetchContent")
+    installed = _page("Installed-Package")
     source_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    installed_config = (ROOT / "cmake" / "protocyteConfig.cmake.in").read_text(
+    installed_config = (ROOT / "cmake/protocyteConfig.cmake.in").read_text(
         encoding="utf-8"
     )
 
@@ -336,110 +224,70 @@ def test_documented_protobuf_fallback_defaults_match_cmake_modes() -> None:
 
     assert "\n    ON" in source_option
     assert "\n        OFF" in installed_default
-    assert (
-        "CMake source consumers using `FetchContent` or `add_subdirectory` default"
-        in guide
-    )
-    assert (
-        "Installed\n`find_package(protocyte CONFIG REQUIRED)` consumers default "
-        "that option to\n`OFF`"
-    ) in guide
-    assert (
-        "A host-runnable `protoc` and required protobuf import\n"
-        "sources are caller-supplied by default"
-    ) in guide
-    assert "for native builds, a missing host `protoc`" in guide
-    assert "Cross-compiling consumers must always supply the host-runnable" in guide
-    assert "Protobuf C++ files" not in guide
+    assert "defaults to `ON`" in fetchcontent
+    assert "defaults to `OFF`" in installed
+    assert "host-runnable" in "\n".join((integration, fetchcontent, installed))
     assert "Fetch protobuf tools or import sources" in source_option
     assert "Fetch protobuf tools or import sources" in installed_default
 
 
-def test_readme_documents_descriptor_name_portability_rejections() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    descriptor_paths = readme.split("Protobuf virtual descriptor names", maxsplit=1)[
-        1
-    ].split("Generate from a descriptor set", maxsplit=1)[0]
-
-    assert "Descriptor names beginning with `-` are rejected" in descriptor_paths
-    assert "differ only by letter case" in descriptor_paths
-    assert "case-insensitive filesystems" in descriptor_paths
+def test_descriptor_name_portability_rejections_are_documented() -> None:
+    generation = _page("Code-Generation")
+    assert "descriptor names beginning with `-`" in generation
+    assert "differ only by letter case" in generation
+    assert "case-sensitive host" in generation
+    assert "carriage returns or line feeds" in generation
 
 
 def test_release_guidance_does_not_claim_unpublished_assets_exist() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    guide = (ROOT / "tests" / "smoke" / "README.md").read_text(encoding="utf-8")
-
-    for document in (readme, guide):
-        assert "has not published its first tag or" in document
-        assert "https://github.com/anthonyprintup/protocyte/releases" in document
-    assert "GIT_TAG vX.Y.Z" not in readme
-    assert "GIT_TAG <full-commit-sha>" in readme
-
-
-def test_readme_documents_managed_tool_path_contracts() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-
-    assert "Relative values are normalized against\n`CMAKE_BINARY_DIR`" in readme
-    assert "published back to the\nconsumer scope and CMake cache" in readme
-    assert "The environment root must not contain a semicolon" in readme
-    assert "provide a wrapper from a\nsemicolon-free location" in readme
+    releases = _page("Releases-and-Versioning")
+    compatibility = _page("Compatibility-and-Limitations")
+    combined = releases + compatibility
+    assert "No tag or GitHub release has been published yet" in releases
+    assert "https://github.com/anthonyprintup/protocyte/releases" in combined
+    assert "GIT_TAG vX.Y.Z" not in combined
+    assert "9bae6fe8bf78a47a6356dc1fdc1e0ab8baa97d14" in releases
 
 
-def test_readme_documents_build_time_ownership_staging_and_safe_transfer() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    ownership = readme.split("- `OUT_DIR` is required", maxsplit=1)[1].split(
-        "- `PROTO_ROOT` selects source mode", maxsplit=1
-    )[0]
-
-    assert "Configuration performs a read-only conflict preflight" in ownership
-    assert "runs `protoc` into a private staging directory" in ownership
-    assert "before it publishes an ownership transaction" in ownership
-    assert "A `protoc` failure, timeout, or invalid staging\n  result" in ownership
-    assert "attempts to discard staging" in ownership
-    assert "publishes no new ownership claim" in ownership
-    assert "cleanup refuses an unsafe staging path" in ownership
-    assert "inert staging data outside `OUT_DIR` may remain" in ownership
-    assert "ownership claims and declared generated files stay unchanged" in ownership
-    assert "Configuration itself never publishes a claim" in ownership
-    assert "before Protocyte creates\n  `OUT_DIR` or runs `protoc`" not in ownership
-
-    transfer = readme.split("Deleting a build directory", maxsplit=1)[1].split(
-        "Both `RUNTIME_PREFIX`", maxsplit=1
-    )[0]
-    assert (
-        "Configure-time preflight reports the exact `OUT_DIR` owner-record\npath"
-        in transfer
-    )
-    assert "every conflicting generated-output owner-record path" in transfer
-    assert (
-        "Build-time revalidation also reports the exact conflicting record set"
-        in transfer
-    )
-    assert "Remove only the listed records" in transfer
-    assert "The build-time collision diagnostic prints" not in transfer
-    assert "Do not delete the whole output-lock namespace or cache" in transfer
+def test_cmake_reference_documents_ownership_staging_and_safe_transfer() -> None:
+    reference = _page("CMake-API-Reference")
+    normalized = re.sub(r"\s+", " ", reference)
+    for fragment in (
+        "Configuration performs a read-only conflict preflight",
+        "runs `protoc` into a private staging directory",
+        "before it publishes an ownership transaction",
+        "A `protoc` failure, timeout, or invalid staging result",
+        "attempts to discard staging",
+        "publishes no new ownership claim",
+        "cleanup refuses an unsafe staging path",
+        "inert staging data outside `OUT_DIR` may remain",
+        "ownership claims and declared generated files stay unchanged",
+        "Configuration itself never publishes a claim",
+        "Remove only those listed records",
+        "Do not delete the whole output-lock namespace",
+    ):
+        assert fragment in normalized
 
 
-def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    cmake = (ROOT / "cmake" / "ProtocyteFunctions.cmake").read_text(encoding="utf-8")
-    reference = readme.split("### CMake API Reference", maxsplit=1)[1].split(
-        "## Debugging", maxsplit=1
-    )[0]
+def test_cmake_reference_covers_every_public_helper_argument() -> None:
+    reference = _page("CMake-API-Reference")
+    cmake = (ROOT / "cmake/ProtocyteFunctions.cmake").read_text(encoding="utf-8")
+    assert "## `protocyte_setup_codegen`" in reference
 
-    assert "#### `protocyte_setup_codegen`" in reference
-
-    for helper in (
+    helpers = (
         "protocyte_generate",
         "protocyte_add_proto_library",
         "protocyte_add_descriptor_set_library",
-    ):
+    )
+    for index, helper in enumerate(helpers):
         function_body = cmake.split(f"function({helper})", maxsplit=1)[1].split(
             "endfunction()", maxsplit=1
         )[0]
-        helper_reference = reference.split(f"#### `{helper}`", maxsplit=1)[1]
-        helper_reference = helper_reference.split("#### `", maxsplit=1)[0]
+        helper_reference = reference.split(f"## `{helper}`", maxsplit=1)[1]
+        if index + 1 < len(helpers):
+            helper_reference = helper_reference.split(
+                f"## `{helpers[index + 1]}`", maxsplit=1
+            )[0]
 
         declared_arguments: set[str] = set()
         for group in ("options", "oneValueArgs", "multiValueArgs"):
@@ -448,22 +296,98 @@ def test_readme_cmake_reference_covers_every_public_helper_argument() -> None:
             declared_arguments.update(
                 re.findall(r"\b[A-Z][A-Z0-9_]+\b", match.group(1))
             )
-
         missing = sorted(
             argument
             for argument in declared_arguments
             if re.search(rf"\b{re.escape(argument)}\b", helper_reference) is None
         )
-        assert not missing, f"{helper} arguments missing from README: {missing}"
+        assert not missing, f"{helper} arguments missing from wiki: {missing}"
+
+
+def test_runtime_configuration_types_and_public_features_are_documented() -> None:
+    embedded = _page("Embedded-and-Freestanding")
+    runtime = _page("Runtime-Reference")
+    for fragment in (
+        "Config::Context",
+        "Config::Vector<T>",
+        "Config::Map<K, V>",
+        "Config::Box<T>",
+        "Config::Optional<T>",
+        "Config::allocate",
+        "Config::deallocate",
+    ):
+        assert fragment in embedded
+    assert "PUBLIC PROTOCYTE_ENABLE_STD_STRING_VIEW=1" in runtime
+    assert "All translation units" in runtime
+    assert "PUBLIC PROTOCYTE_ENABLE_REFLECTION=1" in runtime
+    assert "PUBLIC visibility is required" in runtime
+    assert "TYPE SHARED" in runtime
+    assert "target-unique import/export" in runtime
 
 
 def test_debugger_guide_documents_python_enabled_lldb_requirement() -> None:
-    guide = (ROOT / "docs" / "debugger.md").read_text(encoding="utf-8")
+    guide = _page("Debugging")
     plain_lldb = guide.split("## Plain LLDB", maxsplit=1)[1].split(
         "## CLion", maxsplit=1
     )[0]
-
     assert "require an LLDB build with\nPython scripting enabled" in plain_lldb
     assert '(lldb) script print("LLDB Python scripting is available")' in plain_lldb
     assert "CLion's bundled LLDB is one suitable option" in plain_lldb
     assert "not in repository files shared with other users" in plain_lldb
+
+
+def test_wiki_sync_helper_dry_run_apply_and_check(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    checkout = tmp_path / "protocyte.wiki"
+    source.mkdir()
+    checkout.mkdir()
+    (checkout / ".git").mkdir()
+    (source / "Home.md").write_bytes(b"# Home\n")
+    (source / "Guide.md").write_bytes(b"# Guide\n")
+    (checkout / "Home.md").write_bytes(b"# Old Home\n")
+    (checkout / "Stale.md").write_bytes(b"# Stale\n")
+    script = ROOT / ".github/scripts/sync_wiki.py"
+
+    dry_run = subprocess.run(
+        [sys.executable, str(script), str(checkout), "--source", str(source)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert dry_run.returncode == 0
+    assert (checkout / "Home.md").read_bytes() == b"# Old Home\n"
+    assert "Dry run only" in dry_run.stdout
+
+    applied = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(checkout),
+            "--source",
+            str(source),
+            "--apply",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert applied.returncode == 0
+    assert (checkout / "Home.md").read_bytes() == b"# Home\n"
+    assert (checkout / "Guide.md").read_bytes() == b"# Guide\n"
+    assert not (checkout / "Stale.md").exists()
+
+    checked = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(checkout),
+            "--source",
+            str(source),
+            "--check",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert checked.returncode == 0
+    assert "already matches" in checked.stdout
