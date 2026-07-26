@@ -322,7 +322,23 @@ function(
     if(NOT observed_transaction_content STREQUAL transaction_content)
         return()
     endif()
-    file(RENAME "${transaction_staging}" "${transaction_active}" NO_REPLACE RESULT transaction_write_result)
+    # Every declared output lock and the OUT_DIR ownership lock are held by
+    # this process. An existing journal is therefore static corruption, while
+    # a same-privilege actor racing this check is outside the execution model.
+    # Check explicitly, then use the portable atomic rename path; CMake's
+    # NO_REPLACE result is not reliable on every supported POSIX filesystem.
+    if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
+        set(
+            ${out_error}
+            "an active journal already exists after recovery"
+            PARENT_SCOPE
+        )
+        return()
+    endif()
+    file(
+        RENAME "${transaction_staging}" "${transaction_active}"
+        RESULT transaction_write_result
+    )
     if("${transaction_write_result}" STREQUAL "0")
         set(${out_written} TRUE PARENT_SCOPE)
         set(${out_error} "" PARENT_SCOPE)

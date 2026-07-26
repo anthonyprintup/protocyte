@@ -165,6 +165,18 @@ def test_transaction_state_metadata_is_private_and_redacts_paths(
             marker_mode = stat.S_IMODE(marker_path.stat().st_mode)
             owner._lease._file.seek(0)
             assert owner._lease._file.read() == b"\0"
+            if os.name != "nt":
+                journal_paths = list(state_directory.rglob("*.state"))
+                assert journal_paths
+                assert all(
+                    stat.S_IMODE(path.stat().st_mode) == 0o600
+                    for path in journal_paths
+                )
+                lock_paths = list(state_directory.rglob("*.lock"))
+                assert lock_paths
+                assert all(
+                    stat.S_IMODE(path.stat().st_mode) == 0o600 for path in lock_paths
+                )
         finally:
             owner.cleanup(install_protoc._remove_path)
 
@@ -220,12 +232,6 @@ def test_transaction_state_metadata_is_private_and_redacts_paths(
     if os.name != "nt":
         assert stat.S_IMODE(state_directory.stat().st_mode) == 0o700
         assert marker_mode == 0o600
-        journal_paths = list(state_directory.rglob("*.state"))
-        assert journal_paths
-        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in journal_paths)
-        lock_paths = list(state_directory.rglob("*.lock"))
-        assert lock_paths
-        assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in lock_paths)
 
 
 def test_transaction_state_directory_rejects_links(
@@ -613,8 +619,18 @@ def test_transaction_state_directory_rejects_wrong_owner(
         lambda: owner_id + 1,
     )
 
-    with pytest.raises(RuntimeError, match="not owned by the current user"):
-        owned_transactions._state_directory()
+    descriptor = os.open(
+        state_directory,
+        owned_transactions._posix_directory_open_flags(),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="not owned by the current user"):
+            owned_transactions._posix_validate_private_state_directory(
+                descriptor,
+                state_directory,
+            )
+    finally:
+        os.close(descriptor)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission check")

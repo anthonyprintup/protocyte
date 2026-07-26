@@ -2465,12 +2465,18 @@ def _posix_create_owned_directory(path: Path) -> int:
         )
         _owned_sibling_creation_phase("after_staging_mkdir", stage_path)
         stage = _posix_open_child_directory(parent, stage_name, parent_device)
+        opened_stage_identity = os.fstat(stage)
+        if not _same_posix_identity(stage_identity, opened_stage_identity):
+            raise RuntimeError(
+                "POSIX staging directory changed identity before it was opened; "
+                f"refusing owned sibling creation: {stage_path}"
+            )
         opened_stage = _validate_posix_staging_directory(
             stage,
             stage_path,
             parent_device,
         )
-        if not _same_posix_identity(stage_identity, opened_stage):
+        if not _same_posix_identity(opened_stage_identity, opened_stage):
             raise RuntimeError(
                 "POSIX staging directory changed identity before it was opened; "
                 f"refusing owned sibling creation: {stage_path}"
@@ -2487,12 +2493,18 @@ def _posix_create_owned_directory(path: Path) -> int:
             stage_path / child_name,
         )
         child = _posix_open_child_directory(stage, child_name, parent_device)
+        opened_child_identity = os.fstat(child)
+        if not _same_posix_identity(child_identity, opened_child_identity):
+            raise RuntimeError(
+                "POSIX staged child changed identity before it was opened; "
+                f"refusing owned sibling creation: {stage_path / child_name}"
+            )
         opened_child = _validate_posix_staging_directory(
             child,
             stage_path / child_name,
             parent_device,
         )
-        if not _same_posix_identity(child_identity, opened_child):
+        if not _same_posix_identity(opened_child_identity, opened_child):
             raise RuntimeError(
                 "POSIX staged child changed identity before it was opened; "
                 f"refusing owned sibling creation: {stage_path / child_name}"
@@ -2856,6 +2868,7 @@ class _OwnedDirectoryHandle:
             ):
                 raise _unowned_sibling_error(path)
             os.rmdir(path.name, dir_fd=parent)
+            _owned_namespace_phase("before_remove_parent_fsync", path.parent)
             os.fsync(parent)
             _owned_namespace_phase("after_remove_parent_fsync", path.parent)
         finally:
