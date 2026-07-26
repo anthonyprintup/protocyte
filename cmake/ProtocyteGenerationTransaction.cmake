@@ -271,6 +271,19 @@ function(
         OUTPUT_DIRECTORY
         OUTPUT_VARIABLE normalized_transaction_output_directory
     )
+    string(
+        REGEX REPLACE
+        "[/\\\\]+$"
+        ""
+        transaction_output_prefix
+        "${normalized_transaction_output_directory}"
+    )
+    if(transaction_output_prefix STREQUAL "")
+        set(transaction_output_prefix "/")
+    else()
+        string(APPEND transaction_output_prefix "/")
+    endif()
+    string(LENGTH "${transaction_output_prefix}" transaction_output_prefix_length)
     if(generation_output_count GREATER 0)
         math(EXPR last_generation_output_index "${generation_output_count} - 1")
         foreach(generation_output_index RANGE 0 ${last_generation_output_index})
@@ -297,11 +310,35 @@ function(
                 return()
             endif()
             cmake_path(
-                RELATIVE_PATH
+                NORMAL_PATH
                 generation_output
-                BASE_DIRECTORY "${normalized_transaction_output_directory}"
-                OUTPUT_VARIABLE generation_output_relative_path
+                OUTPUT_VARIABLE normalized_generation_output
             )
+            string(LENGTH "${normalized_generation_output}" generation_output_length)
+            set(generation_output_relative_path "")
+            if(generation_output_length GREATER transaction_output_prefix_length)
+                string(
+                    SUBSTRING
+                    "${normalized_generation_output}"
+                    0
+                    ${transaction_output_prefix_length}
+                    observed_output_prefix
+                )
+                set(comparable_output_prefix "${transaction_output_prefix}")
+                if(CMAKE_HOST_WIN32)
+                    string(TOLOWER "${observed_output_prefix}" observed_output_prefix)
+                    string(TOLOWER "${comparable_output_prefix}" comparable_output_prefix)
+                endif()
+                if(observed_output_prefix STREQUAL comparable_output_prefix)
+                    string(
+                        SUBSTRING
+                        "${normalized_generation_output}"
+                        ${transaction_output_prefix_length}
+                        -1
+                        generation_output_relative_path
+                    )
+                endif()
+            endif()
             if(
                 generation_output_relative_path STREQUAL ""
                 OR generation_output_relative_path MATCHES "^\\.\\.(\\\\|/|$)"
