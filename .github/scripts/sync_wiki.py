@@ -61,7 +61,7 @@ def _validate_directory(path: Path, description: str) -> Path:
 
 def _read_markdown(directory: Path) -> dict[str, bytes]:
     return {
-        path.name: path.read_bytes()
+        path.name: path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         for path in sorted(directory.glob("*.md"), key=lambda item: item.name)
         if path.is_file()
     }
