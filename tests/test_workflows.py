@@ -275,6 +275,17 @@ def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
     )
 
 
+def test_fetchcontent_install_gate_counts_a_final_unterminated_manifest_entry() -> None:
+    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    fetchcontent_job = _job_named(ci, "fetchcontent-linux")
+    install_gate = _steps_by_name(fetchcontent_job)[
+        "Verify FetchContent install isolation"
+    ]
+
+    assert "awk 'END { print NR }'" in install_gate
+    assert "wc -l" not in install_gate
+
+
 def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"

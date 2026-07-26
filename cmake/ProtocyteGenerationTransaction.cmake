@@ -197,6 +197,7 @@ endfunction()
 function(
     _protocyte_write_generation_transaction
     out_written
+    out_error
     owner_keys_var
     owner_transaction_id
     initial_states_var
@@ -204,6 +205,11 @@ function(
     staged_hashes_var
 )
     set(${out_written} FALSE PARENT_SCOPE)
+    set(
+        ${out_error}
+        "transaction content or filesystem validation failed"
+        PARENT_SCOPE
+    )
     list(LENGTH generation_outputs generation_output_count)
     list(LENGTH ${owner_keys_var} owner_key_count)
     list(LENGTH ${initial_states_var} initial_state_count)
@@ -319,6 +325,13 @@ function(
     file(RENAME "${transaction_staging}" "${transaction_active}" NO_REPLACE RESULT transaction_write_result)
     if("${transaction_write_result}" STREQUAL "0")
         set(${out_written} TRUE PARENT_SCOPE)
+        set(${out_error} "" PARENT_SCOPE)
+    else()
+        set(
+            ${out_error}
+            "atomic journal publication failed: ${transaction_write_result}"
+            PARENT_SCOPE
+        )
     endif()
 endfunction()
 

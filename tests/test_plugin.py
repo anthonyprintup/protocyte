@@ -4352,7 +4352,11 @@ def test_formatter_worker_start_failure_cleans_up_process_and_pipes(
 def test_formatter_popen_kwargs_support_posix_process_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(protocyte_cpp.os, "name", "posix")
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_is_windows_formatter_platform",
+        lambda: False,
+    )
 
     assert protocyte_cpp._formatter_popen_kwargs() == {"start_new_session": True}
     assert protocyte_cpp._formatter_popen_kwargs(7) == {
@@ -4448,7 +4452,11 @@ def test_formatter_supervisor_reports_exact_formatter_status(
 def test_formatter_popen_kwargs_support_windows_process_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(protocyte_cpp.os, "name", "nt")
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_is_windows_formatter_platform",
+        lambda: True,
+    )
     monkeypatch.setattr(
         protocyte_cpp.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False
     )
@@ -4471,7 +4479,17 @@ def test_windows_formatter_is_assigned_while_suspended_before_resume(
 
     process = FakeProcess()
     job = FakeJob()
-    monkeypatch.setattr(protocyte_cpp.os, "name", "nt")
+    monkeypatch.setattr(
+        protocyte_cpp,
+        "_is_windows_formatter_platform",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        protocyte_cpp.subprocess,
+        "CREATE_NEW_PROCESS_GROUP",
+        0x200,
+        raising=False,
+    )
     monkeypatch.setattr(
         protocyte_cpp._WindowsFormatterJob,
         "create",
@@ -4513,7 +4531,6 @@ def test_formatter_termination_kills_posix_process_group(
 ) -> None:
     process = _FormatterProcess()
     killed_groups: list[tuple[int, int]] = []
-    monkeypatch.setattr(protocyte_cpp.os, "name", "posix")
     monkeypatch.setattr(protocyte_cpp.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(
         protocyte_cpp.os,
@@ -4536,7 +4553,6 @@ def test_formatter_termination_kills_windows_process_tree(
 ) -> None:
     process = _FormatterProcess()
     closures = 0
-    monkeypatch.setattr(protocyte_cpp.os, "name", "nt")
 
     class FormatterJob(protocyte_cpp._WindowsFormatterJob):
         def __init__(self) -> None:

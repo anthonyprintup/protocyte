@@ -585,7 +585,7 @@ jobs:
       - name: Verify FetchContent install isolation
         run: |
           test -f tests/fetchcontent/install/share/protocyte-integration/fetchcontent-consumer.txt
-          test "$(wc -l < tests/fetchcontent/build/install_manifest.txt)" -eq 1
+          test "$(awk 'END { print NR }' tests/fetchcontent/build/install_manifest.txt)" -eq 1
           test ! -e tests/fetchcontent/install/include/protocyte
           test ! -e tests/fetchcontent/install/lib/cmake/protocyte
           test ! -e tests/fetchcontent/install/share/protocyte

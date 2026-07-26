@@ -144,6 +144,10 @@ _WINDOWS_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 
 
+def _is_windows_formatter_platform() -> bool:
+    return os.name == "nt"
+
+
 class _WindowsJobBasicLimitInformation(ctypes.Structure):
     _fields_ = [
         ("per_process_user_time_limit", wintypes.LARGE_INTEGER),
@@ -389,7 +393,7 @@ def _resume_windows_formatter_process(process: subprocess.Popen[bytes]) -> None:
 def _formatter_popen_kwargs(
     status_write_fd: int | None = None,
 ) -> dict[str, object]:
-    if os.name == "nt":
+    if _is_windows_formatter_platform():
         return {
             "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
             | _WINDOWS_CREATE_SUSPENDED
@@ -419,7 +423,9 @@ def _start_formatter_process(
     _WindowsFormatterJob | _PosixFormatterGroup,
 ]:
     containment: _WindowsFormatterJob | _PosixFormatterGroup
-    windows_job = _WindowsFormatterJob.create() if os.name == "nt" else None
+    windows_job = (
+        _WindowsFormatterJob.create() if _is_windows_formatter_platform() else None
+    )
     status_read_fd: int | None = None
     status_write_fd: int | None = None
     process: subprocess.Popen[bytes] | None = None

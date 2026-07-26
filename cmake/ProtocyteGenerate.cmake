@@ -743,6 +743,10 @@ if(different_output_owner_markers)
 endif()
 
 file(MAKE_DIRECTORY "${OUTPUT_DIRECTORY}")
+foreach(generation_output IN LISTS generation_outputs)
+    cmake_path(GET generation_output PARENT_PATH generation_output_parent)
+    file(MAKE_DIRECTORY "${generation_output_parent}")
+endforeach()
 _protocyte_validate_generation_paths()
 _protocyte_validate_generation_staging_directory()
 _protocyte_discard_generation_staging()
@@ -895,13 +899,19 @@ if(generation_transaction_owner_keys)
     endif()
 endif()
 _protocyte_write_generation_transaction(
-    generation_transaction_written generation_transaction_owner_keys
+    generation_transaction_written generation_transaction_write_error
+    generation_transaction_owner_keys
     "${generation_owner_transaction_id}" generation_initial_states
     generation_initial_hashes generation_staged_hashes
 )
 if(NOT generation_transaction_written)
     _protocyte_discard_generation_staging()
-    message(FATAL_ERROR "Protocyte could not persist the generation transaction for target '${GENERATION_TARGET}'. No generated output was changed.")
+    message(
+        FATAL_ERROR
+        "Protocyte could not persist the generation transaction for target "
+        "'${GENERATION_TARGET}': ${generation_transaction_write_error}. "
+        "No generated output was changed."
+    )
 endif()
 
 # One complete preflight attests every source, destination, and backup path
