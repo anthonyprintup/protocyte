@@ -469,7 +469,12 @@ def test_release_uploads_handoff_before_isolated_smoke_jobs() -> None:
     assert 'repository_root / "examples" / "quickstart"' in plugin_artifact_test
     assert '"--build",\n        str(quickstart_build)' in plugin_artifact_test
     assert 'str(ctest),\n        "--test-dir"' in plugin_artifact_test
-    assert '"-DPROTOC_EXECUTABLE={protoc}"' in plugin_artifact_test
+    assert (
+        '"-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE={repository_root}"'
+        in plugin_artifact_test
+    )
+    assert '"-DPROTOCYTE_FETCH_PROTOBUF=OFF"' in plugin_artifact_test
+    assert '"-DProtobuf_PROTOC_EXECUTABLE={protoc}"' in plugin_artifact_test
     assert '"-DPROTOCYTE_PLUGIN_EXECUTABLE={plugin}"' in plugin_artifact_test
 
 

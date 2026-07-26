@@ -39,3 +39,14 @@ def test_quickstart_ci_tests_the_checkout_through_fetchcontent() -> None:
         "-DProtobuf_PROTOC_EXECUTABLE=${{ steps.protoc.outputs.protoc }}"
     ) == 6
     assert "-DPROTOC_EXECUTABLE=" not in workflow
+
+
+def test_external_project_rechecks_application_source_dependencies() -> None:
+    superbuild = (
+        ROOT / "examples/external-project-superbuild/CMakeLists.txt"
+    ).read_text(encoding="utf-8")
+    application = superbuild.split(
+        "ExternalProject_Add(\n    application_external", maxsplit=1
+    )[1]
+
+    assert "BUILD_ALWAYS TRUE" in application

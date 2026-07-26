@@ -91,7 +91,7 @@ Avoid a complete outer-message temporary:
 
 ```cpp
 demo::Sample<> output {ctx};
-protocyte::SliceReader reader {encoded, encoded_size};
+protocyte::SliceReader reader {encoded.data(), encoded.size()};
 
 const auto status = demo::Sample<>::parse(reader, output);
 if (!status) {

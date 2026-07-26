@@ -83,6 +83,7 @@ ExternalProject_Add(
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/application"
     BINARY_DIR "${CMAKE_BINARY_DIR}/application"
     DEPENDS protocyte_external
+    BUILD_ALWAYS TRUE
     CMAKE_ARGS
         ${superbuild_config_args}
         "-DCMAKE_PREFIX_PATH:PATH=${PROTOCYTE_PRIVATE_PREFIX}"

@@ -117,6 +117,19 @@ def test_quickstart_ci_exercises_fetchcontent_from_the_current_checkout() -> Non
     assert "-DPROTOC_EXECUTABLE=" not in workflow
 
 
+def test_retained_readme_matches_the_stage_one_quickstart_and_debugger_links() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert '#include "reading.protocyte.hpp"' in readme
+    assert "quickstart.protocyte.hpp" not in readme
+    assert "-DFETCHCONTENT_SOURCE_DIR_PROTOCYTE=" in readme
+    assert "-DProtobuf_PROTOC_EXECUTABLE=" in readme
+    assert "-DPROTOC_EXECUTABLE=" not in readme
+    assert (
+        "https://github.com/anthonyprintup/protocyte/wiki/Debugging" in readme
+    )
+    assert "docs/debugger.md" not in readme
+
+
 def test_platform_quickstart_and_superbuild_commands_are_documented() -> None:
     for page_name, build_target in (
         ("Getting-Started", None),

@@ -80,6 +80,7 @@ ExternalProject_Add(
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/application"
     BINARY_DIR "${CMAKE_BINARY_DIR}/application"
     DEPENDS protocyte_external
+    BUILD_ALWAYS TRUE
     CMAKE_ARGS
         ${superbuild_config_args}
         "-DCMAKE_PREFIX_PATH:PATH=${PROTOCYTE_PRIVATE_PREFIX}"
@@ -89,6 +90,11 @@ ExternalProject_Add(
 ```
 
 The Protocyte project installs into a build-private prefix. The application receives that prefix through its own `CMAKE_PREFIX_PATH`; it does not inherit Protocyte targets or cache entries from the superbuild.
+
+`BUILD_ALWAYS TRUE` lets the application's own build system recheck source
+dependencies on every superbuild invocation. Without it, ExternalProject's
+completed build stamp could hide edits made under the local `application`
+source tree.
 
 The full commit SHA is intentional. Pin a reviewed immutable commit until releases exist, then prefer an immutable release tag.
 

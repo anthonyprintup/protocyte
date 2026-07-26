@@ -45,13 +45,17 @@ the locator command again if you recreate or move the Python environment.
 
 ### Source checkout
 
-This repository includes a project-local [`.lldbinit`](../../.lldbinit) at the repo root. From the repository root, load that file:
+This repository includes a project-local
+[`.lldbinit`](https://github.com/anthonyprintup/protocyte/blob/main/.lldbinit)
+at the repo root. From the repository root, load that file:
 
 ```text
 (lldb) command source .lldbinit
 ```
 
-That init file imports [src/protocyte/debugger/protocyte_lldb.py](../../src/protocyte/debugger/protocyte_lldb.py). If you prefer, import the formatter module directly:
+That init file imports
+[`src/protocyte/debugger/protocyte_lldb.py`](https://github.com/anthonyprintup/protocyte/blob/main/src/protocyte/debugger/protocyte_lldb.py).
+If you prefer, import the formatter module directly:
 
 ```text
 (lldb) command script import src/protocyte/debugger/protocyte_lldb.py
@@ -90,7 +94,12 @@ settings set target.load-cwd-lldbinit true
 
 On Windows with the MSVC toolchain, CLion uses JetBrains' LLDB-based debugger for MSVC. Use a CMake profile that debugs with LLDB, start a debug session, and the variables view should pick up these formatters through the project `.lldbinit`.
 
-The smoke CMake project lives under `tests/smoke`, so this repository also tracks [tests/smoke/.lldbinit](../../tests/smoke/.lldbinit). That file imports the same formatter module with a path relative to the smoke project root and registers the generated-message oneof formatter used by `protocyte_host_smoke`.
+The smoke CMake project lives under `tests/smoke`, so this repository also
+tracks
+[`tests/smoke/.lldbinit`](https://github.com/anthonyprintup/protocyte/blob/main/tests/smoke/.lldbinit).
+That file imports the same formatter module with a path relative to the smoke
+project root and registers the generated-message oneof formatter used by
+`protocyte_host_smoke`.
 
 If CLion starts the debugger from a different working directory, add the same
 import command under **Settings | Build, Execution, Deployment | Debugger |
