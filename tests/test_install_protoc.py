@@ -34,6 +34,12 @@ install_protoc = _load_install_protoc_module()
 owned_transactions = sys.modules[install_protoc.locked_destination.__module__]
 
 
+def test_windows_child_open_access_mask_is_lazy() -> None:
+    assert owned_transactions._windows_open_child_handle.__kwdefaults__ == {
+        "access": None
+    }
+
+
 def _owner_journal_payload(owner: object) -> dict[str, object]:
     return owned_transactions._read_latest_journal_payload(
         owner.marker_path,

@@ -343,6 +343,9 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked --group dev
 
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
       - name: Verify generated-output containment at the CMake floor
         run: >
           uv run --with cmake==3.24.3 pytest -q -m cmake_integration
@@ -377,9 +380,6 @@ jobs:
               throw "Tracked smoke outputs differ from canonical regeneration"
           }
           uv run python .github/scripts/verify_tracked_tree.py tests/smoke/generated
-
-      - name: Set up MSVC developer command prompt
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Verify generated library install and relocation
         env:

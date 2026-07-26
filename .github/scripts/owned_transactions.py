@@ -2617,14 +2617,16 @@ def _windows_open_child_handle(
     name: str,
     recorded_path: Path,
     *,
-    access: int = (
-        _DELETE
-        | _READ_CONTROL
-        | _SYNCHRONIZE
-        | _FILE_LIST_DIRECTORY
-        | _FILE_READ_ATTRIBUTES
-    ),
+    access: int | None = None,
 ) -> object:
+    if access is None:
+        access = (
+            _DELETE
+            | _READ_CONTROL
+            | _SYNCHRONIZE
+            | _FILE_LIST_DIRECTORY
+            | _FILE_READ_ATTRIBUTES
+        )
     name_buffer = ctypes.create_unicode_buffer(name)
     object_name = _WindowsUnicodeString(
         len(name.encode("utf-16-le")),

@@ -8966,16 +8966,7 @@ def test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import() -> N
             f"{_CI_PROTOC_ENV} is not configured with the prebuilt protoc"
         )
 
-    cmake_help = subprocess.run(
-        ["cmake", "--help"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if "Visual Studio 17 2022" not in cmake_help:
-        _visual_studio_requirement_unavailable(
-            "CMake does not provide the Visual Studio 17 2022 generator"
-        )
+    generator = _find_visual_studio_generator()
 
     repo_root = Path(__file__).resolve().parents[1]
     test_root = _create_configured_visual_studio_test_directory()
@@ -9062,7 +9053,7 @@ def test_visual_studio_codegen_builds_noop_and_rebuilds_transitive_import() -> N
         [
             "cmake",
             "-G",
-            "Visual Studio 17 2022",
+            generator,
             "-A",
             "x64",
             "-S",

@@ -252,6 +252,11 @@ def test_checked_smoke_gate_detects_untracked_tree_membership_drift() -> None:
     assert "git diff --exit-code -- tests/smoke/generated" in smoke_job
     assert ".github/scripts/verify_tracked_tree.py tests/smoke/generated" in smoke_job
     assert "--exclude-standard" not in smoke_job
+    assert smoke_job.index(
+        "- name: Set up MSVC developer command prompt"
+    ) < smoke_job.index(
+        "- name: Verify generated-output containment at the CMake floor"
+    )
 
 
 def test_ci_requires_real_visual_studio_incremental_codegen() -> None:
