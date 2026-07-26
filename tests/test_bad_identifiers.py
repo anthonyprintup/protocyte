@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from shutil import which
+import shutil
 import subprocess
 
 import pytest
@@ -15,6 +15,8 @@ from protocyte.plugin import generate_response
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS_ROOT = Path(__file__).with_name("fixtures") / "bad_identifiers"
+CI_PROTOC_ENV = "PROTOCYTE_CI_PROTOC_EXECUTABLE"
+CI_REQUIRE_REAL_PROTOC_TESTS_ENV = "PROTOCYTE_CI_REQUIRE_REAL_PROTOC_TESTS"
 CORPUS_FILES = (
     "types.proto",
     "bad_identifiers.proto",
@@ -30,10 +32,19 @@ CORPUS_FILES = (
 
 
 def _protoc() -> str:
-    executable = which("protoc")
-    if executable is None:
-        pytest.skip("protoc is required for the upstream bad-identifier corpus")
-    return executable
+    if configured := os.environ.get(CI_PROTOC_ENV):
+        executable = Path(configured).resolve()
+        if not executable.is_file():
+            pytest.fail(f"{CI_PROTOC_ENV} does not name a file: {executable}")
+        return str(executable)
+
+    if executable := shutil.which("protoc"):
+        return executable
+
+    message = "protoc is required for the upstream bad-identifier corpus"
+    if os.environ.get(CI_REQUIRE_REAL_PROTOC_TESTS_ENV) == "1":
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 def _descriptor_request(
@@ -78,7 +89,7 @@ def _generated_files(
 
 
 def _compile_and_run(tmp_path: Path, source: str) -> None:
-    compiler = which("clang++") or which("g++") or which("c++")
+    compiler = shutil.which("clang++") or shutil.which("g++") or shutil.which("c++")
     if compiler is None:
         pytest.skip("a C++20 compiler is required for bad-identifier validation")
     main = tmp_path / "main.cpp"
@@ -125,6 +136,60 @@ def test_stock_cpp_generator_accepts_bad_identifier_corpus(tmp_path: Path) -> No
         check=True,
         cwd=CORPUS_ROOT,
     )
+
+
+def test_protoc_prefers_configured_ci_executable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured = tmp_path / "configured protoc"
+    configured.touch()
+    monkeypatch.setenv(CI_PROTOC_ENV, str(configured))
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: pytest.fail(f"unexpected PATH lookup for {name}"),
+    )
+
+    assert _protoc() == str(configured.resolve())
+
+
+def test_protoc_rejects_missing_configured_ci_executable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured = tmp_path / "missing protoc"
+    monkeypatch.setenv(CI_PROTOC_ENV, str(configured))
+
+    with pytest.raises(pytest.fail.Exception, match="does not name a file"):
+        _protoc()
+
+
+def test_protoc_falls_back_to_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(CI_PROTOC_ENV, raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/tools/{name}")
+
+    assert _protoc() == "/tools/protoc"
+
+
+def test_protoc_absence_is_a_failure_when_ci_requires_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CI_PROTOC_ENV, raising=False)
+    monkeypatch.setenv(CI_REQUIRE_REAL_PROTOC_TESTS_ENV, "1")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    with pytest.raises(pytest.fail.Exception, match="protoc is required"):
+        _protoc()
+
+
+def test_protoc_absence_skips_when_ci_does_not_require_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CI_PROTOC_ENV, raising=False)
+    monkeypatch.delenv(CI_REQUIRE_REAL_PROTOC_TESTS_ENV, raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    with pytest.raises(pytest.skip.Exception, match="protoc is required"):
+        _protoc()
 
 
 def test_bad_identifier_corpus_builds_model_and_generates(tmp_path: Path) -> None:
