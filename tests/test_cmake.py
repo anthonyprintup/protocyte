@@ -10717,6 +10717,20 @@ def _write_fault_instrumented_generation_script(script_dir: Path) -> Path:
         publish_abort_anchor, publish_abort_instrumentation
     )
 
+    residual_journal_anchor = (
+        "# A successful rename must consume the active journal.  Some supported CMake\n"
+    )
+    residual_journal_instrumentation = (
+        "if(DEFINED PROTOCYTE_TEST_DUPLICATE_ACTIVE_AFTER_COMMIT)\n"
+        '    file(COPY_FILE "${transaction_committed}" "${transaction_active}")\n'
+        "endif()\n"
+        + residual_journal_anchor
+    )
+    assert generation_source.count(residual_journal_anchor) == 1
+    generation_source = generation_source.replace(
+        residual_journal_anchor, residual_journal_instrumentation
+    )
+
     cleanup_abort_anchor = (
         "endif()\n"
         "_protocyte_discard_generation_staging()\n"
@@ -11571,6 +11585,28 @@ def test_output_publication_failure_restores_prior_outputs_and_releases_ownershi
         _build_tree_owner_hash(retry_build_dir)
     )
     assert _out_dir_snapshot(output_directory) != previous_outputs
+
+
+def test_generation_commit_removes_duplicate_active_journal(tmp_path: Path) -> None:
+    source_dir = tmp_path / "project"
+    build_dir = tmp_path / "build"
+    output_directory = tmp_path / "generated"
+    _write_out_dir_owner_project(source_dir, output_directory)
+    instrumented_script = _write_fault_instrumented_generation_script(
+        tmp_path / "instrumented-cmake"
+    )
+
+    generated = _run_direct_owner_generation(
+        source_dir,
+        build_dir,
+        output_directory,
+        instrumented_script,
+        "-DPROTOCYTE_TEST_DUPLICATE_ACTIVE_AFTER_COMMIT=TRUE",
+    )
+
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    assert not list((tmp_path / "output-locks").glob("*.active"))
+    assert not list((tmp_path / "output-locks").glob("*.committed"))
 
 
 @pytest.mark.parametrize(

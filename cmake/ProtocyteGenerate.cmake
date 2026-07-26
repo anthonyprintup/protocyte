@@ -1057,6 +1057,44 @@ if(NOT "${transaction_complete_result}" STREQUAL "0")
         "'${GENERATION_TARGET}': ${transaction_complete_result}."
     )
 endif()
+# A successful rename must consume the active journal.  Some supported CMake
+# and filesystem combinations have nevertheless reported success while
+# retaining a byte-identical source entry.  Because every output lock and the
+# OUT_DIR lock are still held, it is safe to remove only that verified duplicate
+# before releasing the transaction.
+if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
+    set(residual_active_matches_committed FALSE)
+    if(
+        NOT IS_DIRECTORY "${transaction_active}"
+        AND NOT IS_SYMLINK "${transaction_active}"
+        AND EXISTS "${transaction_committed}"
+        AND NOT IS_DIRECTORY "${transaction_committed}"
+        AND NOT IS_SYMLINK "${transaction_committed}"
+    )
+        file(SHA256 "${transaction_active}" residual_active_hash)
+        file(SHA256 "${transaction_committed}" committed_transaction_hash)
+        if(residual_active_hash STREQUAL committed_transaction_hash)
+            set(residual_active_matches_committed TRUE)
+        endif()
+    endif()
+    if(NOT residual_active_matches_committed)
+        message(
+            FATAL_ERROR
+            "Protocyte found conflicting generation transaction data after committing target "
+            "'${GENERATION_TARGET}'. Generated outputs were published, but transaction cleanup "
+            "requires manual inspection."
+        )
+    endif()
+    file(REMOVE "${transaction_active}")
+    if(EXISTS "${transaction_active}" OR IS_SYMLINK "${transaction_active}")
+        message(
+            FATAL_ERROR
+            "Protocyte could not remove duplicate active transaction data after committing target "
+            "'${GENERATION_TARGET}'. Generated outputs were published, but transaction cleanup "
+            "requires manual inspection."
+        )
+    endif()
+endif()
 _protocyte_discard_generation_staging()
 file(REMOVE "${transaction_committed}")
 if(EXISTS "${transaction_committed}" OR IS_SYMLINK "${transaction_committed}")
