@@ -61,7 +61,11 @@ review those Markdown files in a normal pull request. The GitHub Wiki is a
 published mirror and should not be treated as an independent source. A
 path-filtered workflow automatically mirrors Wiki changes after they are merged
 to `main`; serialized publication ensures the mirror eventually reflects the
-newest merged documentation when several changes land close together.
+newest merged documentation when several changes land close together. The
+workflow authenticates to the separate Wiki repository through the
+`PROTOCYTE_WIKI_TOKEN` Actions secret. Configure that secret with a dedicated
+fine-grained personal access token restricted to this repository with
+read/write Contents permission; do not reuse a developer's broad CLI token.
 
 The local sync helper remains available to preview, verify, or repair an
 existing Wiki checkout. It never commits or pushes.

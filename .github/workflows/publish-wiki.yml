@@ -10,7 +10,7 @@ on:
       - ".github/workflows/publish-wiki.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: protocyte-wiki-publication-${{ github.repository }}
@@ -30,9 +30,14 @@ jobs:
 
       - name: Mirror and publish the GitHub Wiki
         env:
-          WIKI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIKI_TOKEN: ${{ secrets.PROTOCYTE_WIKI_TOKEN }}
         run: |
           set -euo pipefail
+
+          if [[ -z "${WIKI_TOKEN}" ]]; then
+            echo "::error::PROTOCYTE_WIKI_TOKEN is not configured."
+            exit 1
+          fi
 
           wiki_checkout="$RUNNER_TEMP/protocyte.wiki"
           git clone --quiet \

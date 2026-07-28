@@ -277,12 +277,11 @@ def verify_repository_workflows(repository_root: Path) -> None:
         elif path.name == "publish-wiki.yml":
             wiki_publisher_text = text
 
-    expected_writers = ["publish-release.yml", "publish-wiki.yml"]
-    if [path.name for path in writers] != expected_writers:
+    if [path.name for path in writers] != ["publish-release.yml"]:
         names = ", ".join(path.name for path in writers) or "none"
         raise ReleaseError(
-            "exactly publish-release.yml and publish-wiki.yml may each request "
-            f"one contents-write token; found {names}"
+            "exactly publish-release.yml may request one contents-write token; found "
+            + names
         )
     legacy_path = workflow_directory / "release.yml"
     if (
@@ -313,10 +312,18 @@ def verify_repository_workflows(repository_root: Path) -> None:
         raise ReleaseError(
             "publish-wiki.yml must use the exact path-filtered main-branch trigger"
         )
+    if "${{ secrets.GITHUB_TOKEN }}" in wiki_publisher_text:
+        raise ReleaseError(
+            "publish-wiki.yml must not use the repository-scoped GITHUB_TOKEN "
+            "to write the separate Wiki repository"
+        )
     required_wiki_fragments = (
         "group: protocyte-wiki-publication-${{ github.repository }}",
         "cancel-in-progress: false",
         "persist-credentials: false",
+        "contents: read",
+        "${{ secrets.PROTOCYTE_WIKI_TOKEN }}",
+        'if [[ -z "${WIKI_TOKEN}" ]]',
         "${GITHUB_REPOSITORY}.wiki.git",
         'sync_wiki.py "$wiki_checkout" --apply',
         'git -C "$wiki_checkout" diff --check',

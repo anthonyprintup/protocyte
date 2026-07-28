@@ -135,8 +135,7 @@ def test_repository_workflow_policy_rejects_a_competing_writer(
     _copy_trusted_wiki_workflow(workflows)
 
     with pytest.raises(
-        check_release_policy.ReleaseError,
-        match="exactly publish-release.yml and publish-wiki.yml",
+        check_release_policy.ReleaseError, match="exactly publish-release.yml"
     ):
         check_release_policy.verify_repository_workflows(tmp_path)
 
@@ -153,6 +152,11 @@ def test_repository_workflow_policy_rejects_a_competing_writer(
             "          persist-credentials: false\n",
             "          persist-credentials: true\n",
             "required safety contract",
+        ),
+        (
+            "          WIKI_TOKEN: ${{ secrets.PROTOCYTE_WIKI_TOKEN }}\n",
+            "          WIKI_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n",
+            "repository-scoped GITHUB_TOKEN",
         ),
     ],
 )

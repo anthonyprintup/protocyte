@@ -360,12 +360,16 @@ def test_wiki_publication_is_path_filtered_serial_and_minimally_privileged() -> 
     assert "pull_request:" not in trigger
     assert "workflow_dispatch:" not in trigger
     assert "tags:" not in trigger
-    assert workflow.count("contents: write") == 1
+    assert "contents: read" in workflow
+    assert "contents: write" not in workflow
     assert "write-all" not in workflow
     assert "group: protocyte-wiki-publication-${{ github.repository }}" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "persist-credentials: false" in checkout
     assert "ref: ${{ github.sha }}" in checkout
+    assert "WIKI_TOKEN: ${{ secrets.PROTOCYTE_WIKI_TOKEN }}" in mirror
+    assert "secrets.GITHUB_TOKEN" not in mirror
+    assert 'if [[ -z "${WIKI_TOKEN}" ]]' in mirror
     assert "${GITHUB_REPOSITORY}.wiki.git" in mirror
     assert 'sync_wiki.py "$wiki_checkout" --apply' in mirror
     assert 'git -C "$wiki_checkout" diff --check' in mirror
@@ -964,7 +968,7 @@ def test_release_transaction_order_is_build_test_then_serialized_publication() -
     )
 
 
-def test_repository_writers_are_limited_to_release_and_wiki_publication() -> None:
+def test_release_publication_is_the_repository_single_contents_writer() -> None:
     workflow_directory = REPO_ROOT / ".github" / "workflows"
     workflows = {
         path.name: path.read_text(encoding="utf-8")
@@ -997,9 +1001,12 @@ def test_repository_writers_are_limited_to_release_and_wiki_publication() -> Non
     assert "environment: release" in publish
     for name, workflow in workflows.items():
         assert "write-all" not in workflow
-        if name not in {"publish-release.yml", "publish-wiki.yml"}:
+        if name != "publish-release.yml":
             assert "contents: write" not in workflow
-    assert wiki.count("contents: write") == 1
+    assert "contents: read" in wiki
+    assert "contents: write" not in wiki
+    assert "secrets.PROTOCYTE_WIKI_TOKEN" in wiki
+    assert "secrets.GITHUB_TOKEN" not in wiki
     assert "pull_request:" not in wiki
     assert "workflow_dispatch:" not in wiki
     assert "      - main" in wiki
