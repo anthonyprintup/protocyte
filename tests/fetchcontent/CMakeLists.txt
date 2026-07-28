@@ -52,10 +52,25 @@ protocyte_add_proto_library(
     HOSTED_ALLOCATOR
 )
 
-get_property(
-    protocyte_managed_plugin
-    GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE
+protocyte_get_host_tools(
+    PLUGIN_EXECUTABLE_VAR protocyte_managed_plugin
+    HOST_PYTHON_EXECUTABLE_VAR protocyte_host_python
+    MANAGED_PYTHON_EXECUTABLE_VAR protocyte_managed_python
+    MANAGED_ENVIRONMENT_VAR protocyte_managed_environment
+    PLUGIN_IS_MANAGED_VAR protocyte_plugin_is_managed
 )
+if(NOT protocyte_plugin_is_managed)
+    message(FATAL_ERROR "FetchContent did not report its provisioned plugin as managed")
+endif()
+if(NOT EXISTS "${protocyte_host_python}")
+    message(FATAL_ERROR "FetchContent did not expose the selected host Python")
+endif()
+if(NOT EXISTS "${protocyte_managed_python}")
+    message(FATAL_ERROR "FetchContent did not expose the managed Python")
+endif()
+if(NOT IS_DIRECTORY "${protocyte_managed_environment}")
+    message(FATAL_ERROR "FetchContent did not expose the managed environment")
+endif()
 if(NOT EXISTS "${protocyte_managed_plugin}")
     message(FATAL_ERROR "FetchContent did not provision the managed Protocyte Python plugin")
 endif()

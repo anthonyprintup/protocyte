@@ -1,0 +1,61 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/wiki/**"
+      - ".github/scripts/sync_wiki.py"
+      - ".github/workflows/publish-wiki.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protocyte-wiki-publication-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Mirror canonical Wiki documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the canonical documentation
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Mirror and publish the GitHub Wiki
+        env:
+          WIKI_TOKEN: ${{ secrets.PROTOCYTE_WIKI_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${WIKI_TOKEN}" ]]; then
+            echo "::error::PROTOCYTE_WIKI_TOKEN is not configured."
+            exit 1
+          fi
+
+          wiki_checkout="$RUNNER_TEMP/protocyte.wiki"
+          git clone --quiet \
+            "https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" \
+            "$wiki_checkout"
+
+          python .github/scripts/sync_wiki.py "$wiki_checkout" --apply
+          git -C "$wiki_checkout" diff --check
+
+          if [[ -z "$(git -C "$wiki_checkout" status --porcelain)" ]]; then
+            echo "GitHub Wiki already matches docs/wiki."
+            exit 0
+          fi
+
+          git -C "$wiki_checkout" config user.name "github-actions[bot]"
+          git -C "$wiki_checkout" config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$wiki_checkout" add --all
+          git -C "$wiki_checkout" commit \
+            -m "docs: sync wiki from ${GITHUB_SHA}"
+          git -C "$wiki_checkout" push origin HEAD

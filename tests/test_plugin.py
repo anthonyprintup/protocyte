@@ -5794,6 +5794,21 @@ def test_allocates_distinct_field_cpp_names() -> None:
     assert fields[1].cpp_name == "class_protocyte_"
     assert f"{fields[0].cpp_name}() const noexcept" in header
     assert f"{fields[1].cpp_name}() const noexcept" in header
+    assert (
+        '// Protocyte C++ name mapping: protobuf field "class" uses '
+        'accessor stem "class_protocyte" to avoid a C++ collision.' in header
+    )
+    assert (
+        '// Protocyte C++ name mapping: protobuf field "class_protocyte" uses '
+        'accessor stem "class_protocyte_" to avoid a C++ collision.' in header
+    )
+
+    request.parameter = "comments=off"
+    comments_off = generate_response(request)
+    comments_off_header = next(
+        item.content for item in comments_off.file if item.name.endswith(".hpp")
+    )
+    assert "Protocyte C++ name mapping" not in comments_off_header
 
 
 def test_field_collision_checks_only_emitted_accessors() -> None:

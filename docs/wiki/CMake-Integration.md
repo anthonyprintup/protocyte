@@ -124,6 +124,20 @@ Protocyte code generation uses three host-side inputs:
 
 By default, CMake creates a fingerprinted Python environment under the build tree and installs the matching Protocyte generator there. Set `PROTOCYTE_PLUGIN_EXECUTABLE` before making Protocyte available when the application owns that environment instead.
 
+When a parent configure owns Protocyte's managed environment and launches an
+independent child configure, export the already validated plugin instead of
+reading Protocyte's private CMake properties:
+
+```cmake
+protocyte_get_host_tools(PLUGIN_EXECUTABLE_VAR protocyte_plugin)
+```
+
+Pass `protocyte_plugin` to the child as
+`-DPROTOCYTE_PLUGIN_EXECUTABLE:FILEPATH=...`. See
+[CMake API Reference](CMake-API-Reference) for the complete host-tool output
+surface and [ExternalProject Superbuild](ExternalProject-Superbuild) for a
+complete handoff.
+
 For native builds, Protocyte can fetch a pinned protobuf fallback when a usable compiler or import tree is missing. Set `PROTOCYTE_FETCH_PROTOBUF=OFF` to prohibit fallback downloads.
 
 Cross builds must provide a concrete compiler that runs on the host. Protocyte does not build a host `protoc` with the target toolchain and does not run it through `CROSSCOMPILING_EMULATOR`.

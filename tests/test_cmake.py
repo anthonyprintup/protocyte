@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1109,11 +1110,17 @@ def _write_managed_environment_consumer(
         )
     lines.extend(
         [
-            "_protocyte_prepare_plugin()",
-            "_protocyte_get_internal(managed_plugin PLUGIN_EXECUTABLE)",
-            "_protocyte_get_internal(managed_root PYTHON_ENV_ROOT)",
+            "protocyte_get_host_tools(",
+            "    PLUGIN_EXECUTABLE_VAR managed_plugin",
+            "    HOST_PYTHON_EXECUTABLE_VAR host_python",
+            "    MANAGED_PYTHON_EXECUTABLE_VAR managed_python",
+            "    MANAGED_ENVIRONMENT_VAR managed_environment",
+            "    PLUGIN_IS_MANAGED_VAR plugin_is_managed",
+            ")",
+            "cmake_path(GET managed_environment PARENT_PATH managed_root)",
             'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-plugin.txt" "${managed_plugin}")',
             'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-root.txt" "${PROTOCYTE_PYTHON_ENV_ROOT}\n${managed_root}\n")',
+            'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/host-tools.txt" "${host_python}\n${managed_python}\n${managed_environment}\n${plugin_is_managed}\n")',
             "",
         ]
     )
@@ -1258,6 +1265,40 @@ def _write_version_only_plugin(path: Path, version: str) -> Path:
         plugin = path
         plugin.write_text(
             f"#!/usr/bin/env sh\necho '{version}'\n",
+            encoding="utf-8",
+        )
+        plugin.chmod(0o755)
+    return plugin
+
+
+def _write_failing_version_plugin(path: Path, exit_code: int) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        plugin = path.with_suffix(".cmd")
+        plugin.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    "echo plugin stdout marker",
+                    "echo plugin stderr marker 1>&2",
+                    f"exit /b {exit_code}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    else:
+        plugin = path
+        plugin.write_text(
+            "\n".join(
+                [
+                    "#!/usr/bin/env sh",
+                    "echo 'plugin stdout marker'",
+                    "echo 'plugin stderr marker' >&2",
+                    f"exit {exit_code}",
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
         plugin.chmod(0o755)
@@ -1485,6 +1526,60 @@ def test_explicit_plugin_override_must_match_package_version(tmp_path: Path) -> 
     assert result.returncode != 0
     assert f"CMake package {__version__}" in output
     assert "plugin reported 99.0.0" in output
+
+
+def test_public_host_tools_report_an_explicit_plugin_without_python(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    plugin = _write_version_only_plugin(
+        tmp_path / "tools" / "protoc-gen-protocyte", __version__
+    )
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Python3 TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
+                "protocyte_get_host_tools(",
+                "    PLUGIN_EXECUTABLE_VAR selected_plugin",
+                "    HOST_PYTHON_EXECUTABLE_VAR host_python",
+                "    MANAGED_PYTHON_EXECUTABLE_VAR managed_python",
+                "    MANAGED_ENVIRONMENT_VAR managed_environment",
+                "    PLUGIN_IS_MANAGED_VAR plugin_is_managed",
+                ")",
+                f'if(NOT selected_plugin STREQUAL "{plugin.as_posix()}")',
+                '    message(FATAL_ERROR "public plugin output mismatch: ${selected_plugin}")',
+                "endif()",
+                'if(NOT host_python STREQUAL "" OR NOT managed_python STREQUAL "" OR NOT managed_environment STREQUAL "")',
+                '    message(FATAL_ERROR "explicit plugin unexpectedly exposed a managed Python environment")',
+                "endif()",
+                "if(plugin_is_managed)",
+                '    message(FATAL_ERROR "explicit plugin was reported as managed")',
+                "endif()",
+            ]
+        ),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_public_host_tools_require_an_output_variable(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    result = _configure_cmake_snippet(
+        tmp_path,
+        "\n".join(
+            [
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                "protocyte_get_host_tools()",
+            ]
+        ),
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "requires at least one output variable keyword" in output
 
 
 def test_explicit_plugin_override_rejects_semicolon_path_before_execution(
@@ -4587,8 +4682,7 @@ def test_relocated_install_provisions_managed_python_environment(
                 f'set(Python3_EXECUTABLE "{Path(sys.executable).as_posix()}")',
                 f'set(PROTOCYTE_PYTHON_ENV_ROOT "{environment_root.as_posix()}")',
                 "find_package(protocyte CONFIG REQUIRED)",
-                "_protocyte_prepare_plugin()",
-                "_protocyte_get_internal(managed_plugin PLUGIN_EXECUTABLE)",
+                "protocyte_get_host_tools(PLUGIN_EXECUTABLE_VAR managed_plugin)",
                 'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/managed-plugin.txt" "${managed_plugin}")',
                 "",
             ]
@@ -10464,6 +10558,107 @@ def _build_out_dir_owner_project(
         capture_output=True,
         text=True,
     )
+
+
+def test_guard_targets_use_stable_logical_names_across_build_trees(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("ninja") is None:
+        _real_protoc_requirement_unavailable(
+            "Ninja is required to inspect stable guard target names"
+        )
+    repo_root = Path(__file__).resolve().parents[1]
+
+    ownership_source = tmp_path / "ownership-project"
+    ownership_output = tmp_path / "generated"
+    _write_out_dir_owner_project(ownership_source, ownership_output)
+    ownership_target_sets: list[set[str]] = []
+    ownership_queries: list[str] = []
+    for build_name in ("ownership-build-a", "ownership-build-b"):
+        build_dir = tmp_path / build_name
+        configured = _configure_out_dir_owner_project(
+            ownership_source, build_dir, "-G", "Ninja"
+        )
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        target_help = subprocess.run(
+            ["cmake", "--build", str(build_dir), "--target", "help"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        ownership_target_sets.append(
+            set(
+                re.findall(
+                    r"generated_0__protocyte_ownership_guard",
+                    target_help,
+                )
+            )
+        )
+        ownership_queries.append(
+            subprocess.run(
+                ["ninja", "-C", str(build_dir), "-t", "query", "generated_0"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+
+    assert ownership_target_sets == [
+        {"generated_0__protocyte_ownership_guard"},
+        {"generated_0__protocyte_ownership_guard"},
+    ]
+    for query in ownership_queries:
+        assert "generated_0__protocyte_ownership_guard" in query
+        assert "protocyte_ownership_guard_" not in query
+
+    import_source = tmp_path / "import-project"
+    import_source.mkdir()
+    (import_source / "proxy.proto").write_text(
+        'syntax = "proto3"; message Demo {}\n', encoding="utf-8"
+    )
+    (import_source / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(stable_import_guard LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                'file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/proxy.proto" proxy_hash)',
+                "set_property(",
+                "    GLOBAL PROPERTY PROTOCYTE_INTERNAL_SOURCE_PROXY_PATH_fixture",
+                '    "${CMAKE_CURRENT_SOURCE_DIR}/proxy.proto"',
+                ")",
+                "set_property(",
+                "    GLOBAL PROPERTY PROTOCYTE_INTERNAL_SOURCE_PROXY_EXPECTED_HASH_fixture",
+                '    "${proxy_hash}"',
+                ")",
+                "set(check_targets protocyte_source_check_fixture)",
+                "_protocyte_create_import_guard(",
+                "    import_guard demo_codegen check_targets",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/guard-target.txt" "${import_guard}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    import_targets = []
+    for build_name in ("import-build-a", "import-build-b"):
+        build_dir = tmp_path / build_name
+        configured = subprocess.run(
+            ["cmake", "-G", "Ninja", "-S", str(import_source), "-B", str(build_dir)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert configured.returncode == 0, configured.stdout + configured.stderr
+        import_targets.append(
+            (build_dir / "guard-target.txt").read_text(encoding="utf-8")
+        )
+
+    assert import_targets == [
+        "demo_codegen__protocyte_import_guard",
+        "demo_codegen__protocyte_import_guard",
+    ]
 
 
 def _make_fake_protoc_fail_in_build(
@@ -16566,6 +16761,151 @@ def test_managed_environment_root_rejects_semicolon_before_provisioning(
     assert "Provisioning Protocyte Python environment" not in output
     assert not environment_root.exists()
     assert not (tmp_path / "managed").exists()
+
+
+def test_managed_host_tools_support_nested_reuse_and_stage_specific_diagnostics(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    environment_root = tmp_path / "managed-environments"
+    parent_source = tmp_path / "parent"
+    parent_build = _write_managed_environment_consumer(parent_source, environment_root)
+
+    parent_result = _configure_managed_environment(parent_source, parent_build)
+
+    assert parent_result.returncode == 0, parent_result.stdout + parent_result.stderr
+    host_python_text, managed_python_text, managed_environment_text, managed_text = (
+        (parent_build / "host-tools.txt").read_text(encoding="utf-8").splitlines()
+    )
+    plugin = Path(
+        (parent_build / "managed-plugin.txt").read_text(encoding="utf-8").strip()
+    )
+    host_python = Path(host_python_text)
+    managed_python = Path(managed_python_text)
+    managed_environment = Path(managed_environment_text)
+    assert host_python.resolve() == Path(sys.executable).resolve()
+    assert managed_python.is_file()
+    assert managed_environment.is_dir()
+    assert plugin.is_file()
+    assert managed_python.is_relative_to(managed_environment)
+    assert plugin.is_relative_to(managed_environment)
+    assert managed_text == "TRUE"
+
+    child_source = tmp_path / "child"
+    child_build = tmp_path / "child-build"
+    child_source.mkdir()
+    (child_source / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_nested_host_tool_consumer LANGUAGES NONE)",
+                "set(CMAKE_DISABLE_FIND_PACKAGE_Python3 TRUE)",
+                f'include("{(repo_root / "cmake" / "Protocyte.cmake").as_posix()}")',
+                "protocyte_get_host_tools(",
+                "    PLUGIN_EXECUTABLE_VAR child_plugin",
+                "    HOST_PYTHON_EXECUTABLE_VAR child_host_python",
+                "    MANAGED_PYTHON_EXECUTABLE_VAR child_managed_python",
+                "    MANAGED_ENVIRONMENT_VAR child_managed_environment",
+                "    PLUGIN_IS_MANAGED_VAR child_plugin_is_managed",
+                ")",
+                'file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/child-tools.txt" "${child_plugin}\n${child_host_python}\n${child_managed_python}\n${child_managed_environment}\n${child_plugin_is_managed}\n")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    child_result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(child_source),
+            "-B",
+            str(child_build),
+            f"-DPROTOCYTE_PLUGIN_EXECUTABLE:FILEPATH={plugin}",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert child_result.returncode == 0, child_result.stdout + child_result.stderr
+    child_plugin, child_host, child_managed, child_environment, child_is_managed = (
+        (child_build / "child-tools.txt").read_text(encoding="utf-8").splitlines()
+    )
+    assert Path(child_plugin).resolve() == plugin.resolve()
+    assert child_host == ""
+    assert child_managed == ""
+    assert child_environment == ""
+    assert child_is_managed == "FALSE"
+    assert "Python3_EXECUTABLE" not in (child_build / "CMakeCache.txt").read_text(
+        encoding="utf-8"
+    )
+
+    failing_plugin = _write_failing_version_plugin(
+        tmp_path / "tools" / "failing-plugin", 17
+    )
+    diagnostic_source = tmp_path / "diagnostic"
+    diagnostic_build = tmp_path / "diagnostic-build"
+    diagnostic_source.mkdir()
+    (diagnostic_source / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(protocyte_managed_diagnostic LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "_protocyte_verify_python_environment(",
+                "    verify_result verify_action verify_command verify_output verify_error",
+                f'    "{managed_python.as_posix()}"',
+                f'    "{failing_plugin.as_posix()}"',
+                f'    "{(repo_root / "protocyte-cmake-constraints.txt").as_posix()}"',
+                f'    "{__version__}"',
+                ")",
+                "_protocyte_python_provisioning_error(",
+                '    "${verify_action}" "${verify_command}" "${verify_result}"',
+                '    "${verify_output}" "${verify_error}"',
+                f'    HOST_PYTHON "{host_python.as_posix()}"',
+                f'    MANAGED_ENVIRONMENT "{managed_environment.as_posix()}"',
+                f'    MANAGED_PYTHON "{managed_python.as_posix()}"',
+                f'    PLUGIN_EXECUTABLE "{failing_plugin.as_posix()}"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    diagnostic_result = subprocess.run(
+        [
+            "cmake",
+            "-S",
+            str(diagnostic_source),
+            "-B",
+            str(diagnostic_build),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    diagnostic_output = diagnostic_result.stdout + diagnostic_result.stderr
+    normalized_diagnostic = " ".join(diagnostic_output.split())
+    assert diagnostic_result.returncode != 0
+    assert (
+        "Stage: verify the managed Protocyte plugin entry point"
+        in normalized_diagnostic
+    )
+    assert f"Host Python: {host_python.as_posix()}" in normalized_diagnostic
+    assert (
+        f"Managed environment: {managed_environment.as_posix()}"
+        in normalized_diagnostic
+    )
+    assert f"Managed Python: {managed_python.as_posix()}" in normalized_diagnostic
+    assert f"Plugin executable: {failing_plugin.as_posix()}" in normalized_diagnostic
+    assert "Exit code: 17" in normalized_diagnostic
+    assert "plugin stdout marker" in normalized_diagnostic
+    assert "plugin stderr marker" in normalized_diagnostic
+    assert "No broken requirements found." not in normalized_diagnostic
 
 
 def test_shared_managed_environment_serializes_concurrent_configures(

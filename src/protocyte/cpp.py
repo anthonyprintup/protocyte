@@ -843,6 +843,18 @@ def _emit_field_api_annotations(
         w.line("[[deprecated]]")
 
 
+def _emit_field_name_mapping(
+    w: CppWriter, item: FieldModel, options: GeneratorOptions
+) -> None:
+    preferred_stem = cpp_identifier(item.name)
+    if not options.emit_comments or item.cpp_name == preferred_stem:
+        return
+    w.line(
+        f'// Protocyte C++ name mapping: protobuf field "{item.name}" uses '
+        f'accessor stem "{item.cpp_name}" to avoid a C++ collision.'
+    )
+
+
 def generate_outputs(
     model: DescriptorModel,
     options: GeneratorOptions,
@@ -2197,6 +2209,7 @@ def _emit_byte_range_setter_family(
 
 
 def _emit_accessors(w: CppWriter, item: FieldModel, options: GeneratorOptions) -> None:
+    _emit_field_name_mapping(w, item, options)
     if item.oneof_name is not None:
         _emit_oneof_accessors(w, item, options)
         return

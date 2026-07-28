@@ -224,6 +224,25 @@ CMAKE_ARGS
     "-DPROTOCYTE_PROTOBUF_IMPORT_DIR:PATH=/path/to/protobuf/src"
 ```
 
+If the superbuild already made Protocyte available, obtain the plugin path from
+the public API rather than duplicating provisioning or reading an internal
+global property:
+
+```cmake
+protocyte_get_host_tools(PLUGIN_EXECUTABLE_VAR protocyte_plugin)
+
+ExternalProject_Add(
+    application_external
+    # ...
+    CMAKE_ARGS
+        "-DPROTOCYTE_PLUGIN_EXECUTABLE:FILEPATH=${protocyte_plugin}"
+)
+```
+
+The child validates the supplied plugin against its own Protocyte package
+version. Because a managed plugin normally lives under the parent build tree,
+the child shares that build tree's lifetime.
+
 The checked example also accepts
 `-DPROTOCYTE_SOURCE_DIR=/path/to/protocyte`. That cache variable replaces the
 Git download with the supplied source tree and is how repository tests exercise

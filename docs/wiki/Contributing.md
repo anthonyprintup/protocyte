@@ -58,10 +58,17 @@ Format every touched C++ source or header with `clang-format`.
 
 The canonical wiki source is `docs/wiki/` in the main repository. Edit and
 review those Markdown files in a normal pull request. The GitHub Wiki is a
-published mirror and should not be treated as an independent source.
+published mirror and should not be treated as an independent source. A
+path-filtered workflow automatically mirrors Wiki changes after they are merged
+to `main`; serialized publication ensures the mirror eventually reflects the
+newest merged documentation when several changes land close together. The
+workflow authenticates to the separate Wiki repository through the
+`PROTOCYTE_WIKI_TOKEN` Actions secret. Configure that secret with a dedicated
+fine-grained personal access token restricted to this repository with
+read/write Contents permission; do not reuse a developer's broad CLI token.
 
-The local sync helper can preview or apply the mirror to an existing wiki
-checkout. It never commits or pushes.
+The local sync helper remains available to preview, verify, or repair an
+existing Wiki checkout. It never commits or pushes.
 
 ```bash
 python .github/scripts/sync_wiki.py /path/to/protocyte.wiki

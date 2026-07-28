@@ -105,6 +105,14 @@ def test_repository_workflow_policy_accepts_the_trusted_checkout() -> None:
     check_release_policy.verify_repository_workflows(REPO_ROOT)
 
 
+def _copy_trusted_wiki_workflow(workflows: Path) -> None:
+    source = REPO_ROOT / ".github" / "workflows" / "publish-wiki.yml"
+    (workflows / "publish-wiki.yml").write_text(
+        source.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
 def test_repository_workflow_policy_rejects_a_competing_writer(
     tmp_path: Path,
 ) -> None:
@@ -124,10 +132,58 @@ def test_repository_workflow_policy_rejects_a_competing_writer(
         check_release_policy.LEGACY_RELEASE_WORKFLOW_STUB,
         encoding="utf-8",
     )
+    _copy_trusted_wiki_workflow(workflows)
 
     with pytest.raises(
         check_release_policy.ReleaseError, match="exactly publish-release.yml"
     ):
+        check_release_policy.verify_repository_workflows(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            "    paths:\n",
+            "    paths-ignore:\n",
+            "exact path-filtered main-branch trigger",
+        ),
+        (
+            "          persist-credentials: false\n",
+            "          persist-credentials: true\n",
+            "required safety contract",
+        ),
+        (
+            "          WIKI_TOKEN: ${{ secrets.PROTOCYTE_WIKI_TOKEN }}\n",
+            "          WIKI_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n",
+            "repository-scoped GITHUB_TOKEN",
+        ),
+    ],
+)
+def test_repository_workflow_policy_rejects_a_broadened_wiki_writer(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    message: str,
+) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "publish-release.yml").write_text(
+        "on:\n  workflow_dispatch:\njobs:\n  publish:\n"
+        "    permissions:\n      contents: write\n",
+        encoding="utf-8",
+    )
+    (workflows / "release.yml").write_text(
+        check_release_policy.LEGACY_RELEASE_WORKFLOW_STUB,
+        encoding="utf-8",
+    )
+    _copy_trusted_wiki_workflow(workflows)
+    wiki_path = workflows / "publish-wiki.yml"
+    wiki_text = wiki_path.read_text(encoding="utf-8")
+    assert old in wiki_text
+    wiki_path.write_text(wiki_text.replace(old, new, 1), encoding="utf-8")
+
+    with pytest.raises(check_release_policy.ReleaseError, match=message):
         check_release_policy.verify_repository_workflows(tmp_path)
 
 
@@ -145,6 +201,7 @@ def test_repository_workflow_policy_rejects_tag_triggered_publication(
         check_release_policy.LEGACY_RELEASE_WORKFLOW_STUB,
         encoding="utf-8",
     )
+    _copy_trusted_wiki_workflow(workflows)
 
     with pytest.raises(check_release_policy.ReleaseError, match="tag event"):
         check_release_policy.verify_repository_workflows(tmp_path)
@@ -178,6 +235,7 @@ def test_repository_workflow_policy_requires_the_exact_inert_legacy_stub(
     )
     if legacy_text is not None:
         (workflows / "release.yml").write_text(legacy_text, encoding="utf-8")
+    _copy_trusted_wiki_workflow(workflows)
 
     with pytest.raises(check_release_policy.ReleaseError, match="exact inert stub"):
         check_release_policy.verify_repository_workflows(tmp_path)

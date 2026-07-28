@@ -316,6 +316,7 @@ def test_cmake_reference_covers_every_public_helper_argument() -> None:
     assert "## `protocyte_setup_codegen`" in reference
 
     helpers = (
+        "protocyte_get_host_tools",
         "protocyte_generate",
         "protocyte_add_proto_library",
         "protocyte_add_descriptor_set_library",
@@ -331,7 +332,12 @@ def test_cmake_reference_covers_every_public_helper_argument() -> None:
             )[0]
 
         declared_arguments: set[str] = set()
-        for group in ("options", "oneValueArgs", "multiValueArgs"):
+        argument_groups = (
+            ("oneValueArgs",)
+            if helper == "protocyte_get_host_tools"
+            else ("options", "oneValueArgs", "multiValueArgs")
+        )
+        for group in argument_groups:
             match = re.search(rf"set\(\s*{group}\s+(.*?)\)", function_body, re.DOTALL)
             assert match is not None
             declared_arguments.update(

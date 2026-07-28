@@ -73,6 +73,20 @@ The exact accessor set depends on field kind and presence:
 
 Repeated fields expose their configured vector surface. Maps expose their configured map surface. Oneofs expose a case discriminator and only commit case changes after the incoming value is ready.
 
+The current setter and mutation failure model is:
+
+| Field or operation | Generated result | Why it can fail |
+|---|---|---|
+| Numeric and boolean scalar setter | `void` | Direct assignment |
+| Enum setter | `protocyte::Status` | Closed-enum validation |
+| String or bytes setter | `protocyte::Status` | Allocation, configured limits, or fixed-size validation |
+| Nested-message `ensure_*()` | `protocyte::Result<T&>` | Nested storage allocation |
+| Repeated and map mutation | Container-specific `Status` or `Result<T&>` | Allocation, capacity, or configured limits |
+| `clear_*()` | `void` | Releases or resets existing state |
+
+Fallible return types are `[[nodiscard]]`; check them even when the selected
+hosted allocator normally succeeds.
+
 ## Parse from Contiguous Bytes
 
 `parse(ctx, input)` accepts `protocyte::Span<const protocyte::u8>`:
@@ -223,6 +237,18 @@ Each generated message receives an externally linked `std::array<protocyte::Refl
 ## Generated Identifier Safety
 
 Legal schema declarations that collide with generated helper names or internal template parameter spellings are remapped deterministically. The protobuf-derived type remains usable without emitting invalid C++.
+
+When comments are enabled, a remapped field emits a nearby comment naming its
+protobuf field and generated accessor stem. For example:
+
+```cpp
+// Protocyte C++ name mapping: protobuf field "class" uses
+// accessor stem "class_protocyte" to avoid a C++ collision.
+```
+
+Use the generated declaration as the source of truth for collision-safe
+spellings. `comments=off` suppresses these mapping comments together with
+schema documentation.
 
 Cross-file collisions that cannot be renamed consistently are rejected. See [Plugin Parameters](https://github.com/anthonyprintup/protocyte/wiki/Plugin-Parameters).
 

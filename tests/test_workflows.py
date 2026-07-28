@@ -81,6 +81,7 @@ def test_ci_groups_related_jobs_in_reusable_workflows() -> None:
             "CMake Integration",
             "cmake-integration.yml",
             (
+                "managed-python-windows",
                 "fetchcontent-linux",
                 "find-package-linux",
                 "find-package-windows",
@@ -329,6 +330,53 @@ def test_fetchcontent_install_gate_counts_a_final_unterminated_manifest_entry() 
     assert "wc -l" not in install_gate
 
 
+def test_managed_python_cmake_integration_covers_supported_interpreters() -> None:
+    job = _job_named(_workflow("cmake-integration.yml"), "managed-python-windows")
+
+    assert "runs-on: windows-latest" in job
+    assert '          - "3.12"' in job
+    assert '          - "3.13"' in job
+    assert '          - "3.14"' in job
+    assert "UV_PYTHON: ${{ matrix.python-version }}" in job
+    assert (
+        "test_managed_host_tools_support_nested_reuse_and_stage_specific_diagnostics"
+        in job
+    )
+
+
+def test_wiki_publication_is_path_filtered_serial_and_minimally_privileged() -> None:
+    workflow = _workflow("publish-wiki.yml")
+    trigger = workflow.split("permissions:", maxsplit=1)[0]
+    publish = _job_named(workflow, "publish")
+    steps = _steps_by_name(publish)
+    checkout = steps["Check out the canonical documentation"]
+    mirror = steps["Mirror and publish the GitHub Wiki"]
+
+    assert "push:" in trigger
+    assert "      - main" in trigger
+    assert '      - "docs/wiki/**"' in trigger
+    assert '      - ".github/scripts/sync_wiki.py"' in trigger
+    assert '      - ".github/workflows/publish-wiki.yml"' in trigger
+    assert "pull_request:" not in trigger
+    assert "workflow_dispatch:" not in trigger
+    assert "tags:" not in trigger
+    assert "contents: read" in workflow
+    assert "contents: write" not in workflow
+    assert "write-all" not in workflow
+    assert "group: protocyte-wiki-publication-${{ github.repository }}" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "persist-credentials: false" in checkout
+    assert "ref: ${{ github.sha }}" in checkout
+    assert "WIKI_TOKEN: ${{ secrets.PROTOCYTE_WIKI_TOKEN }}" in mirror
+    assert "secrets.GITHUB_TOKEN" not in mirror
+    assert 'if [[ -z "${WIKI_TOKEN}" ]]' in mirror
+    assert "${GITHUB_REPOSITORY}.wiki.git" in mirror
+    assert 'sync_wiki.py "$wiki_checkout" --apply' in mirror
+    assert 'git -C "$wiki_checkout" diff --check' in mirror
+    assert 'git -C "$wiki_checkout" add --all' in mirror
+    assert 'git -C "$wiki_checkout" push origin HEAD' in mirror
+
+
 def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
@@ -457,7 +505,8 @@ def test_release_uploads_handoff_before_isolated_smoke_jobs() -> None:
         REPO_ROOT / "tests" / "find_package" / "CMakeLists.txt"
     ).read_text(encoding="utf-8")
     assert "protocyte_add_proto_library(" in find_package_consumer
-    assert "PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE" in find_package_consumer
+    assert "protocyte_get_host_tools(" in find_package_consumer
+    assert "PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE" not in find_package_consumer
     assert (
         "add_test(NAME find_package_demo COMMAND find_package_demo)"
         in find_package_consumer
@@ -919,7 +968,7 @@ def test_release_transaction_order_is_build_test_then_serialized_publication() -
     )
 
 
-def test_release_publication_is_the_repository_single_writer() -> None:
+def test_release_publication_is_the_repository_single_contents_writer() -> None:
     workflow_directory = REPO_ROOT / ".github" / "workflows"
     workflows = {
         path.name: path.read_text(encoding="utf-8")
@@ -928,6 +977,7 @@ def test_release_publication_is_the_repository_single_writer() -> None:
     }
     legacy = workflows["release.yml"]
     release = workflows["publish-release.yml"]
+    wiki = workflows["publish-wiki.yml"]
     publish = _job_named(release, "publish")
 
     assert "workflow_call:" in legacy
@@ -953,6 +1003,14 @@ def test_release_publication_is_the_repository_single_writer() -> None:
         assert "write-all" not in workflow
         if name != "publish-release.yml":
             assert "contents: write" not in workflow
+    assert "contents: read" in wiki
+    assert "contents: write" not in wiki
+    assert "secrets.PROTOCYTE_WIKI_TOKEN" in wiki
+    assert "secrets.GITHUB_TOKEN" not in wiki
+    assert "pull_request:" not in wiki
+    assert "workflow_dispatch:" not in wiki
+    assert "      - main" in wiki
+    assert '      - "docs/wiki/**"' in wiki
 
     release_guide = (
         REPO_ROOT / "docs" / "wiki" / "Maintainer-Release-Guide.md"

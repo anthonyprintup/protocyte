@@ -2511,6 +2511,8 @@ endfunction()
 function(
     _protocyte_verify_python_environment
     out_result
+    out_action
+    out_command
     out_output
     out_error
     python_executable
@@ -2518,14 +2520,20 @@ function(
     constraints_file
     expected_version
 )
+    set(verify_action "validate the managed Python executable")
+    set(verify_command "\"${python_executable}\" -I -c <managed-environment-verification>")
     if(NOT EXISTS "${python_executable}")
         set(${out_result} "missing-python" PARENT_SCOPE)
+        set(${out_action} "${verify_action}" PARENT_SCOPE)
+        set(${out_command} "${verify_command}" PARENT_SCOPE)
         set(${out_output} "" PARENT_SCOPE)
         set(${out_error} "The managed Python executable does not exist: ${python_executable}" PARENT_SCOPE)
         return()
     endif()
     if(NOT EXISTS "${plugin_executable}")
         set(${out_result} "missing-entry-point" PARENT_SCOPE)
+        set(${out_action} "validate the managed Protocyte plugin entry point" PARENT_SCOPE)
+        set(${out_command} "\"${plugin_executable}\" --version" PARENT_SCOPE)
         set(${out_output} "" PARENT_SCOPE)
         set(${out_error} "The managed plugin entry point does not exist: ${plugin_executable}" PARENT_SCOPE)
         return()
@@ -2574,62 +2582,86 @@ import protocyte.main
         ERROR_VARIABLE verify_error
         TIMEOUT 30
     )
-    if("${verify_result}" STREQUAL "0")
-        execute_process(
-            COMMAND
-                "${CMAKE_COMMAND}" -E env
-                "--unset=PIP_PYTHON"
-                "--unset=PIP_REQUIREMENT"
-                "--unset=PIP_EDITABLE"
-                "--unset=PIP_GROUP"
-                "--unset=PIP_REQUIREMENTS_FROM_SCRIPT"
-                "--unset=PYTHONPATH"
-                "--unset=PYTHONHOME"
-                "PIP_ISOLATED=0"
-                "${python_executable}" -I -m pip check
-            RESULT_VARIABLE pip_check_result
-            OUTPUT_VARIABLE pip_check_output
-            ERROR_VARIABLE pip_check_error
-            TIMEOUT 60
+    if(NOT "${verify_result}" STREQUAL "0")
+        set(${out_result} "${verify_result}" PARENT_SCOPE)
+        set(${out_action} "validate managed Python package versions and imports" PARENT_SCOPE)
+        set(
+            ${out_command}
+            "\"${python_executable}\" -I -c <managed-package-verification> \"${constraints_file}\" \"${expected_version}\""
+            PARENT_SCOPE
         )
-        string(APPEND verify_output "${pip_check_output}")
-        string(APPEND verify_error "${pip_check_error}")
-        if(NOT "${pip_check_result}" STREQUAL "0")
-            set(verify_result "${pip_check_result}")
-        endif()
-    endif()
-    if("${verify_result}" STREQUAL "0")
-        execute_process(
-            COMMAND
-                "${CMAKE_COMMAND}" -E env
-                "--unset=PYTHONPATH"
-                "--unset=PYTHONHOME"
-                "${plugin_executable}" --version
-            RESULT_VARIABLE plugin_verify_result
-            OUTPUT_VARIABLE plugin_verify_output
-            ERROR_VARIABLE plugin_verify_error
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_STRIP_TRAILING_WHITESPACE
-            TIMEOUT 15
-        )
-        string(APPEND verify_output "${plugin_verify_output}")
-        string(APPEND verify_error "${plugin_verify_error}")
-        if(NOT "${plugin_verify_result}" STREQUAL "0")
-            set(verify_result "${plugin_verify_result}")
-        elseif(NOT "${plugin_verify_output}" STREQUAL "${expected_version}")
-            set(verify_result "version-mismatch")
-            string(
-                APPEND
-                verify_error
-                "\nmanaged Protocyte plugin version mismatch: expected ${expected_version}, "
-                "reported ${plugin_verify_output}"
-            )
-        endif()
+        set(${out_output} "${verify_output}" PARENT_SCOPE)
+        set(${out_error} "${verify_error}" PARENT_SCOPE)
+        return()
     endif()
 
-    set(${out_result} "${verify_result}" PARENT_SCOPE)
-    set(${out_output} "${verify_output}" PARENT_SCOPE)
-    set(${out_error} "${verify_error}" PARENT_SCOPE)
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "--unset=PIP_PYTHON"
+            "--unset=PIP_REQUIREMENT"
+            "--unset=PIP_EDITABLE"
+            "--unset=PIP_GROUP"
+            "--unset=PIP_REQUIREMENTS_FROM_SCRIPT"
+            "--unset=PYTHONPATH"
+            "--unset=PYTHONHOME"
+            "PIP_ISOLATED=0"
+            "${python_executable}" -I -m pip check
+        RESULT_VARIABLE pip_check_result
+        OUTPUT_VARIABLE pip_check_output
+        ERROR_VARIABLE pip_check_error
+        TIMEOUT 60
+    )
+    if(NOT "${pip_check_result}" STREQUAL "0")
+        set(${out_result} "${pip_check_result}" PARENT_SCOPE)
+        set(${out_action} "validate managed Python dependency compatibility" PARENT_SCOPE)
+        set(${out_command} "\"${python_executable}\" -I -m pip check" PARENT_SCOPE)
+        set(${out_output} "${pip_check_output}" PARENT_SCOPE)
+        set(${out_error} "${pip_check_error}" PARENT_SCOPE)
+        return()
+    endif()
+
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "--unset=PYTHONPATH"
+            "--unset=PYTHONHOME"
+            "${plugin_executable}" --version
+        RESULT_VARIABLE plugin_verify_result
+        OUTPUT_VARIABLE plugin_verify_output
+        ERROR_VARIABLE plugin_verify_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        TIMEOUT 15
+    )
+    if(NOT "${plugin_verify_result}" STREQUAL "0")
+        set(${out_result} "${plugin_verify_result}" PARENT_SCOPE)
+        set(${out_action} "verify the managed Protocyte plugin entry point" PARENT_SCOPE)
+        set(${out_command} "\"${plugin_executable}\" --version" PARENT_SCOPE)
+        set(${out_output} "${plugin_verify_output}" PARENT_SCOPE)
+        set(${out_error} "${plugin_verify_error}" PARENT_SCOPE)
+        return()
+    endif()
+    if(NOT "${plugin_verify_output}" STREQUAL "${expected_version}")
+        string(
+            CONCAT
+            plugin_verify_error
+            "managed Protocyte plugin version mismatch: expected ${expected_version}, "
+            "reported ${plugin_verify_output}"
+        )
+        set(${out_result} "version-mismatch" PARENT_SCOPE)
+        set(${out_action} "verify the managed Protocyte plugin version" PARENT_SCOPE)
+        set(${out_command} "\"${plugin_executable}\" --version" PARENT_SCOPE)
+        set(${out_output} "${plugin_verify_output}" PARENT_SCOPE)
+        set(${out_error} "${plugin_verify_error}" PARENT_SCOPE)
+        return()
+    endif()
+
+    set(${out_result} "0" PARENT_SCOPE)
+    set(${out_action} "" PARENT_SCOPE)
+    set(${out_command} "" PARENT_SCOPE)
+    set(${out_output} "" PARENT_SCOPE)
+    set(${out_error} "" PARENT_SCOPE)
 endfunction()
 
 function(
@@ -2657,6 +2689,8 @@ function(
         if(cached_fingerprint STREQUAL fingerprint)
             _protocyte_verify_python_environment(
                 verify_result
+                verify_action
+                verify_command
                 verify_output
                 verify_error
                 "${python_executable}"
@@ -2750,6 +2784,18 @@ function(
 endfunction()
 
 function(_protocyte_python_provisioning_error action command_text result output error)
+    set(oneValueArgs
+        HOST_PYTHON
+        MANAGED_ENVIRONMENT
+        MANAGED_PYTHON
+        PLUGIN_EXECUTABLE
+    )
+    cmake_parse_arguments(PARSE_ARGV 5 PROTOCYTE_ERROR "" "${oneValueArgs}" "")
+    _protocyte_validate_parsed_arguments(
+        "_protocyte_python_provisioning_error"
+        "${PROTOCYTE_ERROR_UNPARSED_ARGUMENTS}"
+        "${PROTOCYTE_ERROR_KEYWORDS_MISSING_VALUES}"
+    )
     string(STRIP "${output}" output)
     string(STRIP "${error}" error)
     if(output STREQUAL "")
@@ -2758,9 +2804,19 @@ function(_protocyte_python_provisioning_error action command_text result output 
     if(error STREQUAL "")
         set(error "<no standard error>")
     endif()
+    foreach(name IN ITEMS HOST_PYTHON MANAGED_ENVIRONMENT MANAGED_PYTHON PLUGIN_EXECUTABLE)
+        if("${PROTOCYTE_ERROR_${name}}" STREQUAL "")
+            set(PROTOCYTE_ERROR_${name} "<not available>")
+        endif()
+    endforeach()
     message(
         FATAL_ERROR
         "Failed to ${action} for Protocyte's managed Python environment.\n\n"
+        "Stage: ${action}\n"
+        "Host Python: ${PROTOCYTE_ERROR_HOST_PYTHON}\n"
+        "Managed environment: ${PROTOCYTE_ERROR_MANAGED_ENVIRONMENT}\n"
+        "Managed Python: ${PROTOCYTE_ERROR_MANAGED_PYTHON}\n"
+        "Plugin executable: ${PROTOCYTE_ERROR_PLUGIN_EXECUTABLE}\n\n"
         "Command:\n  ${command_text}\n"
         "Exit code: ${result}\n\n"
         "Standard output:\n${output}\n\n"
@@ -2934,6 +2990,10 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${venv_result}"
                 "${venv_output}"
                 "${venv_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
 
@@ -2960,6 +3020,10 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${configuration_result}"
                 ""
                 "${configuration_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
 
@@ -3024,6 +3088,10 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${bootstrap_result}"
                 "${bootstrap_output}"
                 "${bootstrap_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
 
@@ -3057,11 +3125,17 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${install_result}"
                 "${install_output}"
                 "${install_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
 
         _protocyte_verify_python_environment(
             verify_result
+            verify_action
+            verify_command
             verify_output
             verify_error
             "${protocyte_staged_python_executable}"
@@ -3082,11 +3156,15 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 string(APPEND verify_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
-                "verify the installed Protocyte plugin"
-                "\"${protocyte_staged_plugin_executable}\" --version"
+                "${verify_action}"
+                "${verify_command}"
                 "${verify_result}"
                 "${verify_output}"
                 "${verify_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
 
@@ -3122,6 +3200,10 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${prepare_result}"
                 ""
                 "${prepare_output}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
         _protocyte_run_managed_environment_transaction(
@@ -3151,6 +3233,10 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${promote_result}"
                 ""
                 "${promote_output}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_staged_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_staged_plugin_executable}"
             )
         endif()
         _protocyte_run_managed_pip(
@@ -3182,10 +3268,16 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "${relocation_result}"
                 "${relocation_output}"
                 "${relocation_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_plugin_executable}"
             )
         endif()
         _protocyte_verify_python_environment(
             relocated_verify_result
+            relocated_verify_action
+            relocated_verify_command
             relocated_verify_output
             relocated_verify_error
             "${protocyte_python_executable}"
@@ -3206,11 +3298,15 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 string(APPEND relocated_verify_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
-                "verify the promoted Protocyte Python environment"
-                "\"${protocyte_plugin_executable}\" --version"
+                "${relocated_verify_action}"
+                "${relocated_verify_command}"
                 "${relocated_verify_result}"
                 "${relocated_verify_output}"
                 "${relocated_verify_error}"
+                HOST_PYTHON "${Python3_EXECUTABLE}"
+                MANAGED_ENVIRONMENT "${protocyte_python_environment}"
+                MANAGED_PYTHON "${protocyte_python_executable}"
+                PLUGIN_EXECUTABLE "${protocyte_plugin_executable}"
             )
         endif()
         _protocyte_run_managed_environment_transaction(
@@ -3251,6 +3347,8 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         endif()
     endif()
 
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_HOST_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
+    set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT "${protocyte_python_environment}")
     set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PYTHON_EXECUTABLE "${protocyte_python_executable}")
     set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE "${protocyte_plugin_executable}")
     set(${out_python} "${protocyte_python_executable}" PARENT_SCOPE)
@@ -4051,6 +4149,7 @@ endfunction()
 function(
     _protocyte_create_import_guard
     out_guard_dependency
+    generation_target
     check_targets_var
 )
     set(${out_guard_dependency} "" PARENT_SCOPE)
@@ -4158,23 +4257,21 @@ function(
     _protocyte_write_if_different("${guard_manifest}" "${guard_manifest_content}")
     _protocyte_append_configure_dependency("${guard_script}")
 
-    set(guard_target "protocyte_import_guard_${guard_key}")
-    if(NOT TARGET "${guard_target}")
-        set(guard_fail_on_change TRUE)
-        if(CMAKE_GENERATOR MATCHES "Makefiles")
-            set(guard_fail_on_change FALSE)
-        endif()
-        add_custom_target(
-            "${guard_target}"
-            COMMAND
-                "${CMAKE_COMMAND}"
-                "-DMANIFEST_FILE=${guard_manifest}"
-                "-DFAIL_ON_CHANGE=${guard_fail_on_change}"
-                "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
-                -P "${guard_script}"
-            VERBATIM
-        )
+    set(guard_target "${generation_target}__protocyte_import_guard")
+    set(guard_fail_on_change TRUE)
+    if(CMAKE_GENERATOR MATCHES "Makefiles")
+        set(guard_fail_on_change FALSE)
     endif()
+    add_custom_target(
+        "${guard_target}"
+        COMMAND
+            "${CMAKE_COMMAND}"
+            "-DMANIFEST_FILE=${guard_manifest}"
+            "-DFAIL_ON_CHANGE=${guard_fail_on_change}"
+            "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
+            -P "${guard_script}"
+        VERBATIM
+    )
     set(${out_guard_dependency} "${guard_target}" PARENT_SCOPE)
 endfunction()
 
@@ -4489,6 +4586,92 @@ function(_protocyte_setup_codegen_internal fetch_missing_import_sources)
         "${fetch_missing_import_sources}"
         "${require_protobuf_import_sources}"
     )
+endfunction()
+
+function(protocyte_get_host_tools)
+    set(
+        oneValueArgs
+        PLUGIN_EXECUTABLE_VAR
+        HOST_PYTHON_EXECUTABLE_VAR
+        MANAGED_PYTHON_EXECUTABLE_VAR
+        MANAGED_ENVIRONMENT_VAR
+        PLUGIN_IS_MANAGED_VAR
+    )
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_get_host_tools"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
+    cmake_parse_arguments(
+        PARSE_ARGV
+        0
+        PROTOCYTE
+        ""
+        "${oneValueArgs}"
+        ""
+    )
+    _protocyte_validate_parsed_arguments(
+        "protocyte_get_host_tools"
+        "${PROTOCYTE_UNPARSED_ARGUMENTS}"
+        "${PROTOCYTE_KEYWORDS_MISSING_VALUES}"
+    )
+
+    set(requested_output FALSE)
+    foreach(name IN LISTS oneValueArgs)
+        _protocyte_value_is_nonempty(protocyte_has_${name} PROTOCYTE_${name})
+        if(protocyte_has_${name})
+            set(requested_output TRUE)
+        endif()
+    endforeach()
+    if(NOT requested_output)
+        message(
+            FATAL_ERROR
+            "protocyte_get_host_tools requires at least one output variable keyword"
+        )
+    endif()
+
+    _protocyte_prepare_plugin()
+    _protocyte_get_internal(protocyte_plugin_executable PLUGIN_EXECUTABLE)
+    _protocyte_get_internal(protocyte_plugin_is_managed PLUGIN_IS_MANAGED)
+    _protocyte_get_internal(protocyte_host_python_executable HOST_PYTHON_EXECUTABLE)
+    _protocyte_get_internal(protocyte_managed_python_executable MANAGED_PYTHON_EXECUTABLE)
+    _protocyte_get_internal(protocyte_managed_environment MANAGED_ENVIRONMENT)
+
+    if(protocyte_has_PLUGIN_EXECUTABLE_VAR)
+        set(
+            "${PROTOCYTE_PLUGIN_EXECUTABLE_VAR}"
+            "${protocyte_plugin_executable}"
+            PARENT_SCOPE
+        )
+    endif()
+    if(protocyte_has_HOST_PYTHON_EXECUTABLE_VAR)
+        set(
+            "${PROTOCYTE_HOST_PYTHON_EXECUTABLE_VAR}"
+            "${protocyte_host_python_executable}"
+            PARENT_SCOPE
+        )
+    endif()
+    if(protocyte_has_MANAGED_PYTHON_EXECUTABLE_VAR)
+        set(
+            "${PROTOCYTE_MANAGED_PYTHON_EXECUTABLE_VAR}"
+            "${protocyte_managed_python_executable}"
+            PARENT_SCOPE
+        )
+    endif()
+    if(protocyte_has_MANAGED_ENVIRONMENT_VAR)
+        set(
+            "${PROTOCYTE_MANAGED_ENVIRONMENT_VAR}"
+            "${protocyte_managed_environment}"
+            PARENT_SCOPE
+        )
+    endif()
+    if(protocyte_has_PLUGIN_IS_MANAGED_VAR)
+        set(
+            "${PROTOCYTE_PLUGIN_IS_MANAGED_VAR}"
+            "${protocyte_plugin_is_managed}"
+            PARENT_SCOPE
+        )
+    endif()
 endfunction()
 
 function(protocyte_setup_codegen)
@@ -4938,6 +5121,7 @@ function(protocyte_generate)
         list(REMOVE_DUPLICATES protocyte_source_check_targets)
         _protocyte_create_import_guard(
             protocyte_import_guard_target
+            "${PROTOCYTE_TARGET}"
             protocyte_source_check_targets
         )
     endif()
@@ -5394,14 +5578,9 @@ function(protocyte_generate)
         VERBATIM
     )
 
-    string(
-        SHA256
-        protocyte_ownership_guard_key
-        "${CMAKE_CURRENT_BINARY_DIR}|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
-    )
     set(
         protocyte_ownership_guard_target
-        "protocyte_ownership_guard_${protocyte_ownership_guard_key}"
+        "${PROTOCYTE_TARGET}__protocyte_ownership_guard"
     )
     add_custom_target(
         "${protocyte_ownership_guard_target}"
