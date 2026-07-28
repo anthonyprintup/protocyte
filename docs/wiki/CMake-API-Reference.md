@@ -6,6 +6,51 @@ These functions are available after either
 Unknown arguments, missing keyword values, duplicate single-value keywords,
 and incompatible mode selections are configuration errors.
 
+## `protocyte_get_host_tools`
+
+```cmake
+protocyte_get_host_tools(
+    [PLUGIN_EXECUTABLE_VAR <variable>]
+    [HOST_PYTHON_EXECUTABLE_VAR <variable>]
+    [MANAGED_PYTHON_EXECUTABLE_VAR <variable>]
+    [MANAGED_ENVIRONMENT_VAR <variable>]
+    [PLUGIN_IS_MANAGED_VAR <variable>]
+)
+```
+
+Prepares and validates the Protocyte plugin, then returns the requested
+configure-time paths in the caller's scope. At least one output variable is
+required.
+
+- `PLUGIN_EXECUTABLE_VAR` receives the version-matched plugin entry point used
+  by `protoc`.
+- `HOST_PYTHON_EXECUTABLE_VAR` receives the base interpreter selected to create
+  a Protocyte-managed environment. It is empty for an externally supplied
+  plugin.
+- `MANAGED_PYTHON_EXECUTABLE_VAR` receives the interpreter inside the managed
+  environment. It is empty for an externally supplied plugin.
+- `MANAGED_ENVIRONMENT_VAR` receives the managed environment directory. It is
+  empty for an externally supplied plugin.
+- `PLUGIN_IS_MANAGED_VAR` receives a CMake boolean.
+
+Use the plugin output to hand a parent's already validated generator to an
+independently configured child:
+
+```cmake
+protocyte_get_host_tools(PLUGIN_EXECUTABLE_VAR protocyte_plugin)
+
+ExternalProject_Add(
+    child
+    # ...
+    CMAKE_ARGS
+        "-DPROTOCYTE_PLUGIN_EXECUTABLE:FILEPATH=${protocyte_plugin}"
+)
+```
+
+The child revalidates the plugin against its own Protocyte package version and
+does not discover Python or create another managed environment. A plugin under
+the parent's build tree shares that build tree's lifetime.
+
 ## `protocyte_setup_codegen`
 
 ```cmake
@@ -96,6 +141,17 @@ library.
 - `GENERATED_HEADERS_VAR` and `GENERATED_SOURCES_VAR` receive generated paths
   in the caller's scope.
 - `GENERATED_TARGET_VAR` receives `TARGET` in the caller's scope.
+
+The codegen target's direct safety dependencies have stable logical names:
+
+- `<TARGET>__protocyte_ownership_guard`;
+- `<TARGET>__protocyte_import_guard` when source import topology requires a
+  pre-build guard.
+
+These support targets are reserved for Protocyte. Their names intentionally do
+not contain source- or build-directory hashes, so otherwise identical
+configurations expose the same direct production topology to graph-inspection
+tools.
 
 ### Output ownership and transactions
 

@@ -672,6 +672,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         }
         constexpr void clear_protocyte_escaped_5f5570706572() noexcept { protocyte_escaped_5f5570706572_ = {}; }
 
+        // Protocyte C++ name mapping: protobuf field "trailing_" uses accessor stem "trailing_protocyte" to avoid a C++
+        // collision.
         constexpr ::protocyte::i32 trailing_protocyte() const noexcept { return trailing_protocyte_; }
         void set_trailing_protocyte(const ::protocyte::i32 value) noexcept { trailing_protocyte_ = value; }
         constexpr void clear_trailing_protocyte() noexcept { trailing_protocyte_ = {}; }
@@ -698,6 +700,8 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             protocyte_escaped_656e756d5f5f76616c7565_ = {};
         }
 
+        // Protocyte C++ name mapping: protobuf field "class" uses accessor stem "class_protocyte" to avoid a C++
+        // collision.
         bool has_class_protocyte() const noexcept { return class_protocyte_.has_value(); }
         const ::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::
             protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<Config> *

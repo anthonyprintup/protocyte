@@ -81,6 +81,7 @@ def test_ci_groups_related_jobs_in_reusable_workflows() -> None:
             "CMake Integration",
             "cmake-integration.yml",
             (
+                "managed-python-windows",
                 "fetchcontent-linux",
                 "find-package-linux",
                 "find-package-windows",
@@ -329,6 +330,20 @@ def test_fetchcontent_install_gate_counts_a_final_unterminated_manifest_entry() 
     assert "wc -l" not in install_gate
 
 
+def test_managed_python_cmake_integration_covers_supported_interpreters() -> None:
+    job = _job_named(_workflow("cmake-integration.yml"), "managed-python-windows")
+
+    assert "runs-on: windows-latest" in job
+    assert '          - "3.12"' in job
+    assert '          - "3.13"' in job
+    assert '          - "3.14"' in job
+    assert "UV_PYTHON: ${{ matrix.python-version }}" in job
+    assert (
+        "test_managed_host_tools_support_nested_reuse_and_stage_specific_diagnostics"
+        in job
+    )
+
+
 def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
@@ -457,7 +472,8 @@ def test_release_uploads_handoff_before_isolated_smoke_jobs() -> None:
         REPO_ROOT / "tests" / "find_package" / "CMakeLists.txt"
     ).read_text(encoding="utf-8")
     assert "protocyte_add_proto_library(" in find_package_consumer
-    assert "PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE" in find_package_consumer
+    assert "protocyte_get_host_tools(" in find_package_consumer
+    assert "PROTOCYTE_INTERNAL_MANAGED_PLUGIN_EXECUTABLE" not in find_package_consumer
     assert (
         "add_test(NAME find_package_demo COMMAND find_package_demo)"
         in find_package_consumer
