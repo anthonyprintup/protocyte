@@ -344,6 +344,35 @@ def test_managed_python_cmake_integration_covers_supported_interpreters() -> Non
     )
 
 
+def test_wiki_publication_is_path_filtered_serial_and_minimally_privileged() -> None:
+    workflow = _workflow("publish-wiki.yml")
+    trigger = workflow.split("permissions:", maxsplit=1)[0]
+    publish = _job_named(workflow, "publish")
+    steps = _steps_by_name(publish)
+    checkout = steps["Check out the canonical documentation"]
+    mirror = steps["Mirror and publish the GitHub Wiki"]
+
+    assert "push:" in trigger
+    assert "      - main" in trigger
+    assert '      - "docs/wiki/**"' in trigger
+    assert '      - ".github/scripts/sync_wiki.py"' in trigger
+    assert '      - ".github/workflows/publish-wiki.yml"' in trigger
+    assert "pull_request:" not in trigger
+    assert "workflow_dispatch:" not in trigger
+    assert "tags:" not in trigger
+    assert workflow.count("contents: write") == 1
+    assert "write-all" not in workflow
+    assert "group: protocyte-wiki-publication-${{ github.repository }}" in workflow
+    assert "cancel-in-progress: false" in workflow
+    assert "persist-credentials: false" in checkout
+    assert "ref: ${{ github.sha }}" in checkout
+    assert "${GITHUB_REPOSITORY}.wiki.git" in mirror
+    assert 'sync_wiki.py "$wiki_checkout" --apply' in mirror
+    assert 'git -C "$wiki_checkout" diff --check' in mirror
+    assert 'git -C "$wiki_checkout" add --all' in mirror
+    assert 'git -C "$wiki_checkout" push origin HEAD' in mirror
+
+
 def test_release_artifacts_are_rebuilt_normalized_and_compared() -> None:
     release = (REPO_ROOT / ".github" / "workflows" / "publish-release.yml").read_text(
         encoding="utf-8"
@@ -935,7 +964,7 @@ def test_release_transaction_order_is_build_test_then_serialized_publication() -
     )
 
 
-def test_release_publication_is_the_repository_single_writer() -> None:
+def test_repository_writers_are_limited_to_release_and_wiki_publication() -> None:
     workflow_directory = REPO_ROOT / ".github" / "workflows"
     workflows = {
         path.name: path.read_text(encoding="utf-8")
@@ -944,6 +973,7 @@ def test_release_publication_is_the_repository_single_writer() -> None:
     }
     legacy = workflows["release.yml"]
     release = workflows["publish-release.yml"]
+    wiki = workflows["publish-wiki.yml"]
     publish = _job_named(release, "publish")
 
     assert "workflow_call:" in legacy
@@ -967,8 +997,13 @@ def test_release_publication_is_the_repository_single_writer() -> None:
     assert "environment: release" in publish
     for name, workflow in workflows.items():
         assert "write-all" not in workflow
-        if name != "publish-release.yml":
+        if name not in {"publish-release.yml", "publish-wiki.yml"}:
             assert "contents: write" not in workflow
+    assert wiki.count("contents: write") == 1
+    assert "pull_request:" not in wiki
+    assert "workflow_dispatch:" not in wiki
+    assert "      - main" in wiki
+    assert '      - "docs/wiki/**"' in wiki
 
     release_guide = (
         REPO_ROOT / "docs" / "wiki" / "Maintainer-Release-Guide.md"

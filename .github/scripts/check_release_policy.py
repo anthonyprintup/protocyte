@@ -265,6 +265,7 @@ def verify_repository_workflows(repository_root: Path) -> None:
     contents_write = re.compile(r"(?m)^[^#\n]*\bcontents\s*:\s*write\b")
     writers: list[Path] = []
     publisher_text: str | None = None
+    wiki_publisher_text: str | None = None
     for path in workflows:
         text = path.read_text(encoding="utf-8")
         if re.search(r"(?m)^[^#\n]*\bpermissions\s*:\s*write-all\b", text):
@@ -273,12 +274,15 @@ def verify_repository_workflows(repository_root: Path) -> None:
         writers.extend(path for _ in matches)
         if path.name == "publish-release.yml":
             publisher_text = text
+        elif path.name == "publish-wiki.yml":
+            wiki_publisher_text = text
 
-    if [path.name for path in writers] != ["publish-release.yml"]:
+    expected_writers = ["publish-release.yml", "publish-wiki.yml"]
+    if [path.name for path in writers] != expected_writers:
         names = ", ".join(path.name for path in writers) or "none"
         raise ReleaseError(
-            "exactly publish-release.yml may request one contents-write token; found "
-            + names
+            "exactly publish-release.yml and publish-wiki.yml may each request "
+            f"one contents-write token; found {names}"
         )
     legacy_path = workflow_directory / "release.yml"
     if (
@@ -291,6 +295,39 @@ def verify_repository_workflows(repository_root: Path) -> None:
         raise ReleaseError("publisher workflow must use trusted manual dispatch")
     if re.search(r"(?m)^\s*tags\s*:\s*$", publisher_text):
         raise ReleaseError("publisher workflow must not run from a tag event")
+    if wiki_publisher_text is None:
+        raise ReleaseError("repository must contain publish-wiki.yml")
+    expected_wiki_trigger = (
+        "name: Publish Wiki\n\n"
+        "on:\n"
+        "  push:\n"
+        "    branches:\n"
+        "      - main\n"
+        "    paths:\n"
+        '      - "docs/wiki/**"\n'
+        '      - ".github/scripts/sync_wiki.py"\n'
+        '      - ".github/workflows/publish-wiki.yml"\n'
+    )
+    wiki_trigger = wiki_publisher_text.split("\npermissions:", maxsplit=1)[0]
+    if wiki_trigger != expected_wiki_trigger:
+        raise ReleaseError(
+            "publish-wiki.yml must use the exact path-filtered main-branch trigger"
+        )
+    required_wiki_fragments = (
+        "group: protocyte-wiki-publication-${{ github.repository }}",
+        "cancel-in-progress: false",
+        "persist-credentials: false",
+        "${GITHUB_REPOSITORY}.wiki.git",
+        'sync_wiki.py "$wiki_checkout" --apply',
+        'git -C "$wiki_checkout" diff --check',
+        'git -C "$wiki_checkout" add --all',
+        'git -C "$wiki_checkout" push origin HEAD',
+    )
+    for fragment in required_wiki_fragments:
+        if fragment not in wiki_publisher_text:
+            raise ReleaseError(
+                f"publish-wiki.yml is missing its required safety contract: {fragment}"
+            )
 
 
 def _parser() -> argparse.ArgumentParser:
