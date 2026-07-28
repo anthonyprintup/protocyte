@@ -61,7 +61,7 @@ namespace test::reflection_symbols {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(Foo_ &output) const noexcept {
@@ -116,7 +116,7 @@ namespace test::reflection_symbols {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<Foo_> parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
@@ -265,7 +265,7 @@ namespace test::reflection_symbols {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(Foo_fields_ &output) const noexcept {
@@ -320,7 +320,7 @@ namespace test::reflection_symbols {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<Foo_fields_> parse(Context &ctx,

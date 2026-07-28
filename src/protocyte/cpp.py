@@ -1959,7 +1959,7 @@ def _emit_clone_api(
         w.line(
             "if (const auto st = clone(output); !st) { return ::protocyte::unexpected(st.error()); }"
         )
-        w.line("return ::protocyte::move(output);")
+        w.line("return output;")
     w.line("}")
     w.line()
     w.line(f"::protocyte::Status clone({message.cpp_name}& output) const noexcept {{")
@@ -2724,7 +2724,7 @@ def _emit_wire_api(
         w.line(
             "if (const auto st = parse(reader, output); !st) { return ::protocyte::unexpected(st.error()); }"
         )
-        w.line("return ::protocyte::move(output);")
+        w.line("return output;")
     w.line("}")
     w.line()
     w.line(
@@ -3658,7 +3658,9 @@ def _emit_read_map(w: CppWriter, item: FieldModel, options: GeneratorOptions) ->
             w.line(
                 f"::protocyte::pop_recursion<{item.config_cpp_name}>(*{_owner_context_storage(item)});"
             )
-            w.line("if (!entry_status) { return entry_status; }")
+            w.line(
+                "if (!entry_status) { return ::protocyte::unexpected(entry_status.error()); }"
+            )
             w.line("if (entry_is_unknown) {")
             with w.indent():
                 w.line("auto unknown = mutable_unknown_fields();")

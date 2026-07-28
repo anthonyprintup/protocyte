@@ -134,7 +134,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_NestedLevel1_NestedLevel2 &output) const noexcept {
@@ -250,7 +250,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1_NestedLevel2>
@@ -604,7 +604,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_NestedLevel1 &output) const noexcept {
@@ -728,7 +728,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_NestedLevel1>
@@ -1049,7 +1049,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_RepeatedBytesHolder &output) const noexcept {
@@ -1111,7 +1111,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_RepeatedBytesHolder>
@@ -1331,7 +1331,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_BoundedRepeatedBytesHolder &output) const noexcept {
@@ -1395,7 +1395,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_BoundedRepeatedBytesHolder>
@@ -1617,7 +1617,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_FixedRepeatedBytesHolder &output) const noexcept {
@@ -1681,7 +1681,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_FixedRepeatedBytesHolder>
@@ -1973,7 +1973,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE &output) const noexcept {
@@ -2157,7 +2157,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD_LevelE>
@@ -3156,7 +3156,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage &output) const noexcept {
@@ -4362,7 +4362,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage>
@@ -8247,7 +8247,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA &output) const noexcept {
@@ -8302,7 +8302,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA>
@@ -8458,7 +8458,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB &output) const noexcept {
@@ -8513,7 +8513,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB>
@@ -8672,7 +8672,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC &output) const noexcept {
@@ -8727,7 +8727,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC>
@@ -8888,7 +8888,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD &output) const noexcept {
@@ -8945,7 +8945,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<UltimateComplexMessage_LevelA_LevelB_LevelC_LevelD>
@@ -9105,7 +9105,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(ExtraMessage &output) const noexcept {
@@ -9223,7 +9223,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<ExtraMessage> parse(Context &ctx,
@@ -9499,7 +9499,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(CrossMessageConstants_Nested &output) const noexcept {
@@ -9591,7 +9591,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<CrossMessageConstants_Nested>
@@ -9825,7 +9825,7 @@ namespace test::ultimate {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(CrossMessageConstants &output) const noexcept {
@@ -9953,7 +9953,7 @@ namespace test::ultimate {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<CrossMessageConstants>

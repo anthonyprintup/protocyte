@@ -73,7 +73,7 @@ namespace protocyte_smoke::test::compat {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(EncodingMatrix_Inner &output) const noexcept {
@@ -168,7 +168,7 @@ namespace protocyte_smoke::test::compat {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<EncodingMatrix_Inner>
@@ -615,7 +615,7 @@ namespace protocyte_smoke::test::compat {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(EncodingMatrix &output) const noexcept {
@@ -1173,7 +1173,7 @@ namespace protocyte_smoke::test::compat {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<EncodingMatrix> parse(Context &ctx,

@@ -71,7 +71,7 @@ namespace test::crosspkg {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(CrossPackageConstants_Nested &output) const noexcept {
@@ -163,7 +163,7 @@ namespace test::crosspkg {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<CrossPackageConstants_Nested>
@@ -398,7 +398,7 @@ namespace test::crosspkg {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(CrossPackageConstants &output) const noexcept {
@@ -525,7 +525,7 @@ namespace test::crosspkg {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<CrossPackageConstants>

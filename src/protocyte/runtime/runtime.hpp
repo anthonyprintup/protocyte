@@ -1984,13 +1984,13 @@ namespace protocyte {
                 if (const auto st = copied.assign(value.view()); !st) {
                     return protocyte::unexpected(st.error());
                 }
-                return protocyte::move(copied);
+                return copied;
             } else if constexpr (requires { T {}; }) {
                 T copied {};
                 if (const auto st = copied.assign(value.view()); !st) {
                     return protocyte::unexpected(st.error());
                 }
-                return protocyte::move(copied);
+                return copied;
             } else {
                 static_assert(AlwaysFalse<T>::value,
                               "protocyte copy_value requires a default or pointer-context constructor");
@@ -2011,19 +2011,19 @@ namespace protocyte {
                 if (const auto st = copied.copy_from(value); !st) {
                     return protocyte::unexpected(st.error());
                 }
-                return protocyte::move(copied);
+                return copied;
             } else if constexpr (requires(Context *value_ctx) { T {value_ctx}; }) {
                 T copied {copy_ctx};
                 if (const auto st = copied.copy_from(value); !st) {
                     return protocyte::unexpected(st.error());
                 }
-                return protocyte::move(copied);
+                return copied;
             } else if constexpr (requires { T {}; }) {
                 T copied {};
                 if (const auto st = copied.copy_from(value); !st) {
                     return protocyte::unexpected(st.error());
                 }
-                return protocyte::move(copied);
+                return copied;
             } else {
                 static_assert(AlwaysFalse<T>::value, "protocyte copy_value requires a default or context constructor");
                 return protocyte::unexpected(ErrorCode::invalid_argument, {});
@@ -2837,7 +2837,7 @@ namespace protocyte {
                     if (const auto st = copied.assign(*view); !st) {
                         return protocyte::unexpected(st.error());
                     }
-                    return protocyte::move(copied);
+                    return copied;
                 } else if constexpr (requires { T {}; }) {
                     T copied {};
                     const auto view = byte_span_of(value);
@@ -2847,7 +2847,7 @@ namespace protocyte {
                     if (const auto st = copied.assign(*view); !st) {
                         return protocyte::unexpected(st.error());
                     }
-                    return protocyte::move(copied);
+                    return copied;
                 } else {
                     static_assert(AlwaysFalse<T>::value,
                                   "protocyte range assignment requires a default or pointer-context constructor");
@@ -3269,13 +3269,13 @@ namespace protocyte {
                     if (const auto st = copied.assign(*view); !st) {
                         return protocyte::unexpected(st.error());
                     }
-                    return protocyte::move(copied);
+                    return copied;
                 } else if constexpr (requires { T {}; }) {
                     T copied {};
                     if (const auto st = copied.assign(*view); !st) {
                         return protocyte::unexpected(st.error());
                     }
-                    return protocyte::move(copied);
+                    return copied;
                 } else {
                     static_assert(AlwaysFalse<T>::value,
                                   "protocyte range assignment requires a default or pointer-context constructor");
@@ -4266,10 +4266,9 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::size_limit, position());
             }
             auto byte = inner_->read_byte();
-            if (!byte) {
-                return protocyte::unexpected(byte.error());
+            if (byte) {
+                --remaining_;
             }
-            --remaining_;
             return byte;
         }
         Status read(u8 *out, const usize count) noexcept {
@@ -4331,11 +4330,10 @@ namespace protocyte {
                 return protocyte::unexpected(ErrorCode::unexpected_eof, position());
             }
             auto byte = inner_->read_byte();
-            if (!byte) {
-                return protocyte::unexpected(byte.error());
+            if (byte) {
+                --remaining_;
+                ++pos_;
             }
-            --remaining_;
-            ++pos_;
             return byte;
         }
         Status read(u8 *out, const usize count) noexcept {
