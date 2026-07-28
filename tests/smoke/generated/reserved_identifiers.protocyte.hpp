@@ -123,7 +123,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765
@@ -194,7 +194,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765>
@@ -490,7 +490,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(protocyte_escaped_5f5f4c494e455f5f &output) const noexcept {
@@ -729,7 +729,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<protocyte_escaped_5f5f4c494e455f5f>
@@ -1266,7 +1266,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(class_struct_ &output) const noexcept {
@@ -1326,7 +1326,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<class_struct_> parse(Context &ctx,
@@ -1577,7 +1577,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(class_protocyte_bae1d4f6754b &output) const noexcept {
@@ -1696,7 +1696,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<class_protocyte_bae1d4f6754b>
@@ -1976,7 +1976,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(Config &output) const noexcept {
@@ -2066,7 +2066,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<Config> parse(Context &ctx,
@@ -2273,7 +2273,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(Reader &output) const noexcept {
@@ -2328,7 +2328,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<Reader> parse(Context &ctx,
@@ -2484,7 +2484,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(MergeHelperNeighbors &output) const noexcept {
@@ -2539,7 +2539,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<MergeHelperNeighbors>
@@ -2696,7 +2696,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(MergeHelperNeighbors_merge_field_from &output) const noexcept {
@@ -2756,7 +2756,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<MergeHelperNeighbors_merge_field_from>
@@ -2963,7 +2963,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(MergeHelperNeighbors_merge_fields_from_ &output) const noexcept {
@@ -3023,7 +3023,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<MergeHelperNeighbors_merge_fields_from_>
@@ -3232,7 +3232,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(LegacyPayload &output) const noexcept {
@@ -3287,7 +3287,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<LegacyPayload> parse(Context &ctx,
@@ -3459,7 +3459,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(DeprecationCarrier &output) const noexcept {
@@ -3564,7 +3564,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<DeprecationCarrier> parse(Context &ctx,

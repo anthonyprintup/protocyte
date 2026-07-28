@@ -1218,6 +1218,12 @@ def test_runtime_scalar_copy_and_write_helpers_use_direct_checks() -> None:
     )[1].split("template<class Writer>\n    Status write_string_field", maxsplit=1)[0]
 
     assert ".transform([&copied]" not in copy_helpers
+    assert "const T copied" not in copy_helpers
+    assert "return protocyte::move(copied);" not in copy_helpers
+    assert "return copied;" in copy_helpers
+    assert "const T copied" not in range_value_body
+    assert "return protocyte::move(copied);" not in range_value_body
+    assert "return copied;" in range_value_body
     assert ".transform(\n                        [&copied]" not in range_value_body
     assert "auto copied = [&]() noexcept" not in runtime_header
     assert ".and_then([&reader]" not in scalar_read_fields
@@ -5379,6 +5385,9 @@ def test_generated_header_contains_expected_field_api() -> None:
         "static ::protocyte::Result<Sample> parse(Context& ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept"
         in header
     )
+    assert "const auto output =" not in header
+    assert "return output;" in header
+    assert "return ::protocyte::move(output);" not in header
     assert "const auto checked_input = ::protocyte::checked_span_of(input);" in header
     assert (
         "if (!checked_input) { return ::protocyte::unexpected(checked_input.error()); }"
@@ -5662,6 +5671,7 @@ def test_checked_smoke_output_reflects_copy_propagation() -> None:
         "::protocyte::Result<UltimateComplexMessage> clone() const noexcept" in header
     )
     assert "if (const auto st = clone(output); !st) {" in header
+    assert "return output;" in header
     assert (
         "::protocyte::Status clone(UltimateComplexMessage &output) const noexcept"
         in header

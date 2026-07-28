@@ -81,6 +81,16 @@ function(protocyte_smoke_enable_std_format_if_available target_name)
     endif()
 endfunction()
 
+function(protocyte_smoke_enable_nrvo_diagnostics target_name)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 21)
+        if(MSVC)
+            target_compile_options("${target_name}" PRIVATE /clang:-Wnrvo)
+        else()
+            target_compile_options("${target_name}" PRIVATE -Wnrvo)
+        endif()
+    endif()
+endfunction()
+
 if(PROTOCYTE_SMOKE_REGENERATE OR PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     set(PROTOCYTE_FETCH_PROTOBUF "${PROTOCYTE_SMOKE_FETCH_PROTOBUF}")
 else()
@@ -305,10 +315,12 @@ target_compile_definitions(
 protocyte_smoke_enable_std_format_if_available(protocyte_host_smoke)
 target_compile_features(protocyte_host_smoke PRIVATE cxx_std_20)
 target_link_libraries(protocyte_host_smoke PRIVATE Catch2::Catch2WithMain)
+protocyte_smoke_enable_nrvo_diagnostics(protocyte_host_smoke)
 
 add_library(protocyte_runtime_strict_compile OBJECT src/runtime_strict_compile.cpp)
 target_link_libraries(protocyte_runtime_strict_compile PRIVATE protocyte::runtime)
 target_compile_features(protocyte_runtime_strict_compile PRIVATE cxx_std_20)
+protocyte_smoke_enable_nrvo_diagnostics(protocyte_runtime_strict_compile)
 
 add_executable(
     protocyte_reflection_strict_compile
@@ -329,6 +341,7 @@ target_compile_definitions(
         PROTOCYTE_ENABLE_REFLECTION=1
 )
 target_compile_features(protocyte_reflection_strict_compile PRIVATE cxx_std_20)
+protocyte_smoke_enable_nrvo_diagnostics(protocyte_reflection_strict_compile)
 
 foreach(
     target_name
@@ -373,6 +386,7 @@ target_link_libraries(
     protocyte_reserved_identifiers_strict_compile
     PRIVATE protocyte::runtime
 )
+protocyte_smoke_enable_nrvo_diagnostics(protocyte_reserved_identifiers_strict_compile)
 
 if(MSVC)
     target_compile_options(

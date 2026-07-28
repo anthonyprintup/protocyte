@@ -84,7 +84,7 @@ namespace test::required {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(RequiredChild &output) const noexcept {
@@ -203,7 +203,7 @@ namespace test::required {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<RequiredChild> parse(Context &ctx,
@@ -463,7 +463,7 @@ namespace test::required {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(RequiredParent &output) const noexcept {
@@ -557,7 +557,7 @@ namespace test::required {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<RequiredParent> parse(Context &ctx,
@@ -844,7 +844,7 @@ namespace test::required {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(Proto2ArrayDefaults &output) const noexcept {
@@ -1008,7 +1008,7 @@ namespace test::required {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<Proto2ArrayDefaults> parse(Context &ctx,
@@ -1459,7 +1459,7 @@ namespace test::required {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(Proto2DefaultValues &output) const noexcept {
@@ -2012,7 +2012,7 @@ namespace test::required {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<Proto2DefaultValues> parse(Context &ctx,
@@ -2733,7 +2733,7 @@ namespace test::required {
                         const auto entry_status = parse_enum_by_name_entry(entry_reader);
                         ::protocyte::pop_recursion<Config>(*ctx_);
                         if (!entry_status) {
-                            return entry_status;
+                            return ::protocyte::unexpected(entry_status.error());
                         }
                         if (entry_is_unknown) {
                             auto unknown = mutable_unknown_fields();
@@ -3926,7 +3926,7 @@ namespace test::required {
             if (const auto st = clone(output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         ::protocyte::Status clone(OneofShadowingValue &output) const noexcept {
@@ -4014,7 +4014,7 @@ namespace test::required {
             if (const auto st = parse(reader, output); !st) {
                 return ::protocyte::unexpected(st.error());
             }
-            return ::protocyte::move(output);
+            return output;
         }
 
         static ::protocyte::Result<OneofShadowingValue> parse(Context &ctx,
