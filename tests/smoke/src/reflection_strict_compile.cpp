@@ -7,6 +7,11 @@ int main() {
     using ::protocyte::ReflectionFieldLabel;
     using namespace ::test::required::protocyte_reflection;
 
+    static_assert(::test::required::Proto2Int32MinSingleton_is_valid(-2147483647 - 1));
+    static_assert(::test::required::Proto2Int32MaxSingleton_is_valid(2147483647));
+    static_assert(::test::required::Proto2Int32MinRange_is_valid(-2147483647));
+    static_assert(::test::required::Proto2Int32MaxRange_is_valid(2147483646));
+
     const auto &required_id = RequiredChild_fields[0];
     if (required_id.label != ReflectionFieldLabel::required || !required_id.has_presence) {
         return 1;

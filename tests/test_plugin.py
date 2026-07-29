@@ -976,6 +976,36 @@ def test_omits_enum_arraysize_at_int32_max() -> None:
     assert "State_ARRAYSIZE" not in header
 
 
+@pytest.mark.parametrize(
+    ("numbers", "expected"),
+    [
+        ([-2], "return value == -2;"),
+        ([-(2**31)], "return value == -2147483648;"),
+        ([2**31 - 1], "return value == 2147483647;"),
+        ([-(2**31), -(2**31) + 1], "return value <= -2147483647;"),
+        ([2**31 - 2, 2**31 - 1], "return 2147483646 <= value;"),
+    ],
+)
+def test_enum_validity_avoids_redundant_int32_boundary_comparisons(
+    numbers: list[int], expected: str
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="int32_boundary_enum.proto", package="demo", syntax="proto2"
+    )
+    enum = file.enum_type.add(name="Boundary")
+    for index, number in enumerate(numbers):
+        enum.value.add(name=f"BOUNDARY_{index}", number=number)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert expected in header
+
+
 def test_nested_enum_helpers_are_static_members_of_the_declaring_message() -> None:
     file = descriptor_pb2.FileDescriptorProto(
         name="nested_enum.proto", package="demo", syntax="proto3"

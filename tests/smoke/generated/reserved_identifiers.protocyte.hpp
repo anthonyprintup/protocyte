@@ -104,7 +104,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
     inline constexpr LegacyMode LegacyMode_MAX {LegacyMode::LEGACY_MODE_UNSPECIFIED};
     inline constexpr ::protocyte::i32 LegacyMode_ARRAYSIZE {1};
     [[nodiscard]] inline constexpr bool LegacyMode_is_valid(const ::protocyte::i32 value) noexcept {
-        return 0 <= value && value <= 0;
+        return value == 0;
     }
 #if PROTOCYTE_ENABLE_REFLECTION
     [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *LegacyMode_descriptor() noexcept {
@@ -1643,7 +1643,7 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         static constexpr KeywordValues KeywordValues_MAX {KeywordValues::class_};
         static constexpr ::protocyte::i32 KeywordValues_ARRAYSIZE {1};
         [[nodiscard]] static constexpr bool KeywordValues_is_valid(const ::protocyte::i32 value) noexcept {
-            return 0 <= value && value <= 0;
+            return value == 0;
         }
 #if PROTOCYTE_ENABLE_REFLECTION
         [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *KeywordValues_descriptor() noexcept {

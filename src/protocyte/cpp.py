@@ -1662,8 +1662,19 @@ def _emit_enum_helpers(
     )
     with w.indent():
         numbers = sorted({value.number for value in enum.values})
-        if numbers[-1] - numbers[0] + 1 == len(numbers):
-            w.line(f"return {numbers[0]} <= value && value <= {numbers[-1]};")
+        min_number = numbers[0]
+        max_number = numbers[-1]
+        if len(numbers) == 1:
+            w.line(f"return value == {min_number};")
+        elif max_number - min_number + 1 == len(numbers):
+            if min_number == -(2**31):
+                w.line(f"return value <= {max_number};")
+            elif max_number == 2**31 - 1:
+                w.line(f"return {min_number} <= value;")
+            else:
+                w.line(
+                    f"return {min_number} <= value && value <= {max_number};"
+                )
         else:
             w.line("switch (value) {")
             with w.indent():
