@@ -195,6 +195,41 @@ target_compile_definitions(
 
 The definition changes public signatures, so all translation units in that target graph must use the same value.
 
+## Enums
+
+Every generated enum has protobuf-like numeric helpers, even when reflection is
+disabled:
+
+```cpp
+inline constexpr Mode Mode_MIN;
+inline constexpr Mode Mode_MAX;
+inline constexpr ::protocyte::i32 Mode_ARRAYSIZE;
+
+[[nodiscard]] constexpr bool
+Mode_is_valid(::protocyte::i32 value) noexcept;
+```
+
+`MIN` and `MAX` directly alias the first declared enum members having the
+smallest and largest numeric values, regardless of declaration order.
+`ARRAYSIZE` retains protobuf's spelling and means `MAX + 1`; it is not the
+number of declared values. It is omitted when `MAX` is `INT32_MAX`.
+`is_valid()` accepts declared numbers only, deduplicating aliases.
+
+Helpers for a nested enum are static members of the declaring message:
+
+```cpp
+using Color = Paint<>::Color;
+
+static_assert(Paint<>::Color_MIN == Color::COLOR_UNSPECIFIED);
+static_assert(Paint<>::Color_is_valid(1));
+```
+
+Proto2 enums are closed. Their generated field APIs reject undeclared numeric
+values according to the documented closed-enum wire behavior. Proto3 enums are
+open and preserve undeclared `int32` values in their raw field surface, while
+`is_valid()` still reports only declared values. Protocyte does not emit
+protobuf's internal open-enum extrema sentinels.
+
 ## Unknown Fields
 
 Unknown-field preservation is disabled by default:
@@ -233,6 +268,29 @@ PUBLIC visibility is required so generated sources and consumers see the same de
 On Windows, `protocyte_add_proto_library(TYPE SHARED)` gives reflection data a target-unique import/export macro. Direct generator users that build a DLL must manage visibility themselves.
 
 Each generated message receives an externally linked `std::array<protocyte::ReflectionFieldInfo, N>` in its package's `protocyte_reflection` namespace.
+
+Reflection builds also add these enum helpers:
+
+```cpp
+[[nodiscard]] ::protocyte::StringView Mode_name(Mode value) noexcept;
+[[nodiscard]] bool Mode_parse(
+    ::protocyte::StringView name,
+    Mode& value) noexcept;
+[[nodiscard]] const ::protocyte::ReflectionEnumInfo*
+Mode_descriptor() noexcept;
+```
+
+`name()` returns the first declared name for an aliased number and an empty view
+for an unknown value. `parse()` is case-sensitive, accepts every declared alias,
+does not allocate, and leaves its output unchanged on failure. A generated
+character-array overload accepts null-terminated names such as string literals
+with the same behavior for fallback `Span` and hosted `std::string_view` builds.
+The descriptor preserves declaration order and reports short and protobuf full
+names, deprecation state, and whether the enum is closed.
+
+Unlike protobuf `LITE_RUNTIME`, a reflection-disabled Protocyte build
+intentionally has no generated enum `name()`, `parse()`, or `descriptor()` API
+and contains no enum-name tables.
 
 ## Generated Identifier Safety
 

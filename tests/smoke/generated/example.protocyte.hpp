@@ -34,6 +34,11 @@ namespace test::ultimate {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> ExtraMessage_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> CrossMessageConstants_Nested_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 3> CrossMessageConstants_fields;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 4> UltimateComplexMessage_Color_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo UltimateComplexMessage_Color_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 4>
+            UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -81,6 +86,41 @@ namespace test::ultimate {
     template<typename Config> struct UltimateComplexMessage_NestedLevel1_NestedLevel2 {
         using Context = typename Config::Context;
         using InnerEnum = UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum;
+        static constexpr InnerEnum InnerEnum_MIN {InnerEnum::INNER_UNSPECIFIED};
+        static constexpr InnerEnum InnerEnum_MAX {InnerEnum::C};
+        static constexpr ::protocyte::i32 InnerEnum_ARRAYSIZE {4};
+        [[nodiscard]] static constexpr bool InnerEnum_is_valid(const ::protocyte::i32 value) noexcept {
+            return 0 <= value && value <= 3;
+        }
+#if PROTOCYTE_ENABLE_REFLECTION
+        [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *InnerEnum_descriptor() noexcept {
+            return &::test::ultimate::protocyte_reflection::
+                UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum;
+        }
+        [[nodiscard]] static ::protocyte::StringView InnerEnum_name(const InnerEnum value) noexcept {
+            for (const auto &item : InnerEnum_descriptor()->values) {
+                if (item.number == static_cast<::protocyte::i32>(value)) {
+                    return item.name;
+                }
+            }
+            return {};
+        }
+        [[nodiscard]] static bool InnerEnum_parse(const ::protocyte::StringView name, InnerEnum &value) noexcept {
+            for (const auto &item : InnerEnum_descriptor()->values) {
+                if (::protocyte::string_view_equal(name, item.name)) {
+                    value = static_cast<InnerEnum>(item.number);
+                    return true;
+                }
+            }
+            return false;
+        }
+        template<::protocyte::usize N>
+        [[nodiscard]] static bool InnerEnum_parse(const char (&name)[N], InnerEnum &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return InnerEnum_parse(::protocyte::StringView {name, size}, value);
+        }
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
         enum struct FieldNumber : ::protocyte::u32 {
             description = 1u,
@@ -2625,6 +2665,40 @@ namespace test::ultimate {
          *  -------------------------------------------------------------------------
          */
         using Color = UltimateComplexMessage_Color;
+        static constexpr Color Color_MIN {Color::COLOR_UNSPECIFIED};
+        static constexpr Color Color_MAX {Color::BLUE};
+        static constexpr ::protocyte::i32 Color_ARRAYSIZE {4};
+        [[nodiscard]] static constexpr bool Color_is_valid(const ::protocyte::i32 value) noexcept {
+            return 0 <= value && value <= 3;
+        }
+#if PROTOCYTE_ENABLE_REFLECTION
+        [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *Color_descriptor() noexcept {
+            return &::test::ultimate::protocyte_reflection::UltimateComplexMessage_Color_enum;
+        }
+        [[nodiscard]] static ::protocyte::StringView Color_name(const Color value) noexcept {
+            for (const auto &item : Color_descriptor()->values) {
+                if (item.number == static_cast<::protocyte::i32>(value)) {
+                    return item.name;
+                }
+            }
+            return {};
+        }
+        [[nodiscard]] static bool Color_parse(const ::protocyte::StringView name, Color &value) noexcept {
+            for (const auto &item : Color_descriptor()->values) {
+                if (::protocyte::string_view_equal(name, item.name)) {
+                    value = static_cast<Color>(item.number);
+                    return true;
+                }
+            }
+            return false;
+        }
+        template<::protocyte::usize N>
+        [[nodiscard]] static bool Color_parse(const char (&name)[N], Color &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return Color_parse(::protocyte::StringView {name, size}, value);
+        }
+#endif // PROTOCYTE_ENABLE_REFLECTION
         /**
          *  -------------------------------------------------------------------------
          *  Nested Message Types

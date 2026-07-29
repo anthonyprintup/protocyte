@@ -50,6 +50,96 @@ namespace test::required {
             {"bool_value", 1u, "scalar", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2DefaultMode_enum_values {{
+            {::protocyte::StringView {"PROTO2_DEFAULT_MODE_UNKNOWN", 27u}, 5, false},
+            {::protocyte::StringView {"PROTO2_DEFAULT_MODE_READY", 25u}, 9, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2DefaultMode_enum {
+            ::protocyte::StringView {"Proto2DefaultMode", 17u},
+            ::protocyte::StringView {"test.required.Proto2DefaultMode", 31u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2DefaultMode_enum_values.data(),
+                                                                           Proto2DefaultMode_enum_values.size()},
+            true,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 3> Proto2AliasMode_enum_values {{
+            {::protocyte::StringView {"PROTO2_ALIAS_MODE_UNKNOWN", 25u}, 5, false},
+            {::protocyte::StringView {"PROTO2_ALIAS_MODE_READY", 23u}, 9, false},
+            {::protocyte::StringView {"PROTO2_ALIAS_MODE_ACTIVE", 24u}, 9, true},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2AliasMode_enum {
+            ::protocyte::StringView {"Proto2AliasMode", 15u},
+            ::protocyte::StringView {"test.required.Proto2AliasMode", 29u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2AliasMode_enum_values.data(),
+                                                                           Proto2AliasMode_enum_values.size()},
+            true,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2MapMode_enum_values {{
+            {::protocyte::StringView {"PROTO2_MAP_MODE_UNKNOWN", 23u}, 0, false},
+            {::protocyte::StringView {"PROTO2_MAP_MODE_READY", 21u}, 9, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2MapMode_enum {
+            ::protocyte::StringView {"Proto2MapMode", 13u},
+            ::protocyte::StringView {"test.required.Proto2MapMode", 27u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2MapMode_enum_values.data(),
+                                                                           Proto2MapMode_enum_values.size()},
+            true,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> Proto2Int32MinSingleton_enum_values {{
+            {::protocyte::StringView {"PROTO2_INT32_MIN_SINGLETON_VALUE", 32u}, -2147483648, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MinSingleton_enum {
+            ::protocyte::StringView {"Proto2Int32MinSingleton", 23u},
+            ::protocyte::StringView {"test.required.Proto2Int32MinSingleton", 37u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2Int32MinSingleton_enum_values.data(),
+                                                                           Proto2Int32MinSingleton_enum_values.size()},
+            true,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> Proto2Int32MaxSingleton_enum_values {{
+            {::protocyte::StringView {"PROTO2_INT32_MAX_SINGLETON_VALUE", 32u}, 2147483647, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MaxSingleton_enum {
+            ::protocyte::StringView {"Proto2Int32MaxSingleton", 23u},
+            ::protocyte::StringView {"test.required.Proto2Int32MaxSingleton", 37u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2Int32MaxSingleton_enum_values.data(),
+                                                                           Proto2Int32MaxSingleton_enum_values.size()},
+            true,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2Int32MinRange_enum_values {{
+            {::protocyte::StringView {"PROTO2_INT32_MIN_RANGE_MIN", 26u}, -2147483648, false},
+            {::protocyte::StringView {"PROTO2_INT32_MIN_RANGE_NEXT", 27u}, -2147483647, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MinRange_enum {
+            ::protocyte::StringView {"Proto2Int32MinRange", 19u},
+            ::protocyte::StringView {"test.required.Proto2Int32MinRange", 33u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2Int32MinRange_enum_values.data(),
+                                                                           Proto2Int32MinRange_enum_values.size()},
+            true,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2Int32MaxRange_enum_values {{
+            {::protocyte::StringView {"PROTO2_INT32_MAX_RANGE_PREVIOUS", 31u}, 2147483646, false},
+            {::protocyte::StringView {"PROTO2_INT32_MAX_RANGE_MAX", 26u}, 2147483647, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MaxRange_enum {
+            ::protocyte::StringView {"Proto2Int32MaxRange", 19u},
+            ::protocyte::StringView {"test.required.Proto2Int32MaxRange", 33u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {Proto2Int32MaxRange_enum_values.data(),
+                                                                           Proto2Int32MaxRange_enum_values.size()},
+            true,
+            false,
+        };
+
     } // namespace protocyte_reflection
 
 } // namespace test::required

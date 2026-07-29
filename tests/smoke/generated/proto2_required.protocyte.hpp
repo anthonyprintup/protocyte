@@ -20,6 +20,20 @@ namespace test::required {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Proto2ArrayDefaults_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 24> Proto2DefaultValues_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> OneofShadowingValue_fields;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2DefaultMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2DefaultMode_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 3> Proto2AliasMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2AliasMode_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2MapMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2MapMode_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> Proto2Int32MinSingleton_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MinSingleton_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> Proto2Int32MaxSingleton_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MaxSingleton_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2Int32MinRange_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MinRange_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2Int32MaxRange_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2Int32MaxRange_enum;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -27,11 +41,295 @@ namespace test::required {
         PROTO2_DEFAULT_MODE_UNKNOWN = 5,
         PROTO2_DEFAULT_MODE_READY = 9,
     };
+    inline constexpr Proto2DefaultMode Proto2DefaultMode_MIN {Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN};
+    inline constexpr Proto2DefaultMode Proto2DefaultMode_MAX {Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY};
+    inline constexpr ::protocyte::i32 Proto2DefaultMode_ARRAYSIZE {10};
+    [[nodiscard]] inline constexpr bool Proto2DefaultMode_is_valid(const ::protocyte::i32 value) noexcept {
+        switch (value) {
+            case 5:
+            case 9: return true;
+            default: return false;
+        }
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2DefaultMode_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2DefaultMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2DefaultMode_name(const Proto2DefaultMode value) noexcept {
+        for (const auto &item : Proto2DefaultMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2DefaultMode_parse(const ::protocyte::StringView name,
+                                                      Proto2DefaultMode &value) noexcept {
+        for (const auto &item : Proto2DefaultMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2DefaultMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2DefaultMode_parse(const char (&name)[N], Proto2DefaultMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2DefaultMode_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+    enum struct Proto2AliasMode : ::protocyte::i32 {
+        PROTO2_ALIAS_MODE_UNKNOWN = 5,
+        PROTO2_ALIAS_MODE_READY = 9,
+        PROTO2_ALIAS_MODE_ACTIVE [[deprecated]] = 9,
+    };
+    inline constexpr Proto2AliasMode Proto2AliasMode_MIN {Proto2AliasMode::PROTO2_ALIAS_MODE_UNKNOWN};
+    inline constexpr Proto2AliasMode Proto2AliasMode_MAX {Proto2AliasMode::PROTO2_ALIAS_MODE_READY};
+    inline constexpr ::protocyte::i32 Proto2AliasMode_ARRAYSIZE {10};
+    [[nodiscard]] inline constexpr bool Proto2AliasMode_is_valid(const ::protocyte::i32 value) noexcept {
+        switch (value) {
+            case 5:
+            case 9: return true;
+            default: return false;
+        }
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2AliasMode_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2AliasMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2AliasMode_name(const Proto2AliasMode value) noexcept {
+        for (const auto &item : Proto2AliasMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2AliasMode_parse(const ::protocyte::StringView name,
+                                                    Proto2AliasMode &value) noexcept {
+        for (const auto &item : Proto2AliasMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2AliasMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2AliasMode_parse(const char (&name)[N], Proto2AliasMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2AliasMode_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct Proto2MapMode : ::protocyte::i32 {
         PROTO2_MAP_MODE_UNKNOWN = 0,
         PROTO2_MAP_MODE_READY = 9,
     };
+    inline constexpr Proto2MapMode Proto2MapMode_MIN {Proto2MapMode::PROTO2_MAP_MODE_UNKNOWN};
+    inline constexpr Proto2MapMode Proto2MapMode_MAX {Proto2MapMode::PROTO2_MAP_MODE_READY};
+    inline constexpr ::protocyte::i32 Proto2MapMode_ARRAYSIZE {10};
+    [[nodiscard]] inline constexpr bool Proto2MapMode_is_valid(const ::protocyte::i32 value) noexcept {
+        switch (value) {
+            case 0:
+            case 9: return true;
+            default: return false;
+        }
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2MapMode_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2MapMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2MapMode_name(const Proto2MapMode value) noexcept {
+        for (const auto &item : Proto2MapMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2MapMode_parse(const ::protocyte::StringView name, Proto2MapMode &value) noexcept {
+        for (const auto &item : Proto2MapMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2MapMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2MapMode_parse(const char (&name)[N], Proto2MapMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2MapMode_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+    enum struct Proto2Int32MinSingleton : ::protocyte::i32 {
+        PROTO2_INT32_MIN_SINGLETON_VALUE = -2147483648,
+    };
+    inline constexpr Proto2Int32MinSingleton Proto2Int32MinSingleton_MIN {
+        Proto2Int32MinSingleton::PROTO2_INT32_MIN_SINGLETON_VALUE};
+    inline constexpr Proto2Int32MinSingleton Proto2Int32MinSingleton_MAX {
+        Proto2Int32MinSingleton::PROTO2_INT32_MIN_SINGLETON_VALUE};
+    inline constexpr ::protocyte::i32 Proto2Int32MinSingleton_ARRAYSIZE {-2147483647};
+    [[nodiscard]] inline constexpr bool Proto2Int32MinSingleton_is_valid(const ::protocyte::i32 value) noexcept {
+        return value == -2147483648;
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2Int32MinSingleton_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2Int32MinSingleton_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView
+    Proto2Int32MinSingleton_name(const Proto2Int32MinSingleton value) noexcept {
+        for (const auto &item : Proto2Int32MinSingleton_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2Int32MinSingleton_parse(const ::protocyte::StringView name,
+                                                            Proto2Int32MinSingleton &value) noexcept {
+        for (const auto &item : Proto2Int32MinSingleton_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2Int32MinSingleton>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N> [[nodiscard]] inline bool
+    Proto2Int32MinSingleton_parse(const char (&name)[N], Proto2Int32MinSingleton &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2Int32MinSingleton_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+    enum struct Proto2Int32MaxSingleton : ::protocyte::i32 {
+        PROTO2_INT32_MAX_SINGLETON_VALUE = 2147483647,
+    };
+    inline constexpr Proto2Int32MaxSingleton Proto2Int32MaxSingleton_MIN {
+        Proto2Int32MaxSingleton::PROTO2_INT32_MAX_SINGLETON_VALUE};
+    inline constexpr Proto2Int32MaxSingleton Proto2Int32MaxSingleton_MAX {
+        Proto2Int32MaxSingleton::PROTO2_INT32_MAX_SINGLETON_VALUE};
+    [[nodiscard]] inline constexpr bool Proto2Int32MaxSingleton_is_valid(const ::protocyte::i32 value) noexcept {
+        return value == 2147483647;
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2Int32MaxSingleton_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2Int32MaxSingleton_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView
+    Proto2Int32MaxSingleton_name(const Proto2Int32MaxSingleton value) noexcept {
+        for (const auto &item : Proto2Int32MaxSingleton_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2Int32MaxSingleton_parse(const ::protocyte::StringView name,
+                                                            Proto2Int32MaxSingleton &value) noexcept {
+        for (const auto &item : Proto2Int32MaxSingleton_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2Int32MaxSingleton>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N> [[nodiscard]] inline bool
+    Proto2Int32MaxSingleton_parse(const char (&name)[N], Proto2Int32MaxSingleton &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2Int32MaxSingleton_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+    enum struct Proto2Int32MinRange : ::protocyte::i32 {
+        PROTO2_INT32_MIN_RANGE_MIN = -2147483648,
+        PROTO2_INT32_MIN_RANGE_NEXT = -2147483647,
+    };
+    inline constexpr Proto2Int32MinRange Proto2Int32MinRange_MIN {Proto2Int32MinRange::PROTO2_INT32_MIN_RANGE_MIN};
+    inline constexpr Proto2Int32MinRange Proto2Int32MinRange_MAX {Proto2Int32MinRange::PROTO2_INT32_MIN_RANGE_NEXT};
+    inline constexpr ::protocyte::i32 Proto2Int32MinRange_ARRAYSIZE {-2147483646};
+    [[nodiscard]] inline constexpr bool Proto2Int32MinRange_is_valid(const ::protocyte::i32 value) noexcept {
+        return value <= -2147483647;
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2Int32MinRange_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2Int32MinRange_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2Int32MinRange_name(const Proto2Int32MinRange value) noexcept {
+        for (const auto &item : Proto2Int32MinRange_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2Int32MinRange_parse(const ::protocyte::StringView name,
+                                                        Proto2Int32MinRange &value) noexcept {
+        for (const auto &item : Proto2Int32MinRange_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2Int32MinRange>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2Int32MinRange_parse(const char (&name)[N], Proto2Int32MinRange &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2Int32MinRange_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+    enum struct Proto2Int32MaxRange : ::protocyte::i32 {
+        PROTO2_INT32_MAX_RANGE_PREVIOUS = 2147483646,
+        PROTO2_INT32_MAX_RANGE_MAX = 2147483647,
+    };
+    inline constexpr Proto2Int32MaxRange Proto2Int32MaxRange_MIN {Proto2Int32MaxRange::PROTO2_INT32_MAX_RANGE_PREVIOUS};
+    inline constexpr Proto2Int32MaxRange Proto2Int32MaxRange_MAX {Proto2Int32MaxRange::PROTO2_INT32_MAX_RANGE_MAX};
+    [[nodiscard]] inline constexpr bool Proto2Int32MaxRange_is_valid(const ::protocyte::i32 value) noexcept {
+        return 2147483646 <= value;
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2Int32MaxRange_descriptor() noexcept {
+        return &::test::required::protocyte_reflection::Proto2Int32MaxRange_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2Int32MaxRange_name(const Proto2Int32MaxRange value) noexcept {
+        for (const auto &item : Proto2Int32MaxRange_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2Int32MaxRange_parse(const ::protocyte::StringView name,
+                                                        Proto2Int32MaxRange &value) noexcept {
+        for (const auto &item : Proto2Int32MaxRange_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2Int32MaxRange>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2Int32MaxRange_parse(const char (&name)[N], Proto2Int32MaxRange &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2Int32MaxRange_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredChild;
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredParent;

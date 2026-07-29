@@ -15,11 +15,21 @@ namespace test::reflection_symbols {
     namespace protocyte_reflection {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Foo_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> Foo_fields_fields;
+        extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> ReflectionShadowCarrier_fields;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2>
+            ReflectionShadowCarrier_protocyte_reflection_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo ReflectionShadowCarrier_protocyte_reflection_enum;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
+    enum struct ReflectionShadowCarrier_protocyte_reflection : ::protocyte::i32 {
+        PROTOCYTE_REFLECTION_UNSPECIFIED = 0,
+        PROTOCYTE_REFLECTION_READY = 1,
+    };
+
     template<typename Config = ::protocyte::DefaultConfig> struct Foo;
     template<typename Config = ::protocyte::DefaultConfig> struct Foo_fields;
+    template<typename Config = ::protocyte::DefaultConfig> struct ReflectionShadowCarrier;
 
     template<typename Config> struct Foo {
         using Context = typename Config::Context;
@@ -335,6 +345,252 @@ namespace test::reflection_symbols {
 
         template<::protocyte::ReaderLike Reader>
         static ::protocyte::Status parse(Reader &reader, Foo_fields &output) noexcept {
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.merge_from(reader); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+        template<::protocyte::ReaderLike Reader>::protocyte::Status merge_from(Reader &reader) noexcept {
+            ::protocyte::ParseBudgetReader<Reader> budget_reader {
+                reader, ctx_->limits.max_total_bytes, ctx_->limits.max_repeated_elements, ctx_->limits.max_map_entries};
+            if (const auto st = merge_fields_from(budget_reader); !st) {
+                return st;
+            }
+            if (budget_reader.limit_reached()) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::size_limit, budget_reader.position());
+            }
+            return validate();
+        }
+
+    private:
+        template<typename Reader>::protocyte::Status merge_field_from_(Reader &reader,
+                                                                       const ::protocyte::u32 field_number,
+                                                                       const ::protocyte::WireType wire_type) noexcept {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st = ::protocyte::read_unknown_field<Config>(*ctx_, reader, wire_type, field_number,
+                                                                            unknown_fields_);
+                    !st) {
+                    return st;
+                }
+            } else {
+                if (const auto st = ::protocyte::skip_field<Config>(*ctx_, reader, wire_type, field_number); !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    protected:
+        friend class ::protocyte::MessageParseAccess;
+
+        template<typename Reader>::protocyte::Status merge_fields_from(Reader &reader) noexcept {
+            while (!reader.eof()) {
+                const auto tag = ::protocyte::read_tag(reader);
+                if (!tag) {
+                    return tag.status();
+                }
+                const auto [field_number, wire_type] = *tag;
+                if (const auto st = merge_field_from_(reader, field_number, wire_type); !st) {
+                    return ::protocyte::with_field(st, field_number);
+                }
+            }
+            return {};
+        }
+
+    public:
+        template<::protocyte::WriterLike Writer>::protocyte::Status serialize(Writer &writer) const noexcept {
+            if (const auto st = validate(); !st) {
+                return st;
+            }
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                const auto unknown_bytes = unknown_fields_.bytes();
+                if (!unknown_bytes.empty()) {
+                    if (const auto st = writer.write(unknown_bytes.data(), unknown_bytes.size()); !st) {
+                        return st;
+                    }
+                }
+            }
+            return {};
+        }
+
+        ::protocyte::Result<::protocyte::usize>
+        serialize(const ::protocyte::Span<::protocyte::u8> output) const noexcept {
+            return ::protocyte::serialize(*this, output);
+        }
+
+        ::protocyte::Result<::protocyte::usize> encoded_size() const noexcept {
+            if (const auto st = validate(); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            ::protocyte::usize total {};
+            const auto total_with_unknown = ::protocyte::checked_add(total, unknown_fields_.size());
+            if (!total_with_unknown) {
+                return ::protocyte::unexpected(total_with_unknown.error());
+            }
+            return *total_with_unknown;
+        }
+
+        ::protocyte::Status validate() const noexcept { return {}; }
+    protected:
+        Context *ctx_;
+        PROTOCYTE_NO_UNIQUE_ADDRESS ::protocyte::UnknownFieldStorage<Config> unknown_fields_;
+    };
+
+    template<typename Config> struct ReflectionShadowCarrier {
+        using Context = typename Config::Context;
+        using protocyte_reflection = ReflectionShadowCarrier_protocyte_reflection;
+        static constexpr protocyte_reflection protocyte_reflection_MIN {
+            protocyte_reflection::PROTOCYTE_REFLECTION_UNSPECIFIED};
+        static constexpr protocyte_reflection protocyte_reflection_MAX {
+            protocyte_reflection::PROTOCYTE_REFLECTION_READY};
+        static constexpr ::protocyte::i32 protocyte_reflection_ARRAYSIZE {2};
+        [[nodiscard]] static constexpr bool protocyte_reflection_is_valid(const ::protocyte::i32 value) noexcept {
+            return 0 <= value && value <= 1;
+        }
+#if PROTOCYTE_ENABLE_REFLECTION
+        [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *protocyte_reflection_descriptor() noexcept {
+            return &::test::reflection_symbols::protocyte_reflection::ReflectionShadowCarrier_protocyte_reflection_enum;
+        }
+        [[nodiscard]] static ::protocyte::StringView
+        protocyte_reflection_name(const protocyte_reflection value) noexcept {
+            for (const auto &item : protocyte_reflection_descriptor()->values) {
+                if (item.number == static_cast<::protocyte::i32>(value)) {
+                    return item.name;
+                }
+            }
+            return {};
+        }
+        [[nodiscard]] static bool protocyte_reflection_parse(const ::protocyte::StringView name,
+                                                             protocyte_reflection &value) noexcept {
+            for (const auto &item : protocyte_reflection_descriptor()->values) {
+                if (::protocyte::string_view_equal(name, item.name)) {
+                    value = static_cast<protocyte_reflection>(item.number);
+                    return true;
+                }
+            }
+            return false;
+        }
+        template<::protocyte::usize N> [[nodiscard]] static bool
+        protocyte_reflection_parse(const char (&name)[N], protocyte_reflection &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return protocyte_reflection_parse(::protocyte::StringView {name, size}, value);
+        }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+        explicit ReflectionShadowCarrier(Context &ctx) noexcept: ctx_ {&ctx}, unknown_fields_ {&ctx} {}
+
+        static ReflectionShadowCarrier create(Context &ctx) noexcept { return ReflectionShadowCarrier {ctx}; }
+        Context *context() const noexcept { return ctx_; }
+        ReflectionShadowCarrier(ReflectionShadowCarrier &&) noexcept = default;
+        ReflectionShadowCarrier &operator=(ReflectionShadowCarrier &&) noexcept = default;
+        ReflectionShadowCarrier(const ReflectionShadowCarrier &) = delete;
+        ReflectionShadowCarrier &operator=(const ReflectionShadowCarrier &) = delete;
+
+        ::protocyte::Status copy_from(const ReflectionShadowCarrier &source) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            ReflectionShadowCarrier staging_message {*ctx_};
+            return copy_from(source, staging_message);
+        }
+
+        ::protocyte::Status copy_from(const ReflectionShadowCarrier &source,
+                                      ReflectionShadowCarrier &staging_message) noexcept {
+            if (this == &source) {
+                return {};
+            }
+            if (this == &staging_message || &source == &staging_message) {
+                return ::protocyte::unexpected(::protocyte::ErrorCode::invalid_argument, {});
+            }
+            reset_for_reuse_(staging_message, *ctx_);
+            if (const auto st = staging_message.copy_from_in_place_(source); !st) {
+                reset_for_reuse_(staging_message, *ctx_);
+                return st;
+            }
+            *this = ::protocyte::move(staging_message);
+            return {};
+        }
+
+        ::protocyte::Result<ReflectionShadowCarrier> clone() const noexcept {
+            auto output = ReflectionShadowCarrier::create(*ctx_);
+            if (const auto st = clone(output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        ::protocyte::Status clone(ReflectionShadowCarrier &output) const noexcept {
+            if (this == &output) {
+                return {};
+            }
+            Context *const output_ctx = output.context();
+            reset_for_reuse_(output, *output_ctx);
+            if (const auto st = output.copy_from_in_place_(*this); !st) {
+                reset_for_reuse_(output, *output_ctx);
+                return st;
+            }
+            return {};
+        }
+
+    protected:
+        static void reset_for_reuse_(ReflectionShadowCarrier &value, Context &ctx) noexcept {
+            value.~ReflectionShadowCarrier();
+            new (&value) ReflectionShadowCarrier {ctx};
+        }
+
+        ::protocyte::Status copy_from_in_place_(const ReflectionShadowCarrier &source) noexcept {
+            if constexpr (::protocyte::preserve_unknown_fields_v<Config>) {
+                if (const auto st =
+                        unknown_fields_.copy_from(source.unknown_fields_, ctx_->limits.max_unknown_field_bytes);
+                    !st) {
+                    return st;
+                }
+            }
+            return {};
+        }
+
+    public:
+
+        ::protocyte::UnknownFieldRange unknown_fields() const noexcept {
+            return ::protocyte::UnknownFieldRange {unknown_fields_.bytes(), ctx_->limits.max_recursion_depth};
+        }
+        ::protocyte::usize unknown_field_count() const noexcept { return unknown_fields().field_count(); }
+        ::protocyte::Span<const ::protocyte::u8> unknown_field_bytes() const noexcept {
+            return unknown_fields_.bytes();
+        }
+        void clear_unknown_fields() noexcept { unknown_fields_.clear(); }
+        ::protocyte::MutableUnknownFieldSet<Config> mutable_unknown_fields() noexcept
+            requires(::protocyte::preserve_unknown_fields_v<Config>)
+        {
+            return ::protocyte::MutableUnknownFieldSet<Config> {*ctx_, unknown_fields_};
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Result<ReflectionShadowCarrier> parse(Context &ctx, Reader &reader) noexcept {
+            auto output = ReflectionShadowCarrier::create(ctx);
+            if (const auto st = parse(reader, output); !st) {
+                return ::protocyte::unexpected(st.error());
+            }
+            return output;
+        }
+
+        static ::protocyte::Result<ReflectionShadowCarrier>
+        parse(Context &ctx, ::protocyte::Span<const ::protocyte::u8> input) noexcept {
+            const auto checked_input = ::protocyte::checked_span_of(input);
+            if (!checked_input) {
+                return ::protocyte::unexpected(checked_input.error());
+            }
+            ::protocyte::SliceReader reader {checked_input->data(), checked_input->size()};
+            return parse(ctx, reader);
+        }
+
+        template<::protocyte::ReaderLike Reader>
+        static ::protocyte::Status parse(Reader &reader, ReflectionShadowCarrier &output) noexcept {
             Context *const output_ctx = output.context();
             reset_for_reuse_(output, *output_ctx);
             if (const auto st = output.merge_from(reader); !st) {

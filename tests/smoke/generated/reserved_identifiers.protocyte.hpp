@@ -25,6 +25,17 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> MergeHelperNeighbors_merge_fields_from_fields_;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 0> LegacyPayload_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> DeprecationCarrier_fields;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2>
+            protocyte_escaped_5f5f46494c455f5f_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo protocyte_escaped_5f5f46494c455f5f_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> LegacyMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo LegacyMode_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2>
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> class_KeywordValues_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo class_KeywordValues_enum;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -32,10 +43,105 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         protocyte_escaped_5f5570706572 = 0,
         protocyte_escaped_76616c75655f5f676170 = 1,
     };
+    inline constexpr protocyte_escaped_5f5f46494c455f5f protocyte_escaped_5f5f46494c455f5f_MIN {
+        protocyte_escaped_5f5f46494c455f5f::protocyte_escaped_5f5570706572};
+    inline constexpr protocyte_escaped_5f5f46494c455f5f protocyte_escaped_5f5f46494c455f5f_MAX {
+        protocyte_escaped_5f5f46494c455f5f::protocyte_escaped_76616c75655f5f676170};
+    inline constexpr ::protocyte::i32 protocyte_escaped_5f5f46494c455f5f_ARRAYSIZE {2};
+    [[nodiscard]] inline constexpr bool
+    protocyte_escaped_5f5f46494c455f5f_is_valid(const ::protocyte::i32 value) noexcept {
+        return 0 <= value && value <= 1;
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *
+    protocyte_escaped_5f5f46494c455f5f_descriptor() noexcept {
+        return &::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::protocyte_reflection::
+            protocyte_escaped_5f5f46494c455f5f_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView
+    protocyte_escaped_5f5f46494c455f5f_name(const protocyte_escaped_5f5f46494c455f5f value) noexcept {
+        for (const auto &item : protocyte_escaped_5f5f46494c455f5f_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool
+    protocyte_escaped_5f5f46494c455f5f_parse(const ::protocyte::StringView name,
+                                             protocyte_escaped_5f5f46494c455f5f &value) noexcept {
+        for (const auto &item : protocyte_escaped_5f5f46494c455f5f_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<protocyte_escaped_5f5f46494c455f5f>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N> [[nodiscard]] inline bool
+    protocyte_escaped_5f5f46494c455f5f_parse(const char (&name)[N],
+                                             protocyte_escaped_5f5f46494c455f5f &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return protocyte_escaped_5f5f46494c455f5f_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
     enum struct [[deprecated]] LegacyMode : ::protocyte::i32 {
         LEGACY_MODE_UNSPECIFIED = 0,
     };
+    inline constexpr LegacyMode LegacyMode_MIN {LegacyMode::LEGACY_MODE_UNSPECIFIED};
+    inline constexpr LegacyMode LegacyMode_MAX {LegacyMode::LEGACY_MODE_UNSPECIFIED};
+    inline constexpr ::protocyte::i32 LegacyMode_ARRAYSIZE {1};
+    [[nodiscard]] inline constexpr bool LegacyMode_is_valid(const ::protocyte::i32 value) noexcept {
+        return value == 0;
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *LegacyMode_descriptor() noexcept {
+        return &::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::protocyte_reflection::
+            LegacyMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView LegacyMode_name(const LegacyMode value) noexcept {
+        for (const auto &item : LegacyMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool LegacyMode_parse(const ::protocyte::StringView name, LegacyMode &value) noexcept {
+        for (const auto &item : LegacyMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<LegacyMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool LegacyMode_parse(const char (&name)[N], LegacyMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return LegacyMode_parse(::protocyte::StringView {name, size}, value);
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
     enum struct protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d : ::protocyte::i32 {
         protocyte_escaped_5f5f535444435f5f = 0,
@@ -360,6 +466,49 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
         using Context = typename Config::Context;
         using protocyte_escaped_5f4e6573746564456e756d =
             protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d;
+        static constexpr protocyte_escaped_5f4e6573746564456e756d protocyte_escaped_5f4e6573746564456e756d_MIN {
+            protocyte_escaped_5f4e6573746564456e756d::protocyte_escaped_5f5f535444435f5f};
+        static constexpr protocyte_escaped_5f4e6573746564456e756d protocyte_escaped_5f4e6573746564456e756d_MAX {
+            protocyte_escaped_5f4e6573746564456e756d::enum_trailing_};
+        static constexpr ::protocyte::i32 protocyte_escaped_5f4e6573746564456e756d_ARRAYSIZE {2};
+        [[nodiscard]] static constexpr bool
+        protocyte_escaped_5f4e6573746564456e756d_is_valid(const ::protocyte::i32 value) noexcept {
+            return 0 <= value && value <= 1;
+        }
+#if PROTOCYTE_ENABLE_REFLECTION
+        [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *
+        protocyte_escaped_5f4e6573746564456e756d_descriptor() noexcept {
+            return &::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::protocyte_reflection::
+                protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum;
+        }
+        [[nodiscard]] static ::protocyte::StringView
+        protocyte_escaped_5f4e6573746564456e756d_name(const protocyte_escaped_5f4e6573746564456e756d value) noexcept {
+            for (const auto &item : protocyte_escaped_5f4e6573746564456e756d_descriptor()->values) {
+                if (item.number == static_cast<::protocyte::i32>(value)) {
+                    return item.name;
+                }
+            }
+            return {};
+        }
+        [[nodiscard]] static bool
+        protocyte_escaped_5f4e6573746564456e756d_parse(const ::protocyte::StringView name,
+                                                       protocyte_escaped_5f4e6573746564456e756d &value) noexcept {
+            for (const auto &item : protocyte_escaped_5f4e6573746564456e756d_descriptor()->values) {
+                if (::protocyte::string_view_equal(name, item.name)) {
+                    value = static_cast<protocyte_escaped_5f4e6573746564456e756d>(item.number);
+                    return true;
+                }
+            }
+            return false;
+        }
+        template<::protocyte::usize N> [[nodiscard]] static bool
+        protocyte_escaped_5f4e6573746564456e756d_parse(const char (&name)[N],
+                                                       protocyte_escaped_5f4e6573746564456e756d &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return protocyte_escaped_5f4e6573746564456e756d_parse(::protocyte::StringView {name, size}, value);
+        }
+#endif // PROTOCYTE_ENABLE_REFLECTION
         template<typename NestedConfig = Config> using protocyte_escaped_4e65737465645f5f4d657373616765 =
             protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_4e65737465645f5f4d657373616765<NestedConfig>;
 
@@ -1490,6 +1639,42 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
     template<typename Config> struct class_protocyte_bae1d4f6754b {
         using Context = typename Config::Context;
         using KeywordValues = class_KeywordValues;
+        static constexpr KeywordValues KeywordValues_MIN {KeywordValues::class_};
+        static constexpr KeywordValues KeywordValues_MAX {KeywordValues::class_};
+        static constexpr ::protocyte::i32 KeywordValues_ARRAYSIZE {1};
+        [[nodiscard]] static constexpr bool KeywordValues_is_valid(const ::protocyte::i32 value) noexcept {
+            return value == 0;
+        }
+#if PROTOCYTE_ENABLE_REFLECTION
+        [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *KeywordValues_descriptor() noexcept {
+            return &::protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f::protocyte_reflection::
+                class_KeywordValues_enum;
+        }
+        [[nodiscard]] static ::protocyte::StringView KeywordValues_name(const KeywordValues value) noexcept {
+            for (const auto &item : KeywordValues_descriptor()->values) {
+                if (item.number == static_cast<::protocyte::i32>(value)) {
+                    return item.name;
+                }
+            }
+            return {};
+        }
+        [[nodiscard]] static bool KeywordValues_parse(const ::protocyte::StringView name,
+                                                      KeywordValues &value) noexcept {
+            for (const auto &item : KeywordValues_descriptor()->values) {
+                if (::protocyte::string_view_equal(name, item.name)) {
+                    value = static_cast<KeywordValues>(item.number);
+                    return true;
+                }
+            }
+            return false;
+        }
+        template<::protocyte::usize N>
+        [[nodiscard]] static bool KeywordValues_parse(const char (&name)[N], KeywordValues &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return KeywordValues_parse(::protocyte::StringView {name, size}, value);
+        }
+#endif // PROTOCYTE_ENABLE_REFLECTION
         template<typename NestedConfig = Config> using struct_ = class_struct_<NestedConfig>;
 
         enum struct And_Case : ::protocyte::u32 {

@@ -41,6 +41,20 @@ namespace protocyte_smoke::test::compat {
             {"deprecated_unused", 29u, "string", ::protocyte::ReflectionFieldLabel::optional, false, false},
         }};
 
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 3> EncodingMatrix_Mode_enum_values {{
+            {::protocyte::StringView {"MODE_UNSPECIFIED", 16u}, 0, false},
+            {::protocyte::StringView {"FIRST", 5u}, 1, false},
+            {::protocyte::StringView {"SECOND", 6u}, 2, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo EncodingMatrix_Mode_enum {
+            ::protocyte::StringView {"Mode", 4u},
+            ::protocyte::StringView {"test.compat.EncodingMatrix.Mode", 31u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {EncodingMatrix_Mode_enum_values.data(),
+                                                                           EncodingMatrix_Mode_enum_values.size()},
+            false,
+            false,
+        };
+
     } // namespace protocyte_reflection
 
 } // namespace protocyte_smoke::test::compat

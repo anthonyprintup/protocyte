@@ -25,9 +25,35 @@ enum Proto2DefaultMode {
   PROTO2_DEFAULT_MODE_READY = 9;
 }
 
+enum Proto2AliasMode {
+  option allow_alias = true;
+
+  PROTO2_ALIAS_MODE_UNKNOWN = 5;
+  PROTO2_ALIAS_MODE_READY = 9;
+  PROTO2_ALIAS_MODE_ACTIVE = 9 [deprecated = true];
+}
+
 enum Proto2MapMode {
   PROTO2_MAP_MODE_UNKNOWN = 0;
   PROTO2_MAP_MODE_READY = 9;
+}
+
+enum Proto2Int32MinSingleton {
+  PROTO2_INT32_MIN_SINGLETON_VALUE = -2147483648;
+}
+
+enum Proto2Int32MaxSingleton {
+  PROTO2_INT32_MAX_SINGLETON_VALUE = 2147483647;
+}
+
+enum Proto2Int32MinRange {
+  PROTO2_INT32_MIN_RANGE_MIN = -2147483648;
+  PROTO2_INT32_MIN_RANGE_NEXT = -2147483647;
+}
+
+enum Proto2Int32MaxRange {
+  PROTO2_INT32_MAX_RANGE_PREVIOUS = 2147483646;
+  PROTO2_INT32_MAX_RANGE_MAX = 2147483647;
 }
 
 message Proto2DefaultValues {

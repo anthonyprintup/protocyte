@@ -1212,24 +1212,27 @@ def _validate_generated_namespace_scopes(
                 kind="package constant",
                 owner=constant.full_name,
             )
+        for enum in file_model.enums:
+            for symbol in _enum_public_symbols(enum):
+                namespace.symbol(
+                    symbol,
+                    kind="enum helper",
+                    owner=enum.full_name,
+                )
 
     for file_model in scope_files:
-        messages = [
-            message
-            for message in _walk_generated_messages(file_model.messages)
-            if not message.is_map_entry
-        ]
-        if not messages:
+        reflection_symbols = list(_file_reflection_symbols(file_model))
+        if not reflection_symbols:
             continue
         reflection_namespace = namespaces.namespace(
             [*_namespace_parts(file_model), "protocyte_reflection"],
             owner=f"descriptor file {file_model.name!r} generated reflection API",
         )
-        for message in messages:
+        for owner, symbol in reflection_symbols:
             reflection_namespace.symbol(
-                _reflection_name(message),
+                symbol,
                 kind="reflection symbol",
-                owner=message.full_name,
+                owner=owner,
             )
 
 
@@ -1242,6 +1245,22 @@ def _file_generated_cpp_symbols(file_model: FileModel) -> Iterator[tuple[str, st
         yield message.full_name, message.cpp_name
         for enum in message.nested_enums:
             yield enum.full_name, enum.cpp_name
+
+
+def _enum_public_symbols(enum: EnumModel) -> Iterator[str]:
+    for key in ("min", "max", "arraysize", "is_valid", "name", "parse", "descriptor"):
+        symbol = enum.emitted_names.get(key)
+        if symbol is not None:
+            yield symbol
+
+
+def _file_reflection_symbols(file_model: FileModel) -> Iterator[tuple[str, str]]:
+    for message in _walk_generated_messages(file_model.messages):
+        if not message.is_map_entry:
+            yield message.full_name, _reflection_name(message)
+    for enum in _file_enums(file_model):
+        yield enum.full_name, _enum_reflection_values_name(enum)
+        yield enum.full_name, _enum_reflection_name(enum)
 
 
 def _generated_cpp_scope_files(model: DescriptorModel) -> list[FileModel]:
@@ -1303,37 +1322,32 @@ def _validate_generated_reflection_symbols(
                 owners[enum.cpp_name] = enum.full_name
 
     for file_model in scope_files:
-        messages = [
-            message
-            for message in _walk_generated_messages(file_model.messages)
-            if not message.is_map_entry
-        ]
-        if not messages:
+        file_symbols = list(_file_reflection_symbols(file_model))
+        if not file_symbols:
             continue
 
         namespace = (*_namespace_parts(file_model), "protocyte_reflection")
         symbols = reflection_symbols.setdefault(namespace, {})
-        for message in messages:
-            symbol = _reflection_name(message)
+        for owner, symbol in file_symbols:
             first = symbols.get(symbol)
             if first is not None:
                 raise ProtocyteError(
-                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"{owner}: generated reflection symbol {symbol!r} "
                     f"collides with {first!r}"
                 )
             type_owner = type_owners.get(namespace, {}).get(symbol)
             if type_owner is not None:
                 raise ProtocyteError(
-                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"{owner}: generated reflection symbol {symbol!r} "
                     f"collides with generated type {type_owner!r}"
                 )
             constant_owner = constant_owners.get(namespace, {}).get(symbol)
             if constant_owner is not None:
                 raise ProtocyteError(
-                    f"{message.full_name}: generated reflection symbol {symbol!r} "
+                    f"{owner}: generated reflection symbol {symbol!r} "
                     f"collides with generated package constant {constant_owner!r}"
                 )
-            symbols[symbol] = message.full_name
+            symbols[symbol] = owner
 
     for reflection_namespace in reflection_symbols:
         namespace = reflection_namespace[:-1]
@@ -1378,6 +1392,33 @@ def _reflection_name(message: MessageModel) -> str:
     return _cpp_suffix_identifier(message.cpp_name, "fields")
 
 
+def _enum_reflection_values_name(enum: EnumModel) -> str:
+    return _cpp_suffix_identifier(enum.cpp_name, "enum_values")
+
+
+def _enum_reflection_name(enum: EnumModel) -> str:
+    return _cpp_suffix_identifier(enum.cpp_name, "enum")
+
+
+def _qualified_enum_reflection_name(enum: EnumModel) -> str:
+    if enum.cpp_namespace is None:
+        raise AssertionError(
+            f"{enum.full_name}: missing allocated C++ namespace spelling"
+        )
+    return _qualified_name(
+        (*enum.cpp_namespace, "protocyte_reflection"),
+        _enum_reflection_name(enum),
+    )
+
+
+def _string_view_literal(value: str) -> str:
+    encoded = value.encode("utf-8")
+    return (
+        f"::protocyte::StringView "
+        f"{{{_cpp_string_literal(encoded)}, {len(encoded)}u}}"
+    )
+
+
 def _reflection_label(item: FieldModel) -> str:
     if item.label == FieldDescriptorProto.LABEL_REQUIRED:
         return "required"
@@ -1405,7 +1446,8 @@ def _emit_reflection_declarations(
     w: CppWriter, file_model: FileModel, options: GeneratorOptions
 ) -> None:
     messages = _ordered_messages(file_model)
-    if not messages:
+    enums = _file_enums(file_model)
+    if not messages and not enums:
         return
     w.line("#if PROTOCYTE_ENABLE_REFLECTION")
     if options.reflection_api_macro is not None:
@@ -1422,6 +1464,21 @@ def _emit_reflection_declarations(
                 f"extern {api_macro}const "
                 f"::std::array<::protocyte::ReflectionFieldInfo, {len(message.fields)}> "
                 f"{_reflection_name(message)};"
+            )
+        for enum in enums:
+            api_macro = (
+                f"{options.reflection_api_macro} "
+                if options.reflection_api_macro is not None
+                else ""
+            )
+            w.line(
+                f"extern {api_macro}const "
+                f"::std::array<::protocyte::ReflectionEnumValueInfo, {len(enum.values)}> "
+                f"{_enum_reflection_values_name(enum)};"
+            )
+            w.line(
+                f"extern {api_macro}const ::protocyte::ReflectionEnumInfo "
+                f"{_enum_reflection_name(enum)};"
             )
     w.line("}  // namespace protocyte_reflection")
     w.line("#endif  // PROTOCYTE_ENABLE_REFLECTION")
@@ -1513,17 +1570,58 @@ def generate_source(
                     )
             w.line("}};")
             w.line()
+        for enum in _file_enums(file_model):
+            api_macro = (
+                f"{options.reflection_api_macro} "
+                if options.reflection_api_macro is not None
+                else ""
+            )
+            values_name = _enum_reflection_values_name(enum)
+            w.line(
+                f"extern {api_macro}const "
+                f"::std::array<::protocyte::ReflectionEnumValueInfo, {len(enum.values)}> "
+                f"{values_name} {{{{"
+            )
+            with w.indent():
+                for value in enum.values:
+                    w.line(
+                        f"{{{_string_view_literal(value.name)}, {value.number}, "
+                        f"{_cpp_bool(value.deprecated)}}},"
+                    )
+            w.line("}};")
+            w.line(
+                f"extern {api_macro}const ::protocyte::ReflectionEnumInfo "
+                f"{_enum_reflection_name(enum)} {{"
+            )
+            with w.indent():
+                w.line(f"{_string_view_literal(enum.name)},")
+                w.line(f"{_string_view_literal(enum.full_name)},")
+                w.line(
+                    f"::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> "
+                    f"{{{values_name}.data(), {values_name}.size()}},"
+                )
+                w.line(f"{_cpp_bool(enum.closed)},")
+                w.line(f"{_cpp_bool(enum.deprecated)},")
+            w.line("};")
+            w.line()
     w.line("}  // namespace protocyte_reflection")
     _close_namespace(w, _namespace_parts(file_model))
     w.line("#endif  // PROTOCYTE_ENABLE_REFLECTION")
     return w.render()
 
 
-def _emit_enums(w: CppWriter, file_model: FileModel, options: GeneratorOptions) -> None:
+def _file_enums(file_model: FileModel) -> list[EnumModel]:
     enums = list(file_model.enums)
     for message in _walk_messages(file_model.messages):
         enums.extend(message.nested_enums)
-    for enum in enums:
+    return enums
+
+
+def _emit_enums(w: CppWriter, file_model: FileModel, options: GeneratorOptions) -> None:
+    for enum in _file_enums(file_model):
+        suppress_internal_deprecation = _enum_helpers_use_deprecated_values(enum)
+        if enum.deprecated or suppress_internal_deprecation:
+            _emit_deprecated_diagnostic_push(w)
         _emit_documentation(w, enum.documentation, options)
         deprecated = " [[deprecated]]" if enum.deprecated else ""
         w.line(f"enum struct{deprecated} {enum.cpp_name} : ::protocyte::i32 {{")
@@ -1533,13 +1631,130 @@ def _emit_enums(w: CppWriter, file_model: FileModel, options: GeneratorOptions) 
                 deprecated = " [[deprecated]]" if value.deprecated else ""
                 w.line(f"{value.cpp_name}{deprecated} = {value.number},")
         w.line("};")
+        if enum.parent is None:
+            _emit_enum_helpers(w, enum, enum.cpp_name, static=False)
+        if enum.deprecated or suppress_internal_deprecation:
+            _emit_deprecated_diagnostic_pop(w)
         w.line()
+
+
+def _emit_enum_helpers(
+    w: CppWriter, enum: EnumModel, type_name: str, *, static: bool
+) -> None:
+    variable_prefix = "static " if static else "inline "
+    function_prefix = "static " if static else "inline "
+    w.line(
+        f"{variable_prefix}constexpr {type_name} {enum.emitted_names['min']} "
+        f"{{{type_name}::{enum.min_value.cpp_name}}};"
+    )
+    w.line(
+        f"{variable_prefix}constexpr {type_name} {enum.emitted_names['max']} "
+        f"{{{type_name}::{enum.max_value.cpp_name}}};"
+    )
+    if enum.generates_arraysize:
+        w.line(
+            f"{variable_prefix}constexpr ::protocyte::i32 "
+            f"{enum.emitted_names['arraysize']} {{{enum.max_number + 1}}};"
+        )
+    w.line(
+        f"[[nodiscard]] {function_prefix}constexpr bool "
+        f"{enum.emitted_names['is_valid']}(const ::protocyte::i32 value) noexcept {{"
+    )
+    with w.indent():
+        numbers = sorted({value.number for value in enum.values})
+        min_number = numbers[0]
+        max_number = numbers[-1]
+        if len(numbers) == 1:
+            w.line(f"return value == {min_number};")
+        elif max_number - min_number + 1 == len(numbers):
+            if min_number == -(2**31):
+                w.line(f"return value <= {max_number};")
+            elif max_number == 2**31 - 1:
+                w.line(f"return {min_number} <= value;")
+            else:
+                w.line(
+                    f"return {min_number} <= value && value <= {max_number};"
+                )
+        else:
+            w.line("switch (value) {")
+            with w.indent():
+                for number in numbers:
+                    w.line(f"case {number}:")
+                with w.indent():
+                    w.line("return true;")
+                w.line("default:")
+                with w.indent():
+                    w.line("return false;")
+            w.line("}")
+    w.line("}")
+    w.line("#if PROTOCYTE_ENABLE_REFLECTION")
+    w.line(
+        f"[[nodiscard]] {function_prefix}const ::protocyte::ReflectionEnumInfo* "
+        f"{enum.emitted_names['descriptor']}() noexcept {{"
+    )
+    with w.indent():
+        w.line(f"return &{_qualified_enum_reflection_name(enum)};")
+    w.line("}")
+    w.line(
+        f"[[nodiscard]] {function_prefix}::protocyte::StringView "
+        f"{enum.emitted_names['name']}(const {type_name} value) noexcept {{"
+    )
+    with w.indent():
+        w.line(
+            f"for (const auto& item : {enum.emitted_names['descriptor']}()->values) {{"
+        )
+        with w.indent():
+            w.line(
+                "if (item.number == static_cast<::protocyte::i32>(value)) "
+                "{ return item.name; }"
+            )
+        w.line("}")
+        w.line("return {};")
+    w.line("}")
+    w.line(
+        f"[[nodiscard]] {function_prefix}bool {enum.emitted_names['parse']}("
+        f"const ::protocyte::StringView name, {type_name}& value) noexcept {{"
+    )
+    with w.indent():
+        w.line(
+            f"for (const auto& item : {enum.emitted_names['descriptor']}()->values) {{"
+        )
+        with w.indent():
+            w.line("if (::protocyte::string_view_equal(name, item.name)) {")
+            with w.indent():
+                w.line(f"value = static_cast<{type_name}>(item.number);")
+                w.line("return true;")
+            w.line("}")
+        w.line("}")
+        w.line("return false;")
+    w.line("}")
+    w.line("template<::protocyte::usize N>")
+    w.line(
+        f"[[nodiscard]] {function_prefix}bool {enum.emitted_names['parse']}("
+        f"const char (&name)[N], {type_name}& value) noexcept {{"
+    )
+    with w.indent():
+        w.line("::protocyte::usize size {};")
+        w.line("while (size < N && name[size] != '\\0') { ++size; }")
+        w.line(
+            f"return {enum.emitted_names['parse']}("
+            "::protocyte::StringView {name, size}, value);"
+        )
+    w.line("}")
+    w.line("#endif  // PROTOCYTE_ENABLE_REFLECTION")
+
+
+def _enum_helpers_use_deprecated_values(enum: EnumModel) -> bool:
+    return enum.min_value.deprecated or enum.max_value.deprecated
 
 
 def _message_uses_deprecated_declarations(message: MessageModel) -> bool:
     return (
         message.deprecated
-        or any(enum.deprecated for enum in message.nested_enums)
+        or any(
+            enum.deprecated or _enum_helpers_use_deprecated_values(enum)
+            for enum in message.nested_enums
+        )
         or any(nested.deprecated for nested in message.nested_messages)
         or any(
             item.deprecated or _field_uses_deprecated_type(item)
@@ -1597,6 +1812,7 @@ def _emit_message(
             alias_deprecated = " [[deprecated]]" if enum.deprecated else ""
             alias_name = enum.emitted_names["alias"]
             w.line(f"using {alias_name}{alias_deprecated} = {enum.cpp_name};")
+            _emit_enum_helpers(w, enum, alias_name, static=True)
         for nested in message.nested_messages:
             if not nested.is_map_entry:
                 _emit_documentation(w, nested.documentation, options)

@@ -5,3 +5,10 @@ package test.reflection_symbols;
 message Foo {}
 
 message Foo_fields {}
+
+message ReflectionShadowCarrier {
+  enum protocyte_reflection {
+    PROTOCYTE_REFLECTION_UNSPECIFIED = 0;
+    PROTOCYTE_REFLECTION_READY = 1;
+  }
+}

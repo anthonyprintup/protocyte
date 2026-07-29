@@ -51,6 +51,61 @@ namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
             {"legacy_payload", 2u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2>
+            protocyte_escaped_5f5f46494c455f5f_enum_values {{
+                {::protocyte::StringView {"_Upper", 6u}, 0, false},
+                {::protocyte::StringView {"value__gap", 10u}, 1, false},
+            }};
+        extern const ::protocyte::ReflectionEnumInfo protocyte_escaped_5f5f46494c455f5f_enum {
+            ::protocyte::StringView {"__FILE__", 8u},
+            ::protocyte::StringView {"_Package.__LINE__.__FILE__", 26u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {
+                protocyte_escaped_5f5f46494c455f5f_enum_values.data(),
+                protocyte_escaped_5f5f46494c455f5f_enum_values.size()},
+            false,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> LegacyMode_enum_values {{
+            {::protocyte::StringView {"LEGACY_MODE_UNSPECIFIED", 23u}, 0, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo LegacyMode_enum {
+            ::protocyte::StringView {"LegacyMode", 10u},
+            ::protocyte::StringView {"_Package.__LINE__.LegacyMode", 28u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {LegacyMode_enum_values.data(),
+                                                                           LegacyMode_enum_values.size()},
+            false,
+            true,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2>
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum_values {{
+                {::protocyte::StringView {"__STDC__", 8u}, 0, false},
+                {::protocyte::StringView {"enum_trailing_", 14u}, 1, false},
+            }};
+        extern const ::protocyte::ReflectionEnumInfo
+            protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum {
+                ::protocyte::StringView {"_NestedEnum", 11u},
+                ::protocyte::StringView {"_Package.__LINE__.__LINE__._NestedEnum", 38u},
+                ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {
+                    protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum_values.data(),
+                    protocyte_escaped_5f5f4c494e455f5f_protocyte_escaped_5f4e6573746564456e756d_enum_values.size()},
+                false,
+                false,
+            };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 1> class_KeywordValues_enum_values {{
+            {::protocyte::StringView {"class", 5u}, 0, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo class_KeywordValues_enum {
+            ::protocyte::StringView {"KeywordValues", 13u},
+            ::protocyte::StringView {"_Package.__LINE__.class.KeywordValues", 37u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {class_KeywordValues_enum_values.data(),
+                                                                           class_KeywordValues_enum_values.size()},
+            false,
+            false,
+        };
+
     } // namespace protocyte_reflection
 
 } // namespace protocyte_escaped_5f5061636b616765::protocyte_escaped_5f5f4c494e455f5f
