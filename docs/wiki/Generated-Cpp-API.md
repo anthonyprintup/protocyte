@@ -282,9 +282,11 @@ Mode_descriptor() noexcept;
 
 `name()` returns the first declared name for an aliased number and an empty view
 for an unknown value. `parse()` is case-sensitive, accepts every declared alias,
-does not allocate, and leaves its output unchanged on failure. The descriptor
-preserves declaration order and reports short and protobuf full names,
-deprecation state, and whether the enum is closed.
+does not allocate, and leaves its output unchanged on failure. A generated
+character-array overload accepts null-terminated names such as string literals
+with the same behavior for fallback `Span` and hosted `std::string_view` builds.
+The descriptor preserves declaration order and reports short and protobuf full
+names, deprecation state, and whether the enum is closed.
 
 Unlike protobuf `LITE_RUNTIME`, a reflection-disabled Protocyte build
 intentionally has no generated enum `name()`, `parse()`, or `descriptor()` API

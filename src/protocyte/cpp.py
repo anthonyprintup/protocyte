@@ -1400,6 +1400,17 @@ def _enum_reflection_name(enum: EnumModel) -> str:
     return _cpp_suffix_identifier(enum.cpp_name, "enum")
 
 
+def _qualified_enum_reflection_name(enum: EnumModel) -> str:
+    if enum.cpp_namespace is None:
+        raise AssertionError(
+            f"{enum.full_name}: missing allocated C++ namespace spelling"
+        )
+    return _qualified_name(
+        (*enum.cpp_namespace, "protocyte_reflection"),
+        _enum_reflection_name(enum),
+    )
+
+
 def _string_view_literal(value: str) -> str:
     encoded = value.encode("utf-8")
     return (
@@ -1671,9 +1682,7 @@ def _emit_enum_helpers(
         f"{enum.emitted_names['descriptor']}() noexcept {{"
     )
     with w.indent():
-        w.line(
-            f"return &protocyte_reflection::{_enum_reflection_name(enum)};"
-        )
+        w.line(f"return &{_qualified_enum_reflection_name(enum)};")
     w.line("}")
     w.line(
         f"[[nodiscard]] {function_prefix}::protocyte::StringView "
@@ -1707,6 +1716,19 @@ def _emit_enum_helpers(
             w.line("}")
         w.line("}")
         w.line("return false;")
+    w.line("}")
+    w.line("template<::protocyte::usize N>")
+    w.line(
+        f"[[nodiscard]] {function_prefix}bool {enum.emitted_names['parse']}("
+        f"const char (&name)[N], {type_name}& value) noexcept {{"
+    )
+    with w.indent():
+        w.line("::protocyte::usize size {};")
+        w.line("while (size < N && name[size] != '\\0') { ++size; }")
+        w.line(
+            f"return {enum.emitted_names['parse']}("
+            "::protocyte::StringView {name, size}, value);"
+        )
     w.line("}")
     w.line("#endif  // PROTOCYTE_ENABLE_REFLECTION")
 

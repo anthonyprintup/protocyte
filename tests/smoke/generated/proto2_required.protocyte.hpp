@@ -45,7 +45,7 @@ namespace test::required {
     }
 #if PROTOCYTE_ENABLE_REFLECTION
     [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2DefaultMode_descriptor() noexcept {
-        return &protocyte_reflection::Proto2DefaultMode_enum;
+        return &::test::required::protocyte_reflection::Proto2DefaultMode_enum;
     }
     [[nodiscard]] inline ::protocyte::StringView Proto2DefaultMode_name(const Proto2DefaultMode value) noexcept {
         for (const auto &item : Proto2DefaultMode_descriptor()->values) {
@@ -64,6 +64,12 @@ namespace test::required {
             }
         }
         return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2DefaultMode_parse(const char (&name)[N], Proto2DefaultMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2DefaultMode_parse(::protocyte::StringView {name, size}, value);
     }
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -84,7 +90,7 @@ namespace test::required {
     }
 #if PROTOCYTE_ENABLE_REFLECTION
     [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2AliasMode_descriptor() noexcept {
-        return &protocyte_reflection::Proto2AliasMode_enum;
+        return &::test::required::protocyte_reflection::Proto2AliasMode_enum;
     }
     [[nodiscard]] inline ::protocyte::StringView Proto2AliasMode_name(const Proto2AliasMode value) noexcept {
         for (const auto &item : Proto2AliasMode_descriptor()->values) {
@@ -104,6 +110,12 @@ namespace test::required {
         }
         return false;
     }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2AliasMode_parse(const char (&name)[N], Proto2AliasMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2AliasMode_parse(::protocyte::StringView {name, size}, value);
+    }
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct Proto2MapMode : ::protocyte::i32 {
@@ -122,7 +134,7 @@ namespace test::required {
     }
 #if PROTOCYTE_ENABLE_REFLECTION
     [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2MapMode_descriptor() noexcept {
-        return &protocyte_reflection::Proto2MapMode_enum;
+        return &::test::required::protocyte_reflection::Proto2MapMode_enum;
     }
     [[nodiscard]] inline ::protocyte::StringView Proto2MapMode_name(const Proto2MapMode value) noexcept {
         for (const auto &item : Proto2MapMode_descriptor()->values) {
@@ -140,6 +152,12 @@ namespace test::required {
             }
         }
         return false;
+    }
+    template<::protocyte::usize N>
+    [[nodiscard]] inline bool Proto2MapMode_parse(const char (&name)[N], Proto2MapMode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Proto2MapMode_parse(::protocyte::StringView {name, size}, value);
     }
 #endif // PROTOCYTE_ENABLE_REFLECTION
 

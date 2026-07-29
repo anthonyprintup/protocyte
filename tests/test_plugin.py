@@ -1010,6 +1010,52 @@ def test_nested_enum_helpers_are_static_members_of_the_declaring_message() -> No
     )
 
 
+def test_nested_enum_descriptor_uses_absolute_reflection_namespace() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="nested_enum_reflection_shadow.proto",
+        package="demo",
+        syntax="proto3",
+    )
+    outer = file.message_type.add(name="Outer")
+    enum = outer.enum_type.add(name="protocyte_reflection")
+    enum.value.add(name="PROTOCYTE_REFLECTION_UNSPECIFIED", number=0)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert (
+        "using protocyte_reflection = Outer_protocyte_reflection;" in header
+    )
+    assert (
+        "return "
+        "&::demo::protocyte_reflection::Outer_protocyte_reflection_enum;"
+        in header
+    )
+
+
+def test_enum_parse_accepts_null_terminated_character_arrays() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_READY", number=1)
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "template<::protocyte::usize N>" in header
+    assert (
+        "State_parse(const char (&name)[N], State& value) noexcept {" in header
+    )
+    assert "while (size < N && name[size] != '\\0')" in header
+    assert (
+        "return State_parse(::protocyte::StringView {name, size}, value);"
+        in header
+    )
+
+
 @pytest.mark.parametrize(
     "helper_suffix",
     ["MIN", "MAX", "ARRAYSIZE", "is_valid", "name", "parse", "descriptor"],

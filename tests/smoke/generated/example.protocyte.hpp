@@ -94,7 +94,8 @@ namespace test::ultimate {
         }
 #if PROTOCYTE_ENABLE_REFLECTION
         [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *InnerEnum_descriptor() noexcept {
-            return &protocyte_reflection::UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum;
+            return &::test::ultimate::protocyte_reflection::
+                UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum;
         }
         [[nodiscard]] static ::protocyte::StringView InnerEnum_name(const InnerEnum value) noexcept {
             for (const auto &item : InnerEnum_descriptor()->values) {
@@ -112,6 +113,12 @@ namespace test::ultimate {
                 }
             }
             return false;
+        }
+        template<::protocyte::usize N>
+        [[nodiscard]] static bool InnerEnum_parse(const char (&name)[N], InnerEnum &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return InnerEnum_parse(::protocyte::StringView {name, size}, value);
         }
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -2666,7 +2673,7 @@ namespace test::ultimate {
         }
 #if PROTOCYTE_ENABLE_REFLECTION
         [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *Color_descriptor() noexcept {
-            return &protocyte_reflection::UltimateComplexMessage_Color_enum;
+            return &::test::ultimate::protocyte_reflection::UltimateComplexMessage_Color_enum;
         }
         [[nodiscard]] static ::protocyte::StringView Color_name(const Color value) noexcept {
             for (const auto &item : Color_descriptor()->values) {
@@ -2684,6 +2691,12 @@ namespace test::ultimate {
                 }
             }
             return false;
+        }
+        template<::protocyte::usize N>
+        [[nodiscard]] static bool Color_parse(const char (&name)[N], Color &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return Color_parse(::protocyte::StringView {name, size}, value);
         }
 #endif // PROTOCYTE_ENABLE_REFLECTION
         /**

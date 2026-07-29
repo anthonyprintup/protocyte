@@ -401,7 +401,7 @@ namespace protocyte_smoke::test::compat {
         }
 #if PROTOCYTE_ENABLE_REFLECTION
         [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *Mode_descriptor() noexcept {
-            return &protocyte_reflection::EncodingMatrix_Mode_enum;
+            return &::protocyte_smoke::test::compat::protocyte_reflection::EncodingMatrix_Mode_enum;
         }
         [[nodiscard]] static ::protocyte::StringView Mode_name(const Mode value) noexcept {
             for (const auto &item : Mode_descriptor()->values) {
@@ -419,6 +419,12 @@ namespace protocyte_smoke::test::compat {
                 }
             }
             return false;
+        }
+        template<::protocyte::usize N>
+        [[nodiscard]] static bool Mode_parse(const char (&name)[N], Mode &value) noexcept {
+            ::protocyte::usize size {};
+            while (size < N && name[size] != '\0') { ++size; }
+            return Mode_parse(::protocyte::StringView {name, size}, value);
         }
 #endif // PROTOCYTE_ENABLE_REFLECTION
         template<typename NestedConfig = Config> using Inner = EncodingMatrix_Inner<NestedConfig>;

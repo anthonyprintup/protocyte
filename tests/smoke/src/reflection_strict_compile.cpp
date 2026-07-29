@@ -50,7 +50,7 @@ int main() {
         return 8;
     }
     ClosedMode closed_value = ClosedMode::PROTO2_ALIAS_MODE_UNKNOWN;
-    if (!::test::required::Proto2AliasMode_parse({"PROTO2_ALIAS_MODE_ACTIVE", 24u}, closed_value) ||
+    if (!::test::required::Proto2AliasMode_parse("PROTO2_ALIAS_MODE_ACTIVE", closed_value) ||
         closed_value != ClosedMode::PROTO2_ALIAS_MODE_READY) {
         return 9;
     }
@@ -71,10 +71,10 @@ int main() {
         return 13;
     }
     OpenMode open_value = static_cast<OpenMode>(77);
-    if (!::test::open::Mode_parse({"MODE_ACTIVE", 11u}, open_value) || open_value != OpenMode::MODE_READY) {
+    if (!::test::open::Mode_parse("MODE_ACTIVE", open_value) || open_value != OpenMode::MODE_READY) {
         return 14;
     }
-    if (::test::open::Mode_parse({"MODE_MISSING", 12u}, open_value) || open_value != OpenMode::MODE_READY) {
+    if (::test::open::Mode_parse("MODE_MISSING", open_value) || open_value != OpenMode::MODE_READY) {
         return 15;
     }
     if (!::test::open::Mode_name(static_cast<OpenMode>(77)).empty()) {

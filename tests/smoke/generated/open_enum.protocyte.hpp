@@ -31,7 +31,7 @@ namespace test::open {
     }
 #if PROTOCYTE_ENABLE_REFLECTION
     [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Mode_descriptor() noexcept {
-        return &protocyte_reflection::Mode_enum;
+        return &::test::open::protocyte_reflection::Mode_enum;
     }
     [[nodiscard]] inline ::protocyte::StringView Mode_name(const Mode value) noexcept {
         for (const auto &item : Mode_descriptor()->values) {
@@ -49,6 +49,11 @@ namespace test::open {
             }
         }
         return false;
+    }
+    template<::protocyte::usize N> [[nodiscard]] inline bool Mode_parse(const char (&name)[N], Mode &value) noexcept {
+        ::protocyte::usize size {};
+        while (size < N && name[size] != '\0') { ++size; }
+        return Mode_parse(::protocyte::StringView {name, size}, value);
     }
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
