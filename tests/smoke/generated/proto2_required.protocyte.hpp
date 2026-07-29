@@ -20,6 +20,12 @@ namespace test::required {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> Proto2ArrayDefaults_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 24> Proto2DefaultValues_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 1> OneofShadowingValue_fields;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2DefaultMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2DefaultMode_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 3> Proto2AliasMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2AliasMode_enum;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 2> Proto2MapMode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo Proto2MapMode_enum;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -27,11 +33,115 @@ namespace test::required {
         PROTO2_DEFAULT_MODE_UNKNOWN = 5,
         PROTO2_DEFAULT_MODE_READY = 9,
     };
+    inline constexpr Proto2DefaultMode Proto2DefaultMode_MIN {Proto2DefaultMode::PROTO2_DEFAULT_MODE_UNKNOWN};
+    inline constexpr Proto2DefaultMode Proto2DefaultMode_MAX {Proto2DefaultMode::PROTO2_DEFAULT_MODE_READY};
+    inline constexpr ::protocyte::i32 Proto2DefaultMode_ARRAYSIZE {10};
+    [[nodiscard]] inline constexpr bool Proto2DefaultMode_is_valid(const ::protocyte::i32 value) noexcept {
+        switch (value) {
+            case 5:
+            case 9: return true;
+            default: return false;
+        }
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2DefaultMode_descriptor() noexcept {
+        return &protocyte_reflection::Proto2DefaultMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2DefaultMode_name(const Proto2DefaultMode value) noexcept {
+        for (const auto &item : Proto2DefaultMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2DefaultMode_parse(const ::protocyte::StringView name,
+                                                      Proto2DefaultMode &value) noexcept {
+        for (const auto &item : Proto2DefaultMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2DefaultMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
+
+    enum struct Proto2AliasMode : ::protocyte::i32 {
+        PROTO2_ALIAS_MODE_UNKNOWN = 5,
+        PROTO2_ALIAS_MODE_READY = 9,
+        PROTO2_ALIAS_MODE_ACTIVE [[deprecated]] = 9,
+    };
+    inline constexpr Proto2AliasMode Proto2AliasMode_MIN {Proto2AliasMode::PROTO2_ALIAS_MODE_UNKNOWN};
+    inline constexpr Proto2AliasMode Proto2AliasMode_MAX {Proto2AliasMode::PROTO2_ALIAS_MODE_READY};
+    inline constexpr ::protocyte::i32 Proto2AliasMode_ARRAYSIZE {10};
+    [[nodiscard]] inline constexpr bool Proto2AliasMode_is_valid(const ::protocyte::i32 value) noexcept {
+        switch (value) {
+            case 5:
+            case 9: return true;
+            default: return false;
+        }
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2AliasMode_descriptor() noexcept {
+        return &protocyte_reflection::Proto2AliasMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2AliasMode_name(const Proto2AliasMode value) noexcept {
+        for (const auto &item : Proto2AliasMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2AliasMode_parse(const ::protocyte::StringView name,
+                                                    Proto2AliasMode &value) noexcept {
+        for (const auto &item : Proto2AliasMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2AliasMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     enum struct Proto2MapMode : ::protocyte::i32 {
         PROTO2_MAP_MODE_UNKNOWN = 0,
         PROTO2_MAP_MODE_READY = 9,
     };
+    inline constexpr Proto2MapMode Proto2MapMode_MIN {Proto2MapMode::PROTO2_MAP_MODE_UNKNOWN};
+    inline constexpr Proto2MapMode Proto2MapMode_MAX {Proto2MapMode::PROTO2_MAP_MODE_READY};
+    inline constexpr ::protocyte::i32 Proto2MapMode_ARRAYSIZE {10};
+    [[nodiscard]] inline constexpr bool Proto2MapMode_is_valid(const ::protocyte::i32 value) noexcept {
+        switch (value) {
+            case 0:
+            case 9: return true;
+            default: return false;
+        }
+    }
+#if PROTOCYTE_ENABLE_REFLECTION
+    [[nodiscard]] inline const ::protocyte::ReflectionEnumInfo *Proto2MapMode_descriptor() noexcept {
+        return &protocyte_reflection::Proto2MapMode_enum;
+    }
+    [[nodiscard]] inline ::protocyte::StringView Proto2MapMode_name(const Proto2MapMode value) noexcept {
+        for (const auto &item : Proto2MapMode_descriptor()->values) {
+            if (item.number == static_cast<::protocyte::i32>(value)) {
+                return item.name;
+            }
+        }
+        return {};
+    }
+    [[nodiscard]] inline bool Proto2MapMode_parse(const ::protocyte::StringView name, Proto2MapMode &value) noexcept {
+        for (const auto &item : Proto2MapMode_descriptor()->values) {
+            if (::protocyte::string_view_equal(name, item.name)) {
+                value = static_cast<Proto2MapMode>(item.number);
+                return true;
+            }
+        }
+        return false;
+    }
+#endif // PROTOCYTE_ENABLE_REFLECTION
 
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredChild;
     template<typename Config = ::protocyte::DefaultConfig> struct RequiredParent;

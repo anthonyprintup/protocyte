@@ -16100,7 +16100,9 @@ def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> N
     proto_dir = source_dir / "proto"
     proto_dir.mkdir(parents=True)
     (proto_dir / "demo.proto").write_text(
-        'syntax = "proto3"; package api; message Demo { int32 id = 1; }\n',
+        'syntax = "proto3"; package api; '
+        "enum Mode { MODE_UNSPECIFIED = 0; MODE_READY = 1; } "
+        "message Demo { int32 id = 1; }\n",
         encoding="utf-8",
     )
     (proto_dir / "other.proto").write_text(
@@ -16114,7 +16116,9 @@ def test_msvc_shared_library_exports_reflection_to_consumer(tmp_path: Path) -> N
                 "",
                 "int main() {",
                 "  const auto& fields = ::api::protocyte_reflection::Demo_fields;",
-                "  return fields.size() == 1u && fields[0].number == 1u ? 0 : 1;",
+                "  const auto* mode = ::api::Mode_descriptor();",
+                "  return fields.size() == 1u && fields[0].number == 1u &&",
+                "         mode->values.size() == 2u && mode->values[1].number == 1 ? 0 : 1;",
                 "}",
                 "",
             ]

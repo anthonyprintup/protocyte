@@ -113,6 +113,19 @@ Each message exposes an external
 `protocyte_reflection` namespace. Entries report name, number, kind, descriptor
 label, packed state, and protobuf presence independently.
 
+Generated enum metadata uses two data-only runtime types:
+
+- `ReflectionEnumValueInfo` stores the declared name, numeric value, and
+  deprecation state.
+- `ReflectionEnumInfo` stores the short name, protobuf full name,
+  declaration-ordered value view, closed/open state, and deprecation state.
+
+The generated package's `protocyte_reflection` namespace owns one external
+value array and one `ReflectionEnumInfo` object per enum. Generated enum
+`name()`, `parse()`, and `descriptor()` helpers scan this metadata without
+allocation. Alias order is therefore observable: numeric-to-name lookup uses
+the first declaration, while name parsing accepts every declaration.
+
 ## Compile-time feature macros
 
 - `PROTOCYTE_ENABLE_HOSTED_ALLOCATOR`

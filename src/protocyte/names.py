@@ -127,7 +127,8 @@ PROTOCYTE_RUNTIME_CPP_SYMBOLS = frozenset(
     InvokeResult LimitedReader Limits MessageParseAccess MutableUnknownFieldSet
     NestedMessageReader Optional OptionalType ParseBudgetReader
     PointerContextConstructible PointerSpanSource RangeElementCompatible ReaderLike
-    ReaderRef ReferenceContextConstructible ReflectionFieldInfo ReflectionFieldLabel
+    ReaderRef ReferenceContextConstructible ReflectionEnumInfo
+    ReflectionEnumValueInfo ReflectionFieldInfo ReflectionFieldLabel
     Result ResultErrorTag ResultType ResultValueTag ReverseIterator SliceReader
     SliceWriter Span SpanBeginPointer SpanDataPointer SpanEndPointer SpanSource
     StagedReader Status String StringView Tag TextArray TextChar TextPointer TextSource
@@ -156,7 +157,7 @@ PROTOCYTE_RUNTIME_CPP_SYMBOLS = frozenset(
     read_tag read_uint32 read_uint32_field read_uint64 read_uint64_field
     read_unknown_field read_varint read_varint_scalar read_zigzag32_scalar
     read_zigzag64_scalar serialize skip_field skip_group span_of span_storage_size
-    tag_size text_byte_span_of u16 u32 u64 u8 unexpected uptr usize
+    string_view_equal tag_size text_byte_span_of u16 u32 u64 u8 unexpected uptr usize
     validate_unknown_field_bytes varint_size with_field write_bool write_bool_field
     write_bytes write_bytes_field write_canonical_unknown_fields write_double
     write_double_field write_enum write_enum_field write_fixed_width_packed_value
@@ -231,8 +232,15 @@ class EmittedNameMember:
     template: str = "{name}"
     kind: CppNameKind = CppNameKind.IMPLEMENTATION
     signature: str | None = None
+    suffix: str | None = None
 
     def render(self, stem: str) -> str:
+        if self.suffix is not None:
+            if self.template != "{name}":
+                raise ValueError("suffix-based emitted names cannot also use a template")
+            if stem.endswith("_"):
+                return f"{stem}{self.suffix}_"
+            return f"{stem}_{self.suffix}"
         return self.template.format(name=stem)
 
 

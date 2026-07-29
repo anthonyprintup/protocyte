@@ -402,6 +402,13 @@ def test_generation_preserves_enum_value_deprecation() -> None:
     assert "MODE_LEGACY [[deprecated]] = 1," in header
     assert "NESTED_MODE_CURRENT = 0," in header
     assert "NESTED_MODE_LEGACY [[deprecated]] = 1," in header
+    assert "inline constexpr Mode Mode_MAX {Mode::MODE_LEGACY};" in header
+    assert (
+        "static constexpr NestedMode NestedMode_MAX "
+        "{NestedMode::NESTED_MODE_LEGACY};" in header
+    )
+    assert '#pragma clang diagnostic ignored "-Wdeprecated-declarations"' in header
+    assert "#pragma warning(disable : 4996)" in header
     assert header.count("[[deprecated]]") == 2
 
 
@@ -869,6 +876,205 @@ def test_duplicate_enum_number_is_allowed_with_allow_alias() -> None:
 
     assert not response.error
     assert response.file
+
+
+def test_generates_open_enum_numeric_and_reflection_apis() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_READY", number=1)
+    enum.value.add(name="STATE_DONE", number=2)
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    source = next(item.content for item in response.file if item.name.endswith(".cpp"))
+    assert "inline constexpr State State_MIN {State::STATE_UNSPECIFIED};" in header
+    assert "inline constexpr State State_MAX {State::STATE_DONE};" in header
+    assert "inline constexpr ::protocyte::i32 State_ARRAYSIZE {3};" in header
+    assert (
+        "[[nodiscard]] inline constexpr bool State_is_valid"
+        "(const ::protocyte::i32 value) noexcept {" in header
+    )
+    assert "return 0 <= value && value <= 2;" in header
+    assert "#if PROTOCYTE_ENABLE_REFLECTION" in header
+    assert (
+        "[[nodiscard]] inline ::protocyte::StringView "
+        "State_name(const State value) noexcept {" in header
+    )
+    assert (
+        "[[nodiscard]] inline bool State_parse("
+        "const ::protocyte::StringView name, State& value) noexcept {" in header
+    )
+    assert (
+        "[[nodiscard]] inline const ::protocyte::ReflectionEnumInfo* "
+        "State_descriptor() noexcept {" in header
+    )
+    assert "DO_NOT_USE" not in header
+    assert (
+        "extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 3> "
+        "State_enum_values {{" in source
+    )
+    assert '::protocyte::StringView {"demo.State", 10u}' in source
+    assert (
+        "::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> "
+        "{State_enum_values.data(), State_enum_values.size()},\n"
+        "    false,\n"
+        "    false," in source
+    )
+
+
+def test_generates_sparse_closed_enum_extrema_alias_metadata_and_validation() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="closed_enum.proto", package="demo", syntax="proto2"
+    )
+    enum = file.enum_type.add(name="Mode")
+    enum.options.allow_alias = True
+    enum.options.deprecated = True
+    enum.value.add(name="MODE_HIGH", number=9)
+    low = enum.value.add(name="MODE_LOW", number=-2)
+    low.options.deprecated = True
+    enum.value.add(name="MODE_HIGH_ALIAS", number=9)
+    enum.value.add(name="MODE_MIDDLE", number=5)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    source = next(item.content for item in response.file if item.name.endswith(".cpp"))
+    assert "inline constexpr Mode Mode_MIN {Mode::MODE_LOW};" in header
+    assert "inline constexpr Mode Mode_MAX {Mode::MODE_HIGH};" in header
+    assert "inline constexpr ::protocyte::i32 Mode_ARRAYSIZE {10};" in header
+    assert "case -2:\n    case 5:\n    case 9:\n      return true;" in header
+    assert source.index('"MODE_HIGH"') < source.index('"MODE_LOW"')
+    assert source.index('"MODE_LOW"') < source.index('"MODE_HIGH_ALIAS"')
+    assert source.index('"MODE_HIGH_ALIAS"') < source.index('"MODE_MIDDLE"')
+    assert (
+        '{::protocyte::StringView {"MODE_LOW", 8u}, -2, true},' in source
+    )
+    assert (
+        "::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> "
+        "{Mode_enum_values.data(), Mode_enum_values.size()},\n"
+        "    true,\n"
+        "    true," in source
+    )
+
+
+def test_omits_enum_arraysize_at_int32_max() -> None:
+    request, enum = _request_with_enum()
+    enum.value.add(name="STATE_MAX", number=2**31 - 1)
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert (
+        "inline constexpr State State_MAX {State::STATE_MAX};" in header
+    )
+    assert "State_ARRAYSIZE" not in header
+
+
+def test_nested_enum_helpers_are_static_members_of_the_declaring_message() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="nested_enum.proto", package="demo", syntax="proto3"
+    )
+    outer = file.message_type.add(name="Outer")
+    inner = outer.nested_type.add(name="Inner")
+    enum = inner.enum_type.add(name="Color")
+    enum.value.add(name="COLOR_UNSPECIFIED", number=0)
+    enum.value.add(name="COLOR_RED", number=1)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    header = next(item.content for item in response.file if item.name.endswith(".hpp"))
+    assert "using Color = Outer_Inner_Color;" in header
+    assert "static constexpr Color Color_MIN {Color::COLOR_UNSPECIFIED};" in header
+    assert "static constexpr Color Color_MAX {Color::COLOR_RED};" in header
+    assert "static constexpr ::protocyte::i32 Color_ARRAYSIZE {2};" in header
+    assert (
+        "[[nodiscard]] static constexpr bool Color_is_valid"
+        "(const ::protocyte::i32 value) noexcept {" in header
+    )
+    assert (
+        "[[nodiscard]] static ::protocyte::StringView "
+        "Color_name(const Color value) noexcept {" in header
+    )
+    assert (
+        "inline constexpr Outer_Inner_Color Outer_Inner_Color_MIN" not in header
+    )
+
+
+@pytest.mark.parametrize(
+    "helper_suffix",
+    ["MIN", "MAX", "ARRAYSIZE", "is_valid", "name", "parse", "descriptor"],
+)
+def test_same_file_enum_helper_collisions_are_remapped_deterministically(
+    helper_suffix: str,
+) -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="enum_helper_collision.proto", package="demo", syntax="proto3"
+    )
+    enum = file.enum_type.add(name="Mode")
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    file.message_type.add(name=f"Mode_{helper_suffix}")
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    first = generate_response(request)
+    second = generate_response(request)
+
+    assert not first.error
+    assert [(item.name, item.content) for item in first.file] == [
+        (item.name, item.content) for item in second.file
+    ]
+    header = next(item.content for item in first.file if item.name.endswith(".hpp"))
+    assert f"Mode_{helper_suffix}_protocyte_" in header
+    assert f"Mode_{helper_suffix}" in header
+
+
+@pytest.mark.parametrize(
+    "helper_suffix",
+    ["MIN", "MAX", "ARRAYSIZE", "is_valid", "name", "parse", "descriptor"],
+)
+def test_cross_file_enum_helper_collisions_are_rejected(
+    helper_suffix: str,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=["consumer.proto"], parameter="format=off"
+    )
+    enum_file = request.proto_file.add(
+        name="enum.proto", package="demo", syntax="proto3"
+    )
+    enum = enum_file.enum_type.add(name="Mode")
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
+    consumer_file = request.proto_file.add(
+        name="consumer.proto", package="demo", syntax="proto3"
+    )
+    consumer_file.dependency.append(enum_file.name)
+    message = consumer_file.message_type.add(name=f"Mode_{helper_suffix}")
+    message.field.add(
+        name="mode",
+        number=1,
+        label=F.LABEL_OPTIONAL,
+        type=F.TYPE_ENUM,
+        type_name=".demo.Mode",
+    )
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert (
+        f"demo.Mode_{helper_suffix}: generated type 'Mode_{helper_suffix}' "
+        "collides with generated enum helper 'demo.Mode'" in response.error
+    )
+    assert "separately generated headers must agree on their spelling" in response.error
 
 
 @pytest.mark.parametrize("reserved_name", ["", "STATE_UNSPECIFIED"])
@@ -1774,6 +1980,57 @@ def test_reflection_symbol_validation_rejects_colliding_table_symbols(
     )
 
 
+@pytest.mark.parametrize(
+    "reflection_name",
+    ["_enum_reflection_values_name", "_enum_reflection_name"],
+)
+def test_enum_reflection_symbol_validation_rejects_cross_file_collisions(
+    monkeypatch: pytest.MonkeyPatch,
+    reflection_name: str,
+) -> None:
+    request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
+    for file_name, enum_name in (
+        ("first_enum_reflection.proto", "First"),
+        ("second_enum_reflection.proto", "Second"),
+    ):
+        request.file_to_generate.append(file_name)
+        file = request.proto_file.add(name=file_name, package="demo", syntax="proto3")
+        enum = file.enum_type.add(name=enum_name)
+        enum.value.add(name=f"{enum_name.upper()}_UNSPECIFIED", number=0)
+
+    monkeypatch.setattr(protocyte_cpp, reflection_name, lambda enum: "EnumInfo")
+
+    response = generate_response(request)
+
+    assert not response.file
+    assert "demo.Second" in response.error
+    assert (
+        "generated reflection symbol 'EnumInfo' collides with 'demo.First'"
+        in response.error
+    )
+
+
+def test_enum_reflection_symbols_distinguish_trailing_underscores() -> None:
+    file = descriptor_pb2.FileDescriptorProto(
+        name="enum_reflection_symbols.proto", package="demo", syntax="proto3"
+    )
+    for enum_name in ("Mode", "Mode_"):
+        enum = file.enum_type.add(name=enum_name)
+        enum.value.add(name=f"{enum_name.upper()}UNSPECIFIED", number=0)
+    request = plugin_pb2.CodeGeneratorRequest(
+        file_to_generate=[file.name], parameter="format=off", proto_file=[file]
+    )
+
+    response = generate_response(request)
+
+    assert not response.error
+    source = next(item.content for item in response.file if item.name.endswith(".cpp"))
+    assert "Mode_enum_values {{" in source
+    assert "Mode_enum {" in source
+    assert "Mode_enum_values_ {{" in source
+    assert "Mode_enum_ {" in source
+
+
 def test_reflection_symbol_validation_rejects_type_in_reflection_package() -> None:
     request = plugin_pb2.CodeGeneratorRequest(parameter="format=off")
     request.file_to_generate.extend(
@@ -1842,6 +2099,8 @@ def test_reflection_tables_use_opt_in_windows_shared_library_api_macro() -> None
         label=F.LABEL_OPTIONAL,
         type=F.TYPE_INT32,
     )
+    enum = file.enum_type.add(name="Mode")
+    enum.value.add(name="MODE_UNSPECIFIED", number=0)
     request = plugin_pb2.CodeGeneratorRequest(
         file_to_generate=[file.name],
         parameter=f"format=off,_protocyte_reflection_api_macro={macro}",
@@ -1872,6 +2131,24 @@ def test_reflection_tables_use_opt_in_windows_shared_library_api_macro() -> None
     assert (
         f"extern {macro} const "
         "::std::array<::protocyte::ReflectionFieldInfo, 1> Message_fields {{" in source
+    )
+    assert (
+        f"extern {macro} const "
+        "::std::array<::protocyte::ReflectionEnumValueInfo, 1> "
+        "Mode_enum_values;" in header
+    )
+    assert (
+        f"extern {macro} const ::protocyte::ReflectionEnumInfo Mode_enum;"
+        in header
+    )
+    assert (
+        f"extern {macro} const "
+        "::std::array<::protocyte::ReflectionEnumValueInfo, 1> "
+        "Mode_enum_values {{" in source
+    )
+    assert (
+        f"extern {macro} const ::protocyte::ReflectionEnumInfo Mode_enum {{"
+        in source
     )
 
 

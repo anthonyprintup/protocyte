@@ -125,6 +125,21 @@ def test_allocator_priority_applies_to_derived_name_collisions() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("stem", "expected"),
+    [("Mode", "Mode_ARRAYSIZE"), ("Mode_", "Mode_ARRAYSIZE_")],
+)
+def test_suffix_member_rendering_stays_portable_and_injective(
+    stem: str, expected: str
+) -> None:
+    member = EmittedNameMember(
+        kind=CppNameKind.CONSTANT,
+        suffix="ARRAYSIZE",
+    )
+
+    assert member.render(stem) == expected
+
+
 def test_cpp_identifier_encoding_is_injective() -> None:
     raw_names = (
         "class",

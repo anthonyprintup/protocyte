@@ -25,6 +25,14 @@ enum Proto2DefaultMode {
   PROTO2_DEFAULT_MODE_READY = 9;
 }
 
+enum Proto2AliasMode {
+  option allow_alias = true;
+
+  PROTO2_ALIAS_MODE_UNKNOWN = 5;
+  PROTO2_ALIAS_MODE_READY = 9;
+  PROTO2_ALIAS_MODE_ACTIVE = 9 [deprecated = true];
+}
+
 enum Proto2MapMode {
   PROTO2_MAP_MODE_UNKNOWN = 0;
   PROTO2_MAP_MODE_READY = 9;

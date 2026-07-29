@@ -326,6 +326,7 @@ add_executable(
     protocyte_reflection_strict_compile
     src/reflection_strict_compile.cpp
     src/reflection_symbols_strict_compile.cpp
+    "${PROTOCYTE_GENERATED_DIR}/open_enum.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/reflection_symbols.protocyte.cpp"
     "${PROTOCYTE_GENERATED_DIR}/reflection_symbols_other.protocyte.cpp"
@@ -343,11 +344,35 @@ target_compile_definitions(
 target_compile_features(protocyte_reflection_strict_compile PRIVATE cxx_std_20)
 protocyte_smoke_enable_nrvo_diagnostics(protocyte_reflection_strict_compile)
 
+add_executable(
+    protocyte_reflection_hosted_compile
+    src/reflection_strict_compile.cpp
+    src/reflection_symbols_strict_compile.cpp
+    "${PROTOCYTE_GENERATED_DIR}/open_enum.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/proto2_required.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/reflection_symbols.protocyte.cpp"
+    "${PROTOCYTE_GENERATED_DIR}/reflection_symbols_other.protocyte.cpp"
+)
+target_include_directories(
+    protocyte_reflection_hosted_compile
+    PRIVATE
+        "${PROTOCYTE_GENERATED_DIR}"
+)
+target_compile_definitions(
+    protocyte_reflection_hosted_compile
+    PRIVATE
+        PROTOCYTE_ENABLE_REFLECTION=1
+        PROTOCYTE_ENABLE_STD_STRING_VIEW=1
+)
+target_compile_features(protocyte_reflection_hosted_compile PRIVATE cxx_std_20)
+protocyte_smoke_enable_nrvo_diagnostics(protocyte_reflection_hosted_compile)
+
 foreach(
     target_name
     IN ITEMS
         protocyte_runtime_strict_compile
         protocyte_reflection_strict_compile
+        protocyte_reflection_hosted_compile
 )
     if(MSVC)
         target_compile_options("${target_name}" PRIVATE /W4 /WX /permissive-)
@@ -426,6 +451,7 @@ endif()
 if(PROTOCYTE_SMOKE_REGENERATE)
     add_dependencies(protocyte_host_smoke protocyte_smoke_regenerate)
     add_dependencies(protocyte_reflection_strict_compile protocyte_smoke_regenerate)
+    add_dependencies(protocyte_reflection_hosted_compile protocyte_smoke_regenerate)
 endif()
 
 if(MSVC)
@@ -548,6 +574,7 @@ endif()
 enable_testing()
 include(Catch)
 add_test(NAME protocyte_reflection_strict COMMAND protocyte_reflection_strict_compile)
+add_test(NAME protocyte_reflection_hosted COMMAND protocyte_reflection_hosted_compile)
 catch_discover_tests(protocyte_host_smoke)
 if(PROTOCYTE_SMOKE_BUILD_BENCHMARKS)
     catch_discover_tests(protocyte_host_benchmark_smoke)

@@ -1663,6 +1663,32 @@ namespace protocyte {
     using StringView = Span<const char>;
 #endif
 
+    struct ReflectionEnumValueInfo {
+        StringView name;
+        i32 number;
+        bool deprecated;
+    };
+
+    struct ReflectionEnumInfo {
+        StringView name;
+        StringView full_name;
+        Span<const ReflectionEnumValueInfo> values;
+        bool closed;
+        bool deprecated;
+    };
+
+    constexpr bool string_view_equal(const StringView lhs, const StringView rhs) noexcept {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+        for (usize index {}; index < lhs.size(); ++index) {
+            if (lhs[index] != rhs[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     template<class T>
     concept SpanSource = requires(T &value) { Span {value}; } || requires(const T &value) { Span {value}; };
 

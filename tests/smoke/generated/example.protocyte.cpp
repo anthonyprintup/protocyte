@@ -117,6 +117,38 @@ namespace test::ultimate {
             {"nested", 3u, "message", ::protocyte::ReflectionFieldLabel::optional, true, false},
         }};
 
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 4> UltimateComplexMessage_Color_enum_values {{
+            {::protocyte::StringView {"COLOR_UNSPECIFIED", 17u}, 0, false},
+            {::protocyte::StringView {"RED", 3u}, 1, false},
+            {::protocyte::StringView {"GREEN", 5u}, 2, false},
+            {::protocyte::StringView {"BLUE", 4u}, 3, false},
+        }};
+        extern const ::protocyte::ReflectionEnumInfo UltimateComplexMessage_Color_enum {
+            ::protocyte::StringView {"Color", 5u},
+            ::protocyte::StringView {"test.ultimate.UltimateComplexMessage.Color", 42u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {
+                UltimateComplexMessage_Color_enum_values.data(), UltimateComplexMessage_Color_enum_values.size()},
+            false,
+            false,
+        };
+
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 4>
+            UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum_values {{
+                {::protocyte::StringView {"INNER_UNSPECIFIED", 17u}, 0, false},
+                {::protocyte::StringView {"A", 1u}, 1, false},
+                {::protocyte::StringView {"B", 1u}, 2, false},
+                {::protocyte::StringView {"C", 1u}, 3, false},
+            }};
+        extern const ::protocyte::ReflectionEnumInfo UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum {
+            ::protocyte::StringView {"InnerEnum", 9u},
+            ::protocyte::StringView {"test.ultimate.UltimateComplexMessage.NestedLevel1.NestedLevel2.InnerEnum", 72u},
+            ::protocyte::Span<const ::protocyte::ReflectionEnumValueInfo> {
+                UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum_values.data(),
+                UltimateComplexMessage_NestedLevel1_NestedLevel2_InnerEnum_enum_values.size()},
+            false,
+            false,
+        };
+
     } // namespace protocyte_reflection
 
 } // namespace test::ultimate

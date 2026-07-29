@@ -15,6 +15,8 @@ namespace protocyte_smoke::test::compat {
     namespace protocyte_reflection {
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 2> EncodingMatrix_Inner_fields;
         extern const ::std::array<::protocyte::ReflectionFieldInfo, 29> EncodingMatrix_fields;
+        extern const ::std::array<::protocyte::ReflectionEnumValueInfo, 3> EncodingMatrix_Mode_enum_values;
+        extern const ::protocyte::ReflectionEnumInfo EncodingMatrix_Mode_enum;
     } // namespace protocyte_reflection
 #endif // PROTOCYTE_ENABLE_REFLECTION
 
@@ -391,6 +393,34 @@ namespace protocyte_smoke::test::compat {
     template<typename Config> struct EncodingMatrix {
         using Context = typename Config::Context;
         using Mode = EncodingMatrix_Mode;
+        static constexpr Mode Mode_MIN {Mode::MODE_UNSPECIFIED};
+        static constexpr Mode Mode_MAX {Mode::SECOND};
+        static constexpr ::protocyte::i32 Mode_ARRAYSIZE {3};
+        [[nodiscard]] static constexpr bool Mode_is_valid(const ::protocyte::i32 value) noexcept {
+            return 0 <= value && value <= 2;
+        }
+#if PROTOCYTE_ENABLE_REFLECTION
+        [[nodiscard]] static const ::protocyte::ReflectionEnumInfo *Mode_descriptor() noexcept {
+            return &protocyte_reflection::EncodingMatrix_Mode_enum;
+        }
+        [[nodiscard]] static ::protocyte::StringView Mode_name(const Mode value) noexcept {
+            for (const auto &item : Mode_descriptor()->values) {
+                if (item.number == static_cast<::protocyte::i32>(value)) {
+                    return item.name;
+                }
+            }
+            return {};
+        }
+        [[nodiscard]] static bool Mode_parse(const ::protocyte::StringView name, Mode &value) noexcept {
+            for (const auto &item : Mode_descriptor()->values) {
+                if (::protocyte::string_view_equal(name, item.name)) {
+                    value = static_cast<Mode>(item.number);
+                    return true;
+                }
+            }
+            return false;
+        }
+#endif // PROTOCYTE_ENABLE_REFLECTION
         template<typename NestedConfig = Config> using Inner = EncodingMatrix_Inner<NestedConfig>;
 
         enum struct Special_oneofCase : ::protocyte::u32 {

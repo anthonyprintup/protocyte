@@ -625,6 +625,26 @@ class EnumModel:
     cpp_namespace: tuple[str, ...] | None = None
     documentation: SourceDocumentation = field(default_factory=SourceDocumentation)
 
+    @property
+    def min_value(self) -> EnumValueModel:
+        return min(self.values, key=lambda value: value.number)
+
+    @property
+    def max_value(self) -> EnumValueModel:
+        return max(self.values, key=lambda value: value.number)
+
+    @property
+    def min_number(self) -> int:
+        return self.min_value.number
+
+    @property
+    def max_number(self) -> int:
+        return self.max_value.number
+
+    @property
+    def generates_arraysize(self) -> bool:
+        return self.max_number != 2**31 - 1
+
 
 @dataclass(slots=True)
 class OneofModel:
@@ -2285,6 +2305,57 @@ _MESSAGE_PUBLIC_FUNCTIONS: tuple[tuple[str, str], ...] = (
     ("validate", "fn/0/const"),
 )
 
+
+def _enum_helper_name_members(
+    enum: EnumModel,
+) -> tuple[tuple[str, EmittedNameMember], ...]:
+    members: list[tuple[str, EmittedNameMember]] = [
+        ("min", EmittedNameMember(suffix="MIN", kind=CppNameKind.CONSTANT)),
+        ("max", EmittedNameMember(suffix="MAX", kind=CppNameKind.CONSTANT)),
+        (
+            "is_valid",
+            EmittedNameMember(
+                suffix="is_valid",
+                kind=CppNameKind.PUBLIC_FUNCTION,
+                signature="fn/1",
+            ),
+        ),
+        (
+            "name",
+            EmittedNameMember(
+                suffix="name",
+                kind=CppNameKind.PUBLIC_FUNCTION,
+                signature="fn/1",
+            ),
+        ),
+        (
+            "parse",
+            EmittedNameMember(
+                suffix="parse",
+                kind=CppNameKind.PUBLIC_FUNCTION,
+                signature="fn/2",
+            ),
+        ),
+        (
+            "descriptor",
+            EmittedNameMember(
+                suffix="descriptor",
+                kind=CppNameKind.PUBLIC_FUNCTION,
+                signature="fn/0",
+            ),
+        ),
+    ]
+    if enum.generates_arraysize:
+        members.insert(
+            2,
+            (
+                "arraysize",
+                EmittedNameMember(suffix="ARRAYSIZE", kind=CppNameKind.CONSTANT),
+            ),
+        )
+    return tuple(members)
+
+
 _MESSAGE_PRIVATE_FUNCTIONS = (
     "copy_from_in_place_",
     "reset_for_reuse_",
@@ -2357,7 +2428,10 @@ def _allocate_message_class_names(
             EmittedNameRequest(
                 owner=f"nested-enum:{enum.full_name}",
                 preferred=cpp_identifier(enum.name),
-                members=(EmittedNameMember(kind=CppNameKind.TYPE_ALIAS),),
+                members=(
+                    EmittedNameMember(kind=CppNameKind.TYPE_ALIAS),
+                    *(member for _, member in _enum_helper_name_members(enum)),
+                ),
                 priority=20,
             )
         )
@@ -2393,7 +2467,14 @@ def _allocate_message_class_names(
 
     allocated = scope.allocate(requests)
     for enum in message.nested_enums:
-        enum.emitted_names["alias"] = allocated[f"nested-enum:{enum.full_name}"]
+        stem = allocated[f"nested-enum:{enum.full_name}"]
+        enum.emitted_names["alias"] = stem
+        enum.emitted_names.update(
+            {
+                key: member.render(stem)
+                for key, member in _enum_helper_name_members(enum)
+            }
+        )
     for nested in message.nested_messages:
         if not nested.is_map_entry:
             nested.emitted_names["alias"] = allocated[
@@ -2510,7 +2591,11 @@ def _validate_message_cpp_name_allocations(message: MessageModel) -> None:
     _require_emitted_names(message.full_name, message.emitted_names, message_names)
 
     for enum in message.nested_enums:
-        _require_emitted_names(enum.full_name, enum.emitted_names, {"alias"})
+        _require_emitted_names(
+            enum.full_name,
+            enum.emitted_names,
+            {"alias", *(key for key, _ in _enum_helper_name_members(enum))},
+        )
     for nested in message.nested_messages:
         if not nested.is_map_entry:
             _require_emitted_names(
@@ -3018,7 +3103,10 @@ def _allocate_namespace_cpp_names(
                 EmittedNameRequest(
                     owner=owner,
                     preferred=enum.cpp_name,
-                    members=(EmittedNameMember(kind=CppNameKind.TYPE),),
+                    members=(
+                        EmittedNameMember(kind=CppNameKind.TYPE),
+                        *(member for _, member in _enum_helper_name_members(enum)),
+                    ),
                     hash_fallback=True,
                 )
             )
@@ -3078,7 +3166,19 @@ def _allocate_namespace_cpp_names(
             allocated = scope.allocate(file_requests)
             for owner, cpp_name in allocated.items():
                 if owner in type_owners:
-                    type_owners[owner].cpp_name = cpp_name
+                    type_owner = type_owners[owner]
+                    type_owner.cpp_name = cpp_name
+                    if isinstance(type_owner, EnumModel):
+                        type_owner.emitted_names["declaration"] = cpp_name
+                        if type_owner.parent is None:
+                            type_owner.emitted_names.update(
+                                {
+                                    key: member.render(cpp_name)
+                                    for key, member in _enum_helper_name_members(
+                                        type_owner
+                                    )
+                                }
+                            )
                 else:
                     constant = constant_owners[owner]
                     constant.cpp_name = cpp_name
