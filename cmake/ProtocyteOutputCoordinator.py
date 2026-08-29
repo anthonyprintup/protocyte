@@ -787,7 +787,13 @@ class OutputCoordinator:
                                 f"reset found an unowned generated-looking output: {candidate}"
                             )
                         if not candidate.is_file():
-                            continue
+                            if candidate.is_dir() and self._is_snapshot_ancestor(
+                                plan.root, snapshot["entries"], relative
+                            ):
+                                continue
+                            _fail(
+                                f"reset found an unowned generated-looking output: {candidate}"
+                            )
                         known_relative, _ = self._snapshot_entry_for_path(
                             plan.root, snapshot["entries"], relative
                         )
@@ -1284,6 +1290,28 @@ class OutputCoordinator:
             if self._case_spelling_alias(root, relative, previous_relative):
                 return previous_relative, entry
         return None, None
+
+    @staticmethod
+    def _is_snapshot_ancestor(
+        root: Path, entries: Mapping[str, Any], relative: str
+    ) -> bool:
+        candidate = root.joinpath(*PurePosixPath(relative).parts)
+        candidate_parts = PurePosixPath(relative).parts
+        for snapshot_relative in entries:
+            snapshot_parts = PurePosixPath(snapshot_relative).parts
+            if len(candidate_parts) >= len(snapshot_parts):
+                continue
+            planned_ancestor = root.joinpath(
+                *snapshot_parts[: len(candidate_parts)]
+            )
+            try:
+                if planned_ancestor.is_dir() and os.path.samefile(
+                    candidate, planned_ancestor
+                ):
+                    return True
+            except OSError:
+                continue
+        return False
 
     @staticmethod
     def _require_requested_root(requested: Path, recorded: Path) -> None:

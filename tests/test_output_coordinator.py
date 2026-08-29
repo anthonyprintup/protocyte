@@ -854,6 +854,58 @@ def test_reset_releases_claim(tmp_path: Path) -> None:
     assert not (lock_root / "roots" / _identity(root)).exists()
 
 
+def test_reset_rejects_an_unowned_generated_looking_directory(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    engine.publish(plan, target, staging)
+    blocked = root / "blocked.protocyte.hpp"
+    blocked.mkdir()
+
+    with pytest.raises(coordinator.CoordinatorError, match="unowned generated-looking"):
+        engine.reset(plan, token)
+
+    assert blocked.is_dir()
+    assert engine._state_directory(root).exists()
+
+
+def test_reset_allows_a_generated_looking_authenticated_ancestor(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    relative = "namespace.protocyte.hpp/demo.protocyte.hpp"
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, relative),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, relative, b"// generated\n")
+    engine.publish(plan, target, staging)
+
+    engine.reset(plan, token)
+
+    assert not (root / relative).exists()
+    assert not engine._state_directory(root).exists()
+
+
 def test_reset_persists_output_removal_before_claim_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
