@@ -4964,6 +4964,14 @@ function(protocyte_generate)
 
     set(protocyte_command_outputs "${protocyte_outputs}")
     _protocyte_shared_output_lock_directory(protocyte_lock_dir)
+    _protocyte_owned_output_claim_key(
+        protocyte_generation_root_key
+        "${PROTOCYTE_OUT_DIR}"
+    )
+    set(
+        protocyte_generation_lock_file
+        "${protocyte_lock_dir}/generation/${protocyte_generation_root_key}.lock"
+    )
     _protocyte_resolve_output_coordinator_python(protocyte_coordinator_python)
     _protocyte_register_owned_outputs(
         "${PROTOCYTE_TARGET}"
@@ -5081,6 +5089,7 @@ function(protocyte_generate)
             "-DGENERATION_TARGET=${PROTOCYTE_TARGET}"
             "-DGENERATION_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
             "-DLOCK_DIRECTORY=${protocyte_lock_dir}"
+            "-DGENERATION_LOCK_FILE=${protocyte_generation_lock_file}"
             "-DOUTPUT_DIRECTORY=${PROTOCYTE_OUT_DIR}"
             "-DSTAGING_OUTPUT_DIRECTORY=${protocyte_generation_staging_directory}"
             "-DOWNERSHIP_MANIFEST_DIR=${PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR}"

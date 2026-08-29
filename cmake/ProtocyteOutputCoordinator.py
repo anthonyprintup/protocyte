@@ -673,18 +673,19 @@ class OutputCoordinator:
 
     def reconcile(self, plan: Plan) -> str:
         state = self._claim(plan)
-        with FileLock(self._publication_lock(plan.root)):
-            claim = self._load_claim(state, plan)
-            self._recover(state, plan, claim)
-            previous_plan = self._load_recorded_plan(state)
-            snapshot = self._load_snapshot(state, claim)
-            snapshot = self._retire_unplanned(state, plan, claim, snapshot)
-            self._retire_staging(previous_plan, plan)
-            _atomic_write(
-                state / "plan.json",
-                _canonical_json({**plan.payload, "sha256": plan.digest}),
-            )
-            return str(claim["token"])
+        with FileLock(self._generation_lock(plan.root)):
+            with FileLock(self._publication_lock(plan.root)):
+                claim = self._load_claim(state, plan)
+                self._recover(state, plan, claim)
+                previous_plan = self._load_recorded_plan(state)
+                snapshot = self._load_snapshot(state, claim)
+                snapshot = self._retire_unplanned(state, plan, claim, snapshot)
+                self._retire_staging(previous_plan, plan)
+                _atomic_write(
+                    state / "plan.json",
+                    _canonical_json({**plan.payload, "sha256": plan.digest}),
+                )
+                return str(claim["token"])
 
     def validate(self, plan: Plan) -> None:
         state = self._state_directory(plan.root)
@@ -794,37 +795,38 @@ class OutputCoordinator:
     def reset(self, plan: Plan, expected_token: str) -> None:
         state = self._state_directory(plan.root)
         with FileLock(self.lock_root / "registry.lock"):
-            with FileLock(self._publication_lock(plan.root)):
-                claim = self._load_claim(state, plan)
-                if claim["token"] != expected_token:
-                    _fail("reset claim token does not match the live immutable claim")
-                reset_path = state / "reset.json"
-                if reset_path.exists():
-                    intent = self._load_reset_intent(reset_path, plan.root, claim)
-                else:
-                    self._recover(state, plan, claim)
-                    snapshot = self._load_snapshot(state, claim)
-                    self._validate_reset_inventory(plan.root, snapshot["entries"])
-                    recorded_plan = self._load_recorded_plan(state)
-                    staging = [
-                        {"id": target.identity, "path": os.fspath(target.staging)}
-                        for target in (recorded_plan.targets if recorded_plan else ())
-                    ]
-                    intent = {
-                        "claim_token": claim["token"],
-                        "entries": snapshot["entries"],
-                        "staging": staging,
-                        "version": PROTOCOL_VERSION,
-                    }
-                    _atomic_write(reset_path, _canonical_json(intent))
-                    self._inject("after-reset-intent")
-                for index, (relative, entry) in enumerate(intent["entries"].items()):
-                    output = _output_path(plan.root, relative)
-                    self._delete_if_state(output, entry["sha256"])
-                    self._inject(f"after-reset-output-{index + 1}")
-                for target in intent["staging"]:
-                    _durable_rmtree(Path(target["path"]))
-                self._release_claim(state)
+            with FileLock(self._generation_lock(plan.root)):
+                with FileLock(self._publication_lock(plan.root)):
+                    claim = self._load_claim(state, plan)
+                    if claim["token"] != expected_token:
+                        _fail("reset claim token does not match the live immutable claim")
+                    reset_path = state / "reset.json"
+                    if reset_path.exists():
+                        intent = self._load_reset_intent(reset_path, plan.root, claim)
+                    else:
+                        self._recover(state, plan, claim)
+                        snapshot = self._load_snapshot(state, claim)
+                        self._validate_reset_inventory(plan.root, snapshot["entries"])
+                        recorded_plan = self._load_recorded_plan(state)
+                        staging = [
+                            {"id": target.identity, "path": os.fspath(target.staging)}
+                            for target in (recorded_plan.targets if recorded_plan else ())
+                        ]
+                        intent = {
+                            "claim_token": claim["token"],
+                            "entries": snapshot["entries"],
+                            "staging": staging,
+                            "version": PROTOCOL_VERSION,
+                        }
+                        _atomic_write(reset_path, _canonical_json(intent))
+                        self._inject("after-reset-intent")
+                    for index, (relative, entry) in enumerate(intent["entries"].items()):
+                        output = _output_path(plan.root, relative)
+                        self._delete_if_state(output, entry["sha256"])
+                        self._inject(f"after-reset-output-{index + 1}")
+                    for target in intent["staging"]:
+                        _durable_rmtree(Path(target["path"]))
+                    self._release_claim(state)
 
     def _validate_reset_inventory(
         self, root: Path, entries: Mapping[str, Any]
@@ -1009,6 +1011,9 @@ class OutputCoordinator:
 
     def _publication_lock(self, root: Path) -> Path:
         return self.lock_root / "publication" / f"{_path_key(root)}.lock"
+
+    def _generation_lock(self, root: Path) -> Path:
+        return self.lock_root / "generation" / f"{_path_key(root)}.lock"
 
     def _load_claim(self, state: Path, plan: Plan) -> dict[str, Any]:
         claim_path = state / "claim.json"

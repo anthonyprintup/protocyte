@@ -9,6 +9,7 @@ foreach(
         PROTOC_EXECUTABLE
         ARGUMENT_FILE
         GENERATION_TARGET
+        GENERATION_LOCK_FILE
         GENERATION_WORKING_DIRECTORY
         LOCK_DIRECTORY
         OUTPUT_DIRECTORY
@@ -185,6 +186,28 @@ if(NOT "${recovery_result}" STREQUAL "0")
     message(
         FATAL_ERROR
         "Protocyte could not recover or reconcile output state before generation.\n${recovery_error}"
+    )
+endif()
+
+cmake_path(GET GENERATION_LOCK_FILE PARENT_PATH generation_lock_parent)
+file(MAKE_DIRECTORY "${generation_lock_parent}")
+file(
+    LOCK "${GENERATION_LOCK_FILE}"
+    GUARD PROCESS
+    RESULT_VARIABLE generation_lock_result
+)
+if(NOT "${generation_lock_result}" STREQUAL "0")
+    message(
+        FATAL_ERROR
+        "Protocyte could not acquire the output-root generation lock: ${generation_lock_result}"
+    )
+endif()
+_protocyte_run_coordinator(validate validation_result validation_output validation_error)
+if(NOT "${validation_result}" STREQUAL "0")
+    string(STRIP "${validation_error}" validation_error)
+    message(
+        FATAL_ERROR
+        "Protocyte output ownership changed before generation began.\n${validation_error}"
     )
 endif()
 

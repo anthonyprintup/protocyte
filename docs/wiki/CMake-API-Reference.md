@@ -208,6 +208,10 @@ derived from the target identity and validated against the claimed output root;
 the coordinator never accepts an arbitrary cleanup path from plan metadata.
 Registry and output-tree enumeration is fail-closed: an unreadable or unsafe
 entry aborts claim acquisition or reset instead of being silently skipped.
+An output-root generation lock serializes the complete staging cleanup,
+`protoc`, validation, and publication sequence across build processes. Plan
+reconciliation and reset acquire the same lock before touching staging, so
+configuration, generation, and explicit release share one lock order.
 
 Configuration reconciles interrupted work, commits the complete output plan,
 and retires only files whose bytes match the committed snapshot. The build
