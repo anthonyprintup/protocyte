@@ -999,12 +999,43 @@ class OutputCoordinator:
             claim = _load_json(claim_path, "output claim")
             self._validate_claim_shape(claim, claim_path)
             claimed_root = project_path(Path(claim["root"]))
+            recorded_plan = self._load_recorded_plan(state)
             if _contains(claimed_root, plan.root) or _contains(plan.root, claimed_root):
                 if _path_key(claimed_root) != _path_key(plan.root):
                     _fail(
                         "output root overlaps a root claimed by another build: "
                         f"{plan.root} and {claimed_root}"
                     )
+            recorded_targets = recorded_plan.targets if recorded_plan else ()
+            for recorded_target in recorded_targets:
+                if _contains(recorded_target.staging, plan.root) or _contains(
+                    plan.root, recorded_target.staging
+                ):
+                    _fail(
+                        "output root overlaps staging reserved by another plan: "
+                        f"{plan.root} and {recorded_target.staging}"
+                    )
+            for target in plan.targets:
+                if _contains(claimed_root, target.staging) or _contains(
+                    target.staging, claimed_root
+                ):
+                    _fail(
+                        "generation staging overlaps a claimed output root: "
+                        f"{target.staging} and {claimed_root}"
+                    )
+                for recorded_target in recorded_targets:
+                    if (
+                        _path_key(plan.root) == _path_key(claimed_root)
+                        and target.identity == recorded_target.identity
+                    ):
+                        continue
+                    if _contains(recorded_target.staging, target.staging) or _contains(
+                        target.staging, recorded_target.staging
+                    ):
+                        _fail(
+                            "generation staging overlaps staging reserved by another plan: "
+                            f"{target.staging} and {recorded_target.staging}"
+                        )
 
     def _state_directory(self, root: Path) -> Path:
         return self.lock_root / "roots" / _path_key(root)
@@ -1521,7 +1552,9 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
         "command",
         choices=(
             "encode-build-root",
+            "generation-lock-path",
             "reconcile",
+            "target-outputs",
             "validate",
             "publish",
             "reset",
@@ -1555,7 +1588,21 @@ def main(arguments: Sequence[str] | None = None) -> int:
             plan = coordinator.plan_for_root(options.output_root)
         else:
             _fail(f"{options.command} requires --plan")
-        if options.command == "reconcile":
+        if options.command == "generation-lock-path":
+            print(coordinator._generation_lock(plan.root))
+        elif options.command == "target-outputs":
+            if options.target is None or not _is_sha256(options.target):
+                _fail("target-outputs requires a valid --target")
+            outputs = [
+                _output_path(plan.root, output.relative)
+                for output in plan.outputs
+                if output.target == options.target
+            ]
+            if not outputs:
+                _fail(f"output plan contains no outputs for target {options.target}")
+            for output in outputs:
+                print(os.fspath(output).encode("utf-8").hex())
+        elif options.command == "reconcile":
             print(coordinator.reconcile(plan))
         elif options.command == "validate":
             coordinator.validate(plan)

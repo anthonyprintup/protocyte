@@ -9,12 +9,10 @@ foreach(
         PROTOC_EXECUTABLE
         ARGUMENT_FILE
         GENERATION_TARGET
-        GENERATION_LOCK_FILE
         GENERATION_WORKING_DIRECTORY
         LOCK_DIRECTORY
         OUTPUT_DIRECTORY
         STAGING_OUTPUT_DIRECTORY
-        OWNERSHIP_MANIFEST_DIR
         OUTPUT_PLAN
         OUTPUT_TARGET_ID
         OUTPUT_COORDINATOR_PYTHON
@@ -48,40 +46,20 @@ function(_protocyte_decode_output_hex out_var encoded_value)
 endfunction()
 
 function(_protocyte_load_generation_outputs out_var)
-    if(
-        NOT IS_DIRECTORY "${OWNERSHIP_MANIFEST_DIR}"
-        OR IS_SYMLINK "${OWNERSHIP_MANIFEST_DIR}"
+    _protocyte_run_coordinator(
+        target-outputs
+        inventory_result
+        encoded_output_text
+        inventory_error
+        --target "${OUTPUT_TARGET_ID}"
     )
-        message(
-            FATAL_ERROR
-            "Protocyte generation plan is missing or unsafe for target "
-            "'${GENERATION_TARGET}'. No generated output was changed."
-        )
+    if(NOT "${inventory_result}" STREQUAL "0")
+        string(STRIP "${inventory_error}" inventory_error)
+        message(FATAL_ERROR "Protocyte could not load target outputs.\n${inventory_error}")
     endif()
-    set(output_root_file "${OWNERSHIP_MANIFEST_DIR}/output-root.path")
-    if(
-        NOT EXISTS "${output_root_file}"
-        OR IS_DIRECTORY "${output_root_file}"
-        OR IS_SYMLINK "${output_root_file}"
-    )
-        message(FATAL_ERROR "Protocyte generation plan has no safe output root")
-    endif()
-    file(READ "${output_root_file}" manifest_output_root)
-    _protocyte_normalized_path_identity(manifest_root_identity "${manifest_output_root}")
-    _protocyte_normalized_path_identity(output_root_identity "${OUTPUT_DIRECTORY}")
-    if(NOT manifest_root_identity STREQUAL output_root_identity)
-        message(FATAL_ERROR "Protocyte generation plan names a different output root")
-    endif()
-
-    set(outputs_file "${OWNERSHIP_MANIFEST_DIR}/outputs.hex")
-    if(
-        NOT EXISTS "${outputs_file}"
-        OR IS_DIRECTORY "${outputs_file}"
-        OR IS_SYMLINK "${outputs_file}"
-    )
-        message(FATAL_ERROR "Protocyte generation plan has no safe output inventory")
-    endif()
-    file(STRINGS "${outputs_file}" encoded_outputs ENCODING UTF-8)
+    string(REPLACE "\r\n" "\n" encoded_output_text "${encoded_output_text}")
+    string(REPLACE "\n" ";" encoded_outputs "${encoded_output_text}")
+    list(FILTER encoded_outputs EXCLUDE REGEX "^$")
     set(outputs)
     foreach(encoded_output IN LISTS encoded_outputs)
         _protocyte_decode_output_hex(output_path "${encoded_output}")
@@ -189,6 +167,17 @@ if(NOT "${recovery_result}" STREQUAL "0")
     )
 endif()
 
+_protocyte_run_coordinator(
+    generation-lock-path
+    generation_lock_path_result
+    GENERATION_LOCK_FILE
+    generation_lock_path_error
+)
+if(NOT "${generation_lock_path_result}" STREQUAL "0")
+    string(STRIP "${generation_lock_path_error}" generation_lock_path_error)
+    message(FATAL_ERROR "Protocyte could not derive its generation lock.\n${generation_lock_path_error}")
+endif()
+string(STRIP "${GENERATION_LOCK_FILE}" GENERATION_LOCK_FILE)
 cmake_path(GET GENERATION_LOCK_FILE PARENT_PATH generation_lock_parent)
 file(MAKE_DIRECTORY "${generation_lock_parent}")
 file(
@@ -302,9 +291,5 @@ foreach(generation_output IN LISTS generation_outputs)
         message(FATAL_ERROR "Protocyte publication reported success without every declared output")
     endif()
     file(TOUCH_NOCREATE "${generation_output}")
-    _protocyte_normalized_path_identity(output_identity "${generation_output}")
-    string(SHA256 output_key "${output_identity}")
-    file(SHA256 "${generation_output}" output_hash)
-    file(WRITE "${OWNERSHIP_MANIFEST_DIR}/${output_key}.sha256" "${output_hash}")
 endforeach()
 _protocyte_discard_staging()

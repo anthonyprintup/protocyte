@@ -1218,15 +1218,6 @@ function(_protocyte_schedule_owned_output_cleanup)
         return()
     endif()
 
-    set(
-        manifest_root
-        "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-owned-outputs"
-    )
-    set_property(
-        GLOBAL PROPERTY
-        PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_ROOT
-        "${manifest_root}"
-    )
     set_property(
         GLOBAL PROPERTY
         PROTOCYTE_INTERNAL_OWNED_OUTPUT_CLEANUP_SCHEDULED
@@ -1374,12 +1365,6 @@ function(_protocyte_finalize_output_plans)
     _protocyte_shared_output_lock_directory(output_lock_directory)
 
     file(MAKE_DIRECTORY "${plan_root}")
-    get_property(
-        manifest_root
-        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_ROOT
-    )
-    file(REMOVE_RECURSE "${manifest_root}")
-    file(MAKE_DIRECTORY "${manifest_root}")
     execute_process(
         COMMAND
             "${CMAKE_COMMAND}" -E env --unset=PYTHONHOME --unset=PYTHONPATH
@@ -1417,11 +1402,18 @@ function(_protocyte_finalize_output_plans)
             staging_directory
             GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_STAGING_${target_key}"
         )
-        set(target_manifest "${manifest_root}/${target_key}")
-        file(MAKE_DIRECTORY "${target_manifest}")
-        file(WRITE "${target_manifest}/output-root.path" "${output_root}")
-        file(WRITE "${target_manifest}/outputs.hex" "")
         _protocyte_owned_output_claim_key(plan_key "${output_root}")
+        if(
+            DEFINED "protocyte_plan_root_${plan_key}"
+            AND NOT "${protocyte_plan_root_${plan_key}}" STREQUAL "${output_root}"
+        )
+            message(
+                FATAL_ERROR
+                "Protocyte output roots '${protocyte_plan_root_${plan_key}}' and '${output_root}' "
+                "have the same portable identity but are physically distinct. Use roots whose "
+                "case-normalized paths are unique."
+            )
+        endif()
         list(APPEND current_plan_keys "${plan_key}")
         set("protocyte_plan_root_${plan_key}" "${output_root}")
         string(HEX "${staging_directory}" encoded_staging_directory)
@@ -1435,8 +1427,6 @@ function(_protocyte_finalize_output_plans)
                 output_path
                 GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PATH_${output_key}"
             )
-            string(HEX "${output_path}" encoded_output_path)
-            file(APPEND "${target_manifest}/outputs.hex" "${encoded_output_path}\n")
             file(RELATIVE_PATH relative_output "${output_root}" "${output_path}")
             string(REPLACE "\\" "/" relative_output "${relative_output}")
             string(HEX "${relative_output}" encoded_relative_output)
@@ -1535,11 +1525,6 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         "${output_root_parent}/.protocyte-generation-staging-${target_key}"
     )
     _protocyte_schedule_owned_output_cleanup()
-    get_property(
-        manifest_root
-        GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_ROOT
-    )
-    set(manifest_dir "${manifest_root}/${target_key}")
     set(current_output_keys)
     foreach(output_path IN LISTS ${outputs_var})
         cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
@@ -1585,11 +1570,6 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
     )
     set_property(
         GLOBAL PROPERTY
-        "PROTOCYTE_INTERNAL_OWNED_OUTPUT_MANIFEST_DIR_${target_key}"
-        "${manifest_dir}"
-    )
-    set_property(
-        GLOBAL PROPERTY
         "PROTOCYTE_INTERNAL_OWNED_OUTPUT_ROOT_${target_key}"
         "${normalized_output_root}"
     )
@@ -1605,11 +1585,6 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
     )
     _protocyte_owned_output_claim_key(output_plan_key "${normalized_output_root}")
 
-    set(
-        PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR
-        "${manifest_dir}"
-        PARENT_SCOPE
-    )
     set(
         PROTOCYTE_INTERNAL_CURRENT_OUTPUT_PLAN
         "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-output-plans/${output_plan_key}.plan"
@@ -4964,14 +4939,6 @@ function(protocyte_generate)
 
     set(protocyte_command_outputs "${protocyte_outputs}")
     _protocyte_shared_output_lock_directory(protocyte_lock_dir)
-    _protocyte_owned_output_claim_key(
-        protocyte_generation_root_key
-        "${PROTOCYTE_OUT_DIR}"
-    )
-    set(
-        protocyte_generation_lock_file
-        "${protocyte_lock_dir}/generation/${protocyte_generation_root_key}.lock"
-    )
     _protocyte_resolve_output_coordinator_python(protocyte_coordinator_python)
     _protocyte_register_owned_outputs(
         "${PROTOCYTE_TARGET}"
@@ -5089,10 +5056,8 @@ function(protocyte_generate)
             "-DGENERATION_TARGET=${PROTOCYTE_TARGET}"
             "-DGENERATION_WORKING_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}"
             "-DLOCK_DIRECTORY=${protocyte_lock_dir}"
-            "-DGENERATION_LOCK_FILE=${protocyte_generation_lock_file}"
             "-DOUTPUT_DIRECTORY=${PROTOCYTE_OUT_DIR}"
             "-DSTAGING_OUTPUT_DIRECTORY=${protocyte_generation_staging_directory}"
-            "-DOWNERSHIP_MANIFEST_DIR=${PROTOCYTE_INTERNAL_CURRENT_OWNED_OUTPUT_MANIFEST_DIR}"
             "-DOUTPUT_PLAN=${PROTOCYTE_INTERNAL_CURRENT_OUTPUT_PLAN}"
             "-DOUTPUT_TARGET_ID=${PROTOCYTE_INTERNAL_CURRENT_OUTPUT_TARGET_ID}"
             "-DOUTPUT_COORDINATOR_PYTHON=${protocyte_coordinator_python}"

@@ -164,6 +164,40 @@ def test_generation_inventory_is_literal_under_glob_metacharacter_build_path(
     assert not list(output.rglob("*.protocyte.*"))
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires case-sensitive paths")
+def test_configure_rejects_case_distinct_roots_with_one_portable_key(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "project"
+    build = tmp_path / "build"
+    upper = tmp_path / "Generated"
+    lower = tmp_path / "generated"
+    locks = tmp_path / "locks"
+    _write_out_dir_owner_project(source, upper, output_lock_root=locks)
+    cmake_lists = source / "CMakeLists.txt"
+    content = cmake_lists.read_text(encoding="utf-8")
+    content += "\n".join(
+        [
+            "protocyte_generate(",
+            "    TARGET generated_second",
+            '    DESCRIPTOR_SET "${CMAKE_CURRENT_SOURCE_DIR}/descriptor_set.pb"',
+            f'    OUT_DIR "{lower.as_posix()}"',
+            "    PROTOS demo_0.proto",
+            "    OPTIONS format=off",
+            ")",
+            "",
+        ]
+    )
+    cmake_lists.write_text(content, encoding="utf-8")
+
+    configured = _configure(source, build)
+
+    assert configured.returncode != 0
+    assert "same portable identity but are physically distinct" in (
+        configured.stdout + configured.stderr
+    )
+
+
 def test_reconfigure_retires_interrupted_staging_for_a_removed_target(
     tmp_path: Path,
 ) -> None:

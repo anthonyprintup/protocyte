@@ -9686,9 +9686,6 @@ def test_removed_source_codegen_target_cleans_only_unchanged_owned_outputs(
     removed_header.write_text("consumer modification\n", encoding="utf-8")
     unrelated.write_text("keep\n", encoding="utf-8")
 
-    manifest_root = build_dir / "CMakeFiles" / "protocyte-owned-outputs"
-    assert len(list(manifest_root.glob("*/*.sha256"))) == 4
-
     (first_dir / "CMakeLists.txt").write_text(
         "# The first code generation target was removed.\n",
         encoding="utf-8",
@@ -9700,7 +9697,6 @@ def test_removed_source_codegen_target_cleans_only_unchanged_owned_outputs(
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
     assert kept_header.read_bytes() == kept_contents
     assert (second_generated / "kept.protocyte.cpp").is_file()
-    assert len([path for path in manifest_root.iterdir() if path.is_dir()]) == 1
 
     (second_dir / "CMakeLists.txt").write_text(
         "# The final code generation target was removed.\n",
@@ -9711,10 +9707,9 @@ def test_removed_source_codegen_target_cleans_only_unchanged_owned_outputs(
     assert not kept_header.exists()
     assert not (second_generated / "kept.protocyte.cpp").exists()
     assert removed_header.read_text(encoding="utf-8") == "consumer modification\n"
-    assert not [path for path in manifest_root.iterdir() if path.is_dir()]
 
 
-def test_renamed_descriptor_codegen_target_retires_its_obsolete_manifest(
+def test_renamed_descriptor_codegen_target_reconciles_its_output_plan(
     tmp_path: Path,
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
@@ -9793,8 +9788,6 @@ def test_renamed_descriptor_codegen_target_retires_its_obsolete_manifest(
     assert not (generated_dir / "removed.protocyte.hpp").exists()
     assert not (generated_dir / "removed.protocyte.cpp").exists()
     assert unrelated.read_text(encoding="utf-8") == "keep\n"
-    manifest_root = build_dir / "CMakeFiles" / "protocyte-owned-outputs"
-    assert len([path for path in manifest_root.iterdir() if path.is_dir()]) == 1
 
     subprocess.run(
         ["cmake", "--build", str(build_dir), "--target", "new_codegen"],
@@ -9856,6 +9849,7 @@ def test_multiconfig_codegen_serializes_shared_outputs_between_build_processes(
                 f'set(PROTOCYTE_PLUGIN_EXECUTABLE "{plugin.as_posix()}")',
                 f'set(Protobuf_PROTOC_EXECUTABLE "{protoc.as_posix()}")',
                 f'set(PROTOCYTE_PROTOBUF_IMPORT_DIR "{protobuf_import_dir.as_posix()}")',
+                f'set(PROTOCYTE_OUTPUT_LOCK_ROOT "{(source_dir / "output-locks").as_posix()}")',
                 "protocyte_generate(",
                 "    TARGET demo_codegen",
                 '    PROTO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/proto"',

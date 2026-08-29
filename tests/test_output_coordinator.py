@@ -936,6 +936,30 @@ def test_registry_enumeration_fails_closed_when_claim_state_is_unreadable(
         engine.reconcile(second)
 
 
+def test_output_claim_cannot_overlap_reserved_generation_staging(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    first = _write_plan(
+        tmp_path / "first-plan",
+        root,
+        tmp_path / "first-build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging_root = first.staging_for_target(target)
+    second = _write_plan(
+        tmp_path / "second-plan",
+        staging_root,
+        tmp_path / "second-build",
+        ((_target("second"), "second.protocyte.hpp"),),
+    )
+
+    with pytest.raises(coordinator.CoordinatorError, match="overlaps staging reserved"):
+        engine.reconcile(second)
+
+
 def test_reset_releases_claim(tmp_path: Path) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
