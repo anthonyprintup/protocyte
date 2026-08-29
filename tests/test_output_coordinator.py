@@ -46,6 +46,9 @@ def _write_plan(
         f"root-hex={os.fspath(root).encode().hex()}",
         f"build-root-hex={os.fspath(build).encode().hex()}",
     ]
+    for target in sorted({target for target, _ in outputs}):
+        staging = root.parent / f".protocyte-generation-staging-{target}"
+        lines.append(f"target={target}|{os.fspath(staging).encode().hex()}")
     lines.extend(
         f"output={target}|{relative.encode().hex()}" for target, relative in outputs
     )
@@ -55,6 +58,10 @@ def _write_plan(
 
 def _target(name: str) -> str:
     return hashlib.sha256(name.encode()).hexdigest()
+
+
+def _staging(plan: object, target: str) -> Path:
+    return plan.staging_for_target(target) / "generated"
 
 
 def _stage(staging: Path, relative: str, content: bytes) -> None:
@@ -79,6 +86,29 @@ def _assert_committed_invariants(lock_root: Path, root: Path) -> None:
     assert len(pending) <= 1
 
 
+def test_durable_directory_creation_resyncs_a_preexisting_retry_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "state" / "transactions" / "transaction"
+    directory.mkdir(parents=True)
+    synced: list[Path] = []
+    original_sync = coordinator._sync_directory
+
+    def record_sync(path: Path) -> None:
+        synced.append(path)
+        original_sync(path)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+
+    coordinator._durable_mkdir(directory, anchor=tmp_path)
+
+    assert synced == [
+        tmp_path,
+        tmp_path / "state",
+        tmp_path / "state" / "transactions",
+    ]
+
+
 def test_publish_commits_one_authoritative_snapshot(tmp_path: Path) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
@@ -92,7 +122,7 @@ def test_publish_commits_one_authoritative_snapshot(tmp_path: Path) -> None:
     )
     engine = coordinator.OutputCoordinator(lock_root)
     claim = engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "api/demo.protocyte.hpp", b"// header v1\n")
     _stage(staging, "api/demo.protocyte.cpp", b"// source v1\n")
 
@@ -114,6 +144,45 @@ def test_publish_commits_one_authoritative_snapshot(tmp_path: Path) -> None:
     assert claim_record["token"] == claim
 
 
+def test_claim_parent_chain_is_synced_before_claim_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    events: list[tuple[str, Path]] = []
+    original_sync = coordinator._sync_directory
+    original_atomic_write = coordinator._atomic_write
+
+    def record_sync(path: Path) -> None:
+        events.append(("sync", path))
+        original_sync(path)
+
+    def record_atomic_write(path: Path, content: bytes) -> None:
+        if path.name == "claim.json":
+            events.append(("claim", path))
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+    monkeypatch.setattr(coordinator, "_atomic_write", record_atomic_write)
+
+    coordinator.OutputCoordinator(lock_root).reconcile(plan)
+
+    claim_index = next(index for index, event in enumerate(events) if event[0] == "claim")
+    synced_before_claim = {
+        path for event, path in events[:claim_index] if event == "sync"
+    }
+    assert lock_root in synced_before_claim
+    assert lock_root / "roots" in synced_before_claim
+
+
 def test_payload_tree_is_synced_before_pending_intent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -129,7 +198,7 @@ def test_payload_tree_is_synced_before_pending_intent(
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
     events: list[tuple[str, Path]] = []
     original_sync = coordinator._sync_directory
@@ -159,6 +228,86 @@ def test_payload_tree_is_synced_before_pending_intent(
     assert any(path.name == "payloads" for path in synced_before_pending)
     assert state / "transactions" in synced_before_pending
     assert state in synced_before_pending
+
+
+def test_new_output_ancestor_chain_is_synced_before_snapshot_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "api/v1/demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "api/v1/demo.protocyte.hpp", b"// generated\n")
+    events: list[tuple[str, Path]] = []
+    original_sync = coordinator._sync_directory
+    original_atomic_write = coordinator._atomic_write
+
+    def record_sync(path: Path) -> None:
+        events.append(("sync", path))
+        original_sync(path)
+
+    def record_atomic_write(path: Path, content: bytes) -> None:
+        if path.name == "snapshot.json":
+            events.append(("snapshot", path))
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+    monkeypatch.setattr(coordinator, "_atomic_write", record_atomic_write)
+
+    engine.publish(plan, target, staging)
+
+    snapshot_index = next(
+        index for index, event in enumerate(events) if event[0] == "snapshot"
+    )
+    synced_before_snapshot = {
+        path for event, path in events[:snapshot_index] if event == "sync"
+    }
+    assert root.parent in synced_before_snapshot
+    assert root in synced_before_snapshot
+    assert root / "api" in synced_before_snapshot
+    assert root / "api" / "v1" in synced_before_snapshot
+
+
+def test_retry_resyncs_an_already_replaced_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    destination = root / "api" / "v1" / "demo.protocyte.hpp"
+    destination.parent.mkdir(parents=True)
+    content = b"// generated\n"
+    destination.write_bytes(content)
+    synced: list[Path] = []
+    original_sync = coordinator._sync_directory
+
+    def record_sync(path: Path) -> None:
+        synced.append(path)
+        original_sync(path)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+
+    coordinator.OutputCoordinator._publish_one(
+        root,
+        destination,
+        tmp_path / "unused-payload",
+        None,
+        hashlib.sha256(content).hexdigest(),
+        "0" * 64,
+        0,
+    )
+
+    assert root.parent in synced
+    assert root in synced
+    assert root / "api" in synced
+    assert root / "api" / "v1" in synced
 
 
 @pytest.mark.parametrize("crash_phase", ("after-initial-snapshot", "after-claim"))
@@ -219,11 +368,11 @@ def test_every_publication_crash_cut_rolls_forward_from_durable_payloads(
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(plan)
-    first_staging = tmp_path / "first-staging"
+    first_staging = _staging(plan, target)
     _stage(first_staging, "demo.protocyte.cpp", b"// source v1\n")
     _stage(first_staging, "demo.protocyte.hpp", b"// header v1\n")
     engine.publish(plan, target, first_staging)
-    second_staging = tmp_path / "second-staging"
+    second_staging = _staging(plan, target)
     _stage(second_staging, "demo.protocyte.cpp", b"// source v2\n")
     _stage(second_staging, "demo.protocyte.hpp", b"// header v2\n")
     script = Path(coordinator.__file__)
@@ -279,7 +428,7 @@ def test_reconcile_retires_only_snapshot_authenticated_outputs(tmp_path: Path) -
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
     engine.publish(plan, target, staging)
     empty_plan = _write_plan(plan_path, root, build, ())
@@ -288,6 +437,84 @@ def test_reconcile_retires_only_snapshot_authenticated_outputs(tmp_path: Path) -
 
     assert not (root / "demo.protocyte.hpp").exists()
     assert _snapshot(lock_root, root)["entries"] == {}
+
+
+def test_reconcile_durably_retires_removed_target_staging_before_plan_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path, root, build, ((target, "demo.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = first.staging_for_target(target)
+    _stage(staging / "generated", "demo.protocyte.hpp", b"// interrupted\n")
+    second = _write_plan(plan_path, root, build, ())
+    state = engine._state_directory(root)
+    events: list[tuple[str, Path]] = []
+    original_rmtree = coordinator.shutil.rmtree
+    original_atomic_write = coordinator._atomic_write
+
+    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
+        events.append(("rmtree", Path(path)))
+        original_rmtree(path, *args, **kwargs)
+
+    def record_atomic_write(path: Path, content: bytes) -> None:
+        if path == state / "plan.json":
+            events.append(("plan", path))
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(coordinator.shutil, "rmtree", record_rmtree)
+    monkeypatch.setattr(coordinator, "_atomic_write", record_atomic_write)
+
+    engine.reconcile(second)
+
+    assert not staging.exists()
+    assert events.index(("rmtree", staging)) < events.index(
+        ("plan", state / "plan.json")
+    )
+
+
+def test_reconcile_resyncs_absent_retired_staging_before_plan_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path, root, build, ((target, "demo.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    second = _write_plan(plan_path, root, build, ())
+    state = engine._state_directory(root)
+    events: list[tuple[str, Path]] = []
+    original_sync = coordinator._sync_directory
+    original_atomic_write = coordinator._atomic_write
+
+    def record_sync(path: Path) -> None:
+        events.append(("sync", path))
+        original_sync(path)
+
+    def record_atomic_write(path: Path, content: bytes) -> None:
+        if path == state / "plan.json":
+            events.append(("plan", path))
+        original_atomic_write(path, content)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+    monkeypatch.setattr(coordinator, "_atomic_write", record_atomic_write)
+
+    engine.reconcile(second)
+
+    plan_index = events.index(("plan", state / "plan.json"))
+    assert ("sync", root.parent) in events[:plan_index]
 
 
 def test_reconcile_preserves_modified_retired_output_and_snapshot(
@@ -306,7 +533,7 @@ def test_reconcile_preserves_modified_retired_output_and_snapshot(
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
     engine.publish(plan, target, staging)
     output = root / "demo.protocyte.hpp"
@@ -335,7 +562,7 @@ def test_same_build_path_recovers_after_complete_build_tree_deletion(
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// first\n")
     engine.publish(plan, target, staging)
     import shutil
@@ -343,7 +570,7 @@ def test_same_build_path_recovers_after_complete_build_tree_deletion(
     shutil.rmtree(build)
     build.mkdir()
     recreated = _write_plan(plan_path, root, build, ((target, "demo.protocyte.hpp"),))
-    replacement = tmp_path / "replacement"
+    replacement = _staging(recreated, target)
     _stage(replacement, "demo.protocyte.hpp", b"// regenerated\n")
 
     engine.reconcile(recreated)
@@ -428,7 +655,7 @@ def test_link_inserted_below_output_root_cannot_redirect_publication(
         )
         if junction.returncode != 0:
             pytest.skip(f"directory links are unavailable: {junction.stderr}")
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "api/demo.protocyte.hpp", b"// generated\n")
 
     with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
@@ -485,7 +712,7 @@ def test_hard_link_is_transferred_as_a_distinct_snapshot_entry(tmp_path: Path) -
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(first)
-    staging = tmp_path / "first-staging"
+    staging = _staging(first, target)
     _stage(staging, "old.protocyte.hpp", b"// first\n")
     engine.publish(first, target, staging)
     old_output = root / "old.protocyte.hpp"
@@ -503,7 +730,7 @@ def test_hard_link_is_transferred_as_a_distinct_snapshot_entry(tmp_path: Path) -
     assert not old_output.exists()
     assert new_output.read_bytes() == b"// first\n"
     assert set(_snapshot(lock_root, root)["entries"]) == {"new.protocyte.hpp"}
-    replacement = tmp_path / "replacement"
+    replacement = _staging(second, target)
     _stage(replacement, "new.protocyte.hpp", b"// second\n")
     engine.publish(second, target, replacement)
     assert new_output.read_bytes() == b"// second\n"
@@ -525,7 +752,7 @@ def test_tampered_durable_payload_fails_closed_without_publication(
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
     environment = os.environ.copy()
     environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = "after-pending"
@@ -616,14 +843,138 @@ def test_reset_releases_claim(tmp_path: Path) -> None:
     )
     engine = coordinator.OutputCoordinator(lock_root)
     token = engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
     engine.publish(plan, target, staging)
 
     engine.reset(plan, token)
 
     assert not (root / "demo.protocyte.hpp").exists()
+    assert not staging.parent.exists()
     assert not (lock_root / "roots" / _identity(root)).exists()
+
+
+def test_reset_persists_output_removal_before_claim_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "api/demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "api/demo.protocyte.hpp", b"// generated\n")
+    engine.publish(plan, target, staging)
+    state = engine._state_directory(root)
+    events: list[tuple[str, Path]] = []
+    original_sync = coordinator._sync_directory
+    original_rmtree = coordinator.shutil.rmtree
+
+    def record_sync(path: Path) -> None:
+        events.append(("sync", path))
+        original_sync(path)
+
+    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
+        events.append(("rmtree", Path(path)))
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+    monkeypatch.setattr(coordinator.shutil, "rmtree", record_rmtree)
+
+    engine.reset(plan, token)
+
+    release_index = events.index(("rmtree", state))
+    assert ("sync", root / "api") in events[:release_index]
+    assert ("sync", state.parent) in events[release_index + 1 :]
+
+
+def test_reset_resyncs_an_already_absent_output_before_claim_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    engine.publish(plan, target, staging)
+    output = root / "demo.protocyte.hpp"
+    output.unlink()
+    state = engine._state_directory(root)
+    events: list[tuple[str, Path]] = []
+    original_sync = coordinator._sync_directory
+    original_rmtree = coordinator.shutil.rmtree
+
+    def record_sync(path: Path) -> None:
+        events.append(("sync", path))
+        original_sync(path)
+
+    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
+        events.append(("rmtree", Path(path)))
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+    monkeypatch.setattr(coordinator.shutil, "rmtree", record_rmtree)
+
+    engine.reset(plan, token)
+
+    release_index = events.index(("rmtree", state))
+    assert ("sync", root) in events[:release_index]
+
+
+def test_reset_matches_snapshot_entries_by_case_insensitive_filesystem_identity(
+    tmp_path: Path,
+) -> None:
+    case_probe = tmp_path / "case-probe"
+    case_probe.mkdir()
+    if not (tmp_path / "CASE-PROBE").exists():
+        pytest.skip("requires a case-insensitive filesystem")
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, "API/foo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(first)
+    first_staging = _staging(first, target)
+    _stage(first_staging, "API/foo.protocyte.hpp", b"// first\n")
+    engine.publish(first, target, first_staging)
+    second = _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, "api/foo.protocyte.hpp"),),
+    )
+    engine.reconcile(second)
+    second_staging = _staging(second, target)
+    _stage(second_staging, "api/foo.protocyte.hpp", b"// second\n")
+    engine.publish(second, target, second_staging)
+
+    engine.reset(second, token)
+
+    assert not (root / "API/foo.protocyte.hpp").exists()
+    assert not engine._state_directory(root).exists()
 
 
 def test_reset_can_load_durable_plan_after_build_tree_deletion(tmp_path: Path) -> None:
@@ -639,7 +990,7 @@ def test_reset_can_load_durable_plan_after_build_tree_deletion(tmp_path: Path) -
     )
     engine = coordinator.OutputCoordinator(lock_root)
     token = engine.reconcile(plan)
-    staging = tmp_path / "staging"
+    staging = _staging(plan, target)
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
     engine.publish(plan, target, staging)
     import shutil

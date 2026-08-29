@@ -187,6 +187,22 @@ contains durable replacement payloads. Recovery therefore rolls forward from
 declared intent instead of inferring state from a mixture of output files and
 per-file owner markers.
 
+Crash consistency covers directory topology as well as file contents. The
+coordinator persists the claim directory and initial snapshot before exposing
+the claim, persists transaction directories and payloads before exposing
+pending intent, and persists output files plus every new ancestor directory
+before committing the replacement snapshot. Reset applies the inverse order:
+it durably removes every authenticated output before releasing the claim.
+Retries repeat the relevant directory synchronization even when an interrupted
+operation already created or removed the entry.
+
+The committed plan also records each target's private sibling staging
+directory. Reconfiguration durably removes staging owned by targets that left
+the plan before committing the replacement plan, and explicit reset removes
+all recorded staging before releasing the output-root claim. Staging paths are
+derived from the target identity and validated against the claimed output root;
+the coordinator never accepts an arbitrary cleanup path from plan metadata.
+
 Configuration reconciles interrupted work, commits the complete output plan,
 and retires only files whose bytes match the committed snapshot. The build
 runs `protoc` in a private sibling staging directory and validates every

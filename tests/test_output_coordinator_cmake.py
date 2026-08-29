@@ -164,6 +164,38 @@ def test_generation_inventory_is_literal_under_glob_metacharacter_build_path(
     assert not list(output.rglob("*.protocyte.*"))
 
 
+def test_reconfigure_retires_interrupted_staging_for_a_removed_target(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "project"
+    build = tmp_path / "build"
+    output = tmp_path / "generated"
+    locks = tmp_path / "locks"
+    _write_out_dir_owner_project(source, output, output_lock_root=locks)
+    configured = _configure(source, build)
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    plan = next((build / "CMakeFiles" / "protocyte-output-plans").glob("*.plan"))
+    target_line = next(
+        line for line in plan.read_text(encoding="ascii").splitlines()
+        if line.startswith("target=")
+    )
+    staging = Path(bytes.fromhex(target_line.split("|", 1)[1]).decode("utf-8"))
+    staged_output = staging / "generated" / "interrupted.protocyte.hpp"
+    staged_output.parent.mkdir(parents=True)
+    staged_output.write_text("// interrupted\n", encoding="utf-8")
+    _write_out_dir_owner_project(
+        source,
+        output,
+        proto_names=(),
+        output_lock_root=locks,
+    )
+
+    retired = _configure(source, build)
+
+    assert retired.returncode == 0, retired.stdout + retired.stderr
+    assert not staging.exists()
+
+
 def test_build_root_is_physical_when_configured_through_a_directory_link(
     tmp_path: Path,
 ) -> None:

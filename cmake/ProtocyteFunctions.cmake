@@ -1413,6 +1413,10 @@ function(_protocyte_finalize_output_plans)
             output_keys
             GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${target_key}"
         )
+        get_property(
+            staging_directory
+            GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_STAGING_${target_key}"
+        )
         set(target_manifest "${manifest_root}/${target_key}")
         file(MAKE_DIRECTORY "${target_manifest}")
         file(WRITE "${target_manifest}/output-root.path" "${output_root}")
@@ -1420,6 +1424,12 @@ function(_protocyte_finalize_output_plans)
         _protocyte_owned_output_claim_key(plan_key "${output_root}")
         list(APPEND current_plan_keys "${plan_key}")
         set("protocyte_plan_root_${plan_key}" "${output_root}")
+        string(HEX "${staging_directory}" encoded_staging_directory)
+        string(
+            APPEND
+            "protocyte_plan_targets_${plan_key}"
+            "target=${target_key}|${encoded_staging_directory}\n"
+        )
         foreach(output_key IN LISTS output_keys)
             get_property(
                 output_path
@@ -1445,7 +1455,7 @@ function(_protocyte_finalize_output_plans)
         string(HEX "${output_root}" encoded_output_root)
         set(
             plan_content
-            "protocyte-output-plan-v1\nroot-hex=${encoded_output_root}\nbuild-root-hex=${encoded_build_root}\n${protocyte_plan_outputs_${plan_key}}"
+            "protocyte-output-plan-v1\nroot-hex=${encoded_output_root}\nbuild-root-hex=${encoded_build_root}\n${protocyte_plan_targets_${plan_key}}${protocyte_plan_outputs_${plan_key}}"
         )
         set(plan_file "${plan_root}/${plan_key}.plan")
         _protocyte_write_if_different("${plan_file}" "${plan_content}")
@@ -1519,6 +1529,11 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         target_key
         "${CMAKE_CURRENT_BINARY_DIR}|${target_name}"
     )
+    cmake_path(GET normalized_output_root PARENT_PATH output_root_parent)
+    set(
+        staging_directory
+        "${output_root_parent}/.protocyte-generation-staging-${target_key}"
+    )
     _protocyte_schedule_owned_output_cleanup()
     get_property(
         manifest_root
@@ -1583,6 +1598,11 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         "PROTOCYTE_INTERNAL_OWNED_OUTPUT_KEYS_${target_key}"
         "${current_output_keys}"
     )
+    set_property(
+        GLOBAL PROPERTY
+        "PROTOCYTE_INTERNAL_OWNED_OUTPUT_STAGING_${target_key}"
+        "${staging_directory}"
+    )
     _protocyte_owned_output_claim_key(output_plan_key "${normalized_output_root}")
 
     set(
@@ -1598,6 +1618,11 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
     set(
         PROTOCYTE_INTERNAL_CURRENT_OUTPUT_TARGET_ID
         "${target_key}"
+        PARENT_SCOPE
+    )
+    set(
+        PROTOCYTE_INTERNAL_CURRENT_OUTPUT_STAGING_DIRECTORY
+        "${staging_directory}"
         PARENT_SCOPE
     )
 endfunction()
@@ -4951,17 +4976,11 @@ function(protocyte_generate)
     # ProtocyteGenerate.cmake validates this path again under the output locks
     # and publishes expected files only after protoc and ownership publication
     # both succeed.
-    # A stable, target-specific name also lets a retry safely discard only an
-    # interrupted attempt's private staging tree.
-    string(
-        SHA256
-        protocyte_generation_staging_key
-        "generation-staging|${PROTOCYTE_TARGET}|${PROTOCYTE_OUT_DIR}"
-    )
-    cmake_path(GET PROTOCYTE_OUT_DIR PARENT_PATH protocyte_out_dir_parent)
+    # Its stable target identity is recorded in the durable output plan, so
+    # configuration can retire an interrupted staging tree with its target.
     set(
         protocyte_generation_staging_directory
-        "${protocyte_out_dir_parent}/.protocyte-generation-staging-${protocyte_generation_staging_key}"
+        "${PROTOCYTE_INTERNAL_CURRENT_OUTPUT_STAGING_DIRECTORY}"
     )
     set(
         protocyte_generation_staged_output_directory

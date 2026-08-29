@@ -5,6 +5,13 @@ physical output root has one immutable claim, one committed snapshot, and at
 most one write-ahead transaction.  Transactions carry durable replacement
 payloads, so recovery always rolls forward and never has to infer intent from
 partially published outputs.
+
+The persistence order is part of the protocol: directory topology and the
+initial snapshot precede claim visibility; transaction topology and payloads
+precede pending intent; published outputs and their ancestor topology precede
+the new snapshot; and reset persists output absence before removing the claim.
+Every topology operation is idempotently synchronized so a retry after a crash
+also completes a parent fsync that the interrupted invocation may have missed.
 """
 
 from __future__ import annotations
@@ -191,7 +198,7 @@ def _output_path(root: Path, relative: str) -> Path:
 
 
 def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _durable_mkdir(path.parent)
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(16)}.tmp")
     try:
         with temporary.open("xb") as stream:
@@ -250,7 +257,66 @@ def _sync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _durable_mkdir(path: Path, *, anchor: Path | None = None) -> None:
+    """Create a directory chain and persist every entry below its anchor."""
+
+    path = _require_absolute(path, "directory path")
+    expected = project_path(path)
+    if anchor is None:
+        anchor = path.parent
+        while not os.path.lexists(anchor):
+            if anchor.parent == anchor:
+                _fail(f"could not find an existing parent for directory: {path}")
+            anchor = anchor.parent
+    anchor = project_path(_require_absolute(anchor, "directory anchor"))
+    try:
+        relative = path.relative_to(anchor)
+    except ValueError:
+        _fail(f"directory path is outside its durability anchor: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    if project_path(path) != expected:
+        _fail(f"directory changed while it was being created: {path}")
+    parent = anchor
+    for part in relative.parts:
+        directory = parent / part
+        if project_path(directory) != directory:
+            _fail(f"directory changed before its parent was synchronized: {directory}")
+        _sync_directory(parent)
+        parent = directory
+
+
+def _sync_absence(path: Path) -> None:
+    """Persist that a path is absent, including after a pre-fsync crash retry."""
+
+    existing = path.parent
+    while not os.path.lexists(existing):
+        if existing.parent == existing:
+            _fail(f"could not find an existing ancestor for absent path: {path}")
+        existing = existing.parent
+    existing = project_path(existing)
+    _sync_directory(existing)
+
+
+def _durable_rmtree(path: Path) -> None:
+    """Remove a directory tree and persist removal of its root entry."""
+
+    if not os.path.lexists(path):
+        _sync_absence(path)
+        return
+    expected = project_path(_require_absolute(path, "directory tree"))
+    if expected != path:
+        _fail(f"directory tree changed before removal: {path}")
+    parent = path.parent
+    shutil.rmtree(path)
+    if project_path(parent) != parent:
+        _fail(f"directory tree parent changed during removal: {parent}")
+    _sync_directory(parent)
+
+
 def _load_json(path: Path, description: str) -> dict[str, Any]:
+    expected = project_path(path, leaf_may_be_file=True)
+    if expected != path or _is_link(path):
+        _fail(f"{description} path is unsafe or was replaced: {path}")
     try:
         content = path.read_bytes()
         value = json.loads(content)
@@ -272,7 +338,7 @@ class FileLock:
     def __enter__(self) -> FileLock:
         expected_path = project_path(self.path, leaf_may_be_file=True)
         expected_parent = expected_path.parent
-        expected_parent.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(expected_parent)
         observed_parent = project_path(expected_parent)
         if observed_parent != expected_parent:
             _fail(f"lock directory changed while it was being prepared: {self.path}")
@@ -347,10 +413,17 @@ class PlanOutput:
 
 
 @dataclass(frozen=True)
+class PlanTarget:
+    identity: str
+    staging: Path
+
+
+@dataclass(frozen=True)
 class Plan:
     root: Path
     build_root: Path
     build_id: str
+    targets: tuple[PlanTarget, ...]
     outputs: tuple[PlanOutput, ...]
 
     @property
@@ -363,6 +436,10 @@ class Plan:
                 for output in self.outputs
             ],
             "root": os.fspath(self.root),
+            "targets": [
+                {"id": target.identity, "staging": os.fspath(target.staging)}
+                for target in self.targets
+            ],
             "version": PROTOCOL_VERSION,
         }
 
@@ -379,12 +456,27 @@ class Plan:
         if not lines or lines[0] != PLAN_HEADER:
             _fail(f"output plan has an unsupported header: {path}")
         scalar: dict[str, str] = {}
+        targets: list[PlanTarget] = []
         outputs: list[PlanOutput] = []
         for line in lines[1:]:
             key, separator, value = line.partition("=")
             if not separator:
                 _fail(f"output plan contains a malformed line: {path}")
-            if key == "output":
+            if key == "target":
+                identity, target_separator, encoded_staging = value.partition("|")
+                if not target_separator or not _is_sha256(identity):
+                    _fail(f"output plan contains invalid target metadata: {path}")
+                targets.append(
+                    PlanTarget(
+                        identity,
+                        _validate_staging_path(
+                            root=None,
+                            identity=identity,
+                            path=Path(_decode_hex(encoded_staging)),
+                        ),
+                    )
+                )
+            elif key == "output":
                 target, output_separator, encoded_relative = value.partition("|")
                 if not output_separator or not _is_sha256(target):
                     _fail(f"output plan contains an invalid target identity: {path}")
@@ -402,6 +494,14 @@ class Plan:
         root = project_path(Path(_decode_hex(scalar["root-hex"])))
         build_root = project_path(Path(_decode_hex(scalar["build-root-hex"])))
         build_id = _path_key(build_root)
+        validated_targets = tuple(
+            PlanTarget(
+                target.identity,
+                _validate_staging_path(root, target.identity, target.staging),
+            )
+            for target in targets
+        )
+        _validate_plan_targets(validated_targets, outputs, path)
         unique: dict[str, PlanOutput] = {}
         portable: dict[str, PlanOutput] = {}
         for output in outputs:
@@ -418,7 +518,13 @@ class Plan:
         ordered = tuple(
             sorted(outputs, key=lambda output: (output.relative, output.target))
         )
-        return cls(root, build_root, build_id, ordered)
+        return cls(
+            root,
+            build_root,
+            build_id,
+            tuple(sorted(validated_targets, key=lambda target: target.identity)),
+            ordered,
+        )
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any], source: Path) -> Plan:
@@ -430,10 +536,12 @@ class Plan:
                 "outputs",
                 "root",
                 "sha256",
+                "targets",
                 "version",
             }
             or payload["version"] != PROTOCOL_VERSION
             or not isinstance(payload["outputs"], list)
+            or not isinstance(payload["targets"], list)
         ):
             _fail(f"configured output plan is malformed: {source}")
         root = project_path(Path(str(payload["root"])))
@@ -451,15 +559,69 @@ class Plan:
                     str(value["target"]), _validate_relative_path(str(value["path"]))
                 )
             )
+        targets: list[PlanTarget] = []
+        for value in payload["targets"]:
+            if (
+                not isinstance(value, dict)
+                or set(value) != {"id", "staging"}
+                or not _is_sha256(str(value["id"]))
+            ):
+                _fail(f"configured output plan contains malformed target metadata: {source}")
+            identity = str(value["id"])
+            targets.append(
+                PlanTarget(
+                    identity,
+                    _validate_staging_path(
+                        root, identity, Path(str(value["staging"]))
+                    ),
+                )
+            )
+        _validate_plan_targets(targets, outputs, source)
         plan = cls(
             root,
             build_root,
             _path_key(build_root),
+            tuple(sorted(targets, key=lambda target: target.identity)),
             tuple(sorted(outputs, key=lambda output: (output.relative, output.target))),
         )
         if payload["build_id"] != plan.build_id or payload["sha256"] != plan.digest:
             _fail(f"configured output plan identity is malformed: {source}")
         return plan
+
+    def staging_for_target(self, identity: str) -> Path:
+        for target in self.targets:
+            if target.identity == identity:
+                return target.staging
+        _fail(f"output plan contains no metadata for target {identity}")
+
+
+def _validate_staging_path(
+    root: Path | None, identity: str, path: Path
+) -> Path:
+    path = project_path(_require_absolute(path, "generation staging directory"))
+    if root is not None:
+        expected = project_path(
+            root.parent / f".protocyte-generation-staging-{identity}"
+        )
+        if path != expected:
+            _fail(
+                "output plan target metadata contains an unexpected staging directory: "
+                f"{path}"
+            )
+    return path
+
+
+def _validate_plan_targets(
+    targets: Sequence[PlanTarget], outputs: Sequence[PlanOutput], source: Path
+) -> None:
+    identities = [target.identity for target in targets]
+    staging_paths = [os.fspath(target.staging).casefold() for target in targets]
+    if len(set(identities)) != len(identities) or len(set(staging_paths)) != len(
+        staging_paths
+    ):
+        _fail(f"output plan repeats target metadata: {source}")
+    if set(identities) != {output.target for output in outputs}:
+        _fail(f"output plan target metadata does not match its outputs: {source}")
 
 
 def _is_sha256(value: str) -> bool:
@@ -487,8 +649,10 @@ class OutputCoordinator:
         with FileLock(self._publication_lock(plan.root)):
             claim = self._load_claim(state, plan)
             self._recover(state, plan, claim)
+            previous_plan = self._load_recorded_plan(state)
             snapshot = self._load_snapshot(state, claim)
             snapshot = self._retire_unplanned(state, plan, claim, snapshot)
+            self._retire_staging(previous_plan, plan)
             _atomic_write(
                 state / "plan.json",
                 _canonical_json({**plan.payload, "sha256": plan.digest}),
@@ -510,6 +674,11 @@ class OutputCoordinator:
             claim = self._load_claim(state, plan)
             self._recover(state, plan, claim)
             self._require_current_plan(state, plan)
+            expected_staging_root = plan.staging_for_target(target) / "generated"
+            if project_path(staging_root) != project_path(expected_staging_root):
+                _fail(
+                    "publish staging root does not match the configured target metadata"
+                )
             snapshot = self._load_snapshot(state, claim)
             target_outputs = [
                 output for output in plan.outputs if output.target == target
@@ -521,7 +690,7 @@ class OutputCoordinator:
             transaction_id = secrets.token_hex(32)
             transaction_directory = state / "transactions" / transaction_id
             payload_directory = transaction_directory / "payloads"
-            payload_directory.mkdir(parents=True)
+            _durable_mkdir(payload_directory, anchor=state)
             try:
                 for index, output in enumerate(target_outputs):
                     destination = _output_path(plan.root, output.relative)
@@ -566,9 +735,6 @@ class OutputCoordinator:
                         }
                     )
                 _sync_directory(payload_directory)
-                _sync_directory(transaction_directory)
-                _sync_directory(transaction_directory.parent)
-                _sync_directory(state)
                 new_snapshot = {
                     "claim_token": claim["token"],
                     "entries": dict(sorted(new_entries.items())),
@@ -589,7 +755,8 @@ class OutputCoordinator:
                 self._apply_pending(state, plan, claim, pending, transaction_directory)
             except BaseException:
                 if not (transaction_directory / "pending.json").exists():
-                    shutil.rmtree(transaction_directory, ignore_errors=True)
+                    with contextlib.suppress(OSError):
+                        _durable_rmtree(transaction_directory)
                 raise
             for output in target_outputs:
                 expected = new_entries[output.relative]["sha256"]
@@ -605,7 +772,6 @@ class OutputCoordinator:
                     _fail("reset claim token does not match the live immutable claim")
                 self._recover(state, plan, claim)
                 snapshot = self._load_snapshot(state, claim)
-                known_paths = set(snapshot["entries"])
                 for relative, entry in snapshot["entries"].items():
                     output = _output_path(plan.root, relative)
                     self._require_observed_state(
@@ -614,22 +780,29 @@ class OutputCoordinator:
                 if plan.root.exists():
                     for candidate in plan.root.rglob("*"):
                         relative = candidate.relative_to(plan.root).as_posix()
-                        if (
-                            relative.casefold().endswith(GENERATED_SUFFIXES)
-                            and relative not in known_paths
-                            and (_is_link(candidate) or candidate.is_file())
-                        ):
+                        if not relative.casefold().endswith(GENERATED_SUFFIXES):
+                            continue
+                        if _is_link(candidate):
+                            _fail(
+                                f"reset found an unowned generated-looking output: {candidate}"
+                            )
+                        if not candidate.is_file():
+                            continue
+                        known_relative, _ = self._snapshot_entry_for_path(
+                            plan.root, snapshot["entries"], relative
+                        )
+                        if known_relative is None:
                             _fail(
                                 f"reset found an unowned generated-looking output: {candidate}"
                             )
                 for relative, entry in snapshot["entries"].items():
                     output = _output_path(plan.root, relative)
-                    self._require_observed_state(
-                        output, entry["sha256"], allow_absent=True
-                    )
-                    with contextlib.suppress(FileNotFoundError):
-                        output.unlink()
-                shutil.rmtree(state)
+                    self._delete_if_state(output, entry["sha256"])
+                recorded_plan = self._load_recorded_plan(state)
+                if recorded_plan is not None:
+                    for target in recorded_plan.targets:
+                        _durable_rmtree(target.staging)
+                _durable_rmtree(state)
 
     def plan_for_root(self, root: Path) -> Plan:
         root = project_path(_require_absolute(root, "output root"))
@@ -647,17 +820,18 @@ class OutputCoordinator:
         claim_root = project_path(Path(claim["root"]))
         self._require_requested_root(root, claim_root)
         build_root = project_path(Path(claim["build_root"]))
-        return Plan(claim_root, build_root, str(claim["build_id"]), ())
+        return Plan(claim_root, build_root, str(claim["build_id"]), (), ())
 
     def _claim(self, plan: Plan) -> Path:
-        self.lock_root.mkdir(parents=True, exist_ok=True)
+        _durable_mkdir(self.lock_root)
         state = self._state_directory(plan.root)
         with FileLock(self.lock_root / "registry.lock"):
             self._validate_registry(plan)
-            state.mkdir(parents=True, exist_ok=True)
+            _durable_mkdir(state, anchor=self.lock_root)
             claim_path = state / "claim.json"
             if claim_path.exists():
                 self._load_claim(state, plan)
+                _sync_directory(state)
                 return state
             token = secrets.token_hex(32)
             claim = {
@@ -774,6 +948,22 @@ class OutputCoordinator:
                 "build-time output plan does not match the plan committed during configuration"
             )
 
+    @staticmethod
+    def _load_recorded_plan(state: Path) -> Plan | None:
+        path = state / "plan.json"
+        if not path.exists():
+            return None
+        return Plan.from_payload(_load_json(path, "configured output plan"), path)
+
+    @staticmethod
+    def _retire_staging(previous: Plan | None, current: Plan) -> None:
+        if previous is None:
+            return
+        current_targets = {target.identity for target in current.targets}
+        for target in previous.targets:
+            if target.identity not in current_targets:
+                _durable_rmtree(target.staging)
+
     def _retire_unplanned(
         self,
         state: Path,
@@ -841,7 +1031,7 @@ class OutputCoordinator:
             return snapshot
         transaction_id = secrets.token_hex(32)
         transaction_directory = state / "transactions" / transaction_id
-        transaction_directory.mkdir(parents=True)
+        _durable_mkdir(transaction_directory, anchor=state)
         new_snapshot = {
             "claim_token": claim["token"],
             "entries": dict(sorted(new_entries.items())),
@@ -861,24 +1051,35 @@ class OutputCoordinator:
 
     def _recover(self, state: Path, plan: Plan, claim: Mapping[str, Any]) -> None:
         transaction_root = state / "transactions"
-        if not transaction_root.exists():
+        if not os.path.lexists(transaction_root):
             return
+        if project_path(transaction_root) != transaction_root:
+            _fail(f"transaction directory is unsafe or was replaced: {transaction_root}")
+        transaction_directories: list[Path] = []
+        for directory in transaction_root.iterdir():
+            if not directory.is_dir():
+                continue
+            if _is_link(directory) or not _is_sha256(directory.name):
+                _fail(f"transaction directory contains an unsafe entry: {directory}")
+            transaction_directories.append(directory)
         pending_directories = [
             directory
-            for directory in transaction_root.iterdir()
-            if directory.is_dir() and (directory / "pending.json").exists()
+            for directory in transaction_directories
+            if (directory / "pending.json").exists()
         ]
         if len(pending_directories) > 1:
             _fail(f"output root contains multiple pending transactions: {plan.root}")
         if pending_directories:
             directory = pending_directories[0]
+            _durable_mkdir(directory, anchor=state)
+            _sync_directory(directory)
             pending = _load_json(
                 directory / "pending.json", "pending output transaction"
             )
             self._apply_pending(state, plan, claim, pending, directory)
-        for directory in transaction_root.iterdir():
-            if directory.is_dir():
-                shutil.rmtree(directory)
+        for directory in transaction_directories:
+            if directory.exists():
+                _durable_rmtree(directory)
 
     def _apply_pending(
         self,
@@ -903,7 +1104,8 @@ class OutputCoordinator:
                 _fail(
                     "committed snapshot conflicts with a pending transaction generation"
                 )
-            shutil.rmtree(transaction_directory)
+            _sync_directory(state)
+            _durable_rmtree(transaction_directory)
             return
         if snapshot["generation"] != pending["base_generation"]:
             _fail(
@@ -948,15 +1150,22 @@ class OutputCoordinator:
                         f"pending transaction payload is missing or changed: {payload}"
                     )
                 self._publish_one(
-                    destination, payload, before, after, pending["id"], index
+                    plan.root,
+                    destination,
+                    payload,
+                    before,
+                    after,
+                    pending["id"],
+                    index,
                 )
             self._inject(f"after-output-{index + 1}")
         _atomic_write(state / "snapshot.json", _canonical_json(new_snapshot))
         self._inject("after-snapshot")
-        shutil.rmtree(transaction_directory)
+        _durable_rmtree(transaction_directory)
 
     @staticmethod
     def _publish_one(
+        output_root: Path,
         destination: Path,
         payload: Path,
         before: str | None,
@@ -964,6 +1173,7 @@ class OutputCoordinator:
         transaction_id: str,
         index: int,
     ) -> None:
+        _durable_mkdir(destination.parent, anchor=output_root.parent)
         if destination.exists():
             observed = (
                 _sha256_file(destination)
@@ -971,6 +1181,7 @@ class OutputCoordinator:
                 else None
             )
             if observed == after:
+                _sync_directory(destination.parent)
                 return
             if observed != before:
                 _fail(
@@ -980,7 +1191,6 @@ class OutputCoordinator:
             # Missing previously committed output is repairable from the
             # durable roll-forward payload.
             pass
-        destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(
             f".{destination.name}.protocyte-{transaction_id}-{index}.tmp"
         )
@@ -1002,6 +1212,7 @@ class OutputCoordinator:
     @staticmethod
     def _delete_if_state(destination: Path, before: str | None) -> None:
         if not os.path.lexists(destination):
+            _sync_absence(destination)
             return
         if _is_link(destination) or not destination.is_file():
             _fail(f"retired generated output became unsafe: {destination}")
