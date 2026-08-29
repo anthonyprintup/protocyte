@@ -152,6 +152,53 @@ def test_generation_inventory_is_literal_under_glob_metacharacter_build_path(
     assert generated.returncode == 0, generated.stdout + generated.stderr
     assert (output / "demo_0.protocyte.hpp").is_file()
 
+    _write_out_dir_owner_project(
+        source,
+        output,
+        proto_names=(),
+        output_lock_root=locks,
+    )
+    retired = _configure(source, build)
+
+    assert retired.returncode == 0, retired.stdout + retired.stderr
+    assert not list(output.rglob("*.protocyte.*"))
+
+
+def test_build_root_is_physical_when_configured_through_a_directory_link(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "project"
+    real_build = tmp_path / "real-build"
+    build_alias = tmp_path / "build-alias"
+    output = tmp_path / "generated"
+    locks = tmp_path / "locks"
+    real_build.mkdir()
+    try:
+        build_alias.symlink_to(real_build, target_is_directory=True)
+    except OSError as error:
+        if os.name != "nt":
+            pytest.skip(f"directory links are unavailable: {error}")
+        junction = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(build_alias), str(real_build)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if junction.returncode != 0:
+            pytest.skip(f"directory links are unavailable: {junction.stderr}")
+    _write_out_dir_owner_project(source, output, output_lock_root=locks)
+
+    configured = _configure(source, build_alias)
+    generated = _build_out_dir_owner_project(build_alias)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    plan = next(
+        (real_build / "CMakeFiles" / "protocyte-output-plans").glob("*.plan")
+    )
+    encoded_build_root = plan.read_text(encoding="ascii").splitlines()[2].split("=", 1)[1]
+    assert Path(bytes.fromhex(encoded_build_root).decode("utf-8")) == real_build.resolve()
+
 
 def test_public_reset_requires_token_and_releases_claim(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]

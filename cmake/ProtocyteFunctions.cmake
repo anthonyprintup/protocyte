@@ -1346,11 +1346,21 @@ function(protocyte_reset_output_directory)
     endif()
 endfunction()
 
+function(_protocyte_escape_glob_path out_var path)
+    set(escaped_path "${path}")
+    string(REPLACE "\\" "\\\\" escaped_path "${escaped_path}")
+    string(REPLACE "[" "[[]" escaped_path "${escaped_path}")
+    string(REPLACE "?" "[?]" escaped_path "${escaped_path}")
+    string(REPLACE "*" "[*]" escaped_path "${escaped_path}")
+    set(${out_var} "${escaped_path}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_finalize_output_plans)
     get_property(target_keys GLOBAL PROPERTY PROTOCYTE_INTERNAL_OWNED_OUTPUT_TARGET_KEYS)
     list(REMOVE_DUPLICATES target_keys)
     set(plan_root "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-output-plans")
-    file(GLOB prior_plans LIST_DIRECTORIES FALSE "${plan_root}/*.plan")
+    _protocyte_escape_glob_path(glob_plan_root "${plan_root}")
+    file(GLOB prior_plans LIST_DIRECTORIES FALSE "${glob_plan_root}/*.plan")
     if(NOT target_keys AND NOT prior_plans)
         return()
     endif()
@@ -1370,7 +1380,29 @@ function(_protocyte_finalize_output_plans)
     )
     file(REMOVE_RECURSE "${manifest_root}")
     file(MAKE_DIRECTORY "${manifest_root}")
-    string(HEX "${CMAKE_BINARY_DIR}" encoded_build_root)
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env --unset=PYTHONHOME --unset=PYTHONPATH
+            "${coordinator_python}"
+            "${coordinator_script}"
+            encode-build-root
+            --build-root "${CMAKE_BINARY_DIR}"
+        RESULT_VARIABLE canonical_build_root_result
+        OUTPUT_VARIABLE encoded_build_root
+        ERROR_VARIABLE canonical_build_root_error
+        ENCODING UTF-8
+    )
+    if(NOT "${canonical_build_root_result}" STREQUAL "0")
+        string(STRIP "${canonical_build_root_error}" canonical_build_root_error)
+        message(
+            FATAL_ERROR
+            "Protocyte could not resolve the physical CMake build root.\n${canonical_build_root_error}"
+        )
+    endif()
+    string(STRIP "${encoded_build_root}" encoded_build_root)
+    if(NOT encoded_build_root MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "Protocyte returned an invalid physical CMake build root encoding")
+    endif()
     set(current_plan_keys)
     foreach(target_key IN LISTS target_keys)
         get_property(

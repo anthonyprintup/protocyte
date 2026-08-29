@@ -131,19 +131,34 @@ def test_payload_tree_is_synced_before_pending_intent(
     engine.reconcile(plan)
     staging = tmp_path / "staging"
     _stage(staging, "demo.protocyte.hpp", b"// generated\n")
-    synced: list[Path] = []
+    events: list[tuple[str, Path]] = []
     original_sync = coordinator._sync_directory
+    original_atomic_write = coordinator._atomic_write
 
     def record_sync(path: Path) -> None:
-        synced.append(path)
+        events.append(("sync", path))
         original_sync(path)
 
+    def record_atomic_write(path: Path, content: bytes) -> None:
+        if path.name == "pending.json":
+            events.append(("pending", path))
+        original_atomic_write(path, content)
+
     monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+    monkeypatch.setattr(coordinator, "_atomic_write", record_atomic_write)
 
     engine.publish(plan, target, staging)
 
-    assert any(path.name == "payloads" for path in synced)
-    assert any(path.name == "transactions" for path in synced)
+    pending_index = next(
+        index for index, event in enumerate(events) if event[0] == "pending"
+    )
+    synced_before_pending = {
+        path for event, path in events[:pending_index] if event == "sync"
+    }
+    state = engine._state_directory(root)
+    assert any(path.name == "payloads" for path in synced_before_pending)
+    assert state / "transactions" in synced_before_pending
+    assert state in synced_before_pending
 
 
 @pytest.mark.parametrize("crash_phase", ("after-initial-snapshot", "after-claim"))
@@ -635,6 +650,34 @@ def test_reset_can_load_durable_plan_after_build_tree_deletion(tmp_path: Path) -
     engine.reset(durable_plan, token)
 
     assert not (lock_root / "roots" / _identity(root)).exists()
+
+
+def test_reset_rejects_an_unowned_generated_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    outside = tmp_path / "outside.hpp"
+    outside.write_text("// outside\n", encoding="utf-8")
+    unexpected = root / "stale.protocyte.hpp"
+    try:
+        unexpected.symlink_to(outside)
+    except OSError as error:
+        pytest.skip(f"file symlinks are unavailable: {error}")
+
+    with pytest.raises(coordinator.CoordinatorError, match="unowned generated-looking"):
+        engine.reset(plan, token)
+
+    assert unexpected.is_symlink()
+    assert (lock_root / "roots" / _identity(root)).is_dir()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires distinct case-sensitive roots")

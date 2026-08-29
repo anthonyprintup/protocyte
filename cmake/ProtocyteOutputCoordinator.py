@@ -133,6 +133,19 @@ def project_path(path: Path, *, leaf_may_be_file: bool = False) -> Path:
     return Path(os.path.normpath(projected))
 
 
+def canonical_build_root(path: Path) -> Path:
+    """Resolve a valid CMake build directory to its stable physical path."""
+
+    path = _require_absolute(path, "CMake build root")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        _fail(f"could not resolve CMake build root {path}: {error}")
+    if not resolved.is_dir():
+        _fail(f"CMake build root is not a directory: {path}")
+    return project_path(resolved)
+
+
 def _portable_identity(path: Path, *, leaf_may_be_file: bool = False) -> str:
     projected = project_path(path, leaf_may_be_file=leaf_may_be_file)
     return os.fspath(projected).replace("\\", "/").casefold()
@@ -555,6 +568,7 @@ class OutputCoordinator:
                 _sync_directory(payload_directory)
                 _sync_directory(transaction_directory)
                 _sync_directory(transaction_directory.parent)
+                _sync_directory(state)
                 new_snapshot = {
                     "claim_token": claim["token"],
                     "entries": dict(sorted(new_entries.items())),
@@ -599,12 +613,11 @@ class OutputCoordinator:
                     )
                 if plan.root.exists():
                     for candidate in plan.root.rglob("*"):
-                        if not candidate.is_file() or _is_link(candidate):
-                            continue
                         relative = candidate.relative_to(plan.root).as_posix()
                         if (
                             relative.casefold().endswith(GENERATED_SUFFIXES)
                             and relative not in known_paths
+                            and (_is_link(candidate) or candidate.is_file())
                         ):
                             _fail(
                                 f"reset found an unowned generated-looking output: {candidate}"
@@ -1078,9 +1091,17 @@ class OutputCoordinator:
 def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "command", choices=("reconcile", "validate", "publish", "reset")
+        "command",
+        choices=(
+            "encode-build-root",
+            "reconcile",
+            "validate",
+            "publish",
+            "reset",
+        ),
     )
-    parser.add_argument("--lock-root", type=Path, required=True)
+    parser.add_argument("--lock-root", type=Path)
+    parser.add_argument("--build-root", type=Path)
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--target")
@@ -1092,6 +1113,14 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
 def main(arguments: Sequence[str] | None = None) -> int:
     options = _parse_arguments(sys.argv[1:] if arguments is None else arguments)
     try:
+        if options.command == "encode-build-root":
+            if options.build_root is None:
+                _fail("encode-build-root requires --build-root")
+            encoded = os.fspath(canonical_build_root(options.build_root)).encode("utf-8")
+            print(encoded.hex())
+            return 0
+        if options.lock_root is None:
+            _fail(f"{options.command} requires --lock-root")
         coordinator = OutputCoordinator(options.lock_root)
         if options.plan is not None:
             plan = Plan.read(options.plan)
