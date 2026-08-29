@@ -313,6 +313,33 @@ def _durable_rmtree(path: Path) -> None:
     _sync_directory(parent)
 
 
+def _walk_tree(root: Path) -> list[Path]:
+    """Enumerate a tree without suppressing any directory-read failure."""
+
+    paths: list[Path] = []
+
+    def visit(directory: Path) -> None:
+        try:
+            with os.scandir(directory) as stream:
+                entries = sorted(stream, key=lambda entry: entry.name)
+        except OSError as error:
+            _fail(f"could not enumerate directory {directory}: {error}")
+        for entry in entries:
+            path = directory / entry.name
+            paths.append(path)
+            if _is_link(path):
+                continue
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError as error:
+                _fail(f"could not inspect directory entry {path}: {error}")
+            if is_directory:
+                visit(path)
+
+    visit(root)
+    return paths
+
+
 def _load_json(path: Path, description: str) -> dict[str, Any]:
     expected = project_path(path, leaf_may_be_file=True)
     if expected != path or _is_link(path):
@@ -732,6 +759,7 @@ class OutputCoordinator:
                             "path": output.relative,
                             "payload": payload.name,
                             "target": target,
+                            "transfer": None,
                         }
                     )
                 _sync_directory(payload_directory)
@@ -770,45 +798,119 @@ class OutputCoordinator:
                 claim = self._load_claim(state, plan)
                 if claim["token"] != expected_token:
                     _fail("reset claim token does not match the live immutable claim")
-                self._recover(state, plan, claim)
-                snapshot = self._load_snapshot(state, claim)
-                for relative, entry in snapshot["entries"].items():
-                    output = _output_path(plan.root, relative)
-                    self._require_observed_state(
-                        output, entry["sha256"], allow_absent=True
-                    )
-                if plan.root.exists():
-                    for candidate in plan.root.rglob("*"):
-                        relative = candidate.relative_to(plan.root).as_posix()
-                        if not relative.casefold().endswith(GENERATED_SUFFIXES):
-                            continue
-                        if _is_link(candidate):
-                            _fail(
-                                f"reset found an unowned generated-looking output: {candidate}"
-                            )
-                        if not candidate.is_file():
-                            if candidate.is_dir() and self._is_snapshot_ancestor(
-                                plan.root, snapshot["entries"], relative
-                            ):
-                                continue
-                            _fail(
-                                f"reset found an unowned generated-looking output: {candidate}"
-                            )
-                        known_relative, _ = self._snapshot_entry_for_path(
-                            plan.root, snapshot["entries"], relative
-                        )
-                        if known_relative is None:
-                            _fail(
-                                f"reset found an unowned generated-looking output: {candidate}"
-                            )
-                for relative, entry in snapshot["entries"].items():
+                reset_path = state / "reset.json"
+                if reset_path.exists():
+                    intent = self._load_reset_intent(reset_path, plan.root, claim)
+                else:
+                    self._recover(state, plan, claim)
+                    snapshot = self._load_snapshot(state, claim)
+                    self._validate_reset_inventory(plan.root, snapshot["entries"])
+                    recorded_plan = self._load_recorded_plan(state)
+                    staging = [
+                        {"id": target.identity, "path": os.fspath(target.staging)}
+                        for target in (recorded_plan.targets if recorded_plan else ())
+                    ]
+                    intent = {
+                        "claim_token": claim["token"],
+                        "entries": snapshot["entries"],
+                        "staging": staging,
+                        "version": PROTOCOL_VERSION,
+                    }
+                    _atomic_write(reset_path, _canonical_json(intent))
+                    self._inject("after-reset-intent")
+                for index, (relative, entry) in enumerate(intent["entries"].items()):
                     output = _output_path(plan.root, relative)
                     self._delete_if_state(output, entry["sha256"])
-                recorded_plan = self._load_recorded_plan(state)
-                if recorded_plan is not None:
-                    for target in recorded_plan.targets:
-                        _durable_rmtree(target.staging)
-                _durable_rmtree(state)
+                    self._inject(f"after-reset-output-{index + 1}")
+                for target in intent["staging"]:
+                    _durable_rmtree(Path(target["path"]))
+                self._release_claim(state)
+
+    def _validate_reset_inventory(
+        self, root: Path, entries: Mapping[str, Any]
+    ) -> None:
+        for relative, entry in entries.items():
+            self._require_observed_state(
+                _output_path(root, relative), entry["sha256"], allow_absent=True
+            )
+        if not root.exists():
+            return
+        for candidate in _walk_tree(root):
+            relative = candidate.relative_to(root).as_posix()
+            if not relative.casefold().endswith(GENERATED_SUFFIXES):
+                continue
+            if _is_link(candidate):
+                _fail(f"reset found an unowned generated-looking output: {candidate}")
+            if not candidate.is_file():
+                if candidate.is_dir() and self._is_snapshot_ancestor(
+                    root, entries, relative
+                ):
+                    continue
+                _fail(f"reset found an unowned generated-looking output: {candidate}")
+            known_relative, _ = self._snapshot_entry_for_path(root, entries, relative)
+            if known_relative is None:
+                _fail(f"reset found an unowned generated-looking output: {candidate}")
+
+    @staticmethod
+    def _load_reset_intent(
+        path: Path, root: Path, claim: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        intent = _load_json(path, "pending output reset")
+        if (
+            set(intent) != {"claim_token", "entries", "staging", "version"}
+            or intent["version"] != PROTOCOL_VERSION
+            or intent["claim_token"] != claim["token"]
+            or not isinstance(intent["entries"], dict)
+            or not isinstance(intent["staging"], list)
+        ):
+            _fail(f"pending output reset is malformed: {path}")
+        for relative, entry in intent["entries"].items():
+            _validate_relative_path(relative)
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"sha256", "target"}
+                or not _is_sha256(str(entry["sha256"]))
+                or not _is_sha256(str(entry["target"]))
+            ):
+                _fail(f"pending output reset contains a malformed entry: {path}")
+        seen: set[str] = set()
+        for target in intent["staging"]:
+            if (
+                not isinstance(target, dict)
+                or set(target) != {"id", "path"}
+                or not _is_sha256(str(target["id"]))
+                or str(target["id"]) in seen
+            ):
+                _fail(f"pending output reset contains malformed staging: {path}")
+            seen.add(str(target["id"]))
+            target["path"] = os.fspath(
+                _validate_staging_path(root, str(target["id"]), Path(str(target["path"])))
+            )
+        return intent
+
+    @staticmethod
+    def _release_claim(state: Path) -> None:
+        preserved = {"claim.json", "reset.json"}
+        for entry in _walk_tree(state):
+            if entry.parent != state or entry.name in preserved:
+                continue
+            if _is_link(entry):
+                _fail(f"claim state contains an unsafe entry during reset: {entry}")
+            if entry.is_dir():
+                _durable_rmtree(entry)
+            else:
+                entry.unlink()
+                _sync_directory(state)
+        OutputCoordinator._inject("after-reset-disposable")
+        claim_path = state / "claim.json"
+        claim_path.unlink()
+        _sync_directory(state)
+        OutputCoordinator._inject("after-reset-claim")
+        reset_path = state / "reset.json"
+        reset_path.unlink()
+        _sync_directory(state)
+        state.rmdir()
+        _sync_directory(state.parent)
 
     def plan_for_root(self, root: Path) -> Plan:
         root = project_path(_require_absolute(root, "output root"))
@@ -866,9 +968,32 @@ class OutputCoordinator:
 
     def _validate_registry(self, plan: Plan) -> None:
         roots = self.lock_root / "roots"
-        if not roots.exists():
+        if not os.path.lexists(roots):
             return
-        for claim_path in roots.glob("*/claim.json"):
+        if project_path(roots) != roots:
+            _fail(f"output registry is unsafe or was replaced: {roots}")
+        try:
+            with os.scandir(roots) as stream:
+                states = sorted(stream, key=lambda entry: entry.name)
+        except OSError as error:
+            _fail(f"could not enumerate output registry {roots}: {error}")
+        for entry in states:
+            state = roots / entry.name
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError as error:
+                _fail(f"could not inspect output registry entry {state}: {error}")
+            if _is_link(state) or not is_directory or not _is_sha256(entry.name):
+                _fail(f"output registry contains an unsafe entry: {state}")
+            try:
+                with os.scandir(state) as stream:
+                    names = {child.name for child in stream}
+            except OSError as error:
+                _fail(f"could not enumerate output claim state {state}: {error}")
+            claim_path = state / "claim.json"
+            if "claim.json" not in names:
+                _durable_rmtree(state)
+                continue
             claim = _load_json(claim_path, "output claim")
             self._validate_claim_shape(claim, claim_path)
             claimed_root = project_path(Path(claim["root"]))
@@ -895,7 +1020,14 @@ class OutputCoordinator:
             _fail(
                 f"output claim does not identify the requested physical root: {claim_path}"
             )
-        if claim["build_id"] != plan.build_id:
+        recorded_build = Path(claim["build_root"])
+        same_build = recorded_build == plan.build_root
+        if not same_build:
+            try:
+                same_build = os.path.samefile(recorded_build, plan.build_root)
+            except OSError:
+                same_build = False
+        if claim["build_id"] != plan.build_id or not same_build:
             _fail(
                 "output root is claimed by a different CMake build tree; use the owning build or reset "
                 f"the claim explicitly: {plan.root}"
@@ -924,6 +1056,13 @@ class OutputCoordinator:
     def _load_snapshot(self, state: Path, claim: Mapping[str, Any]) -> dict[str, Any]:
         path = state / "snapshot.json"
         snapshot = _load_json(path, "committed output snapshot")
+        self._validate_snapshot(snapshot, claim, path)
+        return snapshot
+
+    @staticmethod
+    def _validate_snapshot(
+        snapshot: Mapping[str, Any], claim: Mapping[str, Any], path: Path
+    ) -> None:
         if (
             set(snapshot) != {"claim_token", "entries", "generation", "version"}
             or snapshot["version"] != PROTOCOL_VERSION
@@ -942,7 +1081,6 @@ class OutputCoordinator:
                 or not _is_sha256(str(entry["target"]))
             ):
                 _fail(f"committed output snapshot contains a malformed entry: {path}")
-        return snapshot
 
     def _require_current_plan(self, state: Path, plan: Plan) -> None:
         current = _load_json(state / "plan.json", "configured output plan")
@@ -1028,6 +1166,7 @@ class OutputCoordinator:
                     "path": relative,
                     "payload": None,
                     "target": snapshot["entries"][relative]["target"],
+                    "transfer": hard_link_moves.get(relative),
                 }
             )
             new_entries.pop(relative)
@@ -1101,11 +1240,18 @@ class OutputCoordinator:
             or pending["version"] != PROTOCOL_VERSION
             or pending["id"] != transaction_directory.name
             or not isinstance(pending["entries"], list)
+            or not isinstance(pending["base_generation"], int)
+            or pending["base_generation"] < 0
         ):
             _fail(f"pending output transaction is malformed: {transaction_directory}")
         snapshot = self._load_snapshot(state, claim)
         new_snapshot = pending["new_snapshot"]
-        if snapshot["generation"] == new_snapshot.get("generation"):
+        if not isinstance(new_snapshot, dict):
+            _fail("pending output transaction has no valid replacement snapshot")
+        self._validate_snapshot(new_snapshot, claim, transaction_directory / "pending.json")
+        if new_snapshot["generation"] != pending["base_generation"] + 1:
+            _fail("pending replacement snapshot has an invalid generation")
+        if snapshot["generation"] == new_snapshot["generation"]:
             if snapshot != new_snapshot:
                 _fail(
                     "committed snapshot conflicts with a pending transaction generation"
@@ -1113,10 +1259,9 @@ class OutputCoordinator:
             _sync_directory(state)
             _durable_rmtree(transaction_directory)
             return
-        if snapshot["generation"] != pending["base_generation"]:
-            _fail(
-                "pending transaction does not follow the committed snapshot generation"
-            )
+        expected_entries = dict(snapshot["entries"])
+        validated_entries: list[tuple[Path, str | None, str | None, Path | None]] = []
+        seen_paths: set[str] = set()
         for index, entry in enumerate(pending["entries"]):
             if not isinstance(entry, dict) or set(entry) != {
                 "after",
@@ -1124,24 +1269,51 @@ class OutputCoordinator:
                 "path",
                 "payload",
                 "target",
+                "transfer",
             }:
                 _fail(
                     f"pending output transaction contains a malformed entry: {transaction_directory}"
                 )
             relative = _validate_relative_path(str(entry["path"]))
+            portable_relative = relative.casefold()
+            if portable_relative in seen_paths:
+                _fail("pending transaction repeats a generated path")
+            seen_paths.add(portable_relative)
             destination = _output_path(plan.root, relative)
             before = entry["before"]
             after = entry["after"]
             target = entry["target"]
+            transfer = entry["transfer"]
             if before is not None and not _is_sha256(str(before)):
                 _fail("pending transaction contains an invalid prior hash")
             if not _is_sha256(str(target)):
                 _fail("pending transaction contains an invalid target identity")
+            previous_paths = [
+                path for path in expected_entries if path.casefold() == portable_relative
+            ]
+            if before is None:
+                if previous_paths:
+                    _fail("pending transaction omits the committed prior state")
+            elif (
+                len(previous_paths) != 1
+                or expected_entries[previous_paths[0]]["sha256"] != before
+            ):
+                _fail("pending transaction conflicts with the committed prior state")
+            previous_entry = (
+                expected_entries.pop(previous_paths[0]) if previous_paths else None
+            )
+            payload: Path | None = None
             if after is None:
                 if entry["payload"] is not None:
                     _fail("retirement transaction unexpectedly contains a payload")
-                self._delete_if_state(destination, before)
+                if transfer is not None:
+                    transfer = _validate_relative_path(str(transfer))
+                    if previous_entry is None or transfer in expected_entries:
+                        _fail("retirement transaction contains an invalid ownership transfer")
+                    expected_entries[transfer] = previous_entry
             else:
+                if transfer is not None:
+                    _fail("publication transaction unexpectedly contains a transfer")
                 if not _is_sha256(str(after)) or not isinstance(entry["payload"], str):
                     _fail("pending transaction contains an invalid replacement hash")
                 if entry["payload"] != f"{index:08d}.payload":
@@ -1152,9 +1324,20 @@ class OutputCoordinator:
                     or _is_link(payload)
                     or _sha256_file(payload) != after
                 ):
-                    _fail(
-                        f"pending transaction payload is missing or changed: {payload}"
-                    )
+                    _fail(f"pending transaction payload is missing or changed: {payload}")
+                expected_entries[relative] = {"sha256": after, "target": target}
+            validated_entries.append((destination, before, after, payload))
+        if new_snapshot["entries"] != dict(sorted(expected_entries.items())):
+            _fail("pending replacement snapshot does not match its transaction entries")
+        if snapshot["generation"] != pending["base_generation"]:
+            _fail(
+                "pending transaction does not follow the committed snapshot generation"
+            )
+        for index, (destination, before, after, payload) in enumerate(validated_entries):
+            if after is None:
+                self._delete_if_state(destination, before)
+            else:
+                assert payload is not None
                 self._publish_one(
                     plan.root,
                     destination,

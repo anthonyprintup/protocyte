@@ -192,7 +192,11 @@ coordinator persists the claim directory and initial snapshot before exposing
 the claim, persists transaction directories and payloads before exposing
 pending intent, and persists output files plus every new ancestor directory
 before committing the replacement snapshot. Reset applies the inverse order:
-it durably removes every authenticated output before releasing the claim.
+it first commits a durable reset intent, durably removes every authenticated
+output and disposable state, and then unlinks the immutable claim explicitly
+as the final ownership transition. An interrupted reset resumes from its
+intent while the claim remains visible; state left after claim removal is
+unowned cleanup data and cannot block a replacement claim.
 Retries repeat the relevant directory synchronization even when an interrupted
 operation already created or removed the entry.
 
@@ -202,6 +206,8 @@ the plan before committing the replacement plan, and explicit reset removes
 all recorded staging before releasing the output-root claim. Staging paths are
 derived from the target identity and validated against the claimed output root;
 the coordinator never accepts an arbitrary cleanup path from plan metadata.
+Registry and output-tree enumeration is fail-closed: an unreadable or unsafe
+entry aborts claim acquisition or reset instead of being silently skipped.
 
 Configuration reconciles interrupted work, commits the complete output plan,
 and retires only files whose bytes match the committed snapshot. The build

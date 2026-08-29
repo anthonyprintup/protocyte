@@ -414,6 +414,54 @@ def test_every_publication_crash_cut_rolls_forward_from_durable_payloads(
     _assert_committed_invariants(lock_root, root)
 
 
+def test_recovery_rejects_a_semantically_modified_replacement_snapshot(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    plan_path = tmp_path / "plan"
+    target = _target("demo")
+    plan = _write_plan(
+        plan_path, root, build, ((target, "demo.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    environment = os.environ.copy()
+    environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = "after-pending"
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator.__file__),
+            "publish",
+            "--lock-root",
+            str(lock_root),
+            "--plan",
+            str(plan_path),
+            "--target",
+            target,
+            "--staging-root",
+            str(staging),
+        ],
+        check=False,
+        env=environment,
+    )
+    assert crashed.returncode == 86
+    pending_path = next(
+        engine._state_directory(root).glob("transactions/*/pending.json")
+    )
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["new_snapshot"]["entries"] = {}
+    pending_path.write_bytes(coordinator._canonical_json(pending))
+
+    with pytest.raises(coordinator.CoordinatorError, match="does not match"):
+        engine.reconcile(plan)
+
+    assert not (root / "demo.protocyte.hpp").exists()
+
+
 def test_reconcile_retires_only_snapshot_authenticated_outputs(tmp_path: Path) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
@@ -830,6 +878,64 @@ def test_two_builds_racing_for_one_root_have_exactly_one_winner(
     assert len(claims) == 1
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires case-sensitive paths")
+def test_case_distinct_build_roots_cannot_share_a_claim(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    first = _write_plan(
+        tmp_path / "first-plan",
+        root,
+        tmp_path / "Build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+    second = _write_plan(
+        tmp_path / "second-plan",
+        root,
+        tmp_path / "build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+
+    with pytest.raises(coordinator.CoordinatorError, match="different CMake build tree"):
+        engine.reconcile(second)
+
+
+def test_registry_enumeration_fails_closed_when_claim_state_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_root = tmp_path / "first-output"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    first = _write_plan(
+        tmp_path / "first-plan",
+        first_root,
+        tmp_path / "first-build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    unreadable = engine._state_directory(first_root)
+    second = _write_plan(
+        tmp_path / "second-plan",
+        tmp_path / "second-output",
+        tmp_path / "second-build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+    original_scandir = coordinator.os.scandir
+
+    def reject_state(path: Path) -> object:
+        if Path(path) == unreadable:
+            raise PermissionError("denied by test")
+        return original_scandir(path)
+
+    monkeypatch.setattr(coordinator.os, "scandir", reject_state)
+
+    with pytest.raises(coordinator.CoordinatorError, match="could not enumerate output claim"):
+        engine.reconcile(second)
+
+
 def test_reset_releases_claim(tmp_path: Path) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
@@ -852,6 +958,104 @@ def test_reset_releases_claim(tmp_path: Path) -> None:
     assert not (root / "demo.protocyte.hpp").exists()
     assert not staging.parent.exists()
     assert not (lock_root / "roots" / _identity(root)).exists()
+
+
+@pytest.mark.parametrize(
+    "crash_phase",
+    ("after-reset-intent", "after-reset-output-1", "after-reset-disposable"),
+)
+def test_reset_crash_cuts_resume_from_durable_intent(
+    tmp_path: Path, crash_phase: str
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    plan_path = tmp_path / "plan"
+    target = _target("demo")
+    plan = _write_plan(
+        plan_path, root, build, ((target, "demo.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    engine.publish(plan, target, staging)
+    environment = os.environ.copy()
+    environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = crash_phase
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator.__file__),
+            "reset",
+            "--lock-root",
+            str(lock_root),
+            "--plan",
+            str(plan_path),
+            "--expected-claim",
+            token,
+        ],
+        check=False,
+        env=environment,
+    )
+    assert crashed.returncode == 86
+    state = engine._state_directory(root)
+    assert (state / "claim.json").exists()
+    assert (state / "reset.json").exists()
+
+    engine.reset(plan, token)
+
+    assert not (root / "demo.protocyte.hpp").exists()
+    assert not state.exists()
+
+
+def test_reset_crash_after_claim_release_allows_a_replacement_owner(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    plan = _write_plan(
+        plan_path,
+        root,
+        tmp_path / "build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    engine.publish(plan, target, staging)
+    environment = os.environ.copy()
+    environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = "after-reset-claim"
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator.__file__),
+            "reset",
+            "--lock-root",
+            str(lock_root),
+            "--plan",
+            str(plan_path),
+            "--expected-claim",
+            token,
+        ],
+        check=False,
+        env=environment,
+    )
+    assert crashed.returncode == 86
+    state = engine._state_directory(root)
+    assert not (state / "claim.json").exists()
+    replacement = _write_plan(
+        tmp_path / "replacement-plan",
+        root,
+        tmp_path / "replacement-build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+
+    replacement_token = engine.reconcile(replacement)
+
+    assert len(replacement_token) == 64
 
 
 def test_reset_rejects_an_unowned_generated_looking_directory(tmp_path: Path) -> None:
@@ -877,6 +1081,40 @@ def test_reset_rejects_an_unowned_generated_looking_directory(tmp_path: Path) ->
         engine.reset(plan, token)
 
     assert blocked.is_dir()
+    assert engine._state_directory(root).exists()
+
+
+def test_reset_fails_closed_when_output_traversal_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan", root, build, ((target, "demo.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    engine.publish(plan, target, staging)
+    unreadable = root / "private"
+    unreadable.mkdir()
+    _stage(unreadable, "unknown.protocyte.hpp", b"// unknown\n")
+    original_scandir = coordinator.os.scandir
+
+    def reject_directory(path: Path) -> object:
+        if Path(path) == unreadable:
+            raise PermissionError("denied by test")
+        return original_scandir(path)
+
+    monkeypatch.setattr(coordinator.os, "scandir", reject_directory)
+
+    with pytest.raises(coordinator.CoordinatorError, match="could not enumerate directory"):
+        engine.reset(plan, token)
+
+    assert (root / "demo.protocyte.hpp").exists()
     assert engine._state_directory(root).exists()
 
 
@@ -927,24 +1165,19 @@ def test_reset_persists_output_removal_before_claim_release(
     state = engine._state_directory(root)
     events: list[tuple[str, Path]] = []
     original_sync = coordinator._sync_directory
-    original_rmtree = coordinator.shutil.rmtree
 
     def record_sync(path: Path) -> None:
         events.append(("sync", path))
         original_sync(path)
 
-    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
-        events.append(("rmtree", Path(path)))
-        original_rmtree(path, *args, **kwargs)
-
     monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
-    monkeypatch.setattr(coordinator.shutil, "rmtree", record_rmtree)
 
     engine.reset(plan, token)
 
-    release_index = events.index(("rmtree", state))
+    release_index = max(
+        index for index, event in enumerate(events) if event == ("sync", state.parent)
+    )
     assert ("sync", root / "api") in events[:release_index]
-    assert ("sync", state.parent) in events[release_index + 1 :]
 
 
 def test_reset_resyncs_an_already_absent_output_before_claim_release(
@@ -970,22 +1203,18 @@ def test_reset_resyncs_an_already_absent_output_before_claim_release(
     state = engine._state_directory(root)
     events: list[tuple[str, Path]] = []
     original_sync = coordinator._sync_directory
-    original_rmtree = coordinator.shutil.rmtree
 
     def record_sync(path: Path) -> None:
         events.append(("sync", path))
         original_sync(path)
 
-    def record_rmtree(path: Path, *args: object, **kwargs: object) -> None:
-        events.append(("rmtree", Path(path)))
-        original_rmtree(path, *args, **kwargs)
-
     monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
-    monkeypatch.setattr(coordinator.shutil, "rmtree", record_rmtree)
 
     engine.reset(plan, token)
 
-    release_index = events.index(("rmtree", state))
+    release_index = max(
+        index for index, event in enumerate(events) if event == ("sync", state.parent)
+    )
     assert ("sync", root) in events[:release_index]
 
 
