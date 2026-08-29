@@ -162,8 +162,10 @@ library.
   in the caller's scope.
 - `GENERATED_TARGET_VAR` receives `TARGET` in the caller's scope.
 
-The codegen target's direct safety dependency has a stable logical name:
+The codegen target's direct safety dependencies have stable logical names:
 
+- `<TARGET>__protocyte_output_claim`, an always-run validation that rejects a
+  stale configured build after ownership has been reset and transferred;
 - `<TARGET>__protocyte_import_guard` when source import topology requires a
   pre-build guard.
 

@@ -25,6 +25,27 @@ foreach(
     endif()
 endforeach()
 
+function(_protocyte_decode_output_hex out_var encoded_value)
+    string(LENGTH "${encoded_value}" encoded_length)
+    math(EXPR encoded_remainder "${encoded_length} % 2")
+    if(
+        encoded_length EQUAL 0
+        OR NOT encoded_remainder EQUAL 0
+        OR NOT encoded_value MATCHES "^[0-9a-f]+$"
+    )
+        message(FATAL_ERROR "Protocyte generation plan contains malformed output encoding")
+    endif()
+    math(EXPR encoded_last "${encoded_length} - 2")
+    set(decoded_value "")
+    foreach(offset RANGE 0 ${encoded_last} 2)
+        string(SUBSTRING "${encoded_value}" ${offset} 2 encoded_byte)
+        math(EXPR byte_value "0x${encoded_byte}")
+        string(ASCII ${byte_value} decoded_character)
+        string(APPEND decoded_value "${decoded_character}")
+    endforeach()
+    set(${out_var} "${decoded_value}" PARENT_SCOPE)
+endfunction()
+
 function(_protocyte_load_generation_outputs out_var)
     if(
         NOT IS_DIRECTORY "${OWNERSHIP_MANIFEST_DIR}"
@@ -51,24 +72,25 @@ function(_protocyte_load_generation_outputs out_var)
         message(FATAL_ERROR "Protocyte generation plan names a different output root")
     endif()
 
-    file(GLOB output_markers LIST_DIRECTORIES TRUE "${OWNERSHIP_MANIFEST_DIR}/*.path")
-    list(REMOVE_ITEM output_markers "${output_root_file}")
+    set(outputs_file "${OWNERSHIP_MANIFEST_DIR}/outputs.hex")
+    if(
+        NOT EXISTS "${outputs_file}"
+        OR IS_DIRECTORY "${outputs_file}"
+        OR IS_SYMLINK "${outputs_file}"
+    )
+        message(FATAL_ERROR "Protocyte generation plan has no safe output inventory")
+    endif()
+    file(STRINGS "${outputs_file}" encoded_outputs ENCODING UTF-8)
     set(outputs)
-    foreach(output_marker IN LISTS output_markers)
-        if(IS_DIRECTORY "${output_marker}" OR IS_SYMLINK "${output_marker}")
-            message(FATAL_ERROR "Protocyte generation plan contains an unsafe output marker")
-        endif()
-        cmake_path(GET output_marker STEM output_key)
-        file(READ "${output_marker}" output_path)
+    foreach(encoded_output IN LISTS encoded_outputs)
+        _protocyte_decode_output_hex(output_path "${encoded_output}")
         cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE output_path)
-        _protocyte_normalized_path_identity(output_identity "${output_path}")
-        string(SHA256 expected_key "${output_identity}")
         _protocyte_generated_output_path_is_safe(
             output_is_safe
             "${output_path}"
             "${OUTPUT_DIRECTORY}"
         )
-        if(NOT output_key STREQUAL expected_key OR NOT output_is_safe)
+        if(NOT output_is_safe)
             message(FATAL_ERROR "Protocyte generation plan contains an unsafe output path")
         endif()
         list(APPEND outputs "${output_path}")

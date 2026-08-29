@@ -136,6 +136,23 @@ def test_coordinator_rejects_a_second_build_before_generation(tmp_path: Path) ->
     assert "different CMake build tree" in diagnostic
 
 
+def test_generation_inventory_is_literal_under_glob_metacharacter_build_path(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "project"
+    build = tmp_path / "build[1]"
+    output = build / "generated"
+    locks = tmp_path / "locks"
+    _write_out_dir_owner_project(source, output, output_lock_root=locks)
+
+    configured = _configure(source, build)
+    generated = _build_out_dir_owner_project(build)
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    assert (output / "demo_0.protocyte.hpp").is_file()
+
+
 def test_public_reset_requires_token_and_releases_claim(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     source = tmp_path / "project"
@@ -180,6 +197,15 @@ def test_public_reset_requires_token_and_releases_claim(tmp_path: Path) -> None:
     assert not list(output.rglob("*.protocyte.*"))
     transferred = _configure(source, tmp_path / "replacement-build")
     assert transferred.returncode == 0, transferred.stdout + transferred.stderr
+    replacement_build = tmp_path / "replacement-build"
+    replacement = _build_out_dir_owner_project(replacement_build)
+    assert replacement.returncode == 0, replacement.stdout + replacement.stderr
+
+    stale = _build_out_dir_owner_project(build)
+
+    assert stale.returncode != 0
+    diagnostic = " ".join((stale.stdout + stale.stderr).split())
+    assert "different CMake build tree" in diagnostic
 
 
 def test_generation_timeout_publishes_no_snapshot_entries_and_retry_succeeds(

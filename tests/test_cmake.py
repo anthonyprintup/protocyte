@@ -11545,7 +11545,7 @@ def test_descriptor_set_library_accepts_build_generated_input_with_files(
         capture_output=True,
         text=True,
     )
-    assert "no work to do" in no_change.stdout.lower()
+    assert "ProtocyteOutputCoordinator.py validate" in no_change.stdout
     assert "Generating" not in no_change.stdout
     assert descriptor_set.stat().st_mtime_ns == initial_descriptor_mtime_ns
     assert common_header.stat().st_mtime_ns == initial_header_mtime_ns

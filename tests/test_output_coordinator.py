@@ -114,6 +114,38 @@ def test_publish_commits_one_authoritative_snapshot(tmp_path: Path) -> None:
     assert claim_record["token"] == claim
 
 
+def test_payload_tree_is_synced_before_pending_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan)
+    staging = tmp_path / "staging"
+    _stage(staging, "demo.protocyte.hpp", b"// generated\n")
+    synced: list[Path] = []
+    original_sync = coordinator._sync_directory
+
+    def record_sync(path: Path) -> None:
+        synced.append(path)
+        original_sync(path)
+
+    monkeypatch.setattr(coordinator, "_sync_directory", record_sync)
+
+    engine.publish(plan, target, staging)
+
+    assert any(path.name == "payloads" for path in synced)
+    assert any(path.name == "transactions" for path in synced)
+
+
 @pytest.mark.parametrize("crash_phase", ("after-initial-snapshot", "after-claim"))
 def test_initial_claim_crash_cuts_are_retryable(
     tmp_path: Path, crash_phase: str
@@ -390,6 +422,78 @@ def test_link_inserted_below_output_root_cannot_redirect_publication(
     assert not (outside / "demo.protocyte.hpp").exists()
 
 
+def test_replaced_nested_lock_directory_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan)
+    publication = lock_root / "publication"
+    redirected = tmp_path / "redirected-publication"
+    publication.rename(redirected)
+    try:
+        publication.symlink_to(redirected, target_is_directory=True)
+    except OSError as error:
+        if os.name != "nt":
+            pytest.skip(f"directory links are unavailable: {error}")
+        junction = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(publication), str(redirected)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if junction.returncode != 0:
+            pytest.skip(f"directory links are unavailable: {junction.stderr}")
+
+    with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
+        engine.validate(plan)
+
+
+def test_hard_link_is_transferred_as_a_distinct_snapshot_entry(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, "old.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = tmp_path / "first-staging"
+    _stage(staging, "old.protocyte.hpp", b"// first\n")
+    engine.publish(first, target, staging)
+    old_output = root / "old.protocyte.hpp"
+    new_output = root / "new.protocyte.hpp"
+    os.link(old_output, new_output)
+    second = _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, "new.protocyte.hpp"),),
+    )
+
+    engine.reconcile(second)
+
+    assert not old_output.exists()
+    assert new_output.read_bytes() == b"// first\n"
+    assert set(_snapshot(lock_root, root)["entries"]) == {"new.protocyte.hpp"}
+    replacement = tmp_path / "replacement"
+    _stage(replacement, "new.protocyte.hpp", b"// second\n")
+    engine.publish(second, target, replacement)
+    assert new_output.read_bytes() == b"// second\n"
+
+
 def test_tampered_durable_payload_fails_closed_without_publication(
     tmp_path: Path,
 ) -> None:
@@ -531,3 +635,25 @@ def test_reset_can_load_durable_plan_after_build_tree_deletion(tmp_path: Path) -
     engine.reset(durable_plan, token)
 
     assert not (lock_root / "roots" / _identity(root)).exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires distinct case-sensitive roots")
+def test_reset_plan_lookup_is_bound_to_the_requested_case_sensitive_root(
+    tmp_path: Path,
+) -> None:
+    claimed_root = tmp_path / "Generated"
+    wrong_root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        claimed_root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan)
+
+    with pytest.raises(coordinator.CoordinatorError, match="does not match"):
+        engine.plan_for_root(wrong_root)

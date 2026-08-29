@@ -194,6 +194,41 @@ def _atomic_write(path: Path, content: bytes) -> None:
 
 def _sync_directory(path: Path) -> None:
     if os.name == "nt":
+        from ctypes import wintypes
+
+        absolute = os.path.abspath(path)
+        if absolute.startswith("\\\\"):
+            extended = "\\\\?\\UNC\\" + absolute[2:]
+        else:
+            extended = "\\\\?\\" + absolute
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        )
+        create_file.restype = wintypes.HANDLE
+        handle = create_file(
+            extended,
+            0x80000000 | 0x40000000,
+            0x00000001 | 0x00000002 | 0x00000004,
+            None,
+            3,
+            0x02000000 | 0x00200000,
+            None,
+        )
+        if handle == wintypes.HANDLE(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not kernel32.FlushFileBuffers(handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            kernel32.CloseHandle(handle)
         return
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -222,7 +257,16 @@ class FileLock:
         self._overlapped: Any = None
 
     def __enter__(self) -> FileLock:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        expected_path = project_path(self.path, leaf_may_be_file=True)
+        expected_parent = expected_path.parent
+        expected_parent.mkdir(parents=True, exist_ok=True)
+        observed_parent = project_path(expected_parent)
+        if observed_parent != expected_parent:
+            _fail(f"lock directory changed while it was being prepared: {self.path}")
+        observed_path = project_path(expected_path, leaf_may_be_file=True)
+        if observed_path != expected_path or _is_link(expected_path):
+            _fail(f"lock path is unsafe or was replaced: {self.path}")
+        self.path = expected_path
         self._stream = self.path.open("a+b")
         if os.name == "nt":
             self._lock_windows()
@@ -438,6 +482,13 @@ class OutputCoordinator:
             )
             return str(claim["token"])
 
+    def validate(self, plan: Plan) -> None:
+        state = self._state_directory(plan.root)
+        with FileLock(self._publication_lock(plan.root)):
+            claim = self._load_claim(state, plan)
+            self._recover(state, plan, claim)
+            self._require_current_plan(state, plan)
+
     def publish(self, plan: Plan, target: str, staging_root: Path) -> None:
         if not _is_sha256(target):
             _fail("publish target identity is invalid")
@@ -475,7 +526,13 @@ class OutputCoordinator:
                         destination, before_hash, allow_absent=True
                     )
                     payload = payload_directory / f"{index:08d}.payload"
-                    shutil.copyfile(source, payload)
+                    with (
+                        source.open("rb") as source_stream,
+                        payload.open("xb") as payload_stream,
+                    ):
+                        shutil.copyfileobj(source_stream, payload_stream)
+                        payload_stream.flush()
+                        os.fsync(payload_stream.fileno())
                     if _sha256_file(payload) != after_hash:
                         _fail(
                             f"durable transaction payload changed while copying: {source}"
@@ -495,6 +552,9 @@ class OutputCoordinator:
                             "target": target,
                         }
                     )
+                _sync_directory(payload_directory)
+                _sync_directory(transaction_directory)
+                _sync_directory(transaction_directory.parent)
                 new_snapshot = {
                     "claim_token": claim["token"],
                     "entries": dict(sorted(new_entries.items())),
@@ -563,15 +623,16 @@ class OutputCoordinator:
         state = self._state_directory(root)
         plan_path = state / "plan.json"
         if plan_path.exists():
-            return Plan.from_payload(
+            plan = Plan.from_payload(
                 _load_json(plan_path, "configured output plan"), plan_path
             )
+            self._require_requested_root(root, plan.root)
+            return plan
         claim_path = state / "claim.json"
         claim = _load_json(claim_path, "output claim")
         self._validate_claim_shape(claim, claim_path)
         claim_root = project_path(Path(claim["root"]))
-        if _path_key(claim_root) != _path_key(root):
-            _fail(f"output claim does not identify the requested root: {root}")
+        self._require_requested_root(root, claim_root)
         build_root = project_path(Path(claim["build_root"]))
         return Plan(claim_root, build_root, str(claim["build_id"]), ())
 
@@ -709,16 +770,30 @@ class OutputCoordinator:
     ) -> dict[str, Any]:
         desired = {output.relative for output in plan.outputs}
         removals: list[str] = []
+        hard_link_moves: dict[str, str] = {}
         for relative in snapshot["entries"]:
             if relative in desired:
                 continue
-            old_path = _output_path(plan.root, relative)
             aliased = any(
-                self._same_existing_file(old_path, _output_path(plan.root, item))
-                for item in desired
+                self._case_spelling_alias(plan.root, relative, item) for item in desired
             )
             if not aliased:
                 removals.append(relative)
+                linked_desired = [
+                    item
+                    for item in desired
+                    if self._same_existing_file(
+                        _output_path(plan.root, relative),
+                        _output_path(plan.root, item),
+                    )
+                ]
+                if len(linked_desired) > 1:
+                    _fail(
+                        "retired generated output has multiple desired hard-link destinations: "
+                        f"{relative}"
+                    )
+                if linked_desired:
+                    hard_link_moves[relative] = linked_desired[0]
         if not removals:
             return snapshot
         new_entries = dict(snapshot["entries"])
@@ -747,6 +822,8 @@ class OutputCoordinator:
                 }
             )
             new_entries.pop(relative)
+            if relative in hard_link_moves:
+                new_entries[hard_link_moves[relative]] = snapshot["entries"][relative]
         if not pending_entries:
             return snapshot
         transaction_id = secrets.token_hex(32)
@@ -946,6 +1023,31 @@ class OutputCoordinator:
         except OSError:
             return False
 
+    @staticmethod
+    def _case_spelling_alias(root: Path, first: str, second: str) -> bool:
+        first_parts = PurePosixPath(first).parts
+        second_parts = PurePosixPath(second).parts
+        if first_parts == second_parts or tuple(
+            part.casefold() for part in first_parts
+        ) != tuple(part.casefold() for part in second_parts):
+            return False
+        current = root
+        try:
+            for first_part, second_part in zip(first_parts, second_parts, strict=True):
+                matches = [
+                    entry.name
+                    for entry in os.scandir(current)
+                    if entry.name.casefold() == first_part.casefold()
+                ]
+                if len(matches) != 1:
+                    return False
+                current /= matches[0]
+            return os.path.samefile(
+                _output_path(root, first), _output_path(root, second)
+            )
+        except OSError:
+            return False
+
     def _snapshot_entry_for_path(
         self,
         root: Path,
@@ -954,13 +1056,18 @@ class OutputCoordinator:
     ) -> tuple[str | None, Mapping[str, Any] | None]:
         if relative in entries:
             return relative, entries[relative]
-        candidate = _output_path(root, relative)
         for previous_relative, entry in entries.items():
-            if self._same_existing_file(
-                candidate, _output_path(root, previous_relative)
-            ):
+            if self._case_spelling_alias(root, relative, previous_relative):
                 return previous_relative, entry
         return None, None
+
+    @staticmethod
+    def _require_requested_root(requested: Path, recorded: Path) -> None:
+        if project_path(requested) != project_path(recorded):
+            _fail(
+                "requested output root does not match the physical root recorded by the claim: "
+                f"{requested}"
+            )
 
     @staticmethod
     def _inject(phase: str) -> None:
@@ -970,7 +1077,9 @@ class OutputCoordinator:
 
 def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("reconcile", "publish", "reset"))
+    parser.add_argument(
+        "command", choices=("reconcile", "validate", "publish", "reset")
+    )
     parser.add_argument("--lock-root", type=Path, required=True)
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--output-root", type=Path)
@@ -992,6 +1101,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             _fail(f"{options.command} requires --plan")
         if options.command == "reconcile":
             print(coordinator.reconcile(plan))
+        elif options.command == "validate":
+            coordinator.validate(plan)
         elif options.command == "publish":
             if options.target is None or options.staging_root is None:
                 _fail("publish requires --target and --staging-root")

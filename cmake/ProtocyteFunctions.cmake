@@ -1384,6 +1384,7 @@ function(_protocyte_finalize_output_plans)
         set(target_manifest "${manifest_root}/${target_key}")
         file(MAKE_DIRECTORY "${target_manifest}")
         file(WRITE "${target_manifest}/output-root.path" "${output_root}")
+        file(WRITE "${target_manifest}/outputs.hex" "")
         _protocyte_owned_output_claim_key(plan_key "${output_root}")
         list(APPEND current_plan_keys "${plan_key}")
         set("protocyte_plan_root_${plan_key}" "${output_root}")
@@ -1392,7 +1393,8 @@ function(_protocyte_finalize_output_plans)
                 output_path
                 GLOBAL PROPERTY "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PATH_${output_key}"
             )
-            file(WRITE "${target_manifest}/${output_key}.path" "${output_path}")
+            string(HEX "${output_path}" encoded_output_path)
+            file(APPEND "${target_manifest}/outputs.hex" "${encoded_output_path}\n")
             file(RELATIVE_PATH relative_output "${output_root}" "${output_path}")
             string(REPLACE "\\" "/" relative_output "${relative_output}")
             string(HEX "${relative_output}" encoded_relative_output)
@@ -5057,6 +5059,29 @@ function(protocyte_generate)
     )
 
     add_custom_target("${PROTOCYTE_TARGET}" DEPENDS ${protocyte_command_outputs})
+    set(protocyte_claim_guard_target "${PROTOCYTE_TARGET}__protocyte_output_claim")
+    if(TARGET "${protocyte_claim_guard_target}")
+        message(
+            FATAL_ERROR
+            "Protocyte reserved claim-validation target already exists: ${protocyte_claim_guard_target}"
+        )
+    endif()
+    add_custom_target(
+        "${protocyte_claim_guard_target}"
+        COMMAND
+            "${CMAKE_COMMAND}" -E env --unset=PYTHONHOME --unset=PYTHONPATH
+            "${protocyte_coordinator_python}"
+            "${protocyte_output_coordinator_script}"
+            validate
+            --lock-root "${protocyte_lock_dir}"
+            --plan "${PROTOCYTE_INTERNAL_CURRENT_OUTPUT_PLAN}"
+        DEPENDS
+            "${PROTOCYTE_INTERNAL_CURRENT_OUTPUT_PLAN}"
+            "${protocyte_output_coordinator_script}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        VERBATIM
+    )
+    add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_claim_guard_target}")
     if(NOT protocyte_import_guard_target STREQUAL "")
         add_dependencies("${PROTOCYTE_TARGET}" "${protocyte_import_guard_target}")
     endif()
