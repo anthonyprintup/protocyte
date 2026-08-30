@@ -171,6 +171,55 @@ def _contains(parent: Path, child: Path) -> bool:
     )
 
 
+def _physical_location_key(path: Path) -> tuple[int, int, tuple[str, ...]]:
+    projected = project_path(path)
+    suffix: list[str] = []
+    current = projected
+    while not os.path.lexists(current):
+        suffix.append(current.name.casefold())
+        parent = current.parent
+        if parent == current:
+            _fail(f"could not identify physical filesystem location: {path}")
+        current = parent
+    try:
+        observed = current.stat()
+    except OSError as error:
+        _fail(f"could not identify physical filesystem location {path}: {error}")
+    return observed.st_dev, observed.st_ino, tuple(reversed(suffix))
+
+
+def _same_physical_location(first: Path, second: Path) -> bool:
+    if first == second:
+        return True
+    try:
+        if os.path.samefile(first, second):
+            return True
+    except OSError:
+        pass
+    return _physical_location_key(first) == _physical_location_key(second)
+
+
+def _physically_contains(parent: Path, child: Path) -> bool:
+    projected_parent = project_path(parent)
+    current = project_path(child)
+    while True:
+        if _same_physical_location(projected_parent, current):
+            return True
+        next_parent = current.parent
+        if next_parent == current:
+            return False
+        current = next_parent
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return (
+        _contains(first, second)
+        or _contains(second, first)
+        or _physically_contains(first, second)
+        or _physically_contains(second, first)
+    )
+
+
 def _same_physical_path(first: Path, second: Path) -> bool:
     if first == second:
         return True
@@ -657,7 +706,7 @@ def _validate_staging_path(
                 "output plan target metadata contains an unexpected staging directory: "
                 f"{path}"
             )
-        if _contains(root, path) or _contains(path, root):
+        if _paths_overlap(root, path):
             _fail(
                 "output plan generation staging overlaps its own output root: "
                 f"{path} and {root}"
@@ -887,7 +936,7 @@ class OutputCoordinator:
                     "entries": transaction_entries,
                     "id": transaction_id,
                     "new_snapshot": new_snapshot,
-                    "plan_sha256": plan.digest,
+                    "plan": {**plan.payload, "sha256": plan.digest},
                     "version": PROTOCOL_VERSION,
                 }
                 _atomic_write(
@@ -1106,25 +1155,19 @@ class OutputCoordinator:
     def _validate_plan_set(plans: Sequence[Plan]) -> None:
         for index, first in enumerate(plans):
             for second in plans[index + 1 :]:
-                if _contains(first.root, second.root) or _contains(second.root, first.root):
+                if _paths_overlap(first.root, second.root):
                     _fail(
                         "current output plans contain overlapping roots: "
                         f"{first.root} and {second.root}"
                     )
                 for target in first.targets:
-                    if _contains(target.staging, second.root) or _contains(
-                        second.root, target.staging
-                    ):
+                    if _paths_overlap(target.staging, second.root):
                         _fail("current output plan staging overlaps another output root")
                     for other in second.targets:
-                        if _contains(target.staging, other.staging) or _contains(
-                            other.staging, target.staging
-                        ):
+                        if _paths_overlap(target.staging, other.staging):
                             _fail("current output plans contain overlapping staging")
                 for target in second.targets:
-                    if _contains(target.staging, first.root) or _contains(
-                        first.root, target.staging
-                    ):
+                    if _paths_overlap(target.staging, first.root):
                         _fail("current output plan staging overlaps another output root")
 
     def _validate_registry(
@@ -1133,7 +1176,9 @@ class OutputCoordinator:
         if retiring_root_keys is None:
             retiring_root_keys = set()
         for target in plan.targets:
-            if _contains(target.staging, self.lock_root):
+            if _contains(target.staging, self.lock_root) or _physically_contains(
+                target.staging, self.lock_root
+            ):
                 _fail(
                     "generation staging contains the output coordinator lock root: "
                     f"{target.staging} and {self.lock_root}"
@@ -1143,9 +1188,8 @@ class OutputCoordinator:
             self.lock_root / "generation",
             self.lock_root / "publication",
         )
-        if _contains(plan.root, self.lock_root) or any(
-            _contains(path, plan.root) or _contains(plan.root, path)
-            for path in internal_paths
+        if _paths_overlap(plan.root, self.lock_root) or any(
+            _paths_overlap(path, plan.root) for path in internal_paths
         ):
             _fail(
                 "output root overlaps the output coordinator lock namespace: "
@@ -1184,7 +1228,7 @@ class OutputCoordinator:
             if entry.name != claim["root_key"]:
                 _fail(f"output claim is stored under the wrong registry key: {claim_path}")
             recorded_plan = self._load_recorded_plan(state, claim)
-            if _contains(claimed_root, plan.root) or _contains(plan.root, claimed_root):
+            if _paths_overlap(claimed_root, plan.root):
                 if _path_key(claimed_root) != _path_key(plan.root):
                     _fail(
                         "output root overlaps a root claimed by another build: "
@@ -1192,17 +1236,13 @@ class OutputCoordinator:
                     )
             recorded_targets = recorded_plan.targets if recorded_plan else ()
             for recorded_target in recorded_targets:
-                if _contains(recorded_target.staging, plan.root) or _contains(
-                    plan.root, recorded_target.staging
-                ):
+                if _paths_overlap(recorded_target.staging, plan.root):
                     _fail(
                         "output root overlaps staging reserved by another plan: "
                         f"{plan.root} and {recorded_target.staging}"
                     )
             for target in plan.targets:
-                if _contains(claimed_root, target.staging) or _contains(
-                    target.staging, claimed_root
-                ):
+                if _paths_overlap(claimed_root, target.staging):
                     _fail(
                         "generation staging overlaps a claimed output root: "
                         f"{target.staging} and {claimed_root}"
@@ -1219,9 +1259,7 @@ class OutputCoordinator:
                         and target.identity == recorded_target.identity
                     ):
                         continue
-                    if _contains(recorded_target.staging, target.staging) or _contains(
-                        target.staging, recorded_target.staging
-                    ):
+                    if _paths_overlap(recorded_target.staging, target.staging):
                         _fail(
                             "generation staging overlaps staging reserved by another plan: "
                             f"{target.staging} and {recorded_target.staging}"
@@ -1408,18 +1446,20 @@ class OutputCoordinator:
             linked_desired = (
                 desired_by_identity.get(identity, []) if identity is not None else []
             )
-            if len(linked_desired) > 1:
+            transfer_candidates = [
+                destination
+                for destination in linked_desired
+                if destination not in snapshot["entries"]
+            ]
+            if len(transfer_candidates) > 1:
                 _fail(
                     "retired generated output has multiple desired hard-link destinations: "
                     f"{relative}"
                 )
             transfer: dict[str, int | str] | None = None
-            if linked_desired:
-                destination = linked_desired[0]
-                if (
-                    destination not in snapshot["entries"]
-                    and destination not in claimed_transfer_destinations
-                ):
+            if transfer_candidates:
+                destination = transfer_candidates[0]
+                if destination not in claimed_transfer_destinations:
                     assert identity is not None
                     transfer = {
                         "device": identity[0],
@@ -1462,7 +1502,7 @@ class OutputCoordinator:
             "entries": pending_entries,
             "id": transaction_id,
             "new_snapshot": new_snapshot,
-            "plan_sha256": plan.digest,
+            "plan": {**plan.payload, "sha256": plan.digest},
             "version": PROTOCOL_VERSION,
         }
         _atomic_write(transaction_directory / "pending.json", _canonical_json(pending))
@@ -1496,17 +1536,15 @@ class OutputCoordinator:
             pending = _load_json(
                 directory / "pending.json", "pending output transaction"
             )
-            recovery_plan = plan
-            if pending.get("plan_sha256") != plan.digest:
-                recorded_plan = self._load_recorded_plan(state, claim)
-                if (
-                    recorded_plan is None
-                    or pending.get("plan_sha256") != recorded_plan.digest
-                ):
-                    _fail(
-                        "pending output transaction does not match an authorized plan"
-                    )
-                recovery_plan = recorded_plan
+            pending_plan = pending.get("plan")
+            if not isinstance(pending_plan, dict):
+                _fail("pending output transaction has no authorizing plan")
+            recovery_plan = Plan.from_payload(
+                pending_plan, directory / "pending.json"
+            )
+            self._require_plan_claim_binding(
+                recovery_plan, claim, directory / "pending.json"
+            )
             self._apply_pending(state, recovery_plan, claim, pending, directory)
         for directory in transaction_directories:
             if directory.exists():
@@ -1527,12 +1565,12 @@ class OutputCoordinator:
                 "entries",
                 "id",
                 "new_snapshot",
-                "plan_sha256",
+                "plan",
                 "version",
             }
             or pending["version"] != PROTOCOL_VERSION
             or pending["id"] != transaction_directory.name
-            or pending["plan_sha256"] != plan.digest
+            or pending["plan"] != {**plan.payload, "sha256": plan.digest}
             or not isinstance(pending["entries"], list)
             or not isinstance(pending["base_generation"], int)
             or pending["base_generation"] < 0
@@ -1564,6 +1602,9 @@ class OutputCoordinator:
             ]
         ] = []
         planned_targets = {output.relative: output.target for output in plan.outputs}
+        planned_by_portable = {
+            relative.casefold(): relative for relative in planned_targets
+        }
         seen_paths: set[str] = set()
         for index, entry in enumerate(pending["entries"]):
             if not isinstance(entry, dict) or set(entry) != {
@@ -1609,6 +1650,14 @@ class OutputCoordinator:
             if after is None:
                 if entry["payload"] is not None:
                     _fail("retirement transaction unexpectedly contains a payload")
+                planned_match = planned_by_portable.get(relative.casefold())
+                if planned_match is not None and (
+                    planned_match == relative
+                    or self._case_spelling_alias(
+                        plan.root, relative, planned_match
+                    )
+                ):
+                    _fail("retirement transaction contains a planned output")
                 if transfer is not None:
                     if not isinstance(transfer, dict) or set(transfer) != {
                         "device",

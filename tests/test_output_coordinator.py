@@ -558,6 +558,105 @@ def test_reconfigure_recovers_publication_under_its_recorded_plan(
     assert engine.plan_for_root(root).digest == second.digest
 
 
+def test_reconfigure_recovers_retirement_under_its_embedded_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    plan_path = tmp_path / "plan"
+    target = _target("demo")
+    relative = "old.protocyte.hpp"
+    first = _write_plan(plan_path, root, build, ((target, relative),))
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, relative, b"// generated\n")
+    engine.publish(first, target, staging)
+    second = _write_plan(plan_path, root, build, ())
+    original_atomic_write = coordinator._atomic_write
+    interrupted = False
+
+    def interrupt_after_pending(path: Path, payload: bytes) -> None:
+        nonlocal interrupted
+        original_atomic_write(path, payload)
+        if path.name == "pending.json" and not interrupted:
+            interrupted = True
+            raise RuntimeError("interrupted retirement")
+
+    monkeypatch.setattr(coordinator, "_atomic_write", interrupt_after_pending)
+    with pytest.raises(RuntimeError, match="interrupted retirement"):
+        engine.reconcile(second)
+    third = _write_plan(
+        plan_path, root, build, ((target, "new.protocyte.hpp"),)
+    )
+
+    engine.reconcile(third)
+
+    assert not (root / relative).exists()
+    assert _snapshot(lock_root, root)["entries"] == {}
+    assert engine.plan_for_root(root).digest == third.digest
+
+
+def test_recovery_rejects_retirement_of_an_authorized_plan_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    plan_path = tmp_path / "plan"
+    target = _target("demo")
+    kept = "kept.protocyte.hpp"
+    retired = "retired.protocyte.hpp"
+    first = _write_plan(
+        plan_path, root, build, ((target, kept), (target, retired))
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, kept, b"// kept\n")
+    _stage(staging, retired, b"// retired\n")
+    engine.publish(first, target, staging)
+    committed = _snapshot(lock_root, root)
+    second = _write_plan(plan_path, root, build, ((target, kept),))
+    original_atomic_write = coordinator._atomic_write
+    interrupted = False
+
+    def interrupt_after_pending(path: Path, payload: bytes) -> None:
+        nonlocal interrupted
+        original_atomic_write(path, payload)
+        if path.name == "pending.json" and not interrupted:
+            interrupted = True
+            raise RuntimeError("interrupted retirement")
+
+    monkeypatch.setattr(coordinator, "_atomic_write", interrupt_after_pending)
+    with pytest.raises(RuntimeError, match="interrupted retirement"):
+        engine.reconcile(second)
+    pending_path = next(
+        engine._state_directory(root).glob("transactions/*/pending.json")
+    )
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["entries"][0].update(
+        {
+            "before": committed["entries"][kept]["sha256"],
+            "path": kept,
+            "target": committed["entries"][kept]["target"],
+            "transfer": None,
+        }
+    )
+    pending["new_snapshot"]["entries"] = {
+        retired: committed["entries"][retired]
+    }
+    pending_path.write_bytes(coordinator._canonical_json(pending))
+
+    with pytest.raises(coordinator.CoordinatorError, match="planned output"):
+        engine.validate(second)
+
+    assert (root / kept).read_bytes() == b"// kept\n"
+    assert (root / retired).read_bytes() == b"// retired\n"
+    assert _snapshot(lock_root, root) == committed
+
+
 def test_reconcile_retires_only_snapshot_authenticated_outputs(tmp_path: Path) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
@@ -1055,6 +1154,46 @@ def test_retirement_does_not_transfer_into_an_already_owned_hard_link(
     assert set(_snapshot(lock_root, root)["entries"]) == {"kept.protocyte.hpp"}
 
 
+def test_retirement_ignores_multiple_already_owned_hard_link_destinations(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    kept_a = "kept-a.protocyte.hpp"
+    kept_b = "kept-b.protocyte.hpp"
+    retired = "retired.protocyte.hpp"
+    first = _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, kept_a), (target, kept_b), (target, retired)),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    for relative in (kept_a, kept_b, retired):
+        _stage(staging, relative, b"// same\n")
+    engine.publish(first, target, staging)
+    retired_path = root / retired
+    for relative in (kept_a, kept_b):
+        destination = root / relative
+        destination.unlink()
+        os.link(retired_path, destination)
+    second = _write_plan(
+        plan_path, root, build, ((target, kept_a), (target, kept_b))
+    )
+
+    engine.reconcile(second)
+
+    assert not retired_path.exists()
+    assert (root / kept_a).read_bytes() == b"// same\n"
+    assert (root / kept_b).read_bytes() == b"// same\n"
+    assert set(_snapshot(lock_root, root)["entries"]) == {kept_a, kept_b}
+
+
 def test_case_distinct_modified_retirement_does_not_block_publication(
     tmp_path: Path,
 ) -> None:
@@ -1459,6 +1598,49 @@ def test_registry_enumeration_fails_closed_when_claim_state_is_unreadable(
     monkeypatch.setattr(coordinator.os, "scandir", reject_state)
 
     with pytest.raises(coordinator.CoordinatorError, match="could not enumerate output claim"):
+        engine.reconcile(second)
+
+
+def test_physical_output_root_aliases_cannot_receive_distinct_claims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_a = tmp_path / "root-a"
+    root_b = tmp_path / "root-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    lock_root = tmp_path / "locks-v1"
+    first = _write_plan(
+        tmp_path / "first-plan",
+        root_a,
+        tmp_path / "first-build",
+        ((_target("first"), "first.protocyte.hpp"),),
+    )
+    second = _write_plan(
+        tmp_path / "second-plan",
+        root_b,
+        tmp_path / "second-build",
+        ((_target("second"), "second.protocyte.hpp"),),
+    )
+    original_samefile = coordinator.os.path.samefile
+    aliases = {os.path.normcase(os.fspath(root_a)), os.path.normcase(os.fspath(root_b))}
+
+    def samefile_with_root_alias(first_path: object, second_path: object) -> bool:
+        pair = {
+            os.path.normcase(os.fspath(first_path)),
+            os.path.normcase(os.fspath(second_path)),
+        }
+        if pair == aliases:
+            return True
+        return original_samefile(first_path, second_path)
+
+    monkeypatch.setattr(coordinator.os.path, "samefile", samefile_with_root_alias)
+    engine = coordinator.OutputCoordinator(lock_root)
+
+    with pytest.raises(coordinator.CoordinatorError, match="overlapping roots"):
+        engine._validate_plan_set((first, second))
+
+    engine.reconcile(first)
+    with pytest.raises(coordinator.CoordinatorError, match="root claimed"):
         engine.reconcile(second)
 
 
