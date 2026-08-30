@@ -1525,6 +1525,26 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         "${output_root_parent}/.protocyte-generation-staging-${target_key}"
     )
     _protocyte_schedule_owned_output_cleanup()
+    _protocyte_owned_output_claim_key(output_plan_key "${normalized_output_root}")
+    set(root_property "PROTOCYTE_INTERNAL_OWNED_OUTPUT_PLAN_ROOT_${output_plan_key}")
+    get_property(root_is_registered GLOBAL PROPERTY "${root_property}" SET)
+    if(root_is_registered)
+        get_property(registered_root GLOBAL PROPERTY "${root_property}")
+        if(NOT "${registered_root}" STREQUAL "${normalized_output_root}")
+            message(
+                FATAL_ERROR
+                "Protocyte output roots '${registered_root}' and '${normalized_output_root}' "
+                "have the same portable identity but are physically distinct. Use roots whose "
+                "case-normalized paths are unique."
+            )
+        endif()
+    else()
+        set_property(
+            GLOBAL PROPERTY
+            "${root_property}"
+            "${normalized_output_root}"
+        )
+    endif()
     set(current_output_keys)
     foreach(output_path IN LISTS ${outputs_var})
         cmake_path(NORMAL_PATH output_path OUTPUT_VARIABLE normalized_output_path)
@@ -1583,8 +1603,6 @@ function(_protocyte_register_owned_outputs target_name output_root outputs_var)
         "PROTOCYTE_INTERNAL_OWNED_OUTPUT_STAGING_${target_key}"
         "${staging_directory}"
     )
-    _protocyte_owned_output_claim_key(output_plan_key "${normalized_output_root}")
-
     set(
         PROTOCYTE_INTERNAL_CURRENT_OUTPUT_PLAN
         "${CMAKE_BINARY_DIR}/CMakeFiles/protocyte-output-plans/${output_plan_key}.plan"
