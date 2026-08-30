@@ -750,19 +750,20 @@ def test_hard_link_is_transferred_as_a_distinct_snapshot_entry(tmp_path: Path) -
     root = tmp_path / "generated"
     build = tmp_path / "build"
     lock_root = tmp_path / "locks-v1"
-    target = _target("demo")
+    old_target = _target("old")
+    new_target = _target("new")
     plan_path = tmp_path / "plan"
     first = _write_plan(
         plan_path,
         root,
         build,
-        ((target, "old.protocyte.hpp"),),
+        ((old_target, "old.protocyte.hpp"),),
     )
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(first)
-    staging = _staging(first, target)
+    staging = _staging(first, old_target)
     _stage(staging, "old.protocyte.hpp", b"// first\n")
-    engine.publish(first, target, staging)
+    engine.publish(first, old_target, staging)
     old_output = root / "old.protocyte.hpp"
     new_output = root / "new.protocyte.hpp"
     os.link(old_output, new_output)
@@ -770,18 +771,114 @@ def test_hard_link_is_transferred_as_a_distinct_snapshot_entry(tmp_path: Path) -
         plan_path,
         root,
         build,
-        ((target, "new.protocyte.hpp"),),
+        ((new_target, "new.protocyte.hpp"),),
     )
 
     engine.reconcile(second)
 
     assert not old_output.exists()
     assert new_output.read_bytes() == b"// first\n"
-    assert set(_snapshot(lock_root, root)["entries"]) == {"new.protocyte.hpp"}
-    replacement = _staging(second, target)
+    snapshot = _snapshot(lock_root, root)
+    assert set(snapshot["entries"]) == {"new.protocyte.hpp"}
+    assert snapshot["entries"]["new.protocyte.hpp"]["target"] == new_target
+    replacement = _staging(second, new_target)
     _stage(replacement, "new.protocyte.hpp", b"// second\n")
-    engine.publish(second, target, replacement)
+    engine.publish(second, new_target, replacement)
     assert new_output.read_bytes() == b"// second\n"
+
+
+@pytest.mark.parametrize(
+    ("replacement_mode", "failure"),
+    (
+        ("replace", "ownership transfer destination changed physical identity"),
+        ("rewrite", "generated output bytes are not owned"),
+    ),
+)
+def test_hard_link_transfer_revalidates_destination_before_retirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement_mode: str,
+    failure: str,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(plan_path, root, build, ((target, "old.protocyte.hpp"),))
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, "old.protocyte.hpp", b"// generated\n")
+    engine.publish(first, target, staging)
+    old_output = root / "old.protocyte.hpp"
+    new_output = root / "new.protocyte.hpp"
+    os.link(old_output, new_output)
+    second = _write_plan(plan_path, root, build, ((target, "new.protocyte.hpp"),))
+    original_atomic_write = coordinator._atomic_write
+    replaced = False
+
+    def replace_destination_before_pending(path: Path, payload: bytes) -> None:
+        nonlocal replaced
+        if path.name == "pending.json" and not replaced:
+            replaced = True
+            if replacement_mode == "replace":
+                new_output.unlink()
+            new_output.write_bytes(b"// external replacement\n")
+        original_atomic_write(path, payload)
+
+    monkeypatch.setattr(
+        coordinator, "_atomic_write", replace_destination_before_pending
+    )
+
+    with pytest.raises(coordinator.CoordinatorError, match=failure):
+        engine.reconcile(second)
+
+    expected_old = (
+        b"// generated\n"
+        if replacement_mode == "replace"
+        else b"// external replacement\n"
+    )
+    assert old_output.read_bytes() == expected_old
+    assert new_output.read_bytes() == b"// external replacement\n"
+    assert set(_snapshot(lock_root, root)["entries"]) == {"old.protocyte.hpp"}
+
+
+def test_multiple_retired_hard_links_transfer_ownership_once(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path,
+        root,
+        build,
+        (
+            (target, "old-a.protocyte.hpp"),
+            (target, "old-b.protocyte.hpp"),
+        ),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, "old-a.protocyte.hpp", b"// generated\n")
+    _stage(staging, "old-b.protocyte.hpp", b"// generated\n")
+    engine.publish(first, target, staging)
+    old_a = root / "old-a.protocyte.hpp"
+    old_b = root / "old-b.protocyte.hpp"
+    new_output = root / "new.protocyte.hpp"
+    old_b.unlink()
+    os.link(old_a, old_b)
+    os.link(old_a, new_output)
+    second = _write_plan(plan_path, root, build, ((target, "new.protocyte.hpp"),))
+
+    engine.reconcile(second)
+
+    assert not old_a.exists()
+    assert not old_b.exists()
+    assert new_output.read_bytes() == b"// generated\n"
+    assert set(_snapshot(lock_root, root)["entries"]) == {"new.protocyte.hpp"}
 
 
 def test_retirement_does_not_transfer_into_an_already_owned_hard_link(

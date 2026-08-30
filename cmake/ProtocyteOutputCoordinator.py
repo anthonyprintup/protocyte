@@ -1317,7 +1317,8 @@ class OutputCoordinator:
         claim: Mapping[str, Any],
         snapshot: dict[str, Any],
     ) -> dict[str, Any]:
-        desired = {output.relative for output in plan.outputs}
+        desired_targets = {output.relative: output.target for output in plan.outputs}
+        desired = set(desired_targets)
         desired_by_portable = {relative.casefold(): relative for relative in desired}
         desired_paths = {
             relative: _output_path(plan.root, relative) for relative in desired
@@ -1328,7 +1329,8 @@ class OutputCoordinator:
             if identity is not None:
                 desired_by_identity.setdefault(identity, []).append(relative)
         removals: list[str] = []
-        hard_link_moves: dict[str, str] = {}
+        hard_link_moves: dict[str, dict[str, int | str]] = {}
+        claimed_transfer_destinations: set[str] = set()
         for relative in snapshot["entries"]:
             if relative in desired:
                 continue
@@ -1340,7 +1342,9 @@ class OutputCoordinator:
                 removals.append(relative)
                 identity = _existing_file_identity(_output_path(plan.root, relative))
                 linked_desired = (
-                    desired_by_identity.get(identity, []) if identity is not None else []
+                    desired_by_identity.get(identity, [])
+                    if identity is not None
+                    else []
                 )
                 if len(linked_desired) > 1:
                     _fail(
@@ -1349,8 +1353,17 @@ class OutputCoordinator:
                     )
                 if linked_desired:
                     destination = linked_desired[0]
-                    if destination not in snapshot["entries"]:
-                        hard_link_moves[relative] = destination
+                    if (
+                        destination not in snapshot["entries"]
+                        and destination not in claimed_transfer_destinations
+                    ):
+                        assert identity is not None
+                        hard_link_moves[relative] = {
+                            "device": identity[0],
+                            "inode": identity[1],
+                            "path": destination,
+                        }
+                        claimed_transfer_destinations.add(destination)
         if not removals:
             return snapshot
         new_entries = dict(snapshot["entries"])
@@ -1369,19 +1382,26 @@ class OutputCoordinator:
                     # bytes and keeps reset fail-closed without preventing an
                     # otherwise valid reconfiguration.
                     continue
+            transfer = hard_link_moves.get(relative)
+            transaction_target = snapshot["entries"][relative]["target"]
+            if transfer is not None:
+                transaction_target = desired_targets[str(transfer["path"])]
             pending_entries.append(
                 {
                     "after": None,
                     "before": before,
                     "path": relative,
                     "payload": None,
-                    "target": snapshot["entries"][relative]["target"],
-                    "transfer": hard_link_moves.get(relative),
+                    "target": transaction_target,
+                    "transfer": transfer,
                 }
             )
             new_entries.pop(relative)
-            if relative in hard_link_moves:
-                new_entries[hard_link_moves[relative]] = snapshot["entries"][relative]
+            if transfer is not None:
+                new_entries[str(transfer["path"])] = {
+                    "sha256": before,
+                    "target": transaction_target,
+                }
         if not pending_entries:
             return snapshot
         transaction_id = secrets.token_hex(32)
@@ -1470,7 +1490,16 @@ class OutputCoordinator:
             _durable_rmtree(transaction_directory)
             return
         expected_entries = dict(snapshot["entries"])
-        validated_entries: list[tuple[Path, str | None, str | None, Path | None]] = []
+        validated_entries: list[
+            tuple[
+                Path,
+                str | None,
+                str | None,
+                Path | None,
+                tuple[Path, tuple[int, int], str] | None,
+            ]
+        ] = []
+        planned_targets = {output.relative: output.target for output in plan.outputs}
         seen_paths: set[str] = set()
         for index, entry in enumerate(pending["entries"]):
             if not isinstance(entry, dict) or set(entry) != {
@@ -1512,14 +1541,59 @@ class OutputCoordinator:
             if previous_path is not None:
                 previous_entry = expected_entries.pop(previous_path)
             payload: Path | None = None
+            validated_transfer: tuple[Path, tuple[int, int], str] | None = None
             if after is None:
                 if entry["payload"] is not None:
                     _fail("retirement transaction unexpectedly contains a payload")
                 if transfer is not None:
-                    transfer = _validate_relative_path(str(transfer))
-                    if previous_entry is None or transfer in expected_entries:
-                        _fail("retirement transaction contains an invalid ownership transfer")
-                    expected_entries[transfer] = previous_entry
+                    if not isinstance(transfer, dict) or set(transfer) != {
+                        "device",
+                        "inode",
+                        "path",
+                    }:
+                        _fail(
+                            "retirement transaction contains an invalid ownership transfer"
+                        )
+                    transfer_path = _validate_relative_path(str(transfer["path"]))
+                    device = transfer["device"]
+                    inode = transfer["inode"]
+                    if (
+                        previous_entry is None
+                        or transfer_path in expected_entries
+                        or not isinstance(device, int)
+                        or isinstance(device, bool)
+                        or device < 0
+                        or not isinstance(inode, int)
+                        or isinstance(inode, bool)
+                        or inode < 0
+                        or planned_targets.get(transfer_path) != target
+                    ):
+                        _fail(
+                            "retirement transaction contains an invalid ownership transfer"
+                        )
+                    transfer_destination = _output_path(plan.root, transfer_path)
+                    transfer_identity = (device, inode)
+                    if (
+                        _existing_file_identity(transfer_destination)
+                        != transfer_identity
+                    ):
+                        _fail(
+                            "ownership transfer destination changed physical identity"
+                        )
+                    self._require_observed_state(
+                        transfer_destination, before, allow_absent=False
+                    )
+                    expected_entries[transfer_path] = {
+                        "sha256": before,
+                        "target": target,
+                    }
+                    validated_transfer = (
+                        transfer_destination,
+                        transfer_identity,
+                        before,
+                    )
+                elif previous_entry is not None and previous_entry["target"] != target:
+                    _fail("retirement transaction changes the prior target identity")
             else:
                 if transfer is not None:
                     _fail("publication transaction unexpectedly contains a transfer")
@@ -1535,15 +1609,31 @@ class OutputCoordinator:
                 ):
                     _fail(f"pending transaction payload is missing or changed: {payload}")
                 expected_entries[relative] = {"sha256": after, "target": target}
-            validated_entries.append((destination, before, after, payload))
+            validated_entries.append(
+                (destination, before, after, payload, validated_transfer)
+            )
         if new_snapshot["entries"] != dict(sorted(expected_entries.items())):
             _fail("pending replacement snapshot does not match its transaction entries")
         if snapshot["generation"] != pending["base_generation"]:
             _fail(
                 "pending transaction does not follow the committed snapshot generation"
             )
-        for index, (destination, before, after, payload) in enumerate(validated_entries):
+        for index, (destination, before, after, payload, transfer) in enumerate(
+            validated_entries
+        ):
             if after is None:
+                if transfer is not None:
+                    transfer_destination, transfer_identity, transfer_hash = transfer
+                    if (
+                        _existing_file_identity(transfer_destination)
+                        != transfer_identity
+                    ):
+                        _fail(
+                            "ownership transfer destination changed physical identity"
+                        )
+                    self._require_observed_state(
+                        transfer_destination, transfer_hash, allow_absent=False
+                    )
                 self._delete_if_state(destination, before)
             else:
                 assert payload is not None
