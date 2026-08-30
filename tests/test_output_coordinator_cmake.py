@@ -252,6 +252,80 @@ def test_reconfigure_moves_a_target_between_sibling_output_roots(
     assert (second_output / "demo_0.protocyte.hpp").is_file()
 
 
+def test_conflicting_root_move_preserves_the_last_successful_outputs(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "first-project"
+    first_build = tmp_path / "first-build"
+    first_output = tmp_path / "first-generated"
+    second_source = tmp_path / "second-project"
+    second_build = tmp_path / "second-build"
+    second_output = tmp_path / "second-generated"
+    locks = tmp_path / "locks"
+    _write_out_dir_owner_project(
+        first_source, first_output, output_lock_root=locks
+    )
+    _write_out_dir_owner_project(
+        second_source, second_output, output_lock_root=locks
+    )
+    assert _configure(first_source, first_build).returncode == 0
+    assert _build_out_dir_owner_project(first_build).returncode == 0
+    assert _configure(second_source, second_build).returncode == 0
+    assert _build_out_dir_owner_project(second_build).returncode == 0
+    prior_plan = next(
+        (first_build / "CMakeFiles" / "protocyte-output-plans").glob("*.plan")
+    )
+    prior_plan_text = prior_plan.read_text(encoding="ascii")
+    first_header = first_output / "demo_0.protocyte.hpp"
+    first_header_bytes = first_header.read_bytes()
+    _write_out_dir_owner_project(
+        first_source, second_output, output_lock_root=locks
+    )
+
+    rejected = _configure(first_source, first_build)
+
+    assert rejected.returncode != 0
+    assert "different CMake build tree" in rejected.stdout + rejected.stderr
+    assert first_header.read_bytes() == first_header_bytes
+    assert prior_plan.read_text(encoding="ascii") == prior_plan_text
+
+
+def test_public_reset_rejects_duplicate_single_value_keywords(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source = tmp_path / "project"
+    source.mkdir()
+    (source / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(duplicate_reset LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                "protocyte_reset_output_directory(",
+                f'  OUT_DIR "{(tmp_path / "first").as_posix()}"',
+                f'  OUT_DIR "{(tmp_path / "second").as_posix()}"',
+                f'  EXPECTED_CLAIM "{"0" * 64}"',
+                f'  EXPECTED_CLAIM "{"1" * 64}"',
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configured = subprocess.run(
+        ["cmake", "-S", str(source), "-B", str(tmp_path / "build")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert configured.returncode != 0
+    diagnostic = " ".join((configured.stdout + configured.stderr).split())
+    assert (
+        "duplicate single-value keyword(s): OUT_DIR, EXPECTED_CLAIM" in diagnostic
+    )
+
+
 def test_build_root_is_physical_when_configured_through_a_directory_link(
     tmp_path: Path,
 ) -> None:

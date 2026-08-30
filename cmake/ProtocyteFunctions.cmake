@@ -1289,6 +1289,11 @@ function(protocyte_reset_output_directory)
     set(options)
     set(oneValueArgs OUT_DIR EXPECTED_CLAIM)
     set(multiValueArgs)
+    _protocyte_validate_unique_one_value_keywords_from_argv(
+        "protocyte_reset_output_directory"
+        "${oneValueArgs}"
+        "${ARGC}"
+    )
     cmake_parse_arguments(
         PARSE_ARGV 0
         PROTOCYTE_RESET
@@ -1439,7 +1444,7 @@ function(_protocyte_finalize_output_plans)
     endforeach()
     list(REMOVE_DUPLICATES current_plan_keys)
 
-    set(plans_to_reconcile)
+    set(current_plans)
     foreach(plan_key IN LISTS current_plan_keys)
         set(output_root "${protocyte_plan_root_${plan_key}}")
         string(HEX "${output_root}" encoded_output_root)
@@ -1449,10 +1454,11 @@ function(_protocyte_finalize_output_plans)
         )
         set(plan_file "${plan_root}/${plan_key}.plan")
         _protocyte_write_if_different("${plan_file}" "${plan_content}")
-        list(APPEND plans_to_reconcile "${plan_file}")
+        list(APPEND current_plans "${plan_file}")
     endforeach()
 
     set(retired_plans)
+    set(retired_plan_destinations)
     foreach(prior_plan IN LISTS prior_plans)
         cmake_path(GET prior_plan STEM prior_plan_key)
         list(FIND current_plan_keys "${prior_plan_key}" current_plan_index)
@@ -1474,44 +1480,77 @@ function(_protocyte_finalize_output_plans)
         )
             message(FATAL_ERROR "Protocyte output plan is malformed: ${prior_plan}")
         endif()
+        set(retired_plan "${prior_plan}.retired")
         _protocyte_write_if_different(
-            "${prior_plan}"
+            "${retired_plan}"
             "${prior_plan_header}\n${prior_plan_root}\n${prior_plan_build_root}\n"
         )
-        list(APPEND retired_plans "${prior_plan}")
+        list(APPEND retired_plans "${retired_plan}")
+        list(APPEND retired_plan_destinations "${prior_plan}")
     endforeach()
-    list(PREPEND plans_to_reconcile ${retired_plans})
 
-    foreach(plan_file IN LISTS plans_to_reconcile)
-        execute_process(
-            COMMAND
-                "${CMAKE_COMMAND}" -E env --unset=PYTHONHOME --unset=PYTHONPATH
-                "${coordinator_python}"
-                "${coordinator_script}"
-                reconcile
-                --lock-root "${output_lock_directory}"
-                --plan "${plan_file}"
-            RESULT_VARIABLE coordinator_result
-            OUTPUT_VARIABLE coordinator_output
-            ERROR_VARIABLE coordinator_error
-            ENCODING UTF-8
-        )
-        if(NOT "${coordinator_result}" STREQUAL "0")
-            string(STRIP "${coordinator_error}" coordinator_error)
-            message(
-                FATAL_ERROR
-                "Protocyte could not reconcile its authoritative output plan '${plan_file}'.\n"
-                "Exit code: ${coordinator_result}\n"
-                "Standard output: ${coordinator_output}\n"
-                "Standard error: ${coordinator_error}"
-            )
-        endif()
-        string(STRIP "${coordinator_output}" claim_token)
-        if(NOT claim_token MATCHES "^[0-9a-f]+$")
-            message(FATAL_ERROR "Protocyte output coordinator returned an invalid claim token")
-        endif()
-        _protocyte_write_if_different("${plan_file}.claim-token" "${claim_token}\n")
+    set(coordinator_arguments reconcile-set --lock-root "${output_lock_directory}")
+    foreach(plan_file IN LISTS retired_plans)
+        list(APPEND coordinator_arguments --retired-plan "${plan_file}")
     endforeach()
+    foreach(plan_file IN LISTS current_plans)
+        list(APPEND coordinator_arguments --current-plan "${plan_file}")
+    endforeach()
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env --unset=PYTHONHOME --unset=PYTHONPATH
+            "${coordinator_python}"
+            "${coordinator_script}"
+            ${coordinator_arguments}
+        RESULT_VARIABLE coordinator_result
+        OUTPUT_VARIABLE coordinator_output
+        ERROR_VARIABLE coordinator_error
+        ENCODING UTF-8
+    )
+    if(NOT "${coordinator_result}" STREQUAL "0")
+        file(REMOVE ${retired_plans})
+        string(STRIP "${coordinator_error}" coordinator_error)
+        message(
+            FATAL_ERROR
+            "Protocyte could not reconcile its authoritative output plans.\n"
+            "Exit code: ${coordinator_result}\n"
+            "Standard output: ${coordinator_output}\n"
+            "Standard error: ${coordinator_error}"
+        )
+    endif()
+    string(REPLACE "\r\n" "\n" coordinator_output "${coordinator_output}")
+    string(REPLACE "\n" ";" claim_tokens "${coordinator_output}")
+    list(FILTER claim_tokens EXCLUDE REGEX "^$")
+    set(plans_to_reconcile ${retired_plans} ${current_plans})
+    set(token_destinations ${retired_plan_destinations} ${current_plans})
+    list(LENGTH plans_to_reconcile plan_count)
+    list(LENGTH claim_tokens token_count)
+    if(NOT token_count EQUAL plan_count)
+        message(FATAL_ERROR "Protocyte output coordinator returned an invalid claim token set")
+    endif()
+    if(plan_count GREATER 0)
+        math(EXPR last_plan_index "${plan_count} - 1")
+        foreach(plan_index RANGE 0 ${last_plan_index})
+            list(GET claim_tokens ${plan_index} claim_token)
+            list(GET token_destinations ${plan_index} token_destination)
+            string(LENGTH "${claim_token}" claim_token_length)
+            if(NOT claim_token MATCHES "^[0-9a-f]+$" OR NOT claim_token_length EQUAL 64)
+                message(FATAL_ERROR "Protocyte output coordinator returned an invalid claim token")
+            endif()
+            _protocyte_write_if_different(
+                "${token_destination}.claim-token" "${claim_token}\n"
+            )
+        endforeach()
+    endif()
+    list(LENGTH retired_plans retired_plan_count)
+    if(retired_plan_count GREATER 0)
+        math(EXPR last_retired_index "${retired_plan_count} - 1")
+        foreach(retired_index RANGE 0 ${last_retired_index})
+            list(GET retired_plans ${retired_index} retired_plan)
+            list(GET retired_plan_destinations ${retired_index} retired_destination)
+            file(RENAME "${retired_plan}" "${retired_destination}")
+        endforeach()
+    endif()
 endfunction()
 
 function(_protocyte_register_owned_outputs target_name output_root outputs_var)

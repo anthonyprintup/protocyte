@@ -692,17 +692,67 @@ class OutputCoordinator:
         state = self._claim(plan)
         with FileLock(self._generation_lock(plan.root)):
             with FileLock(self._publication_lock(plan.root)):
+                return self._reconcile_locked(state, plan)
+
+    def reconcile_set(
+        self, retired: Sequence[Plan], current: Sequence[Plan]
+    ) -> list[str]:
+        if not current and not retired:
+            _fail("reconcile-set requires at least one plan")
+        plans = [*retired, *current]
+        roots = {_path_key(plan.root): plan.root for plan in plans}
+        retiring_root_keys = {_path_key(plan.root) for plan in retired}
+        _durable_mkdir(self.lock_root)
+        with contextlib.ExitStack() as locks:
+            locks.enter_context(FileLock(self.lock_root / "registry.lock"))
+            for root in sorted(roots.values(), key=_portable_identity):
+                locks.enter_context(FileLock(self._generation_lock(root)))
+            for root in sorted(roots.values(), key=_portable_identity):
+                locks.enter_context(FileLock(self._publication_lock(root)))
+            self._validate_plan_set(current)
+            for plan in current:
+                self._validate_registry(plan, retiring_root_keys)
+            states: dict[str, Path] = {}
+            existing_plans: list[Plan] = []
+            for plan in retired:
+                state = self._state_directory(plan.root)
+                self._load_claim(state, plan)
+                states[_path_key(plan.root)] = state
+                existing_plans.append(plan)
+            for plan in current:
+                state = self._state_directory(plan.root)
+                claim_path = state / "claim.json"
+                if claim_path.exists():
+                    self._load_claim(state, plan)
+                    existing_plans.append(plan)
+                states[_path_key(plan.root)] = state
+            for plan in existing_plans:
+                state = states[_path_key(plan.root)]
                 claim = self._load_claim(state, plan)
                 self._recover(state, plan, claim)
-                previous_plan = self._load_recorded_plan(state)
-                snapshot = self._load_snapshot(state, claim)
-                snapshot = self._retire_unplanned(state, plan, claim, snapshot)
-                self._retire_staging(previous_plan, plan)
-                _atomic_write(
-                    state / "plan.json",
-                    _canonical_json({**plan.payload, "sha256": plan.digest}),
-                )
-                return str(claim["token"])
+                self._load_snapshot(state, claim)
+                self._load_recorded_plan(state)
+            for plan in current:
+                state = states[_path_key(plan.root)]
+                if not (state / "claim.json").exists():
+                    self._initialize_claim_locked(state, plan)
+            return [
+                self._reconcile_locked(states[_path_key(plan.root)], plan)
+                for plan in plans
+            ]
+
+    def _reconcile_locked(self, state: Path, plan: Plan) -> str:
+        claim = self._load_claim(state, plan)
+        self._recover(state, plan, claim)
+        previous_plan = self._load_recorded_plan(state)
+        snapshot = self._load_snapshot(state, claim)
+        snapshot = self._retire_unplanned(state, plan, claim, snapshot)
+        self._retire_staging(previous_plan, plan)
+        _atomic_write(
+            state / "plan.json",
+            _canonical_json({**plan.payload, "sha256": plan.digest}),
+        )
+        return str(claim["token"])
 
     def validate(self, plan: Plan) -> None:
         state = self._state_directory(plan.root)
@@ -960,32 +1010,63 @@ class OutputCoordinator:
                 self._load_claim(state, plan)
                 _sync_directory(state)
                 return state
-            token = secrets.token_hex(32)
-            claim = {
-                "build_id": plan.build_id,
-                "build_root": os.fspath(plan.build_root),
-                "root": os.fspath(plan.root),
-                "root_key": _path_key(plan.root),
-                "token": token,
-                "version": PROTOCOL_VERSION,
-            }
-            snapshot = {
-                "claim_token": token,
-                "entries": {},
-                "generation": 0,
-                "version": PROTOCOL_VERSION,
-            }
-            _atomic_write(state / "snapshot.json", _canonical_json(snapshot))
-            self._inject("after-initial-snapshot")
-            # Publish the immutable claim last.  A crash before this rename
-            # leaves only unclaimed initialization data, which a retry may
-            # safely replace.  Once the claim is visible, its initial snapshot
-            # is already durable.
-            _atomic_write(claim_path, _canonical_json(claim))
-            self._inject("after-claim")
+            self._initialize_claim_locked(state, plan)
         return state
 
-    def _validate_registry(self, plan: Plan) -> None:
+    def _initialize_claim_locked(self, state: Path, plan: Plan) -> None:
+        _durable_mkdir(state, anchor=self.lock_root)
+        token = secrets.token_hex(32)
+        claim = {
+            "build_id": plan.build_id,
+            "build_root": os.fspath(plan.build_root),
+            "root": os.fspath(plan.root),
+            "root_key": _path_key(plan.root),
+            "token": token,
+            "version": PROTOCOL_VERSION,
+        }
+        snapshot = {
+            "claim_token": token,
+            "entries": {},
+            "generation": 0,
+            "version": PROTOCOL_VERSION,
+        }
+        _atomic_write(state / "snapshot.json", _canonical_json(snapshot))
+        self._inject("after-initial-snapshot")
+        # Publish the immutable claim last. A crash before this rename leaves
+        # only unclaimed initialization data, which a retry may safely replace.
+        _atomic_write(state / "claim.json", _canonical_json(claim))
+        self._inject("after-claim")
+
+    @staticmethod
+    def _validate_plan_set(plans: Sequence[Plan]) -> None:
+        for index, first in enumerate(plans):
+            for second in plans[index + 1 :]:
+                if _contains(first.root, second.root) or _contains(second.root, first.root):
+                    _fail(
+                        "current output plans contain overlapping roots: "
+                        f"{first.root} and {second.root}"
+                    )
+                for target in first.targets:
+                    if _contains(target.staging, second.root) or _contains(
+                        second.root, target.staging
+                    ):
+                        _fail("current output plan staging overlaps another output root")
+                    for other in second.targets:
+                        if _contains(target.staging, other.staging) or _contains(
+                            other.staging, target.staging
+                        ):
+                            _fail("current output plans contain overlapping staging")
+                for target in second.targets:
+                    if _contains(target.staging, first.root) or _contains(
+                        first.root, target.staging
+                    ):
+                        _fail("current output plan staging overlaps another output root")
+
+    def _validate_registry(
+        self, plan: Plan, retiring_root_keys: set[str] | None = None
+    ) -> None:
+        if retiring_root_keys is None:
+            retiring_root_keys = set()
         for target in plan.targets:
             if _contains(target.staging, self.lock_root):
                 _fail(
@@ -1049,6 +1130,12 @@ class OutputCoordinator:
                 for recorded_target in recorded_targets:
                     if (
                         _path_key(plan.root) == _path_key(claimed_root)
+                        and target.identity == recorded_target.identity
+                    ):
+                        continue
+                    if (
+                        str(claim["root_key"]) in retiring_root_keys
+                        and str(claim["build_id"]) == plan.build_id
                         and target.identity == recorded_target.identity
                     ):
                         continue
@@ -1578,6 +1665,7 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
         choices=(
             "encode-build-root",
             "reconcile",
+            "reconcile-set",
             "run-generation",
             "target-outputs",
             "validate",
@@ -1593,6 +1681,8 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--staging-root", type=Path)
     parser.add_argument("--expected-claim")
     parser.add_argument("--exec", dest="execution", nargs=argparse.REMAINDER)
+    parser.add_argument("--current-plan", type=Path, action="append", default=[])
+    parser.add_argument("--retired-plan", type=Path, action="append", default=[])
     return parser.parse_args(arguments)
 
 
@@ -1608,6 +1698,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
         coordinator = OutputCoordinator(options.lock_root)
+        if options.command == "reconcile-set":
+            current = [Plan.read(path) for path in options.current_plan]
+            retired = [Plan.read(path) for path in options.retired_plan]
+            for token in coordinator.reconcile_set(retired, current):
+                print(token)
+            return 0
         if options.command == "run-generation":
             if options.output_root is None or options.plan is None:
                 _fail("run-generation requires --output-root and --plan")
