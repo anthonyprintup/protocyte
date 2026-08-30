@@ -159,14 +159,6 @@ if(
 endif()
 
 if(NOT PROTOCYTE_GENERATION_LOCK_HELD)
-    _protocyte_run_coordinator(reconcile recovery_result recovery_output recovery_error)
-    if(NOT "${recovery_result}" STREQUAL "0")
-        string(STRIP "${recovery_error}" recovery_error)
-        message(
-            FATAL_ERROR
-            "Protocyte could not recover or reconcile output state before generation.\n${recovery_error}"
-        )
-    endif()
     set(
         locked_generation_command
         "${CMAKE_COMMAND}"
@@ -199,6 +191,7 @@ if(NOT PROTOCYTE_GENERATION_LOCK_HELD)
             "${OUTPUT_COORDINATOR_SCRIPT}"
             run-generation
             --lock-root "${LOCK_DIRECTORY}"
+            --output-root "${OUTPUT_DIRECTORY}"
             --plan "${OUTPUT_PLAN}"
             --exec ${locked_generation_command}
         RESULT_VARIABLE locked_generation_result

@@ -877,6 +877,56 @@ def test_staging_cannot_contain_the_coordinator_lock_root(tmp_path: Path) -> Non
         engine.reconcile(plan)
 
 
+def test_run_generation_locks_the_requested_root_before_reading_the_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    events: list[str] = []
+    original_lock = coordinator.FileLock
+    original_read = coordinator.Plan.read
+
+    class RecordingLock(original_lock):
+        def __enter__(self) -> object:
+            events.append("lock")
+            return super().__enter__()
+
+    def recording_read(path: Path) -> object:
+        events.append("read")
+        return original_read(path)
+
+    monkeypatch.setattr(coordinator, "FileLock", RecordingLock)
+    monkeypatch.setattr(coordinator.Plan, "read", recording_read)
+
+    result = coordinator.main(
+        [
+            "run-generation",
+            "--lock-root",
+            str(lock_root),
+            "--output-root",
+            str(root),
+            "--plan",
+            str(plan_path),
+            "--exec",
+            sys.executable,
+            "-c",
+            "pass",
+        ]
+    )
+
+    assert result == 0
+    assert events == ["lock", "read"]
+
+
 def test_tampered_durable_payload_fails_closed_without_publication(
     tmp_path: Path,
 ) -> None:

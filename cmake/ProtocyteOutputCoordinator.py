@@ -1608,21 +1608,26 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
         coordinator = OutputCoordinator(options.lock_root)
+        if options.command == "run-generation":
+            if options.output_root is None or options.plan is None:
+                _fail("run-generation requires --output-root and --plan")
+            if not options.execution:
+                _fail("run-generation requires --exec")
+            requested_root = project_path(options.output_root)
+            with FileLock(coordinator._generation_lock(requested_root)):
+                plan = Plan.read(options.plan)
+                coordinator._require_requested_root(requested_root, plan.root)
+                return subprocess.run(
+                    options.execution,
+                    check=False,
+                    env=_generation_environment(),
+                ).returncode
         if options.plan is not None:
             plan = Plan.read(options.plan)
         elif options.command == "reset" and options.output_root is not None:
             plan = coordinator.plan_for_root(options.output_root)
         else:
             _fail(f"{options.command} requires --plan")
-        if options.command == "run-generation":
-            if not options.execution:
-                _fail("run-generation requires --exec")
-            with FileLock(coordinator._generation_lock(plan.root)):
-                return subprocess.run(
-                    options.execution,
-                    check=False,
-                    env=_generation_environment(),
-                ).returncode
         if options.command == "target-outputs":
             if options.target is None or not _is_sha256(options.target):
                 _fail("target-outputs requires a valid --target")
