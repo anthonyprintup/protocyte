@@ -462,6 +462,102 @@ def test_recovery_rejects_a_semantically_modified_replacement_snapshot(
     assert not (root / "demo.protocyte.hpp").exists()
 
 
+def test_recovery_rejects_publication_outside_the_transaction_plan(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    plan_path = tmp_path / "plan"
+    target = _target("demo")
+    planned = "demo.protocyte.hpp"
+    unplanned = "injected.protocyte.hpp"
+    plan = _write_plan(plan_path, root, build, ((target, planned),))
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, planned, b"// generated\n")
+    environment = os.environ.copy()
+    environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = "after-pending"
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator.__file__),
+            "publish",
+            "--lock-root",
+            str(lock_root),
+            "--plan",
+            str(plan_path),
+            "--target",
+            target,
+            "--staging-root",
+            str(staging),
+        ],
+        check=False,
+        env=environment,
+    )
+    assert crashed.returncode == 86
+    pending_path = next(
+        engine._state_directory(root).glob("transactions/*/pending.json")
+    )
+    pending = json.loads(pending_path.read_text(encoding="utf-8"))
+    pending["entries"][0]["path"] = unplanned
+    pending["new_snapshot"]["entries"][unplanned] = pending["new_snapshot"][
+        "entries"
+    ].pop(planned)
+    pending_path.write_bytes(coordinator._canonical_json(pending))
+
+    with pytest.raises(coordinator.CoordinatorError, match="current output plan"):
+        engine.validate(plan)
+
+    assert not (root / planned).exists()
+    assert not (root / unplanned).exists()
+    assert _snapshot(lock_root, root)["entries"] == {}
+
+
+def test_reconfigure_recovers_publication_under_its_recorded_plan(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    plan_path = tmp_path / "plan"
+    target = _target("demo")
+    relative = "demo.protocyte.hpp"
+    first = _write_plan(plan_path, root, build, ((target, relative),))
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, relative, b"// generated\n")
+    environment = os.environ.copy()
+    environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = "after-pending"
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator.__file__),
+            "publish",
+            "--lock-root",
+            str(lock_root),
+            "--plan",
+            str(plan_path),
+            "--target",
+            target,
+            "--staging-root",
+            str(staging),
+        ],
+        check=False,
+        env=environment,
+    )
+    assert crashed.returncode == 86
+    second = _write_plan(plan_path, root, build, ())
+
+    engine.reconcile(second)
+
+    assert not (root / relative).exists()
+    assert _snapshot(lock_root, root)["entries"] == {}
+    assert engine.plan_for_root(root).digest == second.digest
+
+
 def test_reconcile_retires_only_snapshot_authenticated_outputs(tmp_path: Path) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
@@ -563,6 +659,39 @@ def test_reconcile_resyncs_absent_retired_staging_before_plan_commit(
 
     plan_index = events.index(("plan", state / "plan.json"))
     assert ("sync", root.parent) in events[:plan_index]
+
+
+def test_recorded_plan_cleanup_is_bound_to_its_immutable_claim(tmp_path: Path) -> None:
+    root_a = tmp_path / "generated-a"
+    root_b = tmp_path / "generated-b"
+    build_a = tmp_path / "build-a"
+    build_b = tmp_path / "build-b"
+    lock_root = tmp_path / "locks-v1"
+    target_a = _target("a")
+    target_b = _target("b")
+    plan_a_path = tmp_path / "plan-a"
+    plan_a = _write_plan(
+        plan_a_path, root_a, build_a, ((target_a, "a.protocyte.hpp"),)
+    )
+    plan_b = _write_plan(
+        tmp_path / "plan-b", root_b, build_b, ((target_b, "b.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(plan_a)
+    engine.reconcile(plan_b)
+    staging_b = plan_b.staging_for_target(target_b)
+    _stage(staging_b / "generated", "b.protocyte.hpp", b"// staged\n")
+    state_a = engine._state_directory(root_a)
+    (state_a / "plan.json").write_bytes(
+        coordinator._canonical_json({**plan_b.payload, "sha256": plan_b.digest})
+    )
+    empty_a = _write_plan(plan_a_path, root_a, build_a, ())
+
+    with pytest.raises(coordinator.CoordinatorError, match="immutable claim"):
+        engine.reconcile(empty_a)
+
+    assert staging_b.is_dir()
+    assert (staging_b / "generated/b.protocyte.hpp").is_file()
 
 
 def test_reconcile_preserves_modified_retired_output_and_snapshot(
@@ -844,7 +973,9 @@ def test_hard_link_transfer_revalidates_destination_before_retirement(
     assert set(_snapshot(lock_root, root)["entries"]) == {"old.protocyte.hpp"}
 
 
-def test_multiple_retired_hard_links_transfer_ownership_once(tmp_path: Path) -> None:
+def test_modified_retired_hard_link_cannot_reserve_an_ownership_transfer(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "generated"
     build = tmp_path / "build"
     lock_root = tmp_path / "locks-v1"
@@ -862,23 +993,31 @@ def test_multiple_retired_hard_links_transfer_ownership_once(tmp_path: Path) -> 
     engine = coordinator.OutputCoordinator(lock_root)
     engine.reconcile(first)
     staging = _staging(first, target)
-    _stage(staging, "old-a.protocyte.hpp", b"// generated\n")
-    _stage(staging, "old-b.protocyte.hpp", b"// generated\n")
+    _stage(staging, "old-a.protocyte.hpp", b"// original a\n")
+    _stage(staging, "old-b.protocyte.hpp", b"// original b\n")
     engine.publish(first, target, staging)
     old_a = root / "old-a.protocyte.hpp"
     old_b = root / "old-b.protocyte.hpp"
     new_output = root / "new.protocyte.hpp"
-    old_b.unlink()
-    os.link(old_a, old_b)
-    os.link(old_a, new_output)
+    old_a.unlink()
+    os.link(old_b, old_a)
+    os.link(old_b, new_output)
     second = _write_plan(plan_path, root, build, ((target, "new.protocyte.hpp"),))
 
     engine.reconcile(second)
 
-    assert not old_a.exists()
+    assert old_a.read_bytes() == b"// original b\n"
     assert not old_b.exists()
-    assert new_output.read_bytes() == b"// generated\n"
-    assert set(_snapshot(lock_root, root)["entries"]) == {"new.protocyte.hpp"}
+    assert new_output.read_bytes() == b"// original b\n"
+    snapshot = _snapshot(lock_root, root)
+    assert set(snapshot["entries"]) == {
+        "new.protocyte.hpp",
+        "old-a.protocyte.hpp",
+    }
+    replacement = _staging(second, target)
+    _stage(replacement, "new.protocyte.hpp", b"// replacement\n")
+    engine.publish(second, target, replacement)
+    assert new_output.read_bytes() == b"// replacement\n"
 
 
 def test_retirement_does_not_transfer_into_an_already_owned_hard_link(
@@ -1419,6 +1558,57 @@ def test_reset_crash_cuts_resume_from_durable_intent(
     assert not state.exists()
 
 
+def test_reset_recovery_rejects_intent_outside_committed_claim_state(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    relative = "demo.protocyte.hpp"
+    injected_relative = "injected.protocyte.hpp"
+    plan = _write_plan(plan_path, root, build, ((target, relative),))
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+    staging = _staging(plan, target)
+    _stage(staging, relative, b"// generated\n")
+    engine.publish(plan, target, staging)
+    environment = os.environ.copy()
+    environment["PROTOCYTE_COORDINATOR_CRASH_AFTER"] = "after-reset-intent"
+    crashed = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator.__file__),
+            "reset",
+            "--lock-root",
+            str(lock_root),
+            "--plan",
+            str(plan_path),
+            "--expected-claim",
+            token,
+        ],
+        check=False,
+        env=environment,
+    )
+    assert crashed.returncode == 86
+    original = root / relative
+    injected = root / injected_relative
+    os.link(original, injected)
+    state = engine._state_directory(root)
+    reset_path = state / "reset.json"
+    intent = json.loads(reset_path.read_text(encoding="utf-8"))
+    intent["entries"][injected_relative] = intent["entries"].pop(relative)
+    reset_path.write_bytes(coordinator._canonical_json(intent))
+
+    with pytest.raises(coordinator.CoordinatorError, match="committed claim state"):
+        engine.reset(plan, token)
+
+    assert original.is_file()
+    assert injected.is_file()
+    assert (state / "claim.json").is_file()
+
+
 def test_reset_crash_after_claim_release_allows_a_replacement_owner(
     tmp_path: Path,
 ) -> None:
@@ -1743,3 +1933,29 @@ def test_reset_plan_lookup_is_bound_to_the_requested_case_sensitive_root(
 
     with pytest.raises(coordinator.CoordinatorError, match="does not match"):
         engine.plan_for_root(wrong_root)
+
+
+def test_reset_plan_lookup_accepts_a_case_only_physical_root_alias(
+    tmp_path: Path,
+) -> None:
+    claimed_root = tmp_path / "Generated"
+    requested_root = tmp_path / "generated"
+    claimed_root.mkdir()
+    if not requested_root.exists():
+        pytest.skip("requires a case-insensitive filesystem")
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        claimed_root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(plan)
+
+    durable_plan = engine.plan_for_root(requested_root)
+    engine.reset(durable_plan, token)
+
+    assert not engine._state_directory(claimed_root).exists()

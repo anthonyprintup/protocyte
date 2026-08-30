@@ -748,8 +748,7 @@ class OutputCoordinator:
                     continue
                 claim = _load_json(claim_path, "output claim")
                 self._validate_claim_shape(claim, claim_path)
-                claim_root = project_path(Path(str(claim["root"])))
-                claim_build_root = project_path(Path(str(claim["build_root"])))
+                claim_root, claim_build_root = self._claim_paths(claim, claim_path)
                 if (
                     str(claim["build_id"]) != plan.build_id
                     or not _same_physical_path(claim_root, plan.root)
@@ -772,7 +771,7 @@ class OutputCoordinator:
                 claim = self._load_claim(state, plan)
                 self._recover(state, plan, claim)
                 self._load_snapshot(state, claim)
-                self._load_recorded_plan(state)
+                self._load_recorded_plan(state, claim)
             for plan in current:
                 state = states[_path_key(plan.root)]
                 if not (state / "claim.json").exists():
@@ -790,7 +789,7 @@ class OutputCoordinator:
     def _reconcile_locked(self, state: Path, plan: Plan) -> str:
         claim = self._load_claim(state, plan)
         self._recover(state, plan, claim)
-        previous_plan = self._load_recorded_plan(state)
+        previous_plan = self._load_recorded_plan(state, claim)
         snapshot = self._load_snapshot(state, claim)
         snapshot = self._retire_unplanned(state, plan, claim, snapshot)
         self._retire_staging(previous_plan, plan)
@@ -805,7 +804,7 @@ class OutputCoordinator:
         with FileLock(self._publication_lock(plan.root)):
             claim = self._load_claim(state, plan)
             self._recover(state, plan, claim)
-            self._require_current_plan(state, plan)
+            self._require_current_plan(state, plan, claim)
 
     def publish(self, plan: Plan, target: str, staging_root: Path) -> None:
         if not _is_sha256(target):
@@ -814,7 +813,7 @@ class OutputCoordinator:
         with FileLock(self._publication_lock(plan.root)):
             claim = self._load_claim(state, plan)
             self._recover(state, plan, claim)
-            self._require_current_plan(state, plan)
+            self._require_current_plan(state, plan, claim)
             expected_staging_root = plan.staging_for_target(target) / "generated"
             if project_path(staging_root) != project_path(expected_staging_root):
                 _fail(
@@ -888,6 +887,7 @@ class OutputCoordinator:
                     "entries": transaction_entries,
                     "id": transaction_id,
                     "new_snapshot": new_snapshot,
+                    "plan_sha256": plan.digest,
                     "version": PROTOCOL_VERSION,
                 }
                 _atomic_write(
@@ -914,17 +914,24 @@ class OutputCoordinator:
                     if claim["token"] != expected_token:
                         _fail("reset claim token does not match the live immutable claim")
                     reset_path = state / "reset.json"
-                    if reset_path.exists():
-                        intent = self._load_reset_intent(reset_path, plan.root, claim)
-                    else:
+                    if not reset_path.exists():
                         self._recover(state, plan, claim)
-                        snapshot = self._load_snapshot(state, claim)
+                    snapshot = self._load_snapshot(state, claim)
+                    recorded_plan = self._load_recorded_plan(state, claim)
+                    staging = [
+                        {"id": target.identity, "path": os.fspath(target.staging)}
+                        for target in (recorded_plan.targets if recorded_plan else ())
+                    ]
+                    if reset_path.exists():
+                        intent = self._load_reset_intent(
+                            reset_path,
+                            plan.root,
+                            claim,
+                            snapshot["entries"],
+                            staging,
+                        )
+                    else:
                         self._validate_reset_inventory(plan.root, snapshot["entries"])
-                        recorded_plan = self._load_recorded_plan(state)
-                        staging = [
-                            {"id": target.identity, "path": os.fspath(target.staging)}
-                            for target in (recorded_plan.targets if recorded_plan else ())
-                        ]
                         intent = {
                             "claim_token": claim["token"],
                             "entries": snapshot["entries"],
@@ -968,7 +975,11 @@ class OutputCoordinator:
 
     @staticmethod
     def _load_reset_intent(
-        path: Path, root: Path, claim: Mapping[str, Any]
+        path: Path,
+        root: Path,
+        claim: Mapping[str, Any],
+        snapshot_entries: Mapping[str, Any],
+        recorded_staging: Sequence[Mapping[str, str]],
     ) -> dict[str, Any]:
         intent = _load_json(path, "pending output reset")
         if (
@@ -1001,11 +1012,15 @@ class OutputCoordinator:
             target["path"] = os.fspath(
                 _validate_staging_path(root, str(target["id"]), Path(str(target["path"])))
             )
+        if intent["entries"] != snapshot_entries or intent["staging"] != list(
+            recorded_staging
+        ):
+            _fail("pending output reset does not match committed claim state")
         return intent
 
     @staticmethod
     def _release_claim(state: Path) -> None:
-        preserved = {"claim.json", "reset.json"}
+        preserved = {"claim.json", "plan.json", "reset.json", "snapshot.json"}
         for entry in _walk_tree(state):
             if entry.parent != state or entry.name in preserved:
                 continue
@@ -1021,28 +1036,32 @@ class OutputCoordinator:
         claim_path.unlink()
         _sync_directory(state)
         OutputCoordinator._inject("after-reset-claim")
-        reset_path = state / "reset.json"
-        reset_path.unlink()
-        _sync_directory(state)
+        for name in ("plan.json", "snapshot.json", "reset.json"):
+            path = state / name
+            if path.exists():
+                path.unlink()
+                _sync_directory(state)
         state.rmdir()
         _sync_directory(state.parent)
 
     def plan_for_root(self, root: Path) -> Plan:
         root = project_path(_require_absolute(root, "output root"))
         state = self._state_directory(root)
-        plan_path = state / "plan.json"
-        if plan_path.exists():
-            plan = Plan.from_payload(
-                _load_json(plan_path, "configured output plan"), plan_path
-            )
-            self._require_requested_root(root, plan.root)
-            return plan
         claim_path = state / "claim.json"
         claim = _load_json(claim_path, "output claim")
         self._validate_claim_shape(claim, claim_path)
-        claim_root = project_path(Path(claim["root"]))
+        claim_root, build_root = self._claim_paths(claim, claim_path)
+        if claim["root_key"] != _path_key(root):
+            _fail(
+                "requested output root does not identify the recorded claim: "
+                f"{root}"
+            )
         self._require_requested_root(root, claim_root)
-        build_root = project_path(Path(claim["build_root"]))
+        plan_path = state / "plan.json"
+        if plan_path.exists():
+            plan = self._load_recorded_plan(state, claim)
+            assert plan is not None
+            return plan
         return Plan(claim_root, build_root, str(claim["build_id"]), (), ())
 
     def _claim(self, plan: Plan) -> Path:
@@ -1161,8 +1180,10 @@ class OutputCoordinator:
                 continue
             claim = _load_json(claim_path, "output claim")
             self._validate_claim_shape(claim, claim_path)
-            claimed_root = project_path(Path(claim["root"]))
-            recorded_plan = self._load_recorded_plan(state)
+            claimed_root, _ = self._claim_paths(claim, claim_path)
+            if entry.name != claim["root_key"]:
+                _fail(f"output claim is stored under the wrong registry key: {claim_path}")
+            recorded_plan = self._load_recorded_plan(state, claim)
             if _contains(claimed_root, plan.root) or _contains(plan.root, claimed_root):
                 if _path_key(claimed_root) != _path_key(plan.root):
                     _fail(
@@ -1219,7 +1240,7 @@ class OutputCoordinator:
         claim_path = state / "claim.json"
         claim = _load_json(claim_path, "output claim")
         self._validate_claim_shape(claim, claim_path)
-        recorded_root = project_path(Path(claim["root"]))
+        recorded_root, recorded_build = self._claim_paths(claim, claim_path)
         requested_root = project_path(plan.root)
         if claim["root_key"] != _path_key(plan.root) or not _same_physical_path(
             recorded_root, requested_root
@@ -1227,7 +1248,6 @@ class OutputCoordinator:
             _fail(
                 f"output claim does not identify the requested physical root: {claim_path}"
             )
-        recorded_build = Path(claim["build_root"])
         same_build = _same_physical_path(recorded_build, plan.build_root)
         if claim["build_id"] != plan.build_id or not same_build:
             _fail(
@@ -1235,6 +1255,32 @@ class OutputCoordinator:
                 f"the claim explicitly: {plan.root}"
             )
         return claim
+
+    @staticmethod
+    def _require_plan_claim_binding(
+        plan: Plan, claim: Mapping[str, Any], source: Path
+    ) -> None:
+        claim_root, claim_build_root = OutputCoordinator._claim_paths(claim, source)
+        if (
+            str(claim["root_key"]) != _path_key(plan.root)
+            or str(claim["build_id"]) != plan.build_id
+            or not _same_physical_path(claim_root, plan.root)
+            or not _same_physical_path(claim_build_root, plan.build_root)
+        ):
+            _fail(f"configured output plan does not match its immutable claim: {source}")
+
+    @staticmethod
+    def _claim_paths(
+        claim: Mapping[str, Any], source: Path
+    ) -> tuple[Path, Path]:
+        claim_root = project_path(Path(str(claim["root"])))
+        claim_build_root = project_path(Path(str(claim["build_root"])))
+        if (
+            str(claim["root_key"]) != _path_key(claim_root)
+            or str(claim["build_id"]) != _path_key(claim_build_root)
+        ):
+            _fail(f"output claim identity is inconsistent: {source}")
+        return claim_root, claim_build_root
 
     @staticmethod
     def _validate_claim_shape(claim: Mapping[str, Any], path: Path) -> None:
@@ -1284,22 +1330,24 @@ class OutputCoordinator:
             ):
                 _fail(f"committed output snapshot contains a malformed entry: {path}")
 
-    def _require_current_plan(self, state: Path, plan: Plan) -> None:
-        current = _load_json(state / "plan.json", "configured output plan")
-        if (
-            current.get("sha256") != plan.digest
-            or current.get("build_id") != plan.build_id
-        ):
+    def _require_current_plan(
+        self, state: Path, plan: Plan, claim: Mapping[str, Any]
+    ) -> None:
+        current = self._load_recorded_plan(state, claim)
+        if current is None or current.digest != plan.digest:
             _fail(
                 "build-time output plan does not match the plan committed during configuration"
             )
 
-    @staticmethod
-    def _load_recorded_plan(state: Path) -> Plan | None:
+    def _load_recorded_plan(
+        self, state: Path, claim: Mapping[str, Any]
+    ) -> Plan | None:
         path = state / "plan.json"
         if not path.exists():
             return None
-        return Plan.from_payload(_load_json(path, "configured output plan"), path)
+        plan = Plan.from_payload(_load_json(path, "configured output plan"), path)
+        self._require_plan_claim_binding(plan, claim, path)
+        return plan
 
     @staticmethod
     def _retire_staging(previous: Plan | None, current: Plan) -> None:
@@ -1328,9 +1376,9 @@ class OutputCoordinator:
             identity = _existing_file_identity(path)
             if identity is not None:
                 desired_by_identity.setdefault(identity, []).append(relative)
-        removals: list[str] = []
-        hard_link_moves: dict[str, dict[str, int | str]] = {}
         claimed_transfer_destinations: set[str] = set()
+        new_entries = dict(snapshot["entries"])
+        pending_entries: list[dict[str, Any]] = []
         for relative in snapshot["entries"]:
             if relative in desired:
                 continue
@@ -1338,39 +1386,11 @@ class OutputCoordinator:
             aliased = portable_match is not None and self._case_spelling_alias(
                 plan.root, relative, portable_match
             )
-            if not aliased:
-                removals.append(relative)
-                identity = _existing_file_identity(_output_path(plan.root, relative))
-                linked_desired = (
-                    desired_by_identity.get(identity, [])
-                    if identity is not None
-                    else []
-                )
-                if len(linked_desired) > 1:
-                    _fail(
-                        "retired generated output has multiple desired hard-link destinations: "
-                        f"{relative}"
-                    )
-                if linked_desired:
-                    destination = linked_desired[0]
-                    if (
-                        destination not in snapshot["entries"]
-                        and destination not in claimed_transfer_destinations
-                    ):
-                        assert identity is not None
-                        hard_link_moves[relative] = {
-                            "device": identity[0],
-                            "inode": identity[1],
-                            "path": destination,
-                        }
-                        claimed_transfer_destinations.add(destination)
-        if not removals:
-            return snapshot
-        new_entries = dict(snapshot["entries"])
-        pending_entries: list[dict[str, Any]] = []
-        for relative in removals:
+            if aliased:
+                continue
             before = snapshot["entries"][relative]["sha256"]
             output = _output_path(plan.root, relative)
+            identity: tuple[int, int] | None = None
             if os.path.lexists(output):
                 if (
                     _is_link(output)
@@ -1382,7 +1402,31 @@ class OutputCoordinator:
                     # bytes and keeps reset fail-closed without preventing an
                     # otherwise valid reconfiguration.
                     continue
-            transfer = hard_link_moves.get(relative)
+                identity = _existing_file_identity(output)
+                if identity is None:
+                    continue
+            linked_desired = (
+                desired_by_identity.get(identity, []) if identity is not None else []
+            )
+            if len(linked_desired) > 1:
+                _fail(
+                    "retired generated output has multiple desired hard-link destinations: "
+                    f"{relative}"
+                )
+            transfer: dict[str, int | str] | None = None
+            if linked_desired:
+                destination = linked_desired[0]
+                if (
+                    destination not in snapshot["entries"]
+                    and destination not in claimed_transfer_destinations
+                ):
+                    assert identity is not None
+                    transfer = {
+                        "device": identity[0],
+                        "inode": identity[1],
+                        "path": destination,
+                    }
+                    claimed_transfer_destinations.add(destination)
             transaction_target = snapshot["entries"][relative]["target"]
             if transfer is not None:
                 transaction_target = desired_targets[str(transfer["path"])]
@@ -1418,6 +1462,7 @@ class OutputCoordinator:
             "entries": pending_entries,
             "id": transaction_id,
             "new_snapshot": new_snapshot,
+            "plan_sha256": plan.digest,
             "version": PROTOCOL_VERSION,
         }
         _atomic_write(transaction_directory / "pending.json", _canonical_json(pending))
@@ -1451,7 +1496,18 @@ class OutputCoordinator:
             pending = _load_json(
                 directory / "pending.json", "pending output transaction"
             )
-            self._apply_pending(state, plan, claim, pending, directory)
+            recovery_plan = plan
+            if pending.get("plan_sha256") != plan.digest:
+                recorded_plan = self._load_recorded_plan(state, claim)
+                if (
+                    recorded_plan is None
+                    or pending.get("plan_sha256") != recorded_plan.digest
+                ):
+                    _fail(
+                        "pending output transaction does not match an authorized plan"
+                    )
+                recovery_plan = recorded_plan
+            self._apply_pending(state, recovery_plan, claim, pending, directory)
         for directory in transaction_directories:
             if directory.exists():
                 _durable_rmtree(directory)
@@ -1466,9 +1522,17 @@ class OutputCoordinator:
     ) -> None:
         if (
             set(pending)
-            != {"base_generation", "entries", "id", "new_snapshot", "version"}
+            != {
+                "base_generation",
+                "entries",
+                "id",
+                "new_snapshot",
+                "plan_sha256",
+                "version",
+            }
             or pending["version"] != PROTOCOL_VERSION
             or pending["id"] != transaction_directory.name
+            or pending["plan_sha256"] != plan.digest
             or not isinstance(pending["entries"], list)
             or not isinstance(pending["base_generation"], int)
             or pending["base_generation"] < 0
@@ -1597,6 +1661,10 @@ class OutputCoordinator:
             else:
                 if transfer is not None:
                     _fail("publication transaction unexpectedly contains a transfer")
+                if planned_targets.get(relative) != target:
+                    _fail(
+                        "publication transaction does not match the current output plan"
+                    )
                 if not _is_sha256(str(after)) or not isinstance(entry["payload"], str):
                     _fail("pending transaction contains an invalid replacement hash")
                 if entry["payload"] != f"{index:08d}.payload":
@@ -1788,7 +1856,7 @@ class OutputCoordinator:
 
     @staticmethod
     def _require_requested_root(requested: Path, recorded: Path) -> None:
-        if project_path(requested) != project_path(recorded):
+        if not _same_physical_path(project_path(requested), project_path(recorded)):
             _fail(
                 "requested output root does not match the physical root recorded by the claim: "
                 f"{requested}"
