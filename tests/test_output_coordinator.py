@@ -784,6 +784,41 @@ def test_hard_link_is_transferred_as_a_distinct_snapshot_entry(tmp_path: Path) -
     assert new_output.read_bytes() == b"// second\n"
 
 
+def test_retirement_does_not_transfer_into_an_already_owned_hard_link(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path,
+        root,
+        build,
+        ((target, "kept.protocyte.hpp"), (target, "old.protocyte.hpp")),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, "kept.protocyte.hpp", b"// same\n")
+    _stage(staging, "old.protocyte.hpp", b"// same\n")
+    engine.publish(first, target, staging)
+    kept = root / "kept.protocyte.hpp"
+    old = root / "old.protocyte.hpp"
+    kept.unlink()
+    os.link(old, kept)
+    second = _write_plan(
+        plan_path, root, build, ((target, "kept.protocyte.hpp"),)
+    )
+
+    engine.reconcile(second)
+
+    assert kept.read_bytes() == b"// same\n"
+    assert not old.exists()
+    assert set(_snapshot(lock_root, root)["entries"]) == {"kept.protocyte.hpp"}
+
+
 def test_tampered_durable_payload_fails_closed_without_publication(
     tmp_path: Path,
 ) -> None:

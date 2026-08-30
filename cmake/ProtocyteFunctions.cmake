@@ -1452,6 +1452,7 @@ function(_protocyte_finalize_output_plans)
         list(APPEND plans_to_reconcile "${plan_file}")
     endforeach()
 
+    set(retired_plans)
     foreach(prior_plan IN LISTS prior_plans)
         cmake_path(GET prior_plan STEM prior_plan_key)
         list(FIND current_plan_keys "${prior_plan_key}" current_plan_index)
@@ -1477,8 +1478,9 @@ function(_protocyte_finalize_output_plans)
             "${prior_plan}"
             "${prior_plan_header}\n${prior_plan_root}\n${prior_plan_build_root}\n"
         )
-        list(APPEND plans_to_reconcile "${prior_plan}")
+        list(APPEND retired_plans "${prior_plan}")
     endforeach()
+    list(PREPEND plans_to_reconcile ${retired_plans})
 
     foreach(plan_file IN LISTS plans_to_reconcile)
         execute_process(

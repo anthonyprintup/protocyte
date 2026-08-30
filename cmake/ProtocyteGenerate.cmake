@@ -158,39 +158,63 @@ if(
     message(FATAL_ERROR "Protocyte output coordinator is missing or unsafe")
 endif()
 
-_protocyte_run_coordinator(reconcile recovery_result recovery_output recovery_error)
-if(NOT "${recovery_result}" STREQUAL "0")
-    string(STRIP "${recovery_error}" recovery_error)
-    message(
-        FATAL_ERROR
-        "Protocyte could not recover or reconcile output state before generation.\n${recovery_error}"
+if(NOT PROTOCYTE_GENERATION_LOCK_HELD)
+    _protocyte_run_coordinator(reconcile recovery_result recovery_output recovery_error)
+    if(NOT "${recovery_result}" STREQUAL "0")
+        string(STRIP "${recovery_error}" recovery_error)
+        message(
+            FATAL_ERROR
+            "Protocyte could not recover or reconcile output state before generation.\n${recovery_error}"
+        )
+    endif()
+    set(
+        locked_generation_command
+        "${CMAKE_COMMAND}"
+        "-DPROTOCYTE_GENERATION_LOCK_HELD=TRUE"
+        "-DPROTOC_EXECUTABLE=${PROTOC_EXECUTABLE}"
+        "-DARGUMENT_FILE=${ARGUMENT_FILE}"
+        "-DGENERATION_TARGET=${GENERATION_TARGET}"
+        "-DGENERATION_WORKING_DIRECTORY=${GENERATION_WORKING_DIRECTORY}"
+        "-DLOCK_DIRECTORY=${LOCK_DIRECTORY}"
+        "-DOUTPUT_DIRECTORY=${OUTPUT_DIRECTORY}"
+        "-DSTAGING_OUTPUT_DIRECTORY=${STAGING_OUTPUT_DIRECTORY}"
+        "-DOUTPUT_PLAN=${OUTPUT_PLAN}"
+        "-DOUTPUT_TARGET_ID=${OUTPUT_TARGET_ID}"
+        "-DOUTPUT_COORDINATOR_PYTHON=${OUTPUT_COORDINATOR_PYTHON}"
+        "-DOUTPUT_COORDINATOR_SCRIPT=${OUTPUT_COORDINATOR_SCRIPT}"
+        "-DSOURCE_DIRECTORY_HEX=${SOURCE_DIRECTORY_HEX}"
+        "-DPROTOCYTE_MANAGED_PLUGIN=${PROTOCYTE_MANAGED_PLUGIN}"
+        "-DPROTOCYTE_TOOL_TIMEOUT_SECONDS=${PROTOCYTE_TOOL_TIMEOUT_SECONDS}"
+        -P "${CMAKE_CURRENT_LIST_FILE}"
     )
+    string(HEX "$ENV{PYTHONPATH}" locked_pythonpath_hex)
+    string(HEX "$ENV{PYTHONHOME}" locked_pythonhome_hex)
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "PROTOCYTE_LOCKED_PYTHONPATH_HEX=${locked_pythonpath_hex}"
+            "PROTOCYTE_LOCKED_PYTHONHOME_HEX=${locked_pythonhome_hex}"
+            --unset=PYTHONHOME --unset=PYTHONPATH
+            "${OUTPUT_COORDINATOR_PYTHON}"
+            "${OUTPUT_COORDINATOR_SCRIPT}"
+            run-generation
+            --lock-root "${LOCK_DIRECTORY}"
+            --plan "${OUTPUT_PLAN}"
+            --exec ${locked_generation_command}
+        RESULT_VARIABLE locked_generation_result
+        OUTPUT_VARIABLE locked_generation_output
+        ERROR_VARIABLE locked_generation_error
+        ENCODING UTF-8
+    )
+    if(NOT "${locked_generation_result}" STREQUAL "0")
+        message(
+            FATAL_ERROR
+            "Protocyte locked generation failed.\n${locked_generation_output}${locked_generation_error}"
+        )
+    endif()
+    return()
 endif()
 
-_protocyte_run_coordinator(
-    generation-lock-path
-    generation_lock_path_result
-    GENERATION_LOCK_FILE
-    generation_lock_path_error
-)
-if(NOT "${generation_lock_path_result}" STREQUAL "0")
-    string(STRIP "${generation_lock_path_error}" generation_lock_path_error)
-    message(FATAL_ERROR "Protocyte could not derive its generation lock.\n${generation_lock_path_error}")
-endif()
-string(STRIP "${GENERATION_LOCK_FILE}" GENERATION_LOCK_FILE)
-cmake_path(GET GENERATION_LOCK_FILE PARENT_PATH generation_lock_parent)
-file(MAKE_DIRECTORY "${generation_lock_parent}")
-file(
-    LOCK "${GENERATION_LOCK_FILE}"
-    GUARD PROCESS
-    RESULT_VARIABLE generation_lock_result
-)
-if(NOT "${generation_lock_result}" STREQUAL "0")
-    message(
-        FATAL_ERROR
-        "Protocyte could not acquire the output-root generation lock: ${generation_lock_result}"
-    )
-endif()
 _protocyte_run_coordinator(validate validation_result validation_output validation_error)
 if(NOT "${validation_result}" STREQUAL "0")
     string(STRIP "${validation_error}" validation_error)

@@ -25,6 +25,7 @@ import os
 import secrets
 import shutil
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -667,6 +668,22 @@ def _decode_hex(value: str) -> str:
     return decoded
 
 
+def _generation_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for name in ("PYTHONPATH", "PYTHONHOME"):
+        encoded_name = f"PROTOCYTE_LOCKED_{name}_HEX"
+        encoded = environment.pop(encoded_name, "")
+        try:
+            value = bytes.fromhex(encoded).decode("utf-8")
+        except (ValueError, UnicodeError) as error:
+            _fail(f"locked generation environment is malformed: {error}")
+        if value:
+            environment[name] = value
+        else:
+            environment.pop(name, None)
+    return environment
+
+
 class OutputCoordinator:
     def __init__(self, lock_root: Path) -> None:
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
@@ -1176,7 +1193,9 @@ class OutputCoordinator:
                         f"{relative}"
                     )
                 if linked_desired:
-                    hard_link_moves[relative] = linked_desired[0]
+                    destination = linked_desired[0]
+                    if destination not in snapshot["entries"]:
+                        hard_link_moves[relative] = destination
         if not removals:
             return snapshot
         new_entries = dict(snapshot["entries"])
@@ -1552,8 +1571,8 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
         "command",
         choices=(
             "encode-build-root",
-            "generation-lock-path",
             "reconcile",
+            "run-generation",
             "target-outputs",
             "validate",
             "publish",
@@ -1567,6 +1586,7 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--target")
     parser.add_argument("--staging-root", type=Path)
     parser.add_argument("--expected-claim")
+    parser.add_argument("--exec", dest="execution", nargs=argparse.REMAINDER)
     return parser.parse_args(arguments)
 
 
@@ -1588,9 +1608,16 @@ def main(arguments: Sequence[str] | None = None) -> int:
             plan = coordinator.plan_for_root(options.output_root)
         else:
             _fail(f"{options.command} requires --plan")
-        if options.command == "generation-lock-path":
-            print(coordinator._generation_lock(plan.root))
-        elif options.command == "target-outputs":
+        if options.command == "run-generation":
+            if not options.execution:
+                _fail("run-generation requires --exec")
+            with FileLock(coordinator._generation_lock(plan.root)):
+                return subprocess.run(
+                    options.execution,
+                    check=False,
+                    env=_generation_environment(),
+                ).returncode
+        if options.command == "target-outputs":
             if options.target is None or not _is_sha256(options.target):
                 _fail("target-outputs requires a valid --target")
             outputs = [

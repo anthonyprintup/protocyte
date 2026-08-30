@@ -230,6 +230,28 @@ def test_reconfigure_retires_interrupted_staging_for_a_removed_target(
     assert not staging.exists()
 
 
+def test_reconfigure_moves_a_target_between_sibling_output_roots(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "project"
+    build = tmp_path / "build"
+    first_output = tmp_path / "first-generated"
+    second_output = tmp_path / "second-generated"
+    locks = tmp_path / "locks"
+    _write_out_dir_owner_project(source, first_output, output_lock_root=locks)
+    assert _configure(source, build).returncode == 0
+    assert _build_out_dir_owner_project(build).returncode == 0
+    _write_out_dir_owner_project(source, second_output, output_lock_root=locks)
+
+    reconfigured = _configure(source, build)
+    rebuilt = _build_out_dir_owner_project(build)
+
+    assert reconfigured.returncode == 0, reconfigured.stdout + reconfigured.stderr
+    assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
+    assert not list(first_output.rglob("*.protocyte.*"))
+    assert (second_output / "demo_0.protocyte.hpp").is_file()
+
+
 def test_build_root_is_physical_when_configured_through_a_directory_link(
     tmp_path: Path,
 ) -> None:
