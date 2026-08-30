@@ -1882,7 +1882,10 @@ def test_cmake_generation_uses_utf8_response_file_and_preserves_style_root() -> 
         in functions
     )
     assert '"@${ARGUMENT_FILE}"' in generation_script
-    assert "_protocyte_run_coordinator(reconcile" in generation_script
+    assert "run-generation" in generation_script
+    assert '--output-root "${OUTPUT_DIRECTORY}"' in generation_script
+    assert "_protocyte_run_coordinator(reconcile" not in generation_script
+    assert "_protocyte_run_coordinator(validate" in generation_script
     assert "publish\n    publication_result" in generation_script
     assert 'WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"' in generation_command
     assert (
