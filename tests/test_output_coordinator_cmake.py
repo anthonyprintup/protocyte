@@ -326,6 +326,85 @@ def test_public_reset_rejects_duplicate_single_value_keywords(tmp_path: Path) ->
     )
 
 
+def test_coordinator_skips_an_inherited_incompatible_python(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source = tmp_path / "project"
+    source.mkdir()
+    result_file = tmp_path / "resolved.txt"
+    (source / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(coordinator_python LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake" / "ProtocyteFunctions.cmake").as_posix()}")',
+                'set(Python3_EXECUTABLE "${CMAKE_COMMAND}")',
+                "_protocyte_resolve_output_coordinator_python(resolved_python)",
+                f'file(WRITE "{result_file.as_posix()}" "${{resolved_python}}")',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    configured = subprocess.run(
+        ["cmake", "-S", str(source), "-B", str(tmp_path / "build")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert Path(result_file.read_text(encoding="utf-8")).resolve() != Path(
+        shutil.which("cmake") or ""
+    ).resolve()
+
+
+def test_reconfigure_discards_an_already_released_retired_plan(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source = tmp_path / "project"
+    build = tmp_path / "build"
+    first_output = tmp_path / "first-generated"
+    second_output = tmp_path / "second-generated"
+    locks = tmp_path / "locks"
+    _write_out_dir_owner_project(source, first_output, output_lock_root=locks)
+    assert _configure(source, build).returncode == 0
+    assert _build_out_dir_owner_project(build).returncode == 0
+    _write_out_dir_owner_project(source, second_output, output_lock_root=locks)
+    assert _configure(source, build).returncode == 0
+    plan_root = build / "CMakeFiles" / "protocyte-output-plans"
+    retired_plan = next(
+        plan
+        for plan in plan_root.glob("*.plan")
+        if "output=" not in plan.read_text(encoding="ascii")
+    )
+    token = retired_plan.with_suffix(".plan.claim-token").read_text().strip()
+    coordinator_script = repo_root / "cmake" / "ProtocyteOutputCoordinator.py"
+    reset = subprocess.run(
+        [
+            sys.executable,
+            str(coordinator_script),
+            "reset",
+            "--lock-root",
+            str(locks),
+            "--plan",
+            str(retired_plan),
+            "--expected-claim",
+            token,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert reset.returncode == 0, reset.stdout + reset.stderr
+
+    reconfigured = _configure(source, build)
+
+    assert reconfigured.returncode == 0, reconfigured.stdout + reconfigured.stderr
+    assert not retired_plan.exists()
+
+
 def test_build_root_is_physical_when_configured_through_a_directory_link(
     tmp_path: Path,
 ) -> None:

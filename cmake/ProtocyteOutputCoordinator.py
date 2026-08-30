@@ -636,6 +636,11 @@ def _validate_staging_path(
                 "output plan target metadata contains an unexpected staging directory: "
                 f"{path}"
             )
+        if _contains(root, path) or _contains(path, root):
+            _fail(
+                "output plan generation staging overlaps its own output root: "
+                f"{path} and {root}"
+            )
     return path
 
 
@@ -696,7 +701,7 @@ class OutputCoordinator:
 
     def reconcile_set(
         self, retired: Sequence[Plan], current: Sequence[Plan]
-    ) -> list[str]:
+    ) -> list[str | None]:
         if not current and not retired:
             _fail("reconcile-set requires at least one plan")
         plans = [*retired, *current]
@@ -714,11 +719,20 @@ class OutputCoordinator:
                 self._validate_registry(plan, retiring_root_keys)
             states: dict[str, Path] = {}
             existing_plans: list[Plan] = []
-            for plan in retired:
+            active_retired: set[int] = set()
+            for index, plan in enumerate(retired):
                 state = self._state_directory(plan.root)
+                claim_path = state / "claim.json"
+                if not claim_path.exists():
+                    continue
+                claim = _load_json(claim_path, "output claim")
+                self._validate_claim_shape(claim, claim_path)
+                if str(claim["build_id"]) != plan.build_id:
+                    continue
                 self._load_claim(state, plan)
                 states[_path_key(plan.root)] = state
                 existing_plans.append(plan)
+                active_retired.add(index)
             for plan in current:
                 state = self._state_directory(plan.root)
                 claim_path = state / "claim.json"
@@ -736,10 +750,15 @@ class OutputCoordinator:
                 state = states[_path_key(plan.root)]
                 if not (state / "claim.json").exists():
                     self._initialize_claim_locked(state, plan)
-            return [
-                self._reconcile_locked(states[_path_key(plan.root)], plan)
-                for plan in plans
-            ]
+            results: list[str | None] = []
+            for index, plan in enumerate(plans):
+                if index < len(retired) and index not in active_retired:
+                    results.append(None)
+                else:
+                    results.append(
+                        self._reconcile_locked(states[_path_key(plan.root)], plan)
+                    )
+            return results
 
     def _reconcile_locked(self, state: Path, plan: Plan) -> str:
         claim = self._load_claim(state, plan)
@@ -1702,7 +1721,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             current = [Plan.read(path) for path in options.current_plan]
             retired = [Plan.read(path) for path in options.retired_plan]
             for token in coordinator.reconcile_set(retired, current):
-                print(token)
+                print(token if token is not None else "released")
             return 0
         if options.command == "run-generation":
             if options.output_root is None or options.plan is None:

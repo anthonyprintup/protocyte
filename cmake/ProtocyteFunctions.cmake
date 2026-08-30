@@ -1230,51 +1230,74 @@ function(_protocyte_schedule_owned_output_cleanup)
     )
 endfunction()
 
-function(_protocyte_resolve_output_coordinator_python out_var)
-    _protocyte_get_internal(coordinator_python HOST_PYTHON_EXECUTABLE)
-    if(
-        "${coordinator_python}" STREQUAL ""
-        AND DEFINED Python3_EXECUTABLE
-        AND NOT "${Python3_EXECUTABLE}" STREQUAL ""
-    )
-        set(coordinator_python "${Python3_EXECUTABLE}")
-    endif()
-    if("${coordinator_python}" STREQUAL "")
-        # An explicit plugin does not otherwise require CMake's Python package.
-        # The coordinator is a standalone script, so a PATH interpreter is a
-        # sufficient implementation dependency even when package discovery is
-        # intentionally disabled by the consumer.
-        unset(coordinator_python)
-        find_program(
-            coordinator_python
-            NAMES python3 python
-            NO_CACHE
-        )
-    endif()
-    if("${coordinator_python}" STREQUAL "")
-        if(CMAKE_DISABLE_FIND_PACKAGE_Python3)
-            message(
-                FATAL_ERROR
-                "Protocyte's output coordinator requires Python 3.12 or newer. "
-                "No interpreter was found on PATH while Python3 package discovery is disabled."
-            )
-        endif()
-        find_package(Python3 3.12 COMPONENTS Interpreter REQUIRED)
-        set(coordinator_python "${Python3_EXECUTABLE}")
+function(_protocyte_python_is_coordinator_compatible out_var executable)
+    if("${executable}" STREQUAL "")
+        set(${out_var} FALSE PARENT_SCOPE)
+        return()
     endif()
     execute_process(
         COMMAND
             "${CMAKE_COMMAND}" -E env --unset=PYTHONHOME --unset=PYTHONPATH
-            "${coordinator_python}" -c
+            "${executable}" -c
             "import sys; raise SystemExit(sys.version_info < (3, 12))"
-        RESULT_VARIABLE coordinator_python_result
-        ERROR_VARIABLE coordinator_python_error
+        RESULT_VARIABLE compatible_result
+        OUTPUT_QUIET
+        ERROR_QUIET
     )
-    if(NOT "${coordinator_python_result}" STREQUAL "0")
+    if("${compatible_result}" STREQUAL "0")
+        set(${out_var} TRUE PARENT_SCOPE)
+    else()
+        set(${out_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(_protocyte_find_coordinator_python_package out_var)
+    set(Python3_EXECUTABLE "")
+    unset(Python3_FOUND)
+    find_package(Python3 3.12 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        set(${out_var} "${Python3_EXECUTABLE}" PARENT_SCOPE)
+    else()
+        set(${out_var} "" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(_protocyte_resolve_output_coordinator_python out_var)
+    _protocyte_get_internal(internal_python HOST_PYTHON_EXECUTABLE)
+    set(coordinator_python_candidates "${internal_python}")
+    if(DEFINED Python3_EXECUTABLE)
+        list(APPEND coordinator_python_candidates "${Python3_EXECUTABLE}")
+    endif()
+    unset(path_python)
+    find_program(
+        path_python
+        NAMES python3.14 python3.13 python3.12 python3 python
+        NO_CACHE
+    )
+    list(APPEND coordinator_python_candidates "${path_python}")
+    list(REMOVE_DUPLICATES coordinator_python_candidates)
+    set(coordinator_python "")
+    foreach(candidate IN LISTS coordinator_python_candidates)
+        _protocyte_python_is_coordinator_compatible(candidate_is_compatible "${candidate}")
+        if(candidate_is_compatible)
+            set(coordinator_python "${candidate}")
+            break()
+        endif()
+    endforeach()
+    if("${coordinator_python}" STREQUAL "" AND NOT CMAKE_DISABLE_FIND_PACKAGE_Python3)
+        _protocyte_find_coordinator_python_package(package_python)
+        _protocyte_python_is_coordinator_compatible(
+            package_python_is_compatible "${package_python}"
+        )
+        if(package_python_is_compatible)
+            set(coordinator_python "${package_python}")
+        endif()
+    endif()
+    if("${coordinator_python}" STREQUAL "")
         message(
             FATAL_ERROR
-            "Protocyte's output coordinator requires Python 3.12 or newer: "
-            "${coordinator_python_error}"
+            "Protocyte's output coordinator requires Python 3.12 or newer, but no compatible "
+            "interpreter was found through Protocyte, Python3_EXECUTABLE, PATH, or FindPython3."
         )
     endif()
     set_property(
@@ -1524,6 +1547,7 @@ function(_protocyte_finalize_output_plans)
     set(plans_to_reconcile ${retired_plans} ${current_plans})
     set(token_destinations ${retired_plan_destinations} ${current_plans})
     list(LENGTH plans_to_reconcile plan_count)
+    list(LENGTH retired_plans retired_plan_count)
     list(LENGTH claim_tokens token_count)
     if(NOT token_count EQUAL plan_count)
         message(FATAL_ERROR "Protocyte output coordinator returned an invalid claim token set")
@@ -1533,6 +1557,10 @@ function(_protocyte_finalize_output_plans)
         foreach(plan_index RANGE 0 ${last_plan_index})
             list(GET claim_tokens ${plan_index} claim_token)
             list(GET token_destinations ${plan_index} token_destination)
+            if(claim_token STREQUAL "released" AND plan_index LESS retired_plan_count)
+                file(REMOVE "${token_destination}" "${token_destination}.claim-token")
+                continue()
+            endif()
             string(LENGTH "${claim_token}" claim_token_length)
             if(NOT claim_token MATCHES "^[0-9a-f]+$" OR NOT claim_token_length EQUAL 64)
                 message(FATAL_ERROR "Protocyte output coordinator returned an invalid claim token")
@@ -1542,13 +1570,17 @@ function(_protocyte_finalize_output_plans)
             )
         endforeach()
     endif()
-    list(LENGTH retired_plans retired_plan_count)
     if(retired_plan_count GREATER 0)
         math(EXPR last_retired_index "${retired_plan_count} - 1")
         foreach(retired_index RANGE 0 ${last_retired_index})
             list(GET retired_plans ${retired_index} retired_plan)
             list(GET retired_plan_destinations ${retired_index} retired_destination)
-            file(RENAME "${retired_plan}" "${retired_destination}")
+            list(GET claim_tokens ${retired_index} retired_claim_token)
+            if(retired_claim_token STREQUAL "released")
+                file(REMOVE "${retired_plan}")
+            else()
+                file(RENAME "${retired_plan}" "${retired_destination}")
+            endif()
         endforeach()
     endif()
 endfunction()

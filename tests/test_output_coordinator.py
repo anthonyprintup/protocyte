@@ -877,6 +877,21 @@ def test_staging_cannot_contain_the_coordinator_lock_root(tmp_path: Path) -> Non
         engine.reconcile(plan)
 
 
+def test_output_root_cannot_contain_its_derived_staging_directory(
+    tmp_path: Path,
+) -> None:
+    filesystem_root = Path(tmp_path.anchor)
+    target = _target("demo")
+
+    with pytest.raises(coordinator.CoordinatorError, match="overlaps its own"):
+        _write_plan(
+            tmp_path / "plan",
+            filesystem_root,
+            tmp_path / "build",
+            ((target, "demo.protocyte.hpp"),),
+        )
+
+
 def test_run_generation_locks_the_requested_root_before_reading_the_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
