@@ -819,6 +819,64 @@ def test_retirement_does_not_transfer_into_an_already_owned_hard_link(
     assert set(_snapshot(lock_root, root)["entries"]) == {"kept.protocyte.hpp"}
 
 
+def test_case_distinct_modified_retirement_does_not_block_publication(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generated"
+    root.mkdir()
+    upper = root / "Foo.protocyte.hpp"
+    lower = root / "foo.protocyte.hpp"
+    upper.write_bytes(b"probe\n")
+    if lower.exists():
+        pytest.skip("filesystem does not support case-distinct output paths")
+    upper.unlink()
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path, root, build, ((target, "Foo.protocyte.hpp"),)
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    _stage(staging, "Foo.protocyte.hpp", b"// generated\n")
+    engine.publish(first, target, staging)
+    upper.write_bytes(b"// modified\n")
+    second = _write_plan(
+        plan_path, root, build, ((target, "foo.protocyte.hpp"),)
+    )
+    engine.reconcile(second)
+    replacement = _staging(second, target)
+    _stage(replacement, "foo.protocyte.hpp", b"// replacement\n")
+
+    engine.publish(second, target, replacement)
+
+    assert upper.read_bytes() == b"// modified\n"
+    assert lower.read_bytes() == b"// replacement\n"
+    assert set(_snapshot(lock_root, root)["entries"]) == {
+        "Foo.protocyte.hpp",
+        "foo.protocyte.hpp",
+    }
+
+
+def test_staging_cannot_contain_the_coordinator_lock_root(tmp_path: Path) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    lock_root = plan.staging_for_target(target) / "locks-v1"
+    engine = coordinator.OutputCoordinator(lock_root)
+
+    with pytest.raises(coordinator.CoordinatorError, match="staging contains"):
+        engine.reconcile(plan)
+
+
 def test_tampered_durable_payload_fails_closed_without_publication(
     tmp_path: Path,
 ) -> None:

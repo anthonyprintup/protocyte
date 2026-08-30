@@ -986,6 +986,12 @@ class OutputCoordinator:
         return state
 
     def _validate_registry(self, plan: Plan) -> None:
+        for target in plan.targets:
+            if _contains(target.staging, self.lock_root):
+                _fail(
+                    "generation staging contains the output coordinator lock root: "
+                    f"{target.staging} and {self.lock_root}"
+                )
         roots = self.lock_root / "roots"
         if not os.path.lexists(roots):
             return
@@ -1343,20 +1349,20 @@ class OutputCoordinator:
                 _fail("pending transaction contains an invalid prior hash")
             if not _is_sha256(str(target)):
                 _fail("pending transaction contains an invalid target identity")
-            previous_paths = [
-                path for path in expected_entries if path.casefold() == portable_relative
-            ]
+            previous_path, previous_entry = self._snapshot_entry_for_path(
+                plan.root, expected_entries, relative
+            )
             if before is None:
-                if previous_paths:
+                if previous_path is not None:
                     _fail("pending transaction omits the committed prior state")
             elif (
-                len(previous_paths) != 1
-                or expected_entries[previous_paths[0]]["sha256"] != before
+                previous_path is None
+                or previous_entry is None
+                or previous_entry["sha256"] != before
             ):
                 _fail("pending transaction conflicts with the committed prior state")
-            previous_entry = (
-                expected_entries.pop(previous_paths[0]) if previous_paths else None
-            )
+            if previous_path is not None:
+                previous_entry = expected_entries.pop(previous_path)
             payload: Path | None = None
             if after is None:
                 if entry["payload"] is not None:
