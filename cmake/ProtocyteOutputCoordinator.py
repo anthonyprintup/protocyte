@@ -171,6 +171,27 @@ def _contains(parent: Path, child: Path) -> bool:
     )
 
 
+def _same_physical_path(first: Path, second: Path) -> bool:
+    if first == second:
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _existing_file_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        if _is_link(path):
+            return None
+        observed = path.stat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(observed.st_mode):
+        return None
+    return observed.st_dev, observed.st_ino
+
+
 def _validate_relative_path(value: str) -> str:
     if "\\" in value:
         value = value.replace("\\", "/")
@@ -731,8 +752,8 @@ class OutputCoordinator:
                 claim_build_root = project_path(Path(str(claim["build_root"])))
                 if (
                     str(claim["build_id"]) != plan.build_id
-                    or claim_root != plan.root
-                    or claim_build_root != plan.build_root
+                    or not _same_physical_path(claim_root, plan.root)
+                    or not _same_physical_path(claim_build_root, plan.build_root)
                 ):
                     continue
                 self._load_claim(state, plan)
@@ -1198,19 +1219,16 @@ class OutputCoordinator:
         claim_path = state / "claim.json"
         claim = _load_json(claim_path, "output claim")
         self._validate_claim_shape(claim, claim_path)
-        if claim["root_key"] != _path_key(plan.root) or project_path(
-            Path(claim["root"])
-        ) != project_path(plan.root):
+        recorded_root = project_path(Path(claim["root"]))
+        requested_root = project_path(plan.root)
+        if claim["root_key"] != _path_key(plan.root) or not _same_physical_path(
+            recorded_root, requested_root
+        ):
             _fail(
                 f"output claim does not identify the requested physical root: {claim_path}"
             )
         recorded_build = Path(claim["build_root"])
-        same_build = recorded_build == plan.build_root
-        if not same_build:
-            try:
-                same_build = os.path.samefile(recorded_build, plan.build_root)
-            except OSError:
-                same_build = False
+        same_build = _same_physical_path(recorded_build, plan.build_root)
         if claim["build_id"] != plan.build_id or not same_build:
             _fail(
                 "output root is claimed by a different CMake build tree; use the owning build or reset "
@@ -1300,24 +1318,30 @@ class OutputCoordinator:
         snapshot: dict[str, Any],
     ) -> dict[str, Any]:
         desired = {output.relative for output in plan.outputs}
+        desired_by_portable = {relative.casefold(): relative for relative in desired}
+        desired_paths = {
+            relative: _output_path(plan.root, relative) for relative in desired
+        }
+        desired_by_identity: dict[tuple[int, int], list[str]] = {}
+        for relative, path in desired_paths.items():
+            identity = _existing_file_identity(path)
+            if identity is not None:
+                desired_by_identity.setdefault(identity, []).append(relative)
         removals: list[str] = []
         hard_link_moves: dict[str, str] = {}
         for relative in snapshot["entries"]:
             if relative in desired:
                 continue
-            aliased = any(
-                self._case_spelling_alias(plan.root, relative, item) for item in desired
+            portable_match = desired_by_portable.get(relative.casefold())
+            aliased = portable_match is not None and self._case_spelling_alias(
+                plan.root, relative, portable_match
             )
             if not aliased:
                 removals.append(relative)
-                linked_desired = [
-                    item
-                    for item in desired
-                    if self._same_existing_file(
-                        _output_path(plan.root, relative),
-                        _output_path(plan.root, item),
-                    )
-                ]
+                identity = _existing_file_identity(_output_path(plan.root, relative))
+                linked_desired = (
+                    desired_by_identity.get(identity, []) if identity is not None else []
+                )
                 if len(linked_desired) > 1:
                     _fail(
                         "retired generated output has multiple desired hard-link destinations: "
@@ -1461,10 +1485,9 @@ class OutputCoordinator:
                     f"pending output transaction contains a malformed entry: {transaction_directory}"
                 )
             relative = _validate_relative_path(str(entry["path"]))
-            portable_relative = relative.casefold()
-            if portable_relative in seen_paths:
+            if relative in seen_paths:
                 _fail("pending transaction repeats a generated path")
-            seen_paths.add(portable_relative)
+            seen_paths.add(relative)
             destination = _output_path(plan.root, relative)
             before = entry["before"]
             after = entry["after"]
@@ -1612,15 +1635,6 @@ class OutputCoordinator:
             _fail(
                 f"generated output bytes are not owned by the committed snapshot: {path}"
             )
-
-    @staticmethod
-    def _same_existing_file(first: Path, second: Path) -> bool:
-        try:
-            return (
-                first.exists() and second.exists() and os.path.samefile(first, second)
-            )
-        except OSError:
-            return False
 
     @staticmethod
     def _case_spelling_alias(root: Path, first: str, second: str) -> bool:

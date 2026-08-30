@@ -858,6 +858,87 @@ def test_case_distinct_modified_retirement_does_not_block_publication(
         "Foo.protocyte.hpp",
         "foo.protocyte.hpp",
     }
+    upper.write_bytes(b"// generated\n")
+    retired = _write_plan(plan_path, root, build, ())
+
+    engine.reconcile(retired)
+
+    assert not upper.exists()
+    assert not lower.exists()
+    assert _snapshot(lock_root, root)["entries"] == {}
+
+
+def test_retirement_indexes_desired_files_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    output_count = 40
+    first = _write_plan(
+        plan_path,
+        root,
+        build,
+        tuple((target, f"old-{index}.protocyte.hpp") for index in range(output_count)),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    engine.reconcile(first)
+    staging = _staging(first, target)
+    for index in range(output_count):
+        _stage(staging, f"old-{index}.protocyte.hpp", f"// {index}\n".encode())
+    engine.publish(first, target, staging)
+    second = _write_plan(
+        plan_path,
+        root,
+        build,
+        tuple((target, f"new-{index}.protocyte.hpp") for index in range(output_count)),
+    )
+    identity_calls = 0
+    original_identity = coordinator._existing_file_identity
+
+    def count_identity(path: Path) -> tuple[int, int] | None:
+        nonlocal identity_calls
+        identity_calls += 1
+        return original_identity(path)
+
+    monkeypatch.setattr(coordinator, "_existing_file_identity", count_identity)
+
+    engine.reconcile(second)
+
+    assert identity_calls == output_count * 2
+
+
+@pytest.mark.skipif(os.name == "nt", reason="PosixPath equality is case-sensitive")
+def test_claim_accepts_a_case_only_alias_on_a_case_insensitive_filesystem(
+    tmp_path: Path,
+) -> None:
+    upper_root = tmp_path / "Generated"
+    upper_root.mkdir()
+    lower_root = tmp_path / "generated"
+    if not lower_root.exists():
+        pytest.skip("filesystem is case-sensitive")
+    build = tmp_path / "build"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    plan_path = tmp_path / "plan"
+    first = _write_plan(
+        plan_path,
+        upper_root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(first)
+    second = _write_plan(
+        plan_path,
+        lower_root,
+        build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+
+    assert engine.reconcile(second) == token
 
 
 def test_staging_cannot_contain_the_coordinator_lock_root(tmp_path: Path) -> None:
