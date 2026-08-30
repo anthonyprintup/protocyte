@@ -727,7 +727,13 @@ class OutputCoordinator:
                     continue
                 claim = _load_json(claim_path, "output claim")
                 self._validate_claim_shape(claim, claim_path)
-                if str(claim["build_id"]) != plan.build_id:
+                claim_root = project_path(Path(str(claim["root"])))
+                claim_build_root = project_path(Path(str(claim["build_root"])))
+                if (
+                    str(claim["build_id"]) != plan.build_id
+                    or claim_root != plan.root
+                    or claim_build_root != plan.build_root
+                ):
                     continue
                 self._load_claim(state, plan)
                 states[_path_key(plan.root)] = state
@@ -1092,6 +1098,19 @@ class OutputCoordinator:
                     "generation staging contains the output coordinator lock root: "
                     f"{target.staging} and {self.lock_root}"
                 )
+        internal_paths = (
+            self.lock_root / "roots",
+            self.lock_root / "generation",
+            self.lock_root / "publication",
+        )
+        if _contains(plan.root, self.lock_root) or any(
+            _contains(path, plan.root) or _contains(plan.root, path)
+            for path in internal_paths
+        ):
+            _fail(
+                "output root overlaps the output coordinator lock namespace: "
+                f"{plan.root} and {self.lock_root}"
+            )
         roots = self.lock_root / "roots"
         if not os.path.lexists(roots):
             return

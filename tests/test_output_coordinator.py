@@ -892,6 +892,57 @@ def test_output_root_cannot_contain_its_derived_staging_directory(
         )
 
 
+def test_output_root_cannot_overlap_the_coordinator_registry(tmp_path: Path) -> None:
+    lock_root = tmp_path / "locks-v1"
+    root = lock_root / "roots" / "generated"
+    target = _target("demo")
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        tmp_path / "build",
+        ((target, "demo.protocyte.hpp"),),
+    )
+
+    with pytest.raises(coordinator.CoordinatorError, match="lock namespace"):
+        coordinator.OutputCoordinator(lock_root).reconcile(plan)
+
+
+def test_retired_plan_ignores_a_case_distinct_physical_build_owner(
+    tmp_path: Path,
+) -> None:
+    upper_build = tmp_path / "Build"
+    lower_build = tmp_path / "build"
+    upper_build.mkdir()
+    if lower_build.exists():
+        pytest.skip("filesystem does not support case-distinct build paths")
+    lower_build.mkdir()
+    root = tmp_path / "generated"
+    lock_root = tmp_path / "locks-v1"
+    target = _target("demo")
+    old_plan_path = tmp_path / "old-plan"
+    old_plan = _write_plan(
+        old_plan_path,
+        root,
+        upper_build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(lock_root)
+    token = engine.reconcile(old_plan)
+    engine.reset(old_plan, token)
+    adopted = _write_plan(
+        tmp_path / "adopted-plan",
+        root,
+        lower_build,
+        ((target, "demo.protocyte.hpp"),),
+    )
+    engine.reconcile(adopted)
+    retired = _write_plan(old_plan_path, root, upper_build, ())
+
+    results = engine.reconcile_set((retired,), ())
+
+    assert results == [None]
+
+
 def test_run_generation_locks_the_requested_root_before_reading_the_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
