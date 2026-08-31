@@ -183,9 +183,10 @@ and cross-process locks serialize configuration and publication.
 
 Protocol v1 stores one immutable root claim, one authoritative committed
 snapshot, and at most one write-ahead publication transaction. The transaction
-contains durable replacement payloads. Recovery therefore rolls forward from
-declared intent instead of inferring state from a mixture of output files and
-per-file owner markers.
+contains its complete claim-bound authorizing plan and any durable replacement
+payloads. Recovery therefore rolls forward from the original declared intent,
+even across a later reconfiguration, instead of inferring state from a mixture
+of output files and per-file owner markers.
 
 Crash consistency covers directory topology as well as file contents. The
 coordinator persists the claim directory and initial snapshot before exposing
