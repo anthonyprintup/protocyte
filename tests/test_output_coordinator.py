@@ -86,6 +86,28 @@ def _assert_committed_invariants(lock_root: Path, root: Path) -> None:
     assert len(pending) <= 1
 
 
+def test_project_path_retries_when_an_existing_leaf_disappears(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    disappearing = tmp_path / "disappearing"
+    disappearing.mkdir()
+    original_resolve = Path.resolve
+    interrupted = False
+
+    def resolve_after_deletion(path: Path, strict: bool = False) -> Path:
+        nonlocal interrupted
+        if path == disappearing and strict and not interrupted:
+            interrupted = True
+            disappearing.rmdir()
+            raise FileNotFoundError(disappearing)
+        return original_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve_after_deletion)
+
+    assert coordinator.project_path(disappearing) == disappearing
+    assert interrupted
+
+
 def test_durable_directory_creation_resyncs_a_preexisting_retry_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

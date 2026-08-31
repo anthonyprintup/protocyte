@@ -112,33 +112,39 @@ def project_path(path: Path, *, leaf_may_be_file: bool = False) -> Path:
     """
 
     path = _require_absolute(path, "filesystem path")
-    existing = path
-    suffix: list[str] = []
-    while not os.path.lexists(existing):
-        if existing.parent == existing:
-            _fail(f"could not project filesystem path: {path}")
-        suffix.append(existing.name)
-        existing = existing.parent
-    for component in _existing_chain(existing):
-        if _is_link(component):
-            _fail(f"filesystem path contains a symbolic link or junction: {path}")
-    try:
-        mode = existing.stat().st_mode
-    except OSError as error:
-        _fail(f"could not inspect filesystem path {existing}: {error}")
-    if not stat.S_ISDIR(mode) and not (
-        leaf_may_be_file and existing == path and stat.S_ISREG(mode)
-    ):
-        _fail(f"filesystem path has a non-directory ancestor: {existing}")
-    try:
-        projected = existing.resolve(strict=True)
-    except OSError as error:
-        _fail(f"could not resolve filesystem path {existing}: {error}")
-    for name in reversed(suffix):
-        if name in ("", ".", ".."):
-            _fail(f"filesystem path contains an unsafe component: {path}")
-        projected /= name
-    return Path(os.path.normpath(projected))
+    for _ in range(8):
+        existing = path
+        suffix: list[str] = []
+        while not os.path.lexists(existing):
+            if existing.parent == existing:
+                _fail(f"could not project filesystem path: {path}")
+            suffix.append(existing.name)
+            existing = existing.parent
+        for component in _existing_chain(existing):
+            if _is_link(component):
+                _fail(f"filesystem path contains a symbolic link or junction: {path}")
+        try:
+            mode = existing.stat().st_mode
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            _fail(f"could not inspect filesystem path {existing}: {error}")
+        if not stat.S_ISDIR(mode) and not (
+            leaf_may_be_file and existing == path and stat.S_ISREG(mode)
+        ):
+            _fail(f"filesystem path has a non-directory ancestor: {existing}")
+        try:
+            projected = existing.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            _fail(f"could not resolve filesystem path {existing}: {error}")
+        for name in reversed(suffix):
+            if name in ("", ".", ".."):
+                _fail(f"filesystem path contains an unsafe component: {path}")
+            projected /= name
+        return Path(os.path.normpath(projected))
+    _fail(f"filesystem path changed repeatedly while it was being projected: {path}")
 
 
 def canonical_build_root(path: Path) -> Path:
