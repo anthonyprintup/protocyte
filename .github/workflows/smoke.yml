@@ -42,11 +42,11 @@ jobs:
 
       - name: Verify generated-output containment at the CMake floor
         run: >
-          uv run --with cmake==3.24.3 pytest -q -m cmake_integration
-          tests/test_cmake.py::test_generation_rejects_nested_output_directory_links
-          tests/test_cmake.py::test_retirement_rejects_nested_output_directory_links
-          tests/test_cmake.py::test_retirement_rechecks_containment_immediately_before_removal
-          tests/test_cmake.py::test_unsafe_current_output_reconfigure_preserves_cleanup_fingerprints
+          uv run --with cmake==3.24.3 pytest -q -m "cmake_integration or not cmake_integration"
+          tests/test_output_coordinator.py::test_link_inserted_below_output_root_cannot_redirect_publication
+          tests/test_output_coordinator.py::test_replaced_nested_lock_directory_is_rejected
+          tests/test_output_coordinator.py::test_hard_link_is_transferred_as_a_distinct_snapshot_entry
+          tests/test_output_coordinator_cmake.py::test_generation_inventory_is_literal_under_glob_metacharacter_build_path
 
       - name: Install prebuilt protoc for Windows argument transport
         id: windows-protoc

@@ -73,6 +73,26 @@ Automatically discovered protobuf imports remain associated with their
 compiler. Set `PROTOCYTE_PROTOBUF_IMPORT_DIR` explicitly when different
 compilers should intentionally share one import root.
 
+## `protocyte_reset_output_directory`
+
+```cmake
+protocyte_reset_output_directory(
+    OUT_DIR <absolute-or-resolvable-directory>
+    EXPECTED_CLAIM <64-character-claim-token>
+)
+```
+
+Explicitly releases a persistent protocol-v1 output claim. The claim token is
+written beside the owning build's plan under
+`CMakeFiles/protocyte-output-plans`. Stop all builds that can use the output
+first. Reset recovers pending publication, verifies every committed output,
+refuses modified or unknown generated-looking files, removes authenticated
+outputs, and releases the immutable claim last.
+
+The function uses `PROTOCYTE_OUTPUT_LOCK_ROOT` when set; it must match the
+namespace that owns the claim. This is a destructive administrative operation,
+not a normal configure step.
+
 ## `protocyte_generate`
 
 ```text
@@ -144,7 +164,8 @@ library.
 
 The codegen target's direct safety dependencies have stable logical names:
 
-- `<TARGET>__protocyte_ownership_guard`;
+- `<TARGET>__protocyte_output_claim`, an always-run validation that rejects a
+  stale configured build after ownership has been reset and transferred;
 - `<TARGET>__protocyte_import_guard` when source import topology requires a
   pre-build guard.
 
@@ -156,44 +177,75 @@ tools.
 ### Output ownership and transactions
 
 Generated files in one configure have exactly one current target owner,
-including portable case-insensitive path aliases. One canonical `OUT_DIR`
-belongs to one canonical CMake build tree. Trees may share the directory only
-when they have the same canonical identity; generation is protected by
-cross-process locks.
+including portable case-insensitive path aliases. One physical `OUT_DIR`
+belongs to one canonical CMake build path. Nested claimed roots are rejected,
+and cross-process locks serialize configuration and publication.
 
-Protocyte stores a hashed sibling `.owner` record for the output directory and
-a path-keyed record for every concrete generated file. The records contain a
-format version and SHA-256 identities, not private absolute paths.
+Protocol v1 stores one immutable root claim, one authoritative committed
+snapshot, and at most one write-ahead publication transaction. The transaction
+contains its complete claim-bound authorizing plan and any durable replacement
+payloads. Recovery therefore rolls forward from the original declared intent,
+even across a later reconfiguration, instead of inferring state from a mixture
+of output files and per-file owner markers.
 
-Configuration performs a read-only conflict preflight. The build revalidates
-the claims, runs `protoc` into a private staging directory, and validates every
-expected file before it publishes an ownership transaction or replaces a
-declared output. A `protoc` failure, timeout, or invalid staging result attempts
-to discard staging and publishes no new ownership claim. If cleanup refuses an
-unsafe staging path or cannot remove it, Protocyte warns that inert staging
-data outside `OUT_DIR` may remain; ownership claims and declared generated
-files stay unchanged. Configuration itself never publishes a claim.
+Crash consistency covers directory topology as well as file contents. The
+coordinator persists the claim directory and initial snapshot before exposing
+the claim, persists transaction directories and payloads before exposing
+pending intent, and persists output files plus every new ancestor directory
+before committing the replacement snapshot. Reset applies the inverse order:
+it first commits a durable reset intent, durably removes every authenticated
+output and disposable state, and then unlinks the immutable claim explicitly
+as the final ownership transition. An interrupted reset resumes from its
+intent while the claim remains visible; state left after claim removal is
+unowned cleanup data and cannot block a replacement claim.
+Retries repeat the relevant directory synchronization even when an interrupted
+operation already created or removed the entry.
 
-After staging succeeds, Protocyte durably commits the ownership transaction
-before publishing generated files. An interrupted publication is reconciled by
-a later build. A previously configured tree loses write access at its next
-build after a deliberate ownership transfer.
+The committed plan also records each target's private sibling staging
+directory. Reconfiguration durably removes staging owned by targets that left
+the plan before committing the replacement plan, and explicit reset removes
+all recorded staging before releasing the output-root claim. Staging paths are
+derived from the target identity and validated against the claimed output root;
+the coordinator never accepts an arbitrary cleanup path from plan metadata.
+Registry and output-tree enumeration is fail-closed: an unreadable or unsafe
+entry aborts claim acquisition or reset instead of being silently skipped.
+The coordinator is the sole source of output-root lock identities and target
+output inventory; CMake does not reproduce path hashing or maintain a mutable
+parallel manifest. An output-root generation lock serializes the complete
+staging cleanup, `protoc`, validation, and publication sequence across build
+processes. Plan reconciliation and reset acquire the same lock before touching
+staging, so configuration, generation, and explicit release share one lock
+order. Staging paths are registry reservations and cannot be claimed as output
+roots by another plan.
+
+Configuration reconciles interrupted work, commits the complete output plan,
+and retires only files whose bytes match the committed snapshot. The build
+runs `protoc` in a private sibling staging directory and validates every
+expected file before asking the coordinator to publish it. A compiler failure,
+timeout, or invalid staging result publishes no output transaction.
+
+After the durable transaction exists, publication may be interrupted after any
+file without losing intent. The next configure or build completes the same
+transaction from its durable payloads, commits the new snapshot, and removes
+the transaction. Modified retired outputs are preserved and remain recorded so
+an explicit reset fails closed rather than deleting user bytes.
 
 Protocyte fingerprints generated outputs and removes an unchanged file when
-its owner stops declaring it. Outputs from older records without fingerprints
-are preserved because user edits cannot be distinguished safely.
+its owner stops declaring it.
 
 `PROTOCYTE_OUTPUT_LOCK_ROOT` may select an absolute shared output-lock
 namespace. The default is the current user's cache directory. Different
 namespaces opt trees out of cross-tree collision detection and are unsafe for
 overlapping outputs.
 
-Deleting a build directory does not release its outputs. To transfer an
-`OUT_DIR`, stop every build that may use it, preserve needed files, and use the
-configure-time diagnostic to identify the exact output-directory and
-generated-file owner records. Remove only those listed records, then configure
-the new tree. Do not delete the whole output-lock namespace. `.lock` files
-contain no ownership state and may remain.
+Deleting and recreating the same canonical build path keeps the claim and is
+supported even when `OUT_DIR` is inside that build tree. Deleting a build tree
+does not transfer its claim to a different build path. Transfer requires an
+explicit, claim-token-authenticated reset after all related builds are stopped.
+The reset validates every recorded output and refuses modified or unknown
+generated-looking files before it removes outputs and the root claim. Do not
+delete the output-lock namespace or individual state files to transfer
+ownership.
 
 `RUNTIME_PREFIX` and `INCLUDE_PREFIX` are portable virtual directories. They
 must be normalized, relative, `/`-separated paths without `.` or `..`

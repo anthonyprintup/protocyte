@@ -156,23 +156,37 @@ Nonportable bytes in otherwise valid names are escaped as `~HH`. See [Code Gener
 
 ## `OUT_DIR` Belongs to Another Build Tree
 
-Generated output trees have persistent ownership records. Deleting a build directory does not silently transfer its output tree.
+Generated output trees have a persistent immutable claim. Deleting and recreating the same canonical build path retains the claim; a different build path cannot adopt it implicitly.
 
 To transfer ownership:
 
 1. stop every build that can use the output;
 2. preserve any generated files that were edited;
-3. read the configure or build diagnostic;
-4. remove only the exact owner records named by that diagnostic;
-5. reconfigure the new build tree.
+3. use the owning build's recorded claim token to run the explicit output reset;
+4. resolve any reset diagnostic about modified or unknown generated files;
+5. configure the new build tree.
 
-Do not delete the entire output-lock namespace or cache. `.lock` files carry no ownership state and may remain.
+Reset is intentionally fail-closed and releases the immutable claim only after validating and removing recorded outputs. Do not manually delete the output-lock namespace, claim, snapshot, or transaction files.
+
+Invoke the reset from a temporary CMake project that includes Protocyte, using
+the claim token recorded beside the owning build's file in
+`CMakeFiles/protocyte-output-plans`:
+
+```cmake
+protocyte_reset_output_directory(
+    OUT_DIR "/absolute/path/to/generated"
+    EXPECTED_CLAIM "<64-character claim token>"
+)
+```
+
+If the original project set `PROTOCYTE_OUTPUT_LOCK_ROOT`, set it to the same
+absolute directory before calling reset.
 
 See [CMake API Reference](https://github.com/anthonyprintup/protocyte/wiki/CMake-API-Reference) for the complete ownership contract.
 
 ## Failed Generation Left Staging Data
 
-Protocyte generates into private staging and validates outputs before publication. A compiler failure, timeout, or invalid result publishes no new ownership claim.
+Protocyte generates into private staging and validates outputs before publication. A compiler failure, timeout, or invalid result publishes no output transaction. If publication is interrupted after the durable write-ahead transaction is created, the next configure or build rolls it forward from its durable payloads.
 
 If cleanup refuses an unsafe path or cannot remove it, the diagnostic warns that inert staging data outside `OUT_DIR` may remain. Stop related processes and remove only the named staging path after inspecting it.
 

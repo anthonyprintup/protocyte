@@ -294,18 +294,16 @@ def test_cmake_reference_documents_ownership_staging_and_safe_transfer() -> None
     reference = _page("CMake-API-Reference")
     normalized = re.sub(r"\s+", " ", reference)
     for fragment in (
-        "Configuration performs a read-only conflict preflight",
-        "runs `protoc` into a private staging directory",
-        "before it publishes an ownership transaction",
-        "A `protoc` failure, timeout, or invalid staging result",
-        "attempts to discard staging",
-        "publishes no new ownership claim",
-        "cleanup refuses an unsafe staging path",
-        "inert staging data outside `OUT_DIR` may remain",
-        "ownership claims and declared generated files stay unchanged",
-        "Configuration itself never publishes a claim",
-        "Remove only those listed records",
-        "Do not delete the whole output-lock namespace",
+        "one immutable root claim",
+        "one authoritative committed snapshot",
+        "at most one write-ahead publication transaction",
+        "durable replacement payloads",
+        "Recovery therefore rolls forward",
+        "retires only files whose bytes match the committed snapshot",
+        "A compiler failure, timeout, or invalid staging result publishes no output transaction",
+        "Modified retired outputs are preserved",
+        "claim-token-authenticated reset",
+        "Do not delete the output-lock namespace",
     ):
         assert fragment in normalized
 
@@ -317,6 +315,7 @@ def test_cmake_reference_covers_every_public_helper_argument() -> None:
 
     helpers = (
         "protocyte_get_host_tools",
+        "protocyte_reset_output_directory",
         "protocyte_generate",
         "protocyte_add_proto_library",
         "protocyte_add_descriptor_set_library",
@@ -334,7 +333,8 @@ def test_cmake_reference_covers_every_public_helper_argument() -> None:
         declared_arguments: set[str] = set()
         argument_groups = (
             ("oneValueArgs",)
-            if helper == "protocyte_get_host_tools"
+            if helper
+            in {"protocyte_get_host_tools", "protocyte_reset_output_directory"}
             else ("options", "oneValueArgs", "multiValueArgs")
         )
         for group in argument_groups:
