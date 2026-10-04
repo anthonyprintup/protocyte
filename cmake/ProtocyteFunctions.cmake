@@ -10,6 +10,11 @@ set_property(
     PROPERTY PROTOCYTE_INTERNAL_MANAGED_ENVIRONMENT_HELPER
     "${CMAKE_CURRENT_LIST_DIR}/ProtocyteManagedEnvironment.py"
 )
+set_property(
+    GLOBAL
+    PROPERTY PROTOCYTE_INTERNAL_CREATE_ENVIRONMENT_HELPER
+    "${CMAKE_CURRENT_LIST_DIR}/ProtocyteCreateEnvironment.py"
+)
 
 function(_protocyte_configure_python_environment_root)
     if(NOT DEFINED PROTOCYTE_PYTHON_ENV_ROOT OR "${PROTOCYTE_PYTHON_ENV_ROOT}" STREQUAL "")
@@ -2561,7 +2566,12 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
         else()
             set(protocyte_disabled_pip_config "/dev/null")
         endif()
-        set(venv_arguments -m venv "${protocyte_python_staging}")
+        get_property(
+            protocyte_create_environment_helper
+            GLOBAL
+            PROPERTY PROTOCYTE_INTERNAL_CREATE_ENVIRONMENT_HELPER
+        )
+        set(venv_arguments -I "${protocyte_create_environment_helper}" "${protocyte_python_staging}")
         execute_process(
             COMMAND
                 "${CMAKE_COMMAND}" -E env
@@ -2580,7 +2590,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 "--unset=PYTHONHOME"
                 "PIP_ISOLATED=0"
                 "PIP_CONFIG_FILE=${protocyte_disabled_pip_config}"
-                "${Python3_EXECUTABLE}" -I ${venv_arguments}
+                "${Python3_EXECUTABLE}" ${venv_arguments}
             RESULT_VARIABLE venv_result
             OUTPUT_VARIABLE venv_output
             ERROR_VARIABLE venv_error
@@ -2600,7 +2610,7 @@ function(_protocyte_ensure_python_environment out_python out_plugin)
                 string(APPEND venv_error "\nFailed to restore the previous environment: ${rollback_output}")
             endif()
             _protocyte_python_provisioning_error(
-                "create the virtual environment; ensure the selected Python provides venv and ensurepip"
+                "create the virtual environment and bootstrap pip"
                 "\"${Python3_EXECUTABLE}\" ${venv_command}"
                 "${venv_result}"
                 "${venv_output}"

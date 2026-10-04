@@ -3565,6 +3565,7 @@ def test_fetchcontent_can_explicitly_enable_protocyte_install(
     assert any(prefix.rglob("ProtocyteGenerate.cmake"))
     assert any(prefix.rglob("ProtocyteProcess.cmake"))
     assert any(prefix.rglob("ProtocyteManagedEnvironment.py"))
+    assert any(prefix.rglob("ProtocyteCreateEnvironment.py"))
     assert any(prefix.rglob("owned_transactions.py"))
     assert (prefix / "share/protocyte/python/pyproject.toml").is_file()
 
@@ -13090,6 +13091,133 @@ def test_cmake_fingerprint_inputs_trigger_automatic_reconfiguration(
 
     updated_fingerprint = (build_dir / "fingerprint.txt").read_text(encoding="utf-8")
     assert updated_fingerprint != initial_fingerprint
+
+
+@pytest.mark.parametrize("failure", ["nested-child", "missing-ensurepip"])
+@pytest.mark.parametrize("existing_environment", [False, True])
+def test_managed_environment_preserves_bootstrap_failure_and_rolls_back(
+    tmp_path: Path, failure: str, existing_environment: bool
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper = repo_root / "cmake/ProtocyteCreateEnvironment.py"
+    driver = tmp_path / "injected-bootstrap.py"
+    if failure == "nested-child":
+        child_code = (
+            "import os, sys; "
+            "print('SYNTHETIC_' + 'BOOTSTRAP_' + 'FAILURE_12345', flush=True); "
+            "print(os.environ['PIP_INDEX_URL'], flush=True); "
+            "print('noise' * 5000, flush=True); "
+            "print('nested stderr detail', file=sys.stderr); sys.exit(17)"
+        )
+    else:
+        child_code = (
+            "import sys, importlib.abc; "
+            'exec("class MissingEnsurepip(importlib.abc.MetaPathFinder):\\n'
+            " def find_spec(self, fullname, *args):\\n"
+            "  if fullname == 'ensurepip':\\n"
+            '   raise ModuleNotFoundError(\\"No module named \'ensurepip\'\\", name=fullname)"); '
+            "sys.meta_path.insert(0, MissingEnsurepip()); import ensurepip"
+        )
+    driver.write_text(
+        "\n".join(
+            [
+                "import os, runpy, subprocess, sys, venv",
+                "assert sys.flags.isolated",
+                "assert not any(name in os.environ for name in "
+                "('PIP_TARGET', 'PIP_PREFIX', 'PIP_ROOT', 'PIP_USER', 'PYTHONUSERBASE'))",
+                "class InjectedBuilder(venv.EnvBuilder):",
+                "    def _setup_pip(self, context):",
+                "        self._call_new_python(context, '-I', '-c', "
+                f"{child_code!r}, stderr=subprocess.STDOUT)",
+                "venv.EnvBuilder = InjectedBuilder",
+                f"runpy.run_path({str(helper)!r}, run_name='__main__')",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    environment_root = tmp_path / "managed-environments"
+    source_dir = tmp_path / "consumer"
+    build_dir = _write_managed_environment_consumer(source_dir, environment_root)
+    cmake_file = source_dir / "CMakeLists.txt"
+    cmake_file.write_text(
+        cmake_file.read_text(encoding="utf-8").replace(
+            "protocyte_get_host_tools(",
+            "\n".join(
+                [
+                    "set_property(GLOBAL PROPERTY PROTOCYTE_INTERNAL_CREATE_ENVIRONMENT_HELPER",
+                    f'    "{driver.as_posix()}")',
+                    "find_package(Python3 3.12 COMPONENTS Interpreter REQUIRED)",
+                    "_protocyte_python_environment_fingerprint(fingerprint",
+                    '    "${PROTOCYTE_PYTHON_PROJECT_ROOT}" "${PROTOCYTE_PYTHON_CONSTRAINTS}"',
+                    '    "${Python3_EXECUTABLE}" "${Python3_VERSION}")',
+                    'string(SUBSTRING "${fingerprint}" 0 16 short_fingerprint)',
+                    'set(previous "${PROTOCYTE_PYTHON_ENV_ROOT}/${short_fingerprint}")',
+                    f"if({'TRUE' if existing_environment else 'FALSE'})",
+                    '    file(MAKE_DIRECTORY "${previous}")',
+                    '    file(WRITE "${previous}/.protocyte-ready" "${fingerprint}\\n")',
+                    '    file(WRITE "${previous}/retained.txt" "previous environment\\n")',
+                    "endif()",
+                    "protocyte_get_host_tools(",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+    environment = _managed_environment_process_environment()
+    environment.update(
+        PIP_NO_INDEX="1",
+        PIP_INDEX_URL="https://test-user:private-password@example.invalid/private-path?key=private-query",
+        PROTOCYTE_TRANSACTION_STATE_DIR=str(tmp_path / "transaction-state"),
+        PIP_TARGET=str(tmp_path / "forbidden-target"),
+        PIP_PREFIX=str(tmp_path / "forbidden-prefix"),
+        PIP_ROOT=str(tmp_path / "forbidden-root"),
+        PIP_USER="1",
+        PYTHONUSERBASE=str(tmp_path / "forbidden-user-base"),
+    )
+    result = _configure_managed_environment(source_dir, build_dir, env=environment)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "create the virtual environment and bootstrap pip" in " ".join(
+        output.split()
+    )
+    if failure == "nested-child":
+        assert "Exit code: 17" in output
+        assert "SYNTHETIC_BOOTSTRAP_FAILURE_12345" in output
+        assert "nested stderr detail" in output
+        assert "bootstrap diagnostic truncated" in output
+        assert "<redacted URL>" in output
+        assert "No module named" not in output
+        for secret in (
+            "private-password",
+            "private-path",
+            "private-query",
+            "example.invalid",
+        ):
+            assert secret not in output
+    else:
+        assert "Exit code: 1" in output
+        assert "No module named 'ensurepip'" in output
+        assert "SYNTHETIC_BOOTSTRAP_FAILURE_12345" not in output
+    assert len(output) < 24 * 1024
+    if existing_environment:
+        # An unverified destination cannot be overwritten by rollback. Both
+        # that refusal and the original bootstrap failure must remain visible.
+        assert "Failed to restore the previous environment" in output
+        assert "refusing to restore over an unverified" in output
+        previous = _published_managed_environment(environment_root)
+        assert (previous / "retained.txt").read_text(
+            encoding="utf-8"
+        ) == "previous environment\n"
+        assert {path.name for path in previous.iterdir()} == {
+            ".protocyte-ready",
+            "retained.txt",
+        }
+    else:
+        assert "Failed to restore the previous environment" not in output
+        assert not any(path.is_dir() for path in environment_root.iterdir())
+        _assert_no_managed_environment_transaction_leftovers(environment_root)
+    assert not list(tmp_path.glob("forbidden-*"))
 
 
 def test_cmake_provisioning_error_reports_the_failed_command(tmp_path: Path) -> None:

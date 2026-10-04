@@ -48,7 +48,9 @@ jobs:
 
       - name: Verify managed provisioning, nested reuse, and diagnostics
         run: >
-          uv run pytest -q -m cmake_integration
+          uv run pytest -q -o "addopts="
+          tests/test_create_environment.py
+          tests/test_cmake.py::test_managed_environment_preserves_bootstrap_failure_and_rolls_back
           tests/test_cmake.py::test_managed_host_tools_support_nested_reuse_and_stage_specific_diagnostics
 
   fetchcontent-linux:
