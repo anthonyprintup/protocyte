@@ -188,6 +188,16 @@ See [CMake API Reference](https://github.com/anthonyprintup/protocyte/wiki/CMake
 
 Protocyte generates into private staging and validates outputs before publication. A compiler failure, timeout, or invalid result publishes no output transaction. If publication is interrupted after the durable write-ahead transaction is created, the next configure or build rolls it forward from its durable payloads.
 
+When output reconciliation takes longer than five seconds, CMake shows coordinator
+progress on standard error. It distinguishes waiting for registry, generation, or
+publication locks from current-plan validation, registry validation, and output
+reconciliation. Lines include plan/claim counts and elapsed phase times, without
+consumer paths or claim tokens. Fast operations remain silent; long operations
+emit at most twelve progress lines and one completion or failure summary. A lock
+wait includes preparing and acquiring its lock files. `registry_entries` counts
+state directories, including any abandoned initialization directories encountered;
+`claims_checked` counts authenticated claim/plan records.
+
 If cleanup refuses an unsafe path or cannot remove it, the diagnostic warns that inert staging data outside `OUT_DIR` may remain. Stop related processes and remove only the named staging path after inspecting it.
 
 ## Adding a Proto File Does Not Generate It

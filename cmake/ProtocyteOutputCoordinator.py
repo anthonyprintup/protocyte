@@ -27,6 +27,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, NoReturn, Sequence
@@ -61,12 +63,20 @@ def _canonical_json(value: Mapping[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _stat_is_link(observed: os.stat_result) -> bool:
+    return stat.S_ISLNK(observed.st_mode) or (
+        os.name == "nt"
+        and observed.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    )
+
+
 def _is_link(path: Path) -> bool:
     try:
-        if path.is_symlink():
-            return True
-        is_junction = getattr(path, "is_junction", None)
-        return bool(is_junction and is_junction())
+        # One non-following observation covers both Windows link kinds. Calling
+        # is_symlink() and is_junction() separately probes every ancestor twice.
+        return _stat_is_link(path.lstat())
+    except FileNotFoundError:
+        return False
     except OSError:
         return True
 
@@ -170,46 +180,62 @@ def _path_key(path: Path) -> str:
 
 
 def _contains(parent: Path, child: Path) -> bool:
-    parent_identity = _portable_identity(parent).rstrip("/")
-    child_identity = _portable_identity(child, leaf_may_be_file=True).rstrip("/")
+    return _projected_contains(
+        project_path(parent), project_path(child, leaf_may_be_file=True)
+    )
+
+
+def _projected_contains(parent: Path, child: Path) -> bool:
+    parent_identity = os.fspath(parent).replace("\\", "/").casefold().rstrip("/")
+    child_identity = os.fspath(child).replace("\\", "/").casefold().rstrip("/")
     return child_identity == parent_identity or child_identity.startswith(
         parent_identity + "/"
     )
 
 
 def _physical_location_key(path: Path) -> tuple[int, int, tuple[str, ...]]:
-    projected = project_path(path)
+    """Identify a freshly projected directory or one of its ancestors.
+
+    Callers must project both comparison inputs first. Re-projecting here walks
+    the entire ancestor chain again for every step of a containment comparison.
+    These observations are deliberately local to one comparison, never cached
+    across comparisons, lock acquisitions, or filesystem mutations.
+    """
     suffix: list[str] = []
-    current = projected
-    while not os.path.lexists(current):
-        suffix.append(current.name.casefold())
-        parent = current.parent
-        if parent == current:
-            _fail(f"could not identify physical filesystem location: {path}")
-        current = parent
-    try:
-        observed = current.stat()
-    except OSError as error:
-        _fail(f"could not identify physical filesystem location {path}: {error}")
+    current = path
+    while True:
+        try:
+            # Projection and comparison are separate observations. A formerly
+            # missing component may now be a file, link, or junction; reject it
+            # instead of following it or using its identity as a directory.
+            observed = current.lstat()
+            if _stat_is_link(observed):
+                _fail(f"filesystem path contains a symbolic link or junction: {path}")
+            if not stat.S_ISDIR(observed.st_mode):
+                _fail(f"filesystem path has a non-directory ancestor: {current}")
+            break
+        except FileNotFoundError:
+            suffix.append(current.name.casefold())
+            parent = current.parent
+            if parent == current:
+                _fail(f"could not identify physical filesystem location: {path}")
+            current = parent
+        except OSError as error:
+            _fail(f"could not identify physical filesystem location {path}: {error}")
     return observed.st_dev, observed.st_ino, tuple(reversed(suffix))
 
 
-def _same_physical_location(first: Path, second: Path) -> bool:
-    if first == second:
-        return True
-    try:
-        if os.path.samefile(first, second):
-            return True
-    except OSError:
-        pass
-    return _physical_location_key(first) == _physical_location_key(second)
-
-
 def _physically_contains(parent: Path, child: Path) -> bool:
-    projected_parent = project_path(parent)
-    current = project_path(child)
+    return _projected_physically_contains(project_path(parent), project_path(child))
+
+
+def _projected_physically_contains(parent: Path, child: Path) -> bool:
+    parent_key = _physical_location_key(parent)
+    current = child
     while True:
-        if _same_physical_location(projected_parent, current):
+        if _same_physical_path(parent, current) or parent_key == _physical_location_key(
+            current
+        ):
             return True
         next_parent = current.parent
         if next_parent == current:
@@ -218,11 +244,15 @@ def _physically_contains(parent: Path, child: Path) -> bool:
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
+    # Each projection checks the whole existing chain for links/junctions. The
+    # remaining comparisons share only these two freshly validated inputs.
+    first = project_path(first)
+    second = project_path(second)
     return (
-        _contains(first, second)
-        or _contains(second, first)
-        or _physically_contains(first, second)
-        or _physically_contains(second, first)
+        _projected_contains(first, second)
+        or _projected_contains(second, first)
+        or _projected_physically_contains(first, second)
+        or _projected_physically_contains(second, first)
     )
 
 
@@ -510,6 +540,88 @@ class FileLock:
         self._stream = None
 
 
+class _ReconcileProgress:
+    """Bounded, path-free stderr progress, including while OS locks block.
+
+    Fast operations stay silent. Long operations emit at most twelve progress
+    lines and one completion/failure summary. Nothing is written to the claim
+    token stream on stdout. The reporter observes counters only, not the FS.
+    """
+
+    INTERVAL_SECONDS = 5.0
+    MAX_REPORTS = 12
+
+    def __init__(self, current: int, retired: int) -> None:
+        self.current = current
+        self.retired = retired
+        self._claims = 0
+        self._states: int | None = None
+        self._started = time.monotonic()
+        self._since = self._started
+        self._phase = "preparation"
+        self._category = "reconciliation"
+        self._seconds = {"lock_wait": 0.0, "validation": 0.0, "reconciliation": 0.0}
+        self._reports = 0
+        self._mutex = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def __enter__(self) -> _ReconcileProgress:
+        self._thread.start()
+        return self
+
+    def __exit__(self, kind: object, *_: object) -> None:
+        self._stop.set()
+        self._thread.join()
+        with self._mutex:
+            if self._reports:
+                self._emit("failed" if kind is not None else "complete")
+
+    def phase(self, phase: str, category: str) -> None:
+        with self._mutex:
+            now = time.monotonic()
+            self._seconds[self._category] += now - self._since
+            self._phase, self._category, self._since = phase, category, now
+
+    def registry(self, *, states: int | None = None, claim: bool = False) -> None:
+        with self._mutex:
+            if states is not None:
+                self._states = states
+            if claim:
+                self._claims += 1
+
+    def _emit(self, phase: str) -> None:
+        now = time.monotonic()
+        seconds = dict(self._seconds)
+        seconds[self._category] += now - self._since
+        states = "unknown" if self._states is None else str(self._states)
+        timings = " ".join(f"{name}={value:.3f}s" for name, value in seconds.items())
+        print(
+            f"Protocyte output coordinator: {phase}; "
+            f"current_plans={self.current} retired_plans={self.retired} "
+            f"claims_checked={self._claims} registry_entries={states} "
+            f"elapsed={now - self._started:.3f}s {timings}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def _report(self) -> bool:
+        with self._mutex:
+            if self._reports >= self.MAX_REPORTS:
+                return False
+            self._reports += 1
+            phase = self._phase
+            if self._reports == self.MAX_REPORTS:
+                phase += " (further progress suppressed until completion)"
+            self._emit(phase)
+            return True
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.INTERVAL_SECONDS):
+            if not self._report():
+                return
+
+
 @dataclass(frozen=True)
 class PlanOutput:
     target: str
@@ -770,10 +882,11 @@ class OutputCoordinator:
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
 
     def reconcile(self, plan: Plan) -> str:
-        state = self._claim(plan)
-        with FileLock(self._generation_lock(plan.root)):
-            with FileLock(self._publication_lock(plan.root)):
-                return self._reconcile_locked(state, plan)
+        # All claim/plan writers hold the registry lock through plan commit, so
+        # another reconciliation can safely read each retained record once.
+        token = self.reconcile_set((), (plan,))[0]
+        assert token is not None
+        return token
 
     def reconcile_set(
         self, retired: Sequence[Plan], current: Sequence[Plan]
@@ -784,15 +897,23 @@ class OutputCoordinator:
         roots = {_path_key(plan.root): plan.root for plan in plans}
         retiring_root_keys = {_path_key(plan.root) for plan in retired}
         _durable_mkdir(self.lock_root)
-        with contextlib.ExitStack() as locks:
+        with (
+            _ReconcileProgress(len(current), len(retired)) as progress,
+            contextlib.ExitStack() as locks,
+        ):
+            progress.phase("waiting for registry lock", "lock_wait")
             locks.enter_context(FileLock(self.lock_root / "registry.lock"))
+            progress.phase("waiting for generation locks", "lock_wait")
             for root in sorted(roots.values(), key=_portable_identity):
                 locks.enter_context(FileLock(self._generation_lock(root)))
+            progress.phase("waiting for publication locks", "lock_wait")
             for root in sorted(roots.values(), key=_portable_identity):
                 locks.enter_context(FileLock(self._publication_lock(root)))
+            progress.phase("validating current plans", "validation")
             self._validate_plan_set(current)
-            for plan in current:
-                self._validate_registry(plan, retiring_root_keys)
+            progress.phase("validating registry", "validation")
+            self._validate_registry(current, retiring_root_keys, progress=progress)
+            progress.phase("reconciling outputs", "reconciliation")
             states: dict[str, Path] = {}
             existing_plans: list[Plan] = []
             active_retired: set[int] = set()
@@ -1119,20 +1240,6 @@ class OutputCoordinator:
             return plan
         return Plan(claim_root, build_root, str(claim["build_id"]), (), ())
 
-    def _claim(self, plan: Plan) -> Path:
-        _durable_mkdir(self.lock_root)
-        state = self._state_directory(plan.root)
-        with FileLock(self.lock_root / "registry.lock"):
-            self._validate_registry(plan)
-            _durable_mkdir(state, anchor=self.lock_root)
-            claim_path = state / "claim.json"
-            if claim_path.exists():
-                self._load_claim(state, plan)
-                _sync_directory(state)
-                return state
-            self._initialize_claim_locked(state, plan)
-        return state
-
     def _initialize_claim_locked(self, state: Path, plan: Plan) -> None:
         _durable_mkdir(state, anchor=self.lock_root)
         token = secrets.token_hex(32)
@@ -1177,32 +1284,41 @@ class OutputCoordinator:
                         _fail("current output plan staging overlaps another output root")
 
     def _validate_registry(
-        self, plan: Plan, retiring_root_keys: set[str] | None = None
+        self,
+        plans: Sequence[Plan],
+        retiring_root_keys: set[str] | None = None,
+        *,
+        progress: _ReconcileProgress | None = None,
     ) -> None:
+        if not plans:
+            return
         if retiring_root_keys is None:
             retiring_root_keys = set()
-        for target in plan.targets:
-            if _contains(target.staging, self.lock_root) or _physically_contains(
-                target.staging, self.lock_root
-            ):
-                _fail(
-                    "generation staging contains the output coordinator lock root: "
-                    f"{target.staging} and {self.lock_root}"
-                )
         internal_paths = (
             self.lock_root / "roots",
             self.lock_root / "generation",
             self.lock_root / "publication",
         )
-        if _paths_overlap(plan.root, self.lock_root) or any(
-            _paths_overlap(path, plan.root) for path in internal_paths
-        ):
-            _fail(
-                "output root overlaps the output coordinator lock namespace: "
-                f"{plan.root} and {self.lock_root}"
-            )
+        for plan in plans:
+            for target in plan.targets:
+                if _contains(target.staging, self.lock_root) or _physically_contains(
+                    target.staging, self.lock_root
+                ):
+                    _fail(
+                        "generation staging contains the output coordinator lock root: "
+                        f"{target.staging} and {self.lock_root}"
+                    )
+            if _paths_overlap(plan.root, self.lock_root) or any(
+                _paths_overlap(path, plan.root) for path in internal_paths
+            ):
+                _fail(
+                    "output root overlaps the output coordinator lock namespace: "
+                    f"{plan.root} and {self.lock_root}"
+                )
         roots = self.lock_root / "roots"
         if not os.path.lexists(roots):
+            if progress is not None:
+                progress.registry(states=0)
             return
         if project_path(roots) != roots:
             _fail(f"output registry is unsafe or was replaced: {roots}")
@@ -1211,6 +1327,8 @@ class OutputCoordinator:
                 states = sorted(stream, key=lambda entry: entry.name)
         except OSError as error:
             _fail(f"could not enumerate output registry {roots}: {error}")
+        if progress is not None:
+            progress.registry(states=len(states))
         for entry in states:
             state = roots / entry.name
             try:
@@ -1232,44 +1350,49 @@ class OutputCoordinator:
             self._validate_claim_shape(claim, claim_path)
             claimed_root, _ = self._claim_paths(claim, claim_path)
             if entry.name != claim["root_key"]:
-                _fail(f"output claim is stored under the wrong registry key: {claim_path}")
+                _fail(
+                    f"output claim is stored under the wrong registry key: {claim_path}"
+                )
             recorded_plan = self._load_recorded_plan(state, claim)
-            if _paths_overlap(claimed_root, plan.root):
-                if _path_key(claimed_root) != _path_key(plan.root):
+            if progress is not None:
+                progress.registry(claim=True)
+            recorded_targets = recorded_plan.targets if recorded_plan else ()
+            for plan in plans:
+                same_root_key = claim["root_key"] == _path_key(plan.root)
+                if _paths_overlap(claimed_root, plan.root) and not same_root_key:
                     _fail(
                         "output root overlaps a root claimed by another build: "
                         f"{plan.root} and {claimed_root}"
                     )
-            recorded_targets = recorded_plan.targets if recorded_plan else ()
-            for recorded_target in recorded_targets:
-                if _paths_overlap(recorded_target.staging, plan.root):
-                    _fail(
-                        "output root overlaps staging reserved by another plan: "
-                        f"{plan.root} and {recorded_target.staging}"
-                    )
-            for target in plan.targets:
-                if _paths_overlap(claimed_root, target.staging):
-                    _fail(
-                        "generation staging overlaps a claimed output root: "
-                        f"{target.staging} and {claimed_root}"
-                    )
                 for recorded_target in recorded_targets:
-                    if (
-                        _path_key(plan.root) == _path_key(claimed_root)
-                        and target.identity == recorded_target.identity
-                    ):
-                        continue
-                    if (
-                        str(claim["root_key"]) in retiring_root_keys
-                        and str(claim["build_id"]) == plan.build_id
-                        and target.identity == recorded_target.identity
-                    ):
-                        continue
-                    if _paths_overlap(recorded_target.staging, target.staging):
+                    if _paths_overlap(recorded_target.staging, plan.root):
                         _fail(
-                            "generation staging overlaps staging reserved by another plan: "
-                            f"{target.staging} and {recorded_target.staging}"
+                            "output root overlaps staging reserved by another plan: "
+                            f"{plan.root} and {recorded_target.staging}"
                         )
+                for target in plan.targets:
+                    if _paths_overlap(claimed_root, target.staging):
+                        _fail(
+                            "generation staging overlaps a claimed output root: "
+                            f"{target.staging} and {claimed_root}"
+                        )
+                    for recorded_target in recorded_targets:
+                        if (
+                            same_root_key
+                            and target.identity == recorded_target.identity
+                        ):
+                            continue
+                        if (
+                            str(claim["root_key"]) in retiring_root_keys
+                            and str(claim["build_id"]) == plan.build_id
+                            and target.identity == recorded_target.identity
+                        ):
+                            continue
+                        if _paths_overlap(recorded_target.staging, target.staging):
+                            _fail(
+                                "generation staging overlaps staging reserved by another plan: "
+                                f"{target.staging} and {recorded_target.staging}"
+                            )
 
     def _state_directory(self, root: Path) -> Path:
         return self.lock_root / "roots" / _path_key(root)
