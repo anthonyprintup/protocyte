@@ -22,6 +22,15 @@ An interpreter without `venv` or `ensurepip` cannot provision Protocyte's manage
 
 ## Managed Python Provisioning Fails
 
+If virtual-environment creation or pip bootstrapping fails, the CMake error
+includes the failing stage, selected interpreter, managed paths, and captured
+child-process diagnostics. Bootstrap diagnostics redact URLs and retain up to
+16,384 characters per stream, keeping both the beginning and end of longer
+output. A subprocess failure alone does not mean `venv` or `ensurepip` is missing;
+look for an explicit missing-module error or the underlying child failure.
+Protocyte attempts rollback before reporting the error; any rollback failure is
+reported alongside the original diagnostic, preserving unverified environments.
+
 Check:
 
 - the selected interpreter can create virtual environments;
