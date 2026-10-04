@@ -1528,6 +1528,7 @@ function(_protocyte_finalize_output_plans)
         RESULT_VARIABLE coordinator_result
         OUTPUT_VARIABLE coordinator_output
         ERROR_VARIABLE coordinator_error
+        ECHO_ERROR_VARIABLE
         ENCODING UTF-8
     )
     if(NOT "${coordinator_result}" STREQUAL "0")

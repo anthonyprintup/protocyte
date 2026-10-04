@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,73 @@ def test_coordinator_rejects_a_second_build_before_generation(tmp_path: Path) ->
     assert second.returncode != 0
     diagnostic = " ".join((second.stdout + second.stderr).split())
     assert "different CMake build tree" in diagnostic
+
+
+def test_configure_surfaces_lock_progress_without_corrupting_claim_tokens(
+    tmp_path: Path,
+) -> None:
+    source, build, locks = (tmp_path / name for name in ("source", "build", "locks"))
+    _write_out_dir_owner_project(source, tmp_path / "generated", output_lock_root=locks)
+    coordinator_script = (
+        Path(__file__).resolve().parents[1] / "cmake" / "ProtocyteOutputCoordinator.py"
+    )
+    holder_script = tmp_path / "hold_registry.py"
+    holder_script.write_text(
+        "import runpy, sys\n"
+        "from pathlib import Path\n"
+        "module = runpy.run_path(sys.argv[1])\n"
+        "with module['FileLock'](Path(sys.argv[2]) / 'registry.lock'):\n"
+        "    print('locked', flush=True)\n"
+        "    sys.stdin.readline()\n",
+        encoding="utf-8",
+    )
+    holder = subprocess.Popen(
+        [sys.executable, str(holder_script), str(coordinator_script), str(locks)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    configure = None
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        error_path = tmp_path / "configure.stderr"
+        # communicate(timeout=...) does not expose partial pipe output on
+        # Windows. Read a live file to verify progress BEFORE releasing the lock.
+        with error_path.open("w", encoding="utf-8") as error_stream:
+            configure = subprocess.Popen(
+                ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja"],
+                stdout=subprocess.PIPE,
+                stderr=error_stream,
+                text=True,
+            )
+            deadline = time.monotonic() + 20
+            while True:
+                diagnostic = error_path.read_text(encoding="utf-8")
+                if "waiting for registry lock" in diagnostic:
+                    break
+                assert configure.poll() is None, diagnostic
+                assert time.monotonic() < deadline, diagnostic
+                time.sleep(0.05)
+            progress_lines = [
+                line for line in diagnostic.splitlines()
+                if "Protocyte output coordinator:" in line
+            ]
+            assert progress_lines and all(
+                "current_plans=1" in line for line in progress_lines
+            )
+            assert all(str(tmp_path) not in line for line in progress_lines)
+            holder.communicate(input="\n", timeout=10)
+            output, _ = configure.communicate(timeout=30)
+        error = error_path.read_text(encoding="utf-8")
+        assert configure.returncode == 0, output + error
+        assert "complete;" in error
+        assert len(list((locks / "roots").glob("*/claim.json"))) == 1
+    finally:
+        for process in (configure, holder):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=10)
 
 
 def test_generation_inventory_is_literal_under_glob_metacharacter_build_path(

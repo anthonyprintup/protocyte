@@ -54,6 +54,27 @@ for the focused build matrix.
 
 Format every touched C++ source or header with `clang-format`.
 
+### Output registry performance
+
+Run the offline scaling benchmark with Python 3.12 or newer:
+
+```bash
+python tests/benchmark_output_registry.py --claims 0 8 16 --plans 1 4 --repeat 3
+```
+
+It creates each retained claim through the real coordinator in a fresh private
+registry and reports seed, registry validation, and reconciliation wall/CPU times
+separately. It also counts registry scans, recorded-plan loads, and path
+projections. It does not generate C++, use the shared registry, or access the
+network. The printed temporary directory retains the synthetic state and
+`results.json`; use `--work NEW_DIRECTORY` to choose that directory explicitly.
+
+Use `--baseline-source /path/to/baseline-checkout` for an alternating comparison
+against another revision at the same workspace depth. The report includes every
+sample and median times. Compare operation counts as well as wall times: Windows
+filesystem probes, path depth, caching, and concurrent machine activity affect
+timings. The focused regression tests are in `tests/test_output_coordinator.py`.
+
 ## Documentation
 
 The canonical wiki source is `docs/wiki/` in the main repository. Edit and

@@ -1522,8 +1522,17 @@ def test_tampered_durable_payload_fails_closed_without_publication(
     assert not (root / "demo.protocyte.hpp").exists()
 
 
+@pytest.mark.parametrize(
+    "operations",
+    [
+        ("reconcile", "reconcile"),
+        ("reconcile", "reconcile-set"),
+        ("reconcile-set", "reconcile-set"),
+    ],
+)
 def test_two_builds_racing_for_one_root_have_exactly_one_winner(
     tmp_path: Path,
+    operations: tuple[str, str],
 ) -> None:
     root = tmp_path / "generated"
     lock_root = tmp_path / "locks-v1"
@@ -1542,13 +1551,13 @@ def test_two_builds_racing_for_one_root_have_exactly_one_winner(
         [
             sys.executable,
             str(coordinator.__file__),
-            "reconcile",
+            operation,
             "--lock-root",
             str(lock_root),
-            "--plan",
+            "--plan" if operation == "reconcile" else "--current-plan",
             str(plan),
         ]
-        for plan in plans
+        for operation, plan in zip(operations, plans)
     ]
     processes = [
         subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1563,6 +1572,298 @@ def test_two_builds_racing_for_one_root_have_exactly_one_winner(
     assert b"different CMake build tree" in results[loser][1]
     claims = list((lock_root / "roots").glob("*/claim.json"))
     assert len(claims) == 1
+
+
+@pytest.mark.parametrize("current_count", [1, 4])
+def test_registry_records_are_loaded_once_per_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, current_count: int
+) -> None:
+    def plan(name: str) -> object:
+        return _write_plan(
+            tmp_path / f"{name}.plan",
+            tmp_path / name / "generated",
+            tmp_path / name / "build",
+            ((_target(name), "sample.protocyte.hpp"),),
+        )
+
+    retained = [plan(f"retained-{index}") for index in range(4)]
+    current = [plan(f"current-{index}") for index in range(current_count)]
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    engine.reconcile_set((), retained)
+    expected = {engine._state_directory(value.root) for value in retained}
+    loaded: list[Path] = []
+    scans: list[Path] = []
+    original_load = engine._load_recorded_plan
+    original_scandir = coordinator.os.scandir
+
+    def load(state: Path, claim: object) -> object:
+        if state in expected:
+            loaded.append(state)
+        return original_load(state, claim)
+
+    def scandir(path: Path) -> object:
+        if Path(path) == engine.lock_root / "roots":
+            scans.append(Path(path))
+        return original_scandir(path)
+
+    monkeypatch.setattr(engine, "_load_recorded_plan", load)
+    monkeypatch.setattr(coordinator.os, "scandir", scandir)
+    assert len(engine.reconcile_set((), current)) == current_count
+    assert sorted(loaded) == sorted(expected)
+    assert scans == [engine.lock_root / "roots"]
+
+
+def test_single_reconciliation_holds_registry_lock_through_plan_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _write_plan(
+        tmp_path / "plan",
+        tmp_path / "generated",
+        tmp_path / "build",
+        ((_target("demo"), "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    original_lock = coordinator.FileLock
+    original_write = coordinator._atomic_write
+    held: list[Path] = []
+    committed = False
+
+    class RecordingLock(original_lock):
+        def __enter__(self) -> object:
+            result = super().__enter__()
+            held.append(self.path)
+            return result
+
+        def __exit__(self, *args: object) -> None:
+            assert held.pop() == self.path
+            super().__exit__(*args)
+
+    def write(path: Path, content: bytes) -> None:
+        nonlocal committed
+        if path.name == "plan.json":
+            assert held == [
+                engine.lock_root / "registry.lock",
+                engine._generation_lock(plan.root),
+                engine._publication_lock(plan.root),
+            ]
+            committed = True
+        original_write(path, content)
+
+    monkeypatch.setattr(coordinator, "FileLock", RecordingLock)
+    monkeypatch.setattr(coordinator, "_atomic_write", write)
+    engine.reconcile(plan)
+    assert committed and not held
+
+
+@pytest.mark.parametrize("depth", [0, 8])
+def test_overlap_projects_inputs_once_regardless_of_ancestor_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    base = tmp_path.joinpath(*(f"level-{index}" for index in range(depth)))
+    base.mkdir(parents=True, exist_ok=True)
+    first, second = base / "first" / "missing", base / "second" / "missing"
+    projected: list[Path] = []
+    original_project = coordinator.project_path
+
+    def project(path: Path, **options: object) -> Path:
+        projected.append(path)
+        return original_project(path, **options)
+
+    monkeypatch.setattr(coordinator, "project_path", project)
+    assert not coordinator._paths_overlap(first, second)
+    assert projected == [first, second]
+
+
+def test_physical_containment_checks_ancestors_of_missing_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, alias = tmp_path / "first", tmp_path / "alias"
+    first.mkdir()
+    alias.mkdir()
+    original_samefile = coordinator.os.path.samefile
+
+    def samefile(left: object, right: object) -> bool:
+        if {Path(left), Path(right)} == {first, alias}:
+            return True
+        return original_samefile(left, right)
+
+    monkeypatch.setattr(coordinator.os.path, "samefile", samefile)
+    assert coordinator._paths_overlap(first, alias / "missing" / "nested")
+    assert coordinator._paths_overlap(alias / "missing" / "nested", first)
+    assert not coordinator._paths_overlap(first, tmp_path / "unrelated")
+
+
+@pytest.mark.parametrize("replacement", ["file", "directory-link"])
+@pytest.mark.parametrize("side", [0, 1])
+def test_overlap_rejects_path_replacement_during_the_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str, side: int
+) -> None:
+    paths = (tmp_path / "first", tmp_path / "second")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_project = coordinator.project_path
+    replaced = False
+
+    def project(path: Path, **options: object) -> Path:
+        nonlocal replaced
+        projected = original_project(path, **options)
+        if path == paths[side] and not replaced:
+            replaced = True
+            if replacement == "file":
+                path.touch()
+            else:
+                _directory_link(path, outside)
+        return projected
+
+    monkeypatch.setattr(coordinator, "project_path", project)
+    with pytest.raises(
+        coordinator.CoordinatorError, match="symbolic link or junction|non-directory"
+    ):
+        coordinator._paths_overlap(*paths)
+    assert replaced
+
+
+def test_missing_suffixes_use_the_physical_identity_of_the_existing_ancestor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, alias = tmp_path / "first", tmp_path / "alias"
+    first.mkdir()
+    alias.mkdir()
+    original_stat = Path.stat
+    original_lstat = Path.lstat
+
+    def stat_with_alias(path: Path, **options: object) -> os.stat_result:
+        # Model two non-link directory spellings backed by one filesystem ID.
+        return original_stat(first if path == alias else path, **options)
+
+    def lstat_with_alias(path: Path) -> os.stat_result:
+        return original_lstat(first if path == alias else path)
+
+    monkeypatch.setattr(Path, "stat", stat_with_alias)
+    monkeypatch.setattr(Path, "lstat", lstat_with_alias)
+    assert coordinator._paths_overlap(first / "missing", alias / "missing" / "child")
+    assert not coordinator._paths_overlap(first / "missing", alias / "other")
+
+
+def _directory_link(link: Path, destination: Path) -> None:
+    try:
+        link.symlink_to(destination, target_is_directory=True)
+    except OSError as error:
+        if os.name != "nt":
+            pytest.skip(f"directory links are unavailable: {error}")
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(destination)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode:
+            pytest.skip(f"directory links are unavailable: {result.stderr}")
+
+
+def test_registry_comparisons_reject_a_replaced_retained_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retained_root = tmp_path / "retained" / "generated"
+    retained = _write_plan(
+        tmp_path / "retained.plan",
+        retained_root,
+        tmp_path / "retained-build",
+        ((_target("retained"), "sample.protocyte.hpp"),),
+    )
+    current = [
+        _write_plan(
+            tmp_path / f"current-{index}.plan",
+            tmp_path / f"current-{index}" / "generated",
+            tmp_path / f"current-{index}" / "build",
+            ((_target(f"current-{index}"), "sample.protocyte.hpp"),),
+        )
+        for index in range(2)
+    ]
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    engine.reconcile(retained)
+    original_overlap = coordinator._paths_overlap
+    changed = False
+
+    def overlap(first: Path, second: Path) -> bool:
+        nonlocal changed
+        result = original_overlap(first, second)
+        if not changed and first == retained_root and second == current[0].root:
+            changed = True
+            # The previously missing directory is replaced after one comparison.
+            _directory_link(retained_root, tmp_path)
+        return result
+
+    monkeypatch.setattr(coordinator, "_paths_overlap", overlap)
+    with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
+        engine.reconcile_set((), current)
+    assert changed
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
+def test_reconciliation_revalidates_paths_after_registry_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "generated"
+    plan = _write_plan(
+        tmp_path / "plan",
+        root,
+        tmp_path / "build",
+        ((_target("demo"), "demo.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    original_validate = engine._validate_registry
+
+    def validate(*args: object, **kwargs: object) -> None:
+        original_validate(*args, **kwargs)
+        _directory_link(root, tmp_path)
+
+    monkeypatch.setattr(engine, "_validate_registry", validate)
+    with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
+        engine.reconcile(plan)
+    assert not list((engine.lock_root / "roots").glob("*/claim.json"))
+
+
+def test_progress_is_bounded_path_free_and_keeps_stdout_clean(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(coordinator._ReconcileProgress, "MAX_REPORTS", 3)
+    with coordinator._ReconcileProgress(4, 1) as progress:
+        progress.phase("waiting for registry lock", "lock_wait")
+        assert progress._report()
+        progress.phase("validating registry", "validation")
+        progress.registry(states=8, claim=True)
+        assert progress._report()
+        progress.phase("reconciling outputs", "reconciliation")
+        assert progress._report()
+        for _ in range(10):
+            assert not progress._report()
+    output = capsys.readouterr()
+    assert not output.out
+    assert len(output.err.splitlines()) == 4
+    assert "waiting for registry lock" in output.err
+    assert "validating registry" in output.err
+    assert "current_plans=4 retired_plans=1" in output.err
+    assert "claims_checked=1 registry_entries=8" in output.err
+    assert "lock_wait=" in output.err and "validation=" in output.err
+    assert "further progress suppressed" in output.err
+    assert "complete;" in output.err
+
+
+def test_progress_reports_failure_and_fast_operations_stay_silent(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with coordinator._ReconcileProgress(1, 0):
+        pass
+    assert capsys.readouterr() == ("", "")
+    with pytest.raises(coordinator.CoordinatorError):
+        with coordinator._ReconcileProgress(1, 0) as progress:
+            progress._report()
+            coordinator._fail("injected failure")
+    output = capsys.readouterr()
+    assert not output.out
+    assert len(output.err.splitlines()) == 2
+    assert "failed;" in output.err
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires case-sensitive paths")
