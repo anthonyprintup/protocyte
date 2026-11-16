@@ -87,9 +87,10 @@ def _plan(
 
 def _implementation_fingerprint(module: ModuleType) -> dict[str, str]:
     paths = [Path(module.__file__)]
-    helper = paths[0].with_name("ProtocyteOwnershipIndex.py")
-    if helper.is_file():
-        paths.append(helper)
+    for name in ("ProtocyteOwnershipIndex.py", "ProtocytePathObservation.py"):
+        helper = paths[0].with_name(name)
+        if helper.is_file():
+            paths.append(helper)
     return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
@@ -343,7 +344,9 @@ def main() -> None:
     parser.add_argument("--shared-build-root", action="store_true")
     parser.add_argument("--existing-directories", action="store_true")
     parser.add_argument(
-        "--registry-validation", choices=("reference", "shadow"), default="reference"
+        "--registry-validation",
+        choices=("reference", "shadow", "native-shadow"),
+        default="reference",
     )
     parser.add_argument(
         "--large",

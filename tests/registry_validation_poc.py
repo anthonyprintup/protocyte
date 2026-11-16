@@ -232,7 +232,9 @@ def main():
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--work", type=Path)
     parser.add_argument(
-        "--registry-validation", choices=("reference", "shadow"), default="reference"
+        "--registry-validation",
+        choices=("reference", "shadow", "native-shadow"),
+        default="reference",
     )
     args = parser.parse_args()
     if (
@@ -255,7 +257,11 @@ def main():
         "coordinator_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "implementation_files": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in (source, source.with_name("ProtocyteOwnershipIndex.py"))
+            for path in (
+                source,
+                source.with_name("ProtocyteOwnershipIndex.py"),
+                source.with_name("ProtocytePathObservation.py"),
+            )
             if path.is_file()
         },
         "timings_include_instrumentation": True,
@@ -271,7 +277,11 @@ def main():
                 }
                 observed_files = {
                     path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                    for path in (source, source.with_name("ProtocyteOwnershipIndex.py"))
+                    for path in (
+                        source,
+                        source.with_name("ProtocyteOwnershipIndex.py"),
+                        source.with_name("ProtocytePathObservation.py"),
+                    )
                     if path.is_file()
                 }
                 if observed_files != result["implementation_files"]:

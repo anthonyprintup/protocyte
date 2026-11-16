@@ -68,3 +68,11 @@ The first milestone is a reviewable experimental index with differential and
 adversarial evidence. Promotion to authoritative indexed validation, packaging
 refactoring and the public generation CLI remain gated on the filesystem-lifetime
 proof. Correctness takes precedence over meeting a timing threshold.
+
+## Follow-up observation experiment
+
+The [fresh observation experiment](observation-mechanism-results.md) adds a
+private `native-shadow` mode. It retains reference authority and adds no indexed
+authorization mode. A real attribute-only reparse conversion disproved ordinary
+read-handle pinning as a path-lifetime proof. The fresh reader's pilot also failed
+the performance gate. The original cached-index promotion boundary remains closed.

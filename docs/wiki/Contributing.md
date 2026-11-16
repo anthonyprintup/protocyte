@@ -125,6 +125,13 @@ during a measurement. See the experiment's
 [correctness contract](../experimental-index-contract.md) before interpreting
 the preview numbers. The default coordinator remains reference mode.
 
+The fresh native-reader investigation can be measured with
+`--registry-validation native-shadow` in the scaling benchmark or POC. It keeps
+the cross product and fresh physical checks, then always runs reference validation.
+Native open/query/close counters and all three source fingerprints are reported.
+This mode is an experiment and has not passed the large-workload timing gate;
+see [its results and counterexample](../observation-mechanism-results.md).
+
 ## Documentation
 
 The canonical wiki source is `docs/wiki/` in the main repository. Edit and

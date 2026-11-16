@@ -1,5 +1,9 @@
 # Ownership-index experiment
 
+Subsequent work: [fresh observation experiment and handle-lease counterexample](observation-mechanism-results.md).
+The measurements below retain their original implementation fingerprints; they
+have not been relabeled as current-source performance or authoritative validation.
+
 The experiment is on `codex/experimental-generation-engine`, directly above
 preservation commit `f804fd1` on `codex/issue-54-registry-scaling`. The preceding
 work was committed before branching; no remote publication or consumer-registry

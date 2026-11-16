@@ -62,8 +62,13 @@ def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize(
+    "experimental_flag",
+    ["--experimental-registry-index", "--experimental-native-observation"],
+)
 def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
     tmp_path: Path,
+    experimental_flag: str,
 ) -> None:
     _, prefix = _test_cmake._configure_fetchcontent_install_fixture(
         tmp_path, protocyte_install=True
@@ -72,6 +77,7 @@ def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
     prefix.rename(relocated)
     script = next(relocated.rglob("ProtocyteOutputCoordinator.py"))
     assert script.with_name("ProtocyteOwnershipIndex.py").is_file()
+    assert script.with_name("ProtocytePathObservation.py").is_file()
 
     def contents() -> dict[str, bytes]:
         return {
@@ -115,7 +121,7 @@ def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
             str(tmp_path / "locks"),
             "--plan",
             str(plan),
-            "--experimental-registry-index",
+            experimental_flag,
         ],
         check=False,
         capture_output=True,

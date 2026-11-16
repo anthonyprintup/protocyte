@@ -455,8 +455,9 @@ def _walk_tree(root: Path) -> list[Path]:
     return paths
 
 
-def _load_json(path: Path, description: str) -> dict[str, Any]:
-    expected = project_path(path, leaf_may_be_file=True)
+def _load_json(path: Path, description: str, *, _filesystem: Any = None) -> dict[str, Any]:
+    project = project_path if _filesystem is None else _filesystem.project
+    expected = project(path, leaf_may_be_file=True)
     if expected != path or _is_link(path):
         _fail(f"{description} path is unsafe or was replaced: {path}")
     try:
@@ -930,9 +931,13 @@ class _SampledRegistryFilesystem:
         self._projected.clear()
         self._facts.clear()
 
-    def project(self, path: Path) -> Path:
+    def project(self, path: Path, *, leaf_may_be_file: bool = False) -> Path:
         if self._closed:
             _fail("experimental filesystem sample used outside its preview")
+        if leaf_may_be_file:
+            # Registry record paths retain fresh, uncached observations even
+            # while the directory-only index preview samples geometry.
+            return project_path(path, leaf_may_be_file=True)
         name = os.fspath(_require_absolute(path, "sampled directory"))
         if name not in self._projected:
             projected = project_path(path)
@@ -981,10 +986,79 @@ class _SampledRegistryFilesystem:
         return not first_key[2] and not second_key[2] and first_key == second_key
 
 
+_path_observation_module: Any = None
+
+
+def _load_path_observation() -> Any:
+    global _path_observation_module
+    if _path_observation_module is None:
+        path = Path(__file__).with_name("ProtocytePathObservation.py")
+        name = f"{__name__}_path_observation"
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            _fail("experimental path observer could not be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            exec(compile(path.read_bytes(), os.fspath(path), "exec"), module.__dict__)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        _path_observation_module = module
+    return _path_observation_module
+
+
+class _FreshRegistryFilesystem:
+    """Fresh projection reader; retains no filesystem facts across comparisons.
+
+    Native handles have call lifetime only. Physical containment, immutable
+    identity binding and the subsequent reference pass remain freshly observed.
+    """
+
+    def __init__(self) -> None:
+        self.module = _load_path_observation()
+        self.reader = self.module.FreshPathObserver()
+
+    def close(self) -> None:
+        self.reader.close()
+
+    def project(self, path: Path, *, leaf_may_be_file: bool = False) -> Path:
+        path = _require_absolute(path, "filesystem path")
+        try:
+            return self.reader.project(path, leaf_may_be_file=leaf_may_be_file)
+        except self.module.UnsafeObservation as error:
+            _fail(f"experimental path observation rejected a path: {error}")
+
+    def path_key(self, path: Path) -> str:
+        identity = os.fspath(self.project(path)).replace("\\", "/").casefold()
+        return _sha256_bytes(identity.encode("utf-8"))
+
+    def overlaps(self, first: Path, second: Path) -> bool:
+        first, second = self.project(first), self.project(second)
+        return (
+            _projected_contains(first, second)
+            or _projected_contains(second, first)
+            or _projected_physically_contains(first, second)
+            or _projected_physically_contains(second, first)
+        )
+
+    def contains(self, parent: Path, child: Path) -> bool:
+        return _projected_contains(
+            self.project(parent), self.project(child, leaf_may_be_file=True)
+        )
+
+    def physically_contains(self, parent: Path, child: Path) -> bool:
+        return _projected_physically_contains(self.project(parent), self.project(child))
+
+    @staticmethod
+    def same_path(first: Path, second: Path) -> bool:
+        return _same_physical_path(first, second)
+
+
 class OutputCoordinator:
     def __init__(self, lock_root: Path, *, registry_validation: str = "reference") -> None:
-        if registry_validation not in ("reference", "shadow"):
-            _fail("registry validation must be reference or shadow")
+        if registry_validation not in ("reference", "shadow", "native-shadow"):
+            _fail("registry validation must be reference or shadow (including native-shadow)")
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
         self.registry_validation = registry_validation
         self.validation_metrics: dict[str, Any] = {}
@@ -1407,6 +1481,41 @@ class OutputCoordinator:
         }
         self.validation_metrics = metrics
         preview_accepted: bool | None = None
+        if self.registry_validation == "native-shadow":
+            if progress is not None:
+                progress.phase("fresh experimental path observation", "validation")
+            started = time.perf_counter()
+            filesystem: Any = None
+            try:
+                filesystem = _FreshRegistryFilesystem()
+                self._validate_registry_reference(
+                    plans, retiring_root_keys, _filesystem=filesystem
+                )
+                preview_accepted = True
+                metrics["preview_result"] = "accepted"
+            except Exception as error:
+                module = _path_observation_module
+                if module is not None and isinstance(error, module.ObservationUnavailable):
+                    # Capability failure is never a reason to demand privileges,
+                    # change user configuration or authorize cached geometry.
+                    metrics["preview_result"] = "unavailable"
+                else:
+                    metrics["preview_result"] = "sample-error"
+                    metrics["preview_error_type"] = type(error).__name__
+            finally:
+                if filesystem is not None:
+                    try:
+                        filesystem.close()
+                    except Exception as error:
+                        preview_accepted = None
+                        metrics["preview_result"] = "sample-error"
+                        metrics["preview_error_type"] = type(error).__name__
+                    finally:
+                        metrics.update(filesystem.reader.metrics())
+                metrics["preview_wall_seconds"] = time.perf_counter() - started
+            self._inject("after-native-observation")
+            if progress is not None:
+                progress.phase("validating registry (reference authority)", "validation")
         if self.registry_validation == "shadow":
             if progress is not None:
                 progress.phase("sampling experimental ownership index", "validation")
@@ -1439,7 +1548,11 @@ class OutputCoordinator:
         finally:
             metrics["reference_wall_seconds"] = time.perf_counter() - started
         metrics["reference_result"] = "accepted"
-        if self.registry_validation == "shadow":
+        if self.registry_validation in ("shadow", "native-shadow"):
+            if metrics.get("preview_result") == "unavailable":
+                metrics["agreement"] = None
+                metrics["fallback"] = "reference"
+                return
             metrics["agreement"] = preview_accepted is True
             if preview_accepted is not True:
                 _fail(
@@ -1555,11 +1668,19 @@ class OutputCoordinator:
         retiring_root_keys: set[str] | None = None,
         *,
         progress: _ReconcileProgress | None = None,
+        _filesystem: Any = None,
     ) -> None:
         if not plans:
             return
         if retiring_root_keys is None:
             retiring_root_keys = set()
+        project = project_path if _filesystem is None else _filesystem.project
+        path_key = _path_key if _filesystem is None else _filesystem.path_key
+        overlaps = _paths_overlap if _filesystem is None else _filesystem.overlaps
+        contains = _contains if _filesystem is None else _filesystem.contains
+        physically_contains = _physically_contains if _filesystem is None else _filesystem.physically_contains
+        if _filesystem is not None:
+            self.validation_metrics["native_claims_checked"] = 0
         internal_paths = (
             self.lock_root / "roots",
             self.lock_root / "generation",
@@ -1567,15 +1688,15 @@ class OutputCoordinator:
         )
         for plan in plans:
             for target in plan.targets:
-                if _contains(target.staging, self.lock_root) or _physically_contains(
+                if contains(target.staging, self.lock_root) or physically_contains(
                     target.staging, self.lock_root
                 ):
                     _fail(
                         "generation staging contains the output coordinator lock root: "
                         f"{target.staging} and {self.lock_root}"
                     )
-            if _paths_overlap(plan.root, self.lock_root) or any(
-                _paths_overlap(path, plan.root) for path in internal_paths
+            if overlaps(plan.root, self.lock_root) or any(
+                overlaps(path, plan.root) for path in internal_paths
             ):
                 _fail(
                     "output root overlaps the output coordinator lock namespace: "
@@ -1586,7 +1707,7 @@ class OutputCoordinator:
             if progress is not None:
                 progress.registry(states=0)
             return
-        if project_path(roots) != roots:
+        if project(roots) != roots:
             _fail(f"output registry is unsafe or was replaced: {roots}")
         try:
             with os.scandir(roots) as stream:
@@ -1610,34 +1731,40 @@ class OutputCoordinator:
                 _fail(f"could not enumerate output claim state {state}: {error}")
             claim_path = state / "claim.json"
             if "claim.json" not in names:
-                _durable_rmtree(state)
+                if _filesystem is None:
+                    _durable_rmtree(state)
                 continue
-            claim = _load_json(claim_path, "output claim")
+            claim = _load_json(claim_path, "output claim", _filesystem=_filesystem)
             self._validate_claim_shape(claim, claim_path)
-            claimed_root, _ = self._claim_paths(claim, claim_path)
+            claimed_root, _ = self._claim_paths(claim, claim_path, _filesystem=_filesystem)
             if entry.name != claim["root_key"]:
                 _fail(
                     f"output claim is stored under the wrong registry key: {claim_path}"
                 )
-            recorded_plan = self._load_recorded_plan(state, claim)
+            if _filesystem is None:
+                recorded_plan = self._load_recorded_plan(state, claim)
+            else:
+                recorded_plan = self._load_recorded_plan(state, claim, _filesystem=_filesystem)
             if progress is not None:
                 progress.registry(claim=True)
+            if _filesystem is not None:
+                self.validation_metrics["native_claims_checked"] += 1
             recorded_targets = recorded_plan.targets if recorded_plan else ()
             for plan in plans:
-                same_root_key = claim["root_key"] == _path_key(plan.root)
-                if _paths_overlap(claimed_root, plan.root) and not same_root_key:
+                same_root_key = claim["root_key"] == path_key(plan.root)
+                if overlaps(claimed_root, plan.root) and not same_root_key:
                     _fail(
                         "output root overlaps a root claimed by another build: "
                         f"{plan.root} and {claimed_root}"
                     )
                 for recorded_target in recorded_targets:
-                    if _paths_overlap(recorded_target.staging, plan.root):
+                    if overlaps(recorded_target.staging, plan.root):
                         _fail(
                             "output root overlaps staging reserved by another plan: "
                             f"{plan.root} and {recorded_target.staging}"
                         )
                 for target in plan.targets:
-                    if _paths_overlap(claimed_root, target.staging):
+                    if overlaps(claimed_root, target.staging):
                         _fail(
                             "generation staging overlaps a claimed output root: "
                             f"{target.staging} and {claimed_root}"
@@ -1654,7 +1781,7 @@ class OutputCoordinator:
                             and target.identity == recorded_target.identity
                         ):
                             continue
-                        if _paths_overlap(recorded_target.staging, target.staging):
+                        if overlaps(recorded_target.staging, target.staging):
                             _fail(
                                 "generation staging overlaps staging reserved by another plan: "
                                 f"{target.staging} and {recorded_target.staging}"
@@ -1785,7 +1912,7 @@ class OutputCoordinator:
         if not path.exists():
             return None
         plan = Plan.from_payload(
-            _load_json(path, "configured output plan"), path, _filesystem=_filesystem
+            _load_json(path, "configured output plan", _filesystem=_filesystem), path, _filesystem=_filesystem
         )
         self._require_plan_claim_binding(plan, claim, path, _filesystem=_filesystem)
         return plan
@@ -2348,6 +2475,9 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--experimental-registry-index", action="store_true", help=argparse.SUPPRESS
     )
+    parser.add_argument(
+        "--experimental-native-observation", action="store_true", help=argparse.SUPPRESS
+    )
     return parser.parse_args(arguments)
 
 
@@ -2362,9 +2492,14 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
+        if options.experimental_native_observation and options.experimental_registry_index:
+            _fail("choose one experimental validation mode")
         coordinator = OutputCoordinator(
             options.lock_root,
-            registry_validation="shadow" if options.experimental_registry_index else "reference",
+            registry_validation=(
+                "native-shadow" if options.experimental_native_observation
+                else "shadow" if options.experimental_registry_index else "reference"
+            ),
         )
         if options.command == "reconcile-set":
             current = [Plan.read(path) for path in options.current_plan]
