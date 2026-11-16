@@ -11,6 +11,26 @@ import pytest
 
 
 _lock_module = None
+_quiet_observer_files = {
+    "test_output_coordinator.py",
+    "test_ownership_index.py",
+    "test_observation_commit.py",
+    "test_parallel_probes.py",
+    "test_path_observation.py",
+    "test_consumer_registry_qualification.py",
+}
+_has_quiet_observers = True
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(items):
+    # Marker deselection has finished. CMake-only CI does not run quiet native
+    # scopes and may keep its ordinary process parallelism. Mixed invocations
+    # still coordinate every CLI/integration case with those native scopes.
+    global _has_quiet_observers
+    _has_quiet_observers = any(
+        item.path.name in _quiet_observer_files for item in items
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -18,17 +38,12 @@ def quiet_registry_observers(request: pytest.FixtureRequest):
     # Quiet certificate tests and default-enabled CLI subprocesses share volume
     # ancestors. Serialize *test cases*, while preserving each case's deliberate
     # worker/process concurrency. This does not alter production lock selection.
-    files = {
-        "test_output_coordinator.py",
-        "test_ownership_index.py",
-        "test_observation_commit.py",
-        "test_parallel_probes.py",
-        "test_path_observation.py",
-        "test_consumer_registry_qualification.py",
-    }
     if (
-        request.node.path.name not in files
-        and request.node.get_closest_marker("cmake_integration") is None
+        request.node.path.name not in _quiet_observer_files
+        and (
+            not _has_quiet_observers
+            or request.node.get_closest_marker("cmake_integration") is None
+        )
     ):
         yield
         return

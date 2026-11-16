@@ -131,6 +131,8 @@ boundaries, fresh-negative semantics, and cooperative-writer assumptions.
 | CMake packaging and integration | 22 passed, 1 skipped |
 | Old/new upgrade, rollback, publication, crash recovery | 111 passed |
 | Ruff on touched Python files | Passed |
+| Mixed native/CMake run after narrowing the test gate | 168 passed, 1 skipped |
+| CMake-only run with four pytest workers | 22 passed, 1 skipped; 35.91 seconds |
 
 The parallel suite contains 64 tests, including 1,024 randomized serial/parallel
 ownership and retirement comparisons; all batch boundaries; real simultaneous
@@ -148,10 +150,11 @@ now accepts that existing fail-closed diagnostic, and plugin CI fetches history
 to execute the actual historical compatibility test. Production implementation
 bytes and all timing/source fingerprints are unchanged by these test fixes.
 
-Quiet native test cases and default-enabled CLI/integration cases share a
-test-only mutex so their own USN markers do not invalidate each other on
-common volume ancestors. Deliberate threads/processes inside each case remain
-concurrent. This does not replace or alter production ownership locks. One
+When a run includes quiet native cases, those cases and default-enabled
+CLI/integration cases share a test-only mutex so their own USN markers do not
+invalidate each other on common volume ancestors. CMake-only runs keep their
+ordinary process parallelism. Deliberate threads/processes inside each case
+remain concurrent. This does not replace or alter production ownership locks. One
 test-harness race in the injected-wait handshake was corrected to wait for
 the actual injected interruption before releasing the blocked worker.
 

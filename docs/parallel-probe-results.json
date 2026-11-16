@@ -1868,7 +1868,24 @@
         "accept the existing POSIX rejection diagnostic in the ancestor-replacement test",
         "fetch history in plugin CI to run the real pinned-helper compatibility test"
       ],
-      "production_implementation_bytes_changed": false
+      "production_implementation_bytes_changed": false,
+      "cmake_only_test_parallelism": "quiet-observer test gate applies to integration cases only when quiet native cases are selected",
+      "selection_checks": {
+        "quiet_native_only": true,
+        "cmake_only": false,
+        "mixed_native_and_cmake": true
+      },
+      "mixed_native_cmake_run": {
+        "passed": 168,
+        "skipped": 1,
+        "seconds": 100.49
+      },
+      "cmake_only_parallel_run": {
+        "pytest_workers": 4,
+        "passed": 22,
+        "skipped": 1,
+        "seconds": 35.91
+      }
     },
     "final_source_passes": [
       {
@@ -2707,7 +2724,7 @@
     },
     "parallel_probe_tests": 64,
     "randomized_serial_parallel_differential_cases": 1024,
-    "test_case_serialization": "quiet native tests and CLI/integration cases share a test-only mutex; intentional concurrency inside cases is preserved",
+    "test_case_serialization": "when quiet native cases are selected, native and CLI/integration cases share a test-only mutex; CMake-only runs retain process parallelism and intentional concurrency inside every case is preserved",
     "cpp_files_touched": 0
   },
   "limits": [
