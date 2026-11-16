@@ -1,15 +1,21 @@
 # Experimental observation commit
 
-Status: private `commit-shadow` experiment on
-`codex/experimental-generation-engine`. Reference validation remains the only
-authority. The default and the CMake consumer commands do not select this mode.
+Status: experimental `commit-shadow` and `indexed` integrations on
+`codex/experimental-generation-engine`. The
+[retained consumer qualification](consumer-validation-results.md) failed the
+reliable-under-30-second timing gate. The default remains reference validation.
+An explicit source guard blocks consumer index authority, including the private
+API and CLI. Isolated fixtures and the mutation-forbidden read-only harness can
+exercise the proposed indexed success path; it accepts only a verified, fully
+closed read set. Other outcomes use reference validation.
 
 This replaces the previous fresh-observation experiment's repeated full path
 walks with a provisional read set. Its certificate verifies the requested native
 object/version witnesses; it is not unconditional namespace authority. The read
-set is discarded before the ordinary reference validation and
-before any reconciliation mutation. There is no persistent filesystem cache,
-new claim format, new lock namespace, watcher, service, or privileged setup.
+set is discarded before reference fallback or an indexed acceptance, and before
+any reconciliation mutation. There is no persistent filesystem cache, new claim
+format, change to the ownership lock namespace, watcher, service, or privileged
+setup. A separate observer mutex coordinates the journal markers described below.
 
 ## Scope and dependencies
 
@@ -29,7 +35,9 @@ validator. A missing
 capability never requests administrator access or a user configuration change.
 
 Windows object identity consists of the volume serial and the full 128-bit file
-ID. Every positive path component is observed through a short root-relative
+ID. Reaching a second drive with an already observed volume serial forces
+reference fallback, preventing ambiguous root-handle routing. Every positive
+path component is observed through a short root-relative
 native open with `OBJ_DONT_REPARSE`. Only volume-root handles survive a lookup;
 ordinary build, staging, registry, and record handles are promptly closed, with
 read/write/delete sharing. A competing cleanup can delete an observed directory;
@@ -67,7 +75,9 @@ file's USN. The inference used here is that a relevant NTFS mutation during an
 object's observation interval either changes its version or appears among the
 forced end record's reasons. The native tests exercise rename, content/timestamp,
 and attribute-only reparse ABA changes, including a preexisting writer primed
-with the same reason before registration.
+with the same reason before registration. Additional tests inject those changes
+after the last version read but before the end close is posted: the dirty end
+record must reject a change that the preceding version read could not see.
 
 An adversarial native test found a counterexample to treating **all** metadata
 as versioned: changing a directory's case-sensitivity flag and changing it back
@@ -86,12 +96,17 @@ Microsoft describes the lookup behavior under the directory flag in
 
 This argument covers the anchored NTFS objects. DOS-device mappings are outside
 the NTFS journal: reopening each drive at seal checks its final binding, not
-whether it was temporarily remapped and restored. Likewise, reading canonical
-record bytes under the registry lock retains the reference implementation's
-cooperative-writer model; it does not claim an atomic data snapshot against
-unsynchronized memory-mapped writers. These namespace and writer boundaries
-must be reviewed before a certificate could replace reference validation. No
-current certificate bypasses that validation.
+whether it was temporarily remapped and restored. After each root is bound, all
+lookups and refreshed negatives use its retained volume-root handle, so a
+temporary DOS remapping cannot supply cached geometry from another volume.
+Final bindings must still match. Later mutation checks resolve their paths
+afresh under the unchanged v1 rules.
+
+Reading canonical record bytes under the registry lock retains the reference
+implementation's cooperative-writer model; it does not claim an atomic data
+snapshot against unsynchronized memory-mapped writers. The v1 writer protocol
+uses the same existing locks and durable record operations. This is a retained
+trust boundary, not a new guarantee about arbitrary external writers.
 
 Sources for that inference:
 
@@ -106,9 +121,10 @@ epoch queries and unprivileged reads whose names are redacted. The implementatio
 uses the public V2/V3 record headers and requires positive coverage of every
 exact marker. It never treats the absence of an event in this filtered transport
 as evidence that nothing changed. A transport that omits a required marker
-cannot produce a certificate. This capability and the relevant mutation-to-USN
-semantics still require qualification on the supported Windows/NTFS matrix
-before any authoritative mode is considered.
+cannot produce a certificate. Native mutation tests qualify the relevant
+semantics on the measured Windows/NTFS host. This does not claim a test matrix
+covering every Windows build, filesystem filter, or security product; capability
+failures or unverified replies on another installation use reference validation.
 
 ## Missing paths are not indexed as stable
 
@@ -132,8 +148,11 @@ As with the reference validator's successive fresh probes, absence can change
 between system calls. This experiment does not claim an atomic snapshot or a
 namespace freeze. Its goal is to justify cached **positive** geometry during the
 calculations while preserving fresh negative checks. Existing mutation-time
-checks remain necessary. A future authoritative design must define the boundary
-between a successful past computation and each subsequent mutation explicitly.
+checks remain necessary. The integration's boundary is a completed past
+validation computation: seal has verified the positive intervals, all native
+handles have been released, and the read set has been erased before the caller
+can enter the unchanged reconciliation and mutation methods. There is no new
+claim that namespace stability persists after validation returns.
 
 ## Expiry, fallback, and operational costs
 
@@ -141,17 +160,24 @@ Instances are local to one validation phase. Sealing disables further reads;
 closing releases roots and clears all observations, locators, inventories, and
 object tables. No certificate or path facts cross into claim initialization,
 recovery, publication, reset, or the next invocation. A failed or unsupported
-commit still runs the ordinary reference validator. A verified candidate
-conflict followed by reference acceptance fails closed before reconciliation.
+commit still runs the ordinary reference validator. Indexed conflicts also use
+reference validation, preserving its diagnostics and acceptance behavior.
+`commit-shadow` additionally treats a verified candidate conflict followed by
+reference acceptance as a disagreement and fails closed.
 
 The experiment posts journal metadata records on observed objects, including
 common ancestors. It does not modify their contents or namespace. These posts
 are real filesystem work and are included in timing and operation counters.
 They can invalidate another observer's saved versions even when neither changed
 the geometry. Same-registry operations already serialize through the existing
-lock; independent private registries can still collide on common ancestors.
-Such collisions conservatively fall back to reference validation. No additional
-production mutex was added to conceal this reliability limitation.
+lock. New observers in independent registries additionally share a per-user
+`observation-commit-v1.lock` beneath the ordinary user cache (or temporary
+directory fallback). It is acquired inside the existing ownership locks and
+released before reference fallback or mutation. No additional ownership lock is
+acquired while it is held, so it introduces no reverse lock-order dependency.
+It changes neither registry identity nor old/new ownership exclusion. Other
+users, older prototypes, or external marker writers can still invalidate a
+candidate; such collisions conservatively fall back to reference validation.
 
 Bounds are 32,768 unique objects, 16 MiB per ownership record, and 64 MiB of
 journal transport per volume. Exceeding them falls back. Metrics include native
@@ -163,7 +189,10 @@ or tokens. An exception records its type, not its message.
 
 ## Upgrade contract and promotion gate
 
-Normal installations continue to use reference validation. Packaging installs
+Normal installations continue to use reference validation. Neither consumer
+configuration nor the hidden experiment flag can override the closed promotion
+guard. Only a future reviewed source change after qualification can promote it.
+Packaging installs
 the additional trusted sibling Python helper, without requiring a new consumer
 command or runtime dependency. Protocol v1, plan serialization, claim tokens,
 lock locations, and recovery/publication formats are unchanged. Old and new
@@ -178,8 +207,8 @@ problem to be repaired rather than being skipped.
 
 Promotion remains closed until all of the following have evidence:
 
-- Relevant native mutation semantics and fallback behavior are qualified across
-  supported configurations; the remaining assumptions above are reviewed.
+- Relevant native mutation semantics and fallback behavior are qualified for
+  the enabled capability, with the namespace and writer boundaries above explicit.
 - Differential, race, malformed-state, crash-recovery, packaging, minimum-Python,
   and old/new upgrade checks pass with the final source fingerprints.
 - **All validation**, including current plans, every retained record, fresh

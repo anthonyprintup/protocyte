@@ -25,6 +25,9 @@ def _load_coordinator() -> ModuleType:
     sys.modules[specification.name] = module
     specification.loader.exec_module(module)
     test_mode = os.environ.get("PROTOCYTE_TEST_REGISTRY_VALIDATION", "reference")
+    if test_mode == "indexed":
+        # This module is used exclusively by isolated test registries.
+        module._COMMITTED_INDEX_QUALIFIED = True
     if test_mode != "reference":
         original_initialize = module.OutputCoordinator.__init__
 
@@ -1938,16 +1941,26 @@ def test_registry_comparisons_reject_a_replaced_retained_root(
     original_overlap = coordinator._paths_overlap
     changed = False
 
-    def overlap(first: Path, second: Path) -> bool:
+    def replace_retained_root(first: Path, second: Path, result: bool) -> bool:
         nonlocal changed
-        result = original_overlap(first, second)
         if not changed and first == retained_root and second == current[0].root:
             changed = True
             # The previously missing directory is replaced after one comparison.
             _directory_link(retained_root, tmp_path)
         return result
 
+    def overlap(first: Path, second: Path) -> bool:
+        return replace_retained_root(first, second, original_overlap(first, second))
+
     monkeypatch.setattr(coordinator, "_paths_overlap", overlap)
+    if engine.registry_validation == "indexed" and os.name == "nt":
+        scope_type = coordinator._load_observation_commit().WindowsObservationCommit
+        native_overlap = scope_type.overlaps
+
+        def indexed_overlap(self: object, first: Path, second: Path) -> bool:
+            return replace_retained_root(first, second, native_overlap(self, first, second))
+
+        monkeypatch.setattr(scope_type, "overlaps", indexed_overlap)
     with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
         engine.reconcile_set((), current)
     assert changed
@@ -2125,6 +2138,16 @@ def test_unreadable_recorded_plan_metadata_fails_closed(
         return original_lstat(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "lstat", denied)
+    if engine.registry_validation == "indexed" and os.name == "nt":
+        scope_type = coordinator._load_observation_commit().WindowsObservationCommit
+        record_exists = scope_type.record_exists
+
+        def inaccessible_record(self: object, path: Path) -> bool:
+            if path == recorded:
+                raise PermissionError("metadata denied by test")
+            return record_exists(self, path)
+
+        monkeypatch.setattr(scope_type, "record_exists", inaccessible_record)
     with pytest.raises(coordinator.CoordinatorError, match="could not inspect configured output plan"):
         engine.reconcile(current)
     claim = engine._state_directory(retained.root) / "claim.json"
@@ -2205,6 +2228,27 @@ def test_physical_output_root_aliases_cannot_receive_distinct_claims(
 
     with pytest.raises(coordinator.CoordinatorError, match="overlapping roots"):
         engine._validate_plan_set((first, second))
+
+    if engine.registry_validation == "indexed" and os.name == "nt":
+        scope_type = coordinator._load_observation_commit().WindowsObservationCommit
+        native_identity = scope_type._identity
+        scope = scope_type(coordinator._load_path_observation(), coordinator._load_ownership_index())
+        try:
+            handle = scope.reader._open_existing(root_a)
+            assert handle is not None
+            try:
+                alias_identity = native_identity(scope, handle)
+            finally:
+                scope._release(handle)
+        finally:
+            scope.close()
+
+        def identity_with_root_alias(self: object, handle: object) -> tuple[int, int]:
+            identity = native_identity(self, handle)
+            canonical = self.reader._describe(handle, leaf_may_be_file=True)
+            return alias_identity if canonical == root_b else identity
+
+        monkeypatch.setattr(scope_type, "_identity", identity_with_root_alias)
 
     engine.reconcile(first)
     with pytest.raises(coordinator.CoordinatorError, match="root claimed"):

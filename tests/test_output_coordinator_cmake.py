@@ -64,11 +64,17 @@ def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) 
 
 @pytest.mark.parametrize(
     "experimental_flag",
-    ["--experimental-registry-index", "--experimental-native-observation", "--experimental-observation-commit"],
+    [
+        None,
+        "--experimental-registry-index",
+        "--experimental-native-observation",
+        "--experimental-observation-commit",
+        "--experimental-committed-index",
+    ],
 )
-def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
+def test_installed_coordinator_is_relocatable_and_keeps_prefix_unchanged(
     tmp_path: Path,
-    experimental_flag: str,
+    experimental_flag: str | None,
 ) -> None:
     _, prefix = _test_cmake._configure_fetchcontent_install_fixture(
         tmp_path, protocyte_install=True
@@ -122,15 +128,21 @@ def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
             str(tmp_path / "locks"),
             "--plan",
             str(plan),
-            experimental_flag,
+            *([experimental_flag] if experimental_flag else []),
         ],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert len(result.stdout.strip()) == 64
-    assert len(result.stdout.splitlines()) == 1
+    if experimental_flag == "--experimental-committed-index":
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "not qualified for consumer use" in result.stderr
+        assert not result.stdout
+        assert not (tmp_path / "locks").exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert len(result.stdout.strip()) == 64
+        assert len(result.stdout.splitlines()) == 1
     assert contents() == before
 
 

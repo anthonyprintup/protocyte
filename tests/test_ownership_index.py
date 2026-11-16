@@ -306,7 +306,7 @@ def test_samples_expire_and_index_only_authorization_is_not_available(
             operation(tmp_path)
     with pytest.raises(coordinator.CoordinatorError, match="outside its preview"):
         sample.same_path(tmp_path, tmp_path)
-    with pytest.raises(coordinator.CoordinatorError, match="reference or shadow"):
+    with pytest.raises(coordinator.CoordinatorError, match="registry validation must be"):
         coordinator.OutputCoordinator(
             tmp_path / "locks", registry_validation="index-only"
         )

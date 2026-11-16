@@ -36,6 +36,10 @@ from typing import Any, Iterator, Mapping, NoReturn, Sequence
 
 
 PROTOCOL_VERSION = 1
+# The retained consumer timing gate failed. Only isolated/mutation-forbidden
+# qualification drivers override this in their own imported module instance.
+# Neither a CLI option nor consumer configuration can promote the index.
+_COMMITTED_INDEX_QUALIFIED = False
 PLAN_HEADER = "protocyte-output-plan-v1"
 GENERATED_SUFFIXES = (".protocyte.cpp", ".protocyte.hpp", "/runtime.hpp")
 
@@ -1081,8 +1085,8 @@ def _load_observation_commit() -> Any:
 
 class OutputCoordinator:
     def __init__(self, lock_root: Path, *, registry_validation: str = "reference") -> None:
-        if registry_validation not in ("reference", "shadow", "native-shadow", "commit-shadow"):
-            _fail("registry validation must be reference or shadow (including native/commit-shadow)")
+        if registry_validation not in ("reference", "shadow", "native-shadow", "commit-shadow", "indexed"):
+            _fail("registry validation must be reference, indexed, or shadow (including native/commit-shadow)")
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
         self.registry_validation = registry_validation
         self.validation_metrics: dict[str, Any] = {}
@@ -1505,14 +1509,23 @@ class OutputCoordinator:
         }
         self.validation_metrics = metrics
         preview_accepted: bool | None = None
-        if self.registry_validation == "commit-shadow":
+        index_allowed = self.registry_validation == "indexed" and _COMMITTED_INDEX_QUALIFIED
+        if self.registry_validation == "indexed" and not index_allowed:
+            metrics["index_authorization_blocked"] = True
+            metrics["fallback"] = "reference"
+        if self.registry_validation == "commit-shadow" or index_allowed:
             if progress is not None:
                 progress.phase("validating provisional observation commit", "validation")
             started = time.perf_counter()
             try:
-                preview_accepted = self._preview_committed_index(
-                    plans, retiring_root_keys or set(), progress=progress
-                )
+                # Close markers on shared ancestors would otherwise invalidate
+                # simultaneous observers using different private registries.
+                # This lock coordinates observers only; it never substitutes
+                # for registry/generation/publication locks or filesystem checks.
+                with self._observation_lock():
+                    preview_accepted = self._preview_committed_index(
+                        plans, retiring_root_keys or set(), progress=progress
+                    )
                 metrics["preview_result"] = "accepted" if preview_accepted else "conflict"
             except Exception as error:
                 # A failed or unsupported certificate grants no authority. The
@@ -1523,7 +1536,24 @@ class OutputCoordinator:
                 metrics["fallback"] = "reference"
             finally:
                 metrics["preview_wall_seconds"] = time.perf_counter() - started
-            self._inject("after-observation-commit")
+            if self.registry_validation == "indexed":
+                if (
+                    preview_accepted is True
+                    and metrics.get("commit_certificate") == "verified"
+                    and metrics.get("commit_state") == "closed"
+                    and type(metrics.get("commit_handles_opened")) is int
+                    and type(metrics.get("commit_handles_closed")) is int
+                    and metrics["commit_handles_opened"] > 0
+                    and metrics.get("commit_handles_opened") == metrics.get("commit_handles_closed")
+                ):
+                    metrics["authoritative"] = "index"
+                    metrics["reference_result"] = "not-required"
+                    return
+                # Reference decides conflicts and all unverified/capability
+                # cases, retaining its diagnostics and upgrade behavior.
+                metrics["fallback"] = "reference"
+            else:
+                self._inject("after-observation-commit")
             if progress is not None:
                 progress.phase("validating registry (reference authority)", "validation")
         if self.registry_validation == "native-shadow":
@@ -1608,6 +1638,15 @@ class OutputCoordinator:
                     "validator; no reconciliation changes were authorized"
                 )
 
+    def _observation_lock(self) -> Any:
+        if os.name != "nt":
+            return contextlib.nullcontext()
+        for name in ("LOCALAPPDATA", "TEMP", "TMP"):
+            value = os.environ.get(name)
+            if value and Path(value).is_absolute():
+                return FileLock(Path(value) / "protocyte" / "observation-commit-v1.lock")
+        _fail("native observation coordination is unavailable")
+
     def _preview_committed_index(
         self, plans: Sequence[Plan], retiring_root_keys: set[str], *,
         progress: _ReconcileProgress | None = None,
@@ -1631,7 +1670,10 @@ class OutputCoordinator:
             if plans and scope.record_exists(roots):
                 if scope.project(roots) != roots:
                     _fail("provisional commit found an unsafe registry path")
-                for name in scope.list_names(roots):
+                state_names = scope.list_names(roots)
+                if progress is not None:
+                    progress.registry(states=len(state_names))
+                for name in state_names:
                     if not _is_sha256(name):
                         _fail("provisional commit found an unsafe registry entry")
                     state = roots / name
@@ -1639,7 +1681,9 @@ class OutputCoordinator:
                         _fail("provisional commit found a changed registry entry")
                     names = scope.list_names(state, relevant=frozenset(("claim.json", "plan.json")))
                     if "claim.json" not in names:
-                        continue
+                        # Reference owns abandoned-initialization cleanup. Do
+                        # not silently change its recovery behavior on upgrade.
+                        raise module.CapabilityUnavailable("unclaimed state requires reference cleanup")
                     source = state / "claim.json"
                     claim = _load_json(source, "output claim", _filesystem=scope)
                     self._validate_claim_shape(claim, source)
@@ -1654,6 +1698,7 @@ class OutputCoordinator:
                             entries.append((model.Reservation("staging", key, build, target.identity, scope.facts(target.staging)), target.staging, scope.is_stable(target.staging)))
                     metrics["commit_claims_checked"] += 1
                     if progress is not None:
+                        progress.registry(claim=True)
                         progress.phase(f"provisional observation commit ({metrics['commit_claims_checked']} claims)", "validation")
             index = module.ProvisionalOwnershipIndex(model, scope, entries)
             for plan in plans:
@@ -2609,6 +2654,9 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--experimental-observation-commit", action="store_true", help=argparse.SUPPRESS
     )
+    parser.add_argument(
+        "--experimental-committed-index", action="store_true", help=argparse.SUPPRESS
+    )
     return parser.parse_args(arguments)
 
 
@@ -2623,12 +2671,15 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
-        if sum((options.experimental_native_observation, options.experimental_registry_index, options.experimental_observation_commit)) > 1:
+        if sum((options.experimental_native_observation, options.experimental_registry_index, options.experimental_observation_commit, options.experimental_committed_index)) > 1:
             _fail("choose one experimental validation mode")
+        if options.experimental_committed_index and not _COMMITTED_INDEX_QUALIFIED:
+            _fail("committed index is not qualified for consumer use; reference validation is required")
         coordinator = OutputCoordinator(
             options.lock_root,
             registry_validation=(
-                "commit-shadow" if options.experimental_observation_commit
+                "indexed" if options.experimental_committed_index
+                else "commit-shadow" if options.experimental_observation_commit
                 else "native-shadow" if options.experimental_native_observation
                 else "shadow" if options.experimental_registry_index else "reference"
             ),

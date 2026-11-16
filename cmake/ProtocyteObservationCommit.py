@@ -3,7 +3,8 @@
 Positive objects use root-anchored short opens and exact ID/version witnesses.
 Only volume roots retain handles; foreign build directories are not pinned.
 Negative namespace observations are refreshed at every comparison and commit.
-The coordinator still performs its ordinary reference validation afterward.
+The coordinator decides authority only after seal and complete handle release;
+no observations may cross into reconciliation or publication mutations.
 """
 
 from __future__ import annotations
@@ -459,6 +460,13 @@ class WindowsObservationCommit:
             guard, canonical = self._adopt(handle, retain_root=True)
             if canonical != root:
                 raise CommitUnavailable("drive aliases need reference validation")
+            if any(view.guard.volume == guard.volume for view in self._roots.values()):
+                # A serial is not a license to route a second drive's relative
+                # lookups through the first root handle (for example, cloned
+                # volumes or an additional DOS binding). Refuse ambiguity.
+                raise CapabilityUnavailable(
+                    "duplicate volume binding needs reference validation"
+                )
             location = (guard.volume, guard.file_id, ())
             view = _View(
                 canonical,

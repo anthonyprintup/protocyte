@@ -76,6 +76,9 @@ def main() -> None:
 
     old = load("review_legacy", LEGACY)
     new = load("review_current", CURRENT)
+    assert new._COMMITTED_INDEX_QUALIFIED is False
+    # Only isolated fixture registries below can exercise provisional authority.
+    new._COMMITTED_INDEX_QUALIFIED = True
     assert old.PROTOCOL_VERSION == new.PROTOCOL_VERSION == 1
     assert old.PLAN_HEADER == new.PLAN_HEADER
 
@@ -127,10 +130,21 @@ def main() -> None:
     )
     assert ast.dump(checkpoint["FileLock"]) == ast.dump(candidate["FileLock"])
 
+    indexed_validations = []
+
     def engine(version: str, locks: Path):
         if version == "old":
             return old.OutputCoordinator(locks)
-        return new.OutputCoordinator(locks, registry_validation=version)
+        result = new.OutputCoordinator(locks, registry_validation=version)
+        if version == "indexed":
+            validate = result._validate_registry
+
+            def recorded(*args, **kwargs):
+                validate(*args, **kwargs)
+                indexed_validations.append(dict(result.validation_metrics))
+
+            result._validate_registry = recorded
+        return result
 
     def module(version: str):
         return old if version == "old" else new
@@ -197,6 +211,17 @@ def main() -> None:
             args.append("--experimental-native-observation")
         elif version == "commit-shadow":
             args.append("--experimental-observation-commit")
+        elif version == "indexed":
+            args.append("--experimental-committed-index")
+            qualified_main = (
+                "import importlib.util,sys; "
+                "spec=importlib.util.spec_from_file_location('qualified_upgrade_cli',sys.argv[1]); "
+                "module=importlib.util.module_from_spec(spec); "
+                "sys.modules[spec.name]=module; spec.loader.exec_module(module); "
+                "module._COMMITTED_INDEX_QUALIFIED=True; "
+                "raise SystemExit(module.main(sys.argv[2:]))"
+            )
+            args = [sys.executable, "-c", qualified_main, *args[1:]]
         environment = os.environ.copy()
         environment.pop("PROTOCYTE_COORDINATOR_CRASH_AFTER", None)
         if crash:
@@ -223,6 +248,8 @@ def main() -> None:
         ("native-shadow", "old"),
         ("old", "commit-shadow"),
         ("commit-shadow", "old"),
+        ("old", "indexed"),
+        ("indexed", "old"),
     )
     for writer, reader in transitions:
         root, locks, plan, target, staging = fixture(f"steady-{writer}-{reader}")
@@ -271,6 +298,8 @@ def main() -> None:
         ("native-shadow", "old"),
         ("old", "commit-shadow"),
         ("commit-shadow", "old"),
+        ("old", "indexed"),
+        ("indexed", "old"),
     ):
         for phase in (
             "after-pending",
@@ -379,6 +408,15 @@ def main() -> None:
         "reference_validator_ast_unchanged_since_checkpoint": reference_unchanged,
         "file_lock_ast_unchanged_since_checkpoint": True,
         "passed_cases": len(results),
+        "production_index_authorization_qualified": False,
+        "index_authority_enabled_only_in_isolated_fixture_module": True,
+        "indexed_validations": len(indexed_validations),
+        "index_authorized_validations": sum(
+            metrics["authoritative"] == "index" for metrics in indexed_validations
+        ),
+        "indexed_reference_fallbacks": sum(
+            metrics.get("fallback") == "reference" for metrics in indexed_validations
+        ),
         "cases": results,
     }
     (WORK / "upgrade-results.json").write_text(json.dumps(report, indent=2) + "\n")

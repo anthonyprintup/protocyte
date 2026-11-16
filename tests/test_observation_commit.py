@@ -27,13 +27,15 @@ model = coordinator._load_ownership_index()
 
 
 @pytest.fixture(autouse=True)
-def quiet_native_commit_cases(request, tmp_path_factory):
+def quiet_native_commit_cases(request, tmp_path_factory, monkeypatch):
     # Close-marker posts are deliberately treated as version changes, including
     # posts by another observer. Give quiet-baseline tests a private session gate;
     # the explicit overlap test below exercises invalidation instead.
     base = tmp_path_factory.getbasetemp()
     if getattr(request.config, "workerinput", None) is not None:
         base = base.parent
+    # Exercise the guarded success path only in isolated test fixtures.
+    monkeypatch.setattr(coordinator, "_COMMITTED_INDEX_QUALIFIED", True)
     with coordinator.FileLock(base / "observation-commit-tests.lock"):
         yield
 
@@ -73,6 +75,24 @@ def test_redacted_record_headers_can_supply_exact_positive_witnesses(
     cursor, records = commit.parse_journal_page(page)
     assert cursor == 200
     commit.verify_witnesses({100: 11}, records)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="DOS drive roots")
+@pytest.mark.parametrize("same_root_id", [False, True])
+def test_second_drive_with_duplicate_volume_serial_cannot_reuse_first_root(
+    monkeypatch: pytest.MonkeyPatch, same_root_id: bool
+) -> None:
+    scope = object.__new__(commit.WindowsObservationCommit)
+    scope._counts = defaultdict(int)
+    scope._roots = {"c:\\": SimpleNamespace(guard=SimpleNamespace(volume=77))}
+    scope.reader = SimpleNamespace(
+        _native_name=lambda path: None, _open_existing=lambda path: 123
+    )
+    guard = SimpleNamespace(volume=77, file_id=1 if same_root_id else 2)
+    monkeypatch.setattr(scope, "_adopt", lambda handle, **kwargs: (guard, Path("D:\\")))
+    with pytest.raises(commit.CapabilityUnavailable, match="duplicate volume binding"):
+        scope._root(Path("D:/generated"))
+    assert list(scope._roots) == ["c:\\"]
 
 
 @pytest.mark.parametrize("reason", [0, 1, 0x200, 0x1000, 0x8000, 0x10000, 0x100000])
@@ -228,8 +248,9 @@ def test_record_content_aba_with_restored_timestamp_invalidates(
         readset.seal()
 
 
+@pytest.mark.parametrize("timing", ["before-seal", "after-version-read"])
 def test_reparse_aba_from_a_preexisting_attribute_writer_cannot_certify(
-    tmp_path: Path, readset
+    tmp_path: Path, readset, monkeypatch: pytest.MonkeyPatch, timing: str
 ) -> None:
     from ctypes import wintypes as w
 
@@ -292,15 +313,79 @@ def test_reparse_aba_from_a_preexisting_attribute_writer_cannot_certify(
         reparse(True)
         reparse(False)
         readset.project(directory)
-        reparse(True)
-        reparse(False)
+        if timing == "before-seal":
+            reparse(True)
+            reparse(False)
+        else:
+            identity = readset.facts(directory).location[:2]
+            original_version = readset._version
+            changed = False
+
+            def change_after_version(handle):
+                nonlocal changed
+                version = original_version(handle)
+                if not changed and readset._identity(handle) == identity:
+                    changed = True
+                    reparse(True)
+                    reparse(False)
+                return version
+
+            monkeypatch.setattr(readset, "_version", change_after_version)
         assert not directory.is_junction()
-        with pytest.raises(commit.ObservationChanged):
+        match = (
+            "close witness contains accumulated changes"
+            if timing == "after-version-read"
+            else None
+        )
+        with pytest.raises(commit.ObservationChanged, match=match):
             readset.seal()
+        if timing == "after-version-read":
+            assert changed
     finally:
         if directory.is_junction():
             reparse(False)
         assert readset.reader._close(writer)
+
+
+@pytest.mark.parametrize("mutation", ["rename-aba", "record-content-aba"])
+def test_native_close_witness_catches_changes_after_the_version_read(
+    tmp_path: Path, readset, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    path = tmp_path / "observed"
+    if mutation == "rename-aba":
+        path.mkdir()
+        readset.project(path)
+        guard = readset._view(path).guard
+    else:
+        path.write_bytes(b'{"value":1}\n')
+        readset.read_json(path, "test record")
+        guard = readset._view(path, leaf_may_be_file=True).guard
+    identity = guard.volume, guard.file_id
+    original_version = readset._version
+    changed = False
+
+    def change_after_version(handle):
+        nonlocal changed
+        version = original_version(handle)
+        if not changed and readset._identity(handle) == identity:
+            changed = True
+            if mutation == "rename-aba":
+                moved = path.with_name("moved")
+                path.rename(moved)
+                moved.rename(path)
+            else:
+                original = path.stat()
+                path.write_bytes(b'{"value":2}\n')
+                path.write_bytes(b'{"value":1}\n')
+                os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+        return version
+
+    monkeypatch.setattr(readset, "_version", change_after_version)
+    with pytest.raises(
+        commit.ObservationChanged, match="close witness contains accumulated changes"
+    ):
+        readset.seal()
+    assert changed
 
 
 @pytest.mark.parametrize("phase", ["comparison", "seal"])
@@ -527,8 +612,9 @@ def test_partitioned_index_matches_reference_ownership_and_retirement(
     "error",
     [commit.CapabilityUnavailable("no capability"), RuntimeError("unexpected failure")],
 )
+@pytest.mark.parametrize("mode", ["commit-shadow", "indexed"])
 def test_unavailable_or_failed_commit_uses_reference_and_preserves_existing_token(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, mode: str
 ) -> None:
     engine = coordinator.OutputCoordinator(
         tmp_path / "locks", registry_validation="reference"
@@ -542,7 +628,7 @@ def test_unavailable_or_failed_commit_uses_reference_and_preserves_existing_toke
         raise error
 
     monkeypatch.setattr(engine, "_preview_committed_index", unavailable)
-    engine.registry_validation = "commit-shadow"
+    engine.registry_validation = mode
     assert engine.reconcile(plan) == token
     assert (state / "claim.json").read_bytes() == claim_bytes
     assert engine.validation_metrics["fallback"] == "reference"
@@ -568,7 +654,274 @@ def test_commit_conflict_disagreement_cannot_initialize_a_new_claim(
 
 
 @pytest.mark.parametrize(
-    "other_flag", ["--experimental-registry-index", "--experimental-native-observation"]
+    "certificate",
+    [
+        {},
+        {"commit_certificate": "verified", "commit_state": "closed"},
+        {
+            "commit_certificate": "unverified",
+            "commit_state": "closed",
+            "commit_handles_opened": 2,
+            "commit_handles_closed": 2,
+        },
+        {
+            "commit_certificate": "verified",
+            "commit_state": "sealed",
+            "commit_handles_opened": 2,
+            "commit_handles_closed": 2,
+        },
+        {
+            "commit_certificate": "verified",
+            "commit_state": "closed",
+            "commit_handles_opened": 2,
+            "commit_handles_closed": 1,
+        },
+        {
+            "commit_certificate": "verified",
+            "commit_state": "closed",
+            "commit_handles_opened": 0,
+            "commit_handles_closed": 0,
+        },
+        {
+            "commit_certificate": "verified",
+            "commit_state": "closed",
+            "commit_handles_opened": 1,
+            "commit_handles_closed": True,
+        },
+    ],
+)
+def test_indexed_incomplete_certificate_runs_reference_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, certificate: dict
+) -> None:
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="indexed"
+    )
+    plan = _plan(tmp_path, "current")
+
+    def incomplete(*args, **kwargs):
+        engine.validation_metrics.update(certificate)
+        return True
+
+    monkeypatch.setattr(engine, "_preview_committed_index", incomplete)
+    original = engine._initialize_claim_locked
+
+    def initialize(state, current):
+        assert engine.validation_metrics["fallback"] == "reference"
+        assert engine.validation_metrics["reference_result"] == "accepted"
+        original(state, current)
+
+    monkeypatch.setattr(engine, "_initialize_claim_locked", initialize)
+    assert engine.reconcile(plan)
+
+
+def test_indexed_conflict_uses_reference_diagnostics_and_acceptance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="indexed"
+    )
+    monkeypatch.setattr(
+        engine, "_preview_committed_index", lambda *args, **kwargs: False
+    )
+    retained = _plan(tmp_path, "retained")
+    assert engine.reconcile(retained)
+    assert engine.validation_metrics["reference_result"] == "accepted"
+    retained.root.touch()
+    with pytest.raises(coordinator.CoordinatorError, match="non-directory"):
+        engine.reconcile(_plan(tmp_path, "current"))
+    assert engine.validation_metrics["reference_result"] == "rejected"
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
+def test_failed_promotion_gate_blocks_api_and_cli_before_index_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.setattr(coordinator, "_COMMITTED_INDEX_QUALIFIED", False)
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="indexed"
+    )
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("unqualified index was consulted")
+
+    monkeypatch.setattr(engine, "_preview_committed_index", forbidden)
+    assert engine.reconcile(_plan(tmp_path, "current"))
+    assert engine.validation_metrics["index_authorization_blocked"]
+    assert engine.validation_metrics["authoritative"] == "reference"
+    assert engine.validation_metrics["reference_result"] == "accepted"
+    rejected = tmp_path / "unqualified-cli-locks"
+    assert (
+        coordinator.main(
+            [
+                "reconcile",
+                "--lock-root",
+                str(rejected),
+                "--experimental-committed-index",
+            ]
+        )
+        == 1
+    )
+    assert "not qualified for consumer use" in capsys.readouterr().err
+    assert not rejected.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native commit witnesses require Windows")
+def test_indexed_verified_readset_closes_before_mutation_without_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_capability
+) -> None:
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="reference"
+    )
+    retained = [_plan(tmp_path, f"retained-{number}") for number in range(3)]
+    engine.reconcile_set((), retained)
+    engine.registry_validation = "indexed"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("verified native read set unexpectedly ran reference")
+
+    monkeypatch.setattr(engine, "_validate_registry_reference", forbidden)
+    original = engine._initialize_claim_locked
+
+    def initialize(state, plan):
+        metrics = engine.validation_metrics
+        assert metrics["authoritative"] == "index"
+        assert metrics["commit_certificate"] == "verified"
+        assert metrics["commit_state"] == "closed"
+        assert metrics["commit_handles_opened"] == metrics["commit_handles_closed"]
+        assert metrics["commit_claims_checked"] == 3
+        assert metrics["commit_records_read"] == 6
+        original(state, plan)
+
+    monkeypatch.setattr(engine, "_initialize_claim_locked", initialize)
+    assert engine.reconcile(_plan(tmp_path, "current"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native commit witnesses require Windows")
+def test_indexed_abandoned_state_falls_back_to_reference_cleanup(
+    tmp_path: Path, native_capability
+) -> None:
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="indexed"
+    )
+    abandoned = engine.lock_root / "roots" / ("a" * 64)
+    abandoned.mkdir(parents=True)
+    (abandoned / "snapshot.json").write_bytes(b"{}")
+    assert engine.reconcile(_plan(tmp_path, "current"))
+    assert not abandoned.exists()
+    assert engine.validation_metrics["fallback"] == "reference"
+    assert engine.validation_metrics["reference_result"] == "accepted"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native commit witnesses require Windows")
+@pytest.mark.parametrize("replacement", ["file", "junction"])
+def test_indexed_success_keeps_fresh_mutation_time_path_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, native_capability, replacement: str
+) -> None:
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="reference"
+    )
+    engine.reconcile(_plan(tmp_path, "retained"))
+    current = _plan(tmp_path, "current")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sample.protocyte.hpp"
+    sentinel.write_bytes(b"// preserve external output\n")
+    engine.registry_validation = "indexed"
+    validate = engine._validate_registry
+
+    def change_after_validation(*args, **kwargs):
+        validate(*args, **kwargs)
+        assert engine.validation_metrics["authoritative"] == "index"
+        assert engine.validation_metrics["commit_state"] == "closed"
+        if replacement == "file":
+            current.root.touch()
+        else:
+            helpers._directory_link(current.root, outside)
+
+    monkeypatch.setattr(engine, "_validate_registry", change_after_validation)
+    with pytest.raises(
+        coordinator.CoordinatorError, match="non-directory|symbolic link or junction"
+    ):
+        engine.reconcile(current)
+    assert sentinel.read_bytes() == b"// preserve external output\n"
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows observer coordination")
+def test_independent_registries_serialize_observers_and_release_before_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import concurrent.futures
+    import contextlib
+    import threading
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    first = coordinator.OutputCoordinator(
+        tmp_path / "first", registry_validation="indexed"
+    )
+    second = coordinator.OutputCoordinator(
+        tmp_path / "second", registry_validation="indexed"
+    )
+    assert first._observation_lock().path == second._observation_lock().path
+    entered, attempted, release = (
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+    order = []
+    actual_lock = second._observation_lock
+
+    @contextlib.contextmanager
+    def second_lock():
+        attempted.set()
+        with actual_lock():
+            yield
+
+    def observe_first(*args, **kwargs):
+        order.append("first")
+        entered.set()
+        assert release.wait(5)
+        return False
+
+    def observe_second(*args, **kwargs):
+        order.append("second")
+        return False
+
+    def reference_first(*args, **kwargs):
+        # The second observer can enter while the first reference is active.
+        assert second_entered.wait(5)
+
+    second_entered = threading.Event()
+
+    def reference_second(*args, **kwargs):
+        second_entered.set()
+
+    monkeypatch.setattr(first, "_preview_committed_index", observe_first)
+    monkeypatch.setattr(second, "_preview_committed_index", observe_second)
+    monkeypatch.setattr(second, "_observation_lock", second_lock)
+    monkeypatch.setattr(first, "_validate_registry_reference", reference_first)
+    monkeypatch.setattr(second, "_validate_registry_reference", reference_second)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(first._validate_registry, [])
+        assert entered.wait(5)
+        two = pool.submit(second._validate_registry, [])
+        try:
+            assert attempted.wait(5)
+            assert order == ["first"]
+        finally:
+            release.set()
+        one.result(timeout=10)
+        two.result(timeout=10)
+    assert order == ["first", "second"]
+
+
+@pytest.mark.parametrize(
+    "other_flag",
+    [
+        "--experimental-registry-index",
+        "--experimental-native-observation",
+        "--experimental-committed-index",
+    ],
 )
 def test_commit_flag_rejects_other_experiments_before_mutation(
     tmp_path: Path, capsys, other_flag: str

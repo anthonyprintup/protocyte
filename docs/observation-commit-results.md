@@ -1,5 +1,10 @@
 # Observation commit experiment: results
 
+This is the historical synthetic qualification at commit `0fe8ad4`. Its source
+fingerprints and closed promotion decision are retained below. See the newer
+[retained consumer qualification](consumer-validation-results.md) for subsequent
+real-workload measurements and the current integration decision.
+
 The index remains **disabled as an authority** on
 `codex/experimental-generation-engine`. The new read-set experiment has a safe
 shadow integration, useful native evidence, and passing upgrade checks. It has
