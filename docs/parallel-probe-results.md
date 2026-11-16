@@ -141,6 +141,13 @@ unproved; incomplete certificates; previous-helper fallback; and token
 preservation. Existing native ABA, alias, metadata, malformed-record,
 concurrency, crash-cut and packaging checks remain in the full qualification.
 
+The first Linux CI pass identified two test portability assumptions: POSIX may
+reject a replaced ancestor with `ENOTDIR` before the explicit parent-type check,
+and shallow checkouts lack the pinned older-helper revision. The rejection test
+now accepts that existing fail-closed diagnostic, and plugin CI fetches history
+to execute the actual historical compatibility test. Production implementation
+bytes and all timing/source fingerprints are unchanged by these test fixes.
+
 Quiet native test cases and default-enabled CLI/integration cases share a
 test-only mutex so their own USN markers do not invalidate each other on
 common volume ancestors. Deliberate threads/processes inside each case remain

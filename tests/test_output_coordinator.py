@@ -1895,7 +1895,10 @@ def test_physical_ancestry_rejects_ancestor_replacement_after_projection(
 
     monkeypatch.setattr(coordinator, "project_path", project)
     with pytest.raises(
-        coordinator.CoordinatorError, match="symbolic link or junction|non-directory"
+        coordinator.CoordinatorError,
+        # POSIX can reject the child with ENOTDIR before reaching its replaced
+        # ancestor; Windows can report the child missing and inspect the parent.
+        match="symbolic link or junction|non-directory|could not identify physical filesystem location",
     ):
         coordinator._paths_overlap(parent, child)
 

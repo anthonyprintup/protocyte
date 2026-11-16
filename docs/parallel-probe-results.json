@@ -1858,6 +1858,18 @@
     "controlled_algorithm_only_comparison": false
   },
   "verification": {
+    "ci_test_portability_followup": {
+      "initial_head": "99c2a693731419a002ce5dc6f5b9a28a41526ba9",
+      "initial_failures": [
+        "POSIX ENOTDIR rejection used an already fail-closed diagnostic outside the test regex",
+        "shallow CI checkout lacked the pinned historical helper revision"
+      ],
+      "fixes": [
+        "accept the existing POSIX rejection diagnostic in the ancestor-replacement test",
+        "fetch history in plugin CI to run the real pinned-helper compatibility test"
+      ],
+      "production_implementation_bytes_changed": false
+    },
     "final_source_passes": [
       {
         "check": "Ruff: all touched Python source and tests",
