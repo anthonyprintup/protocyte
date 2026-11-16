@@ -1,5 +1,10 @@
 # Retained consumer qualification
 
+Historical serial qualification at `8851bde`. Its failed timing gate and source
+fingerprints are preserved here. The subsequent
+[parallel-probe qualification](parallel-probe-results.md) passed the gate and
+documents the current automatic default on the experimental branch.
+
 This report uses an anonymous retained consumer configuration, not a synthetic
 replacement. Raw manifests, logs, claim tokens, ledger copies, paths, and output
 names stay in ignored local evidence. **Promotion failed:** six of ten complete

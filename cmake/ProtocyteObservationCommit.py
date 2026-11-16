@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import ctypes
 import contextlib
+import concurrent.futures
 import json
 import os
 import struct
+import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 
@@ -29,6 +33,172 @@ class CapabilityUnavailable(CommitUnavailable):
 
 class ObservationChanged(RuntimeError):
     pass
+
+
+class ProbeCleanupFailed(RuntimeError):
+    """Worker retirement failed: reference fallback must not authorize mutation."""
+
+
+class ProbeSession:
+    """Bounded independent comparisons; no query can outlive close, even on error.
+
+    The admission gate also covers a task queued by a submit call that raises
+    before returning its Future. Shutdown closes admission first, then joins
+    the executor and independently drains all admitted native work.
+    """
+
+    BATCH_SIZE = 32
+
+    def __init__(self, compare, *, workers: int = 4) -> None:
+        if type(workers) is not int or not 1 <= workers <= 4:
+            raise CapabilityUnavailable("unsupported probe worker bound")
+        self.workers = workers
+        self._owner = threading.get_ident()
+        self._compare = compare
+        self._condition = threading.Condition()
+        self._accepting = True
+        self._native_retired = False
+        self._finished = False
+        self._close_error: BaseException | None = None
+        self._active = self._peak = 0
+        self._started = self._completed = self._comparisons = 0
+        self._submitted = self._peak_pending = 0
+        self._threads: set[int] = set()
+        self._futures: set[Any] = set()
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="protocyte-probes"
+        )
+
+    def _run(self, batch):
+        with self._condition:
+            if not self._accepting:
+                raise ObservationChanged("probe work admitted after retirement")
+            self._active += 1
+            self._peak = max(self._peak, self._active)
+            self._started += 1
+            self._threads.add(threading.get_ident())
+        completed = 0
+        result = []
+        try:
+            for reservation, prepared in batch:
+                if self._compare(prepared):
+                    result.append(reservation)
+                completed += 1
+            return result
+        finally:
+            with self._condition:
+                self._comparisons += completed
+                self._completed += 1
+                self._active -= 1
+                self._condition.notify_all()
+
+    def compare(self, prepared):
+        self._require_owner()
+        with self._condition:
+            if not self._accepting:
+                raise ObservationChanged("probe session used after retirement")
+        rows = iter(prepared)
+        pending = deque()
+        result = []
+
+        def submit() -> bool:
+            batch = []
+            for _ in range(self.BATCH_SIZE):
+                try:
+                    batch.append(next(rows))
+                except StopIteration:
+                    break
+            if not batch:
+                return False
+            future = self._executor.submit(self._run, tuple(batch))
+            self._futures.add(future)
+            pending.append(future)
+            self._submitted += 1
+            self._peak_pending = max(self._peak_pending, len(pending))
+            return True
+
+        try:
+            for _ in range(self.workers * 2):
+                if not submit():
+                    break
+            while pending:
+                future = pending.popleft()
+                result.extend(future.result())
+                self._futures.remove(future)
+                submit()
+            return result
+        except BaseException:
+            # This finishes every admitted query before the exception can
+            # reach the read set's handle-release/fallback boundary.
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self._require_owner()
+        if not self._finished:
+            # Close admission and drain *before* touching the executor. Catch
+            # interruption at lock acquisition as well as inside wait(). This
+            # monotonic fence is independently checked before root release.
+            while True:
+                try:
+                    with self._condition:
+                        self._accepting = False
+                        if not self._active:
+                            self._native_retired = True
+                            break
+                        self._condition.wait()
+                except BaseException as error:
+                    if self._close_error is None:
+                        self._close_error = error
+            for future in self._futures:
+                try:
+                    future.cancel()
+                except BaseException as error:
+                    if self._close_error is None:
+                        self._close_error = error
+            try:
+                self._executor.shutdown(wait=True, cancel_futures=True)
+            except BaseException as error:
+                if self._close_error is None:
+                    self._close_error = error
+            self._futures.clear()
+            self._compare = None
+            self._finished = True
+        if self._close_error is not None:
+            if isinstance(self._close_error, Exception):
+                raise ProbeCleanupFailed(
+                    "probe worker retirement failed"
+                ) from self._close_error
+            raise self._close_error
+
+    def _require_owner(self) -> None:
+        if threading.get_ident() != self._owner:
+            raise ObservationChanged("probe session control used by a worker")
+
+    @property
+    def native_retired(self) -> bool:
+        return self._native_retired
+
+    def metrics(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "commit_probe_state": "failed"
+                if self._close_error is not None
+                else "closed"
+                if self._finished
+                else "active",
+                "commit_probe_workers": self.workers,
+                "commit_probe_native_retired": self._native_retired,
+                "commit_probe_threads": len(self._threads),
+                "commit_probe_active": self._active,
+                "commit_probe_peak_active": self._peak,
+                "commit_probe_pending": len(self._futures),
+                "commit_probe_peak_pending": self._peak_pending,
+                "commit_probe_batches_submitted": self._submitted,
+                "commit_probe_batches_started": self._started,
+                "commit_probe_batches_finished": self._completed,
+                "commit_probe_comparisons": self._comparisons,
+            }
 
 
 CLOSE_REASON = 0x80000000
@@ -131,6 +301,56 @@ class _Volume:
     first: int
 
 
+class _FrozenComparisons:
+    """Workers see prepared immutable views, never the mutable observation maps."""
+
+    def __init__(self, scope, workers: int) -> None:
+        self._scope = scope
+        self._views = MappingProxyType(dict(scope._views))
+        self._closed = False
+        self.probe_session = ProbeSession(self._compare, workers=workers)
+
+    def _get(self, path: Path) -> _View:
+        if self._closed:
+            raise ObservationChanged("frozen comparisons used after retirement")
+        self._scope._require_owner()
+        if self._scope._state != "comparing":
+            raise ObservationChanged("comparisons used outside their phase")
+        view = self._views.get(str(path))
+        if view is None:
+            raise CommitUnavailable("comparison path was not observed before freezing")
+        if not view.missing and not view.guard.is_directory:
+            raise ObservationChanged("non-directory comparison endpoint")
+        return view
+
+    def is_stable(self, path: Path) -> bool:
+        return not self._get(path).missing
+
+    def facts(self, path: Path):
+        return self._get(path).facts
+
+    def prepare_overlap(self, first: Path, second: Path):
+        return self._get(first), self._get(second)
+
+    def _compare(self, prepared) -> bool:
+        if self._closed or self._scope._state != "comparing":
+            raise ObservationChanged("prepared comparison used after retirement")
+        return self._scope._overlaps_views(*prepared)
+
+    def close(self) -> None:
+        try:
+            self.probe_session.close()
+        finally:
+            if not self.probe_session.native_retired:
+                # Preserve views and root bindings if an interruption happens
+                # before close() can enter its draining loop. Scope cleanup can
+                # retry, but must never release handles on an unproved fence.
+                raise ProbeCleanupFailed("native probe retirement is unproved")
+            self._closed = True
+            self._views = MappingProxyType({})
+            self._scope = None
+
+
 class WindowsObservationCommit:
     """One bounded read set; instances and facts are never shared across phases."""
 
@@ -145,6 +365,9 @@ class WindowsObservationCommit:
         self.reader = native.FreshPathObserver()
         self.w = self.reader._w
         self._state = "active"
+        self._owner = threading.get_ident()
+        self._negative_lock = threading.Lock()
+        self._comparison_reader: _FrozenComparisons | None = None
         self._objects: dict[tuple[int, int], _Guard] = {}
         self._volumes: dict[int, _Volume] = {}
         self._roots: dict[str, _View] = {}
@@ -171,6 +394,7 @@ class WindowsObservationCommit:
                 "commit_record_seek_calls",
                 "commit_directory_enumerations",
                 "commit_full_inventory_scans",
+                "commit_worker_context_checks",
             )
         }
 
@@ -228,10 +452,91 @@ class WindowsObservationCommit:
             self.w.DWORD,
         )
         self._fs_info.restype = self.w.BOOL
+        self._check_worker_context()
+
+    def _check_worker_context(self) -> None:
+        self._counts["commit_worker_context_checks"] += 1
+        if ctypes.sizeof(ctypes.c_void_p) != 8:
+            raise CapabilityUnavailable(
+                "parallel probes require a native 64-bit process"
+            )
+        kernel = self.reader._kernel
+        current_process = kernel.GetCurrentProcess
+        current_process.argtypes = ()
+        current_process.restype = self.w.HANDLE
+        machine = getattr(kernel, "IsWow64Process2", None)
+        if machine is None:
+            raise CapabilityUnavailable("native process context cannot be established")
+        machine.argtypes = (
+            self.w.HANDLE,
+            ctypes.POINTER(self.w.WORD),
+            ctypes.POINTER(self.w.WORD),
+        )
+        machine.restype = self.w.BOOL
+        process_machine, native_machine = self.w.WORD(), self.w.WORD()
+        if (
+            not machine(
+                current_process(),
+                ctypes.byref(process_machine),
+                ctypes.byref(native_machine),
+            )
+            or process_machine.value
+            or native_machine.value not in (0x8664, 0xAA64)
+        ):
+            raise CapabilityUnavailable(
+                "emulated filesystem context needs reference validation"
+            )
+        current_thread = kernel.GetCurrentThread
+        current_thread.argtypes = ()
+        current_thread.restype = self.w.HANDLE
+        open_token = ctypes.WinDLL("advapi32", use_last_error=True).OpenThreadToken
+        open_token.argtypes = (
+            self.w.HANDLE,
+            self.w.DWORD,
+            self.w.BOOL,
+            ctypes.POINTER(self.w.HANDLE),
+        )
+        open_token.restype = self.w.BOOL
+        token = self.w.HANDLE()
+        if open_token(current_thread(), 0x8, True, ctypes.byref(token)):
+            if not self.reader._close(token):
+                raise ProbeCleanupFailed("thread token handle could not be retired")
+            raise CapabilityUnavailable(
+                "impersonating caller needs reference validation"
+            )
+        if ctypes.get_last_error() != 1008:  # ERROR_NO_TOKEN is the required result.
+            raise CapabilityUnavailable("ordinary thread context cannot be established")
 
     def _active(self) -> None:
+        self._require_owner()
         if self._state != "active":
             raise ObservationChanged("read set used outside its observation phase")
+
+    def _require_owner(self) -> None:
+        if threading.get_ident() != self._owner:
+            raise ObservationChanged("mutable observations used by a worker")
+
+    @contextlib.contextmanager
+    def comparisons(self, *, workers: int = 4):
+        self._active()
+        if self._comparison_reader is not None:
+            raise ObservationChanged("read set comparisons already retired")
+        self._check_worker_context()
+        self._state = "comparing"
+        try:
+            reader = _FrozenComparisons(self, workers)
+        except BaseException:
+            self._state = "active"
+            raise
+        self._comparison_reader = reader
+        try:
+            yield reader
+        finally:
+            try:
+                reader.close()
+            finally:
+                if reader.probe_session.native_retired:
+                    self._state = "observed"
 
     def _io(
         self, handle: Any, code: int, request: bytes | None, capacity: int
@@ -442,7 +747,10 @@ class WindowsObservationCommit:
         return handle
 
     def _probe_absence(self, request: Any) -> None:
-        self._counts["commit_negative_probes"] += 1
+        if self._state not in ("active", "comparing", "sealing"):
+            raise ObservationChanged("negative probe used after its phase")
+        with self._negative_lock:
+            self._counts["commit_negative_probes"] += 1
         value = self._basic_type()
         code = self._query(ctypes.byref(request[2]), ctypes.byref(value)) & 0xFFFFFFFF
         if code not in (0xC0000034, 0xC000003A):
@@ -595,6 +903,11 @@ class WindowsObservationCommit:
 
     def overlaps(self, first: Path, second: Path) -> bool:
         left, right = self._descriptor(first), self._descriptor(second)
+        return self._overlaps_views(left, right)
+
+    def _overlaps_views(self, left: _View, right: _View) -> bool:
+        if self._state not in ("active", "comparing"):
+            raise ObservationChanged("comparison used after its phase")
 
         def refresh(view: _View) -> None:
             if view.missing:
@@ -778,7 +1091,17 @@ class WindowsObservationCommit:
         self._counts["commit_witnesses"] += len(expected)
 
     def seal(self) -> None:
-        self._active()
+        self._require_owner()
+        if self._state not in ("active", "observed"):
+            raise ObservationChanged("read set sealed outside its phase")
+        if self._comparison_reader is not None:
+            probes = self._comparison_reader.probe_session.metrics()
+            if (
+                probes["commit_probe_state"] != "closed"
+                or probes["commit_probe_active"]
+                or probes["commit_probe_pending"]
+            ):
+                raise ProbeCleanupFailed("probe workers were not retired before seal")
         self._state = "sealing"
         for guard, names, relevant in self._inventories:
             current = self._list_handle(guard)
@@ -839,15 +1162,26 @@ class WindowsObservationCommit:
         self._state = "sealed"
 
     def close(self) -> None:
-        self._state = "closed"
+        self._require_owner()
         error = None
+        if self._comparison_reader is not None:
+            try:
+                self._comparison_reader.close()
+            except BaseException as failure:
+                error = failure
+            if not self._comparison_reader.probe_session.native_retired:
+                raise ProbeCleanupFailed(
+                    "root handles cannot close before native probe retirement"
+                ) from error
+        self._state = "closed"
         for guard in reversed(tuple(self._objects.values())):
             if guard.handle is None:
                 continue
             try:
                 self._release(guard.handle)
-            except Exception as failure:
-                error = failure
+            except BaseException as failure:
+                if error is None:
+                    error = failure
         self._objects.clear()
         self._views.clear()
         self._roots.clear()
@@ -859,8 +1193,14 @@ class WindowsObservationCommit:
             raise error
 
     def metrics(self) -> dict[str, Any]:
+        probes = (
+            {}
+            if self._comparison_reader is None
+            else self._comparison_reader.probe_session.metrics()
+        )
         return {
             **self._counts,
+            **probes,
             "commit_info_calls": self._counts["commit_info_calls"]
             + self.reader.information_calls,
             "commit_state": self._state,
@@ -900,6 +1240,15 @@ class ProvisionalOwnershipIndex:
             remaining = tuple(
                 (reservation, reserved) for reservation, reserved, _ in self.entries
             )
+        probes = getattr(self.filesystem, "probe_session", None)
+        if probes is not None:
+            prepared = tuple(
+                (reservation, self.filesystem.prepare_overlap(reserved, path))
+                for reservation, reserved in remaining
+            )
+            self.fresh_comparisons += len(prepared)
+            yield from probes.compare(prepared)
+            return
         for reservation, reserved in remaining:
             self.fresh_comparisons += 1
             if self.filesystem.overlaps(reserved, path):

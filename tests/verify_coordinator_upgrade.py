@@ -76,7 +76,7 @@ def main() -> None:
 
     old = load("review_legacy", LEGACY)
     new = load("review_current", CURRENT)
-    assert new._COMMITTED_INDEX_QUALIFIED is False
+    production_qualified = new._COMMITTED_INDEX_QUALIFIED
     # Only isolated fixture registries below can exercise provisional authority.
     new._COMMITTED_INDEX_QUALIFIED = True
     assert old.PROTOCOL_VERSION == new.PROTOCOL_VERSION == 1
@@ -135,8 +135,10 @@ def main() -> None:
     def engine(version: str, locks: Path):
         if version == "old":
             return old.OutputCoordinator(locks)
-        result = new.OutputCoordinator(locks, registry_validation=version)
-        if version == "indexed":
+        result = new.OutputCoordinator(
+            locks, **({} if version == "default" else {"registry_validation": version})
+        )
+        if version in ("indexed", "default"):
             validate = result._validate_registry
 
             def recorded(*args, **kwargs):
@@ -211,8 +213,12 @@ def main() -> None:
             args.append("--experimental-native-observation")
         elif version == "commit-shadow":
             args.append("--experimental-observation-commit")
-        elif version == "indexed":
-            args.append("--experimental-committed-index")
+        elif version == "reference":
+            args.append("--reference-registry-validation")
+        if version in ("indexed", "default"):
+            if version == "indexed":
+                args.append("--experimental-committed-index")
+        if version in ("indexed", "default") and not production_qualified:
             qualified_main = (
                 "import importlib.util,sys; "
                 "spec=importlib.util.spec_from_file_location('qualified_upgrade_cli',sys.argv[1]); "
@@ -250,6 +256,8 @@ def main() -> None:
         ("commit-shadow", "old"),
         ("old", "indexed"),
         ("indexed", "old"),
+        ("old", "default"),
+        ("default", "old"),
     )
     for writer, reader in transitions:
         root, locks, plan, target, staging = fixture(f"steady-{writer}-{reader}")
@@ -300,6 +308,8 @@ def main() -> None:
         ("commit-shadow", "old"),
         ("old", "indexed"),
         ("indexed", "old"),
+        ("old", "default"),
+        ("default", "old"),
     ):
         for phase in (
             "after-pending",
@@ -408,8 +418,8 @@ def main() -> None:
         "reference_validator_ast_unchanged_since_checkpoint": reference_unchanged,
         "file_lock_ast_unchanged_since_checkpoint": True,
         "passed_cases": len(results),
-        "production_index_authorization_qualified": False,
-        "index_authority_enabled_only_in_isolated_fixture_module": True,
+        "production_index_authorization_qualified": production_qualified,
+        "index_authority_enabled_only_in_isolated_fixture_module": not production_qualified,
         "indexed_validations": len(indexed_validations),
         "index_authorized_validations": sum(
             metrics["authoritative"] == "index" for metrics in indexed_validations

@@ -123,7 +123,14 @@ Both tools record the coordinator/helper fingerprints and reject source changes
 during a measurement. See the experiment's
 [results](../experimental-index-results.md) and
 [correctness contract](../experimental-index-contract.md) before interpreting
-the preview numbers. The default coordinator remains reference mode.
+the preview numbers. That sampled experiment always retains reference authority.
+The subsequent committed index is now the automatic Windows default when native
+capabilities and its complete certificate are verified; see the
+[parallel qualification](../parallel-probe-results.md) and
+[observation contract](../observation-commit-contract.md). Unsupported or
+unverified observations fall back to reference validation. Set
+`PROTOCYTE_REGISTRY_VALIDATION=reference` to compare an existing build using the
+reference path.
 
 The fresh native-reader investigation can be measured with
 `--registry-validation native-shadow` in the scaling benchmark or POC. It keeps

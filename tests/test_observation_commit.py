@@ -27,17 +27,9 @@ model = coordinator._load_ownership_index()
 
 
 @pytest.fixture(autouse=True)
-def quiet_native_commit_cases(request, tmp_path_factory, monkeypatch):
-    # Close-marker posts are deliberately treated as version changes, including
-    # posts by another observer. Give quiet-baseline tests a private session gate;
-    # the explicit overlap test below exercises invalidation instead.
-    base = tmp_path_factory.getbasetemp()
-    if getattr(request.config, "workerinput", None) is not None:
-        base = base.parent
+def qualify_native_commit_cases(monkeypatch):
     # Exercise the guarded success path only in isolated test fixtures.
     monkeypatch.setattr(coordinator, "_COMMITTED_INDEX_QUALIFIED", True)
-    with coordinator.FileLock(base / "observation-commit-tests.lock"):
-        yield
 
 
 @pytest.fixture
@@ -699,6 +691,14 @@ def test_indexed_incomplete_certificate_runs_reference_before_mutation(
     plan = _plan(tmp_path, "current")
 
     def incomplete(*args, **kwargs):
+        engine.validation_metrics.update(
+            commit_probe_state="closed",
+            commit_probe_native_retired=True,
+            commit_probe_active=0,
+            commit_probe_pending=0,
+            commit_probe_comparisons=0,
+            commit_fresh_comparisons=0,
+        )
         engine.validation_metrics.update(certificate)
         return True
 

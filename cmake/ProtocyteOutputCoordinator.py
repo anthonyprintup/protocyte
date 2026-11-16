@@ -36,10 +36,10 @@ from typing import Any, Iterator, Mapping, NoReturn, Sequence
 
 
 PROTOCOL_VERSION = 1
-# The retained consumer timing gate failed. Only isolated/mutation-forbidden
-# qualification drivers override this in their own imported module instance.
-# Neither a CLI option nor consumer configuration can promote the index.
-_COMMITTED_INDEX_QUALIFIED = False
+# Qualified on the complete retained consumer workload, including concurrent
+# reference-reader load. Runtime capability, complete worker retirement, and
+# exact native witnesses remain mandatory; every unverified case uses reference.
+_COMMITTED_INDEX_QUALIFIED = True
 PLAN_HEADER = "protocyte-output-plan-v1"
 GENERATED_SUFFIXES = (".protocyte.cpp", ".protocyte.hpp", "/runtime.hpp")
 
@@ -1084,7 +1084,15 @@ def _load_observation_commit() -> Any:
 
 
 class OutputCoordinator:
-    def __init__(self, lock_root: Path, *, registry_validation: str = "reference") -> None:
+    def __init__(self, lock_root: Path, *, registry_validation: str | None = None) -> None:
+        if registry_validation is None:
+            selected = os.environ.get("PROTOCYTE_REGISTRY_VALIDATION", "auto").strip().lower() or "auto"
+            if selected not in ("auto", "reference"):
+                _fail("PROTOCYTE_REGISTRY_VALIDATION must be auto or reference")
+            registry_validation = (
+                "indexed" if selected == "auto" and _COMMITTED_INDEX_QUALIFIED and os.name == "nt"
+                else "reference"
+            )
         if registry_validation not in ("reference", "shadow", "native-shadow", "commit-shadow", "indexed"):
             _fail("registry validation must be reference, indexed, or shadow (including native/commit-shadow)")
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
@@ -1528,6 +1536,10 @@ class OutputCoordinator:
                     )
                 metrics["preview_result"] = "accepted" if preview_accepted else "conflict"
             except Exception as error:
+                module = _observation_commit_module
+                cleanup_failure = getattr(module, "ProbeCleanupFailed", None)
+                if cleanup_failure is not None and isinstance(error, cleanup_failure):
+                    _fail("native probe workers could not be retired safely; no reconciliation changes were authorized")
                 # A failed or unsupported certificate grants no authority. The
                 # ordinary reference path still determines this operation.
                 metrics["preview_result"] = "unverified"
@@ -1541,6 +1553,15 @@ class OutputCoordinator:
                     preview_accepted is True
                     and metrics.get("commit_certificate") == "verified"
                     and metrics.get("commit_state") == "closed"
+                    and metrics.get("commit_probe_state") == "closed"
+                    and metrics.get("commit_probe_native_retired") is True
+                    and type(metrics.get("commit_probe_active")) is int
+                    and metrics["commit_probe_active"] == 0
+                    and type(metrics.get("commit_probe_pending")) is int
+                    and metrics["commit_probe_pending"] == 0
+                    and type(metrics.get("commit_probe_comparisons")) is int
+                    and type(metrics.get("commit_fresh_comparisons")) is int
+                    and metrics["commit_probe_comparisons"] == metrics["commit_fresh_comparisons"]
                     and type(metrics.get("commit_handles_opened")) is int
                     and type(metrics.get("commit_handles_closed")) is int
                     and metrics["commit_handles_opened"] > 0
@@ -1700,15 +1721,22 @@ class OutputCoordinator:
                     if progress is not None:
                         progress.registry(claim=True)
                         progress.phase(f"provisional observation commit ({metrics['commit_claims_checked']} claims)", "validation")
-            index = module.ProvisionalOwnershipIndex(model, scope, entries)
-            for plan in plans:
-                conflict = index.conflict(
-                    root=plan.root, root_key=scope.path_key(plan.root), build_id=plan.build_id,
-                    staging=((target.identity, target.staging) for target in plan.targets),
-                    retiring_root_keys=retiring_root_keys,
-                )
-                if conflict is not None:
-                    accepted = False
+            queries = [
+                (plan.root, scope.path_key(plan.root), plan.build_id,
+                 tuple((target.identity, target.staging) for target in plan.targets))
+                for plan in plans
+            ]
+            # Registration is complete before any worker can run. The frozen
+            # adapter exposes prepared immutable comparisons, not path lookup.
+            with scope.comparisons() as comparisons:
+                index = module.ProvisionalOwnershipIndex(model, comparisons, entries)
+                for root, key, build, staging in queries:
+                    conflict = index.conflict(
+                        root=root, root_key=key, build_id=build,
+                        staging=staging, retiring_root_keys=retiring_root_keys,
+                    )
+                    if conflict is not None:
+                        accepted = False
             metrics["commit_reservations"] = len(entries)
             metrics["commit_index_queries"] = index.queries
             metrics["commit_fresh_comparisons"] = index.fresh_comparisons
@@ -2657,6 +2685,10 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--experimental-committed-index", action="store_true", help=argparse.SUPPRESS
     )
+    parser.add_argument(
+        "--reference-registry-validation", action="store_true",
+        help="use the full reference registry validator",
+    )
     return parser.parse_args(arguments)
 
 
@@ -2671,17 +2703,18 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
-        if sum((options.experimental_native_observation, options.experimental_registry_index, options.experimental_observation_commit, options.experimental_committed_index)) > 1:
+        if sum((options.experimental_native_observation, options.experimental_registry_index, options.experimental_observation_commit, options.experimental_committed_index, options.reference_registry_validation)) > 1:
             _fail("choose one experimental validation mode")
         if options.experimental_committed_index and not _COMMITTED_INDEX_QUALIFIED:
             _fail("committed index is not qualified for consumer use; reference validation is required")
         coordinator = OutputCoordinator(
             options.lock_root,
             registry_validation=(
-                "indexed" if options.experimental_committed_index
+                "reference" if options.reference_registry_validation
+                else "indexed" if options.experimental_committed_index
                 else "commit-shadow" if options.experimental_observation_commit
                 else "native-shadow" if options.experimental_native_observation
-                else "shadow" if options.experimental_registry_index else "reference"
+                else "shadow" if options.experimental_registry_index else None
             ),
         )
         if options.command == "reconcile-set":

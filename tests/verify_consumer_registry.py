@@ -268,11 +268,25 @@ def reference(module, manifest: dict, work: Path) -> dict:
     }
 
 
-def candidate(module, manifest: dict, work: Path, *, integrated: bool = False) -> dict:
+def candidate(
+    module,
+    manifest: dict,
+    work: Path,
+    *,
+    integrated: bool = False,
+    default_mode: bool = False,
+) -> dict:
     engine = module.OutputCoordinator(
         Path(manifest["registry"]),
-        registry_validation="indexed" if integrated else "reference",
+        **(
+            {}
+            if default_mode
+            else {"registry_validation": "indexed" if integrated else "reference"}
+        ),
     )
+    if default_mode:
+        assert module._COMMITTED_INDEX_QUALIFIED is True
+        assert engine.registry_validation == "indexed"
     if integrated:
         # A failed timing gate must not hold the live shared lock for a slow
         # reference pass. The full reference oracles are qualified separately;
@@ -316,6 +330,12 @@ def candidate(module, manifest: dict, work: Path, *, integrated: bool = False) -
     assert metrics["commit_certificate"] == "verified"
     assert metrics["commit_state"] == "closed"
     assert metrics["commit_handles_opened"] == metrics["commit_handles_closed"]
+    assert metrics["commit_probe_state"] == "closed"
+    assert metrics["commit_probe_native_retired"] is True
+    assert metrics["commit_probe_active"] == metrics["commit_probe_pending"] == 0
+    assert metrics["commit_probe_comparisons"] == metrics["commit_fresh_comparisons"]
+    assert metrics["commit_probe_peak_active"] <= metrics["commit_probe_workers"] <= 4
+    assert metrics["commit_probe_peak_pending"] <= 2 * metrics["commit_probe_workers"]
     if integrated:
         assert metrics["authoritative"] == "index"
         assert metrics["reference_wall_seconds"] == 0
@@ -364,6 +384,7 @@ def main() -> None:
             "capture",
             "candidate",
             "indexed",
+            "default",
             "audit",
             "reference",
             "legacy-reference",
@@ -390,11 +411,16 @@ def main() -> None:
             name: digest(source.with_name(name).read_bytes()) for name in IMPLEMENTATION
         }
     module = load(source, "qualified_consumer_" + args.mode.replace("-", "_"))
+    production_qualified = getattr(module, "_COMMITTED_INDEX_QUALIFIED", False)
     if args.mode == "capture":
         result = capture(module, manifest, args.work)
-    elif args.mode in ("candidate", "indexed"):
+    elif args.mode in ("candidate", "indexed", "default"):
         result = candidate(
-            module, manifest, args.work, integrated=args.mode == "indexed"
+            module,
+            manifest,
+            args.work,
+            integrated=args.mode != "candidate",
+            default_mode=args.mode == "default",
         )
     elif args.mode == "audit":
         result = audit(module, manifest, args.work)
@@ -411,7 +437,7 @@ def main() -> None:
         "python": platform.python_version(),
         "implementation_files": fingerprints,
         "qualification_driver_sha256": driver_fingerprint,
-        "index_authorization_enabled": False,
+        "index_authorization_enabled": production_qualified,
         **result,
     }
     (args.work / f"{args.mode}-{time.time_ns()}-results.json").write_text(

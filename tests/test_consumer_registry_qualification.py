@@ -149,7 +149,7 @@ def test_indexed_qualification_requires_mutation_guard_and_restores_promotion_ga
 ) -> None:
     module, engine, _, _, _, manifest, work = seeded(tmp_path)
     before = driver.ledger(engine.lock_root)
-    assert module._COMMITTED_INDEX_QUALIFIED is False
+    qualified = module._COMMITTED_INDEX_QUALIFIED
 
     def certificate(self, *args, **kwargs):
         assert module._COMMITTED_INDEX_QUALIFIED is True
@@ -163,6 +163,15 @@ def test_indexed_qualification_requires_mutation_guard_and_restores_promotion_ga
             commit_handles_opened=1,
             commit_handles_closed=1,
             commit_claims_checked=1,
+            commit_probe_state="closed",
+            commit_probe_native_retired=True,
+            commit_probe_active=0,
+            commit_probe_pending=0,
+            commit_probe_comparisons=0,
+            commit_fresh_comparisons=0,
+            commit_probe_workers=4,
+            commit_probe_peak_active=0,
+            commit_probe_peak_pending=0,
         )
         return True
 
@@ -175,6 +184,6 @@ def test_indexed_qualification_requires_mutation_guard_and_restores_promotion_ga
     else:
         receipt = driver.candidate(module, manifest, work, integrated=True)
         assert receipt["native_metrics"]["authoritative"] == "index"
-    assert module._COMMITTED_INDEX_QUALIFIED is False
+    assert module._COMMITTED_INDEX_QUALIFIED is qualified
     assert driver.ledger(engine.lock_root) == before
     assert not (tmp_path / "forbidden").exists()

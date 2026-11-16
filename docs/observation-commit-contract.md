@@ -1,13 +1,13 @@
 # Experimental observation commit
 
-Status: experimental `commit-shadow` and `indexed` integrations on
-`codex/experimental-generation-engine`. The
-[retained consumer qualification](consumer-validation-results.md) failed the
-reliable-under-30-second timing gate. The default remains reference validation.
-An explicit source guard blocks consumer index authority, including the private
-API and CLI. Isolated fixtures and the mutation-forbidden read-only harness can
-exercise the proposed indexed success path; it accepts only a verified, fully
-closed read set. Other outcomes use reference validation.
+Status: qualified parallel `indexed` validation is the automatic Windows default
+on `codex/experimental-generation-engine`. The
+[parallel-probe qualification](parallel-probe-results.md) passed 20/20 complete
+retained-workload validations below 30 seconds, including ten under concurrent
+reference-reader load. Index authority still requires a verified certificate,
+complete worker retirement, and balanced native handle accounting. Unsupported
+or unverified observations use reference validation; failed worker retirement
+aborts before mutation. `commit-shadow` remains available for differential checks.
 
 This replaces the previous fresh-observation experiment's repeated full path
 walks with a provisional read set. Its certificate verifies the requested native
@@ -27,12 +27,21 @@ schema, root key, build identity, plan digest, and projected paths. The index is
 an in-memory derivative, never a replacement for authenticating those records.
 
 The prototype accepts local DOS-drive paths on NTFS with an already active USN
-journal and the required ordinary-user handle operations. It does not create or
+journal and the required ordinary-user handle operations, in a native 64-bit
+AMD64 or ARM64 process without a caller thread impersonation token. It does not create or
 configure a journal. Unsupported paths, filesystems, access, case-sensitive
 directories at initial observation, record formats, API responses, resource
 budgets, or changed observations abandon the candidate and run the reference
 validator. A missing
 capability never requests administrator access or a user configuration change.
+
+The caller context is checked before observation and again before starting
+workers. A 32-bit or emulated process, an impersonating thread, an unavailable
+context API, or any result other than `ERROR_NO_TOKEN` from `OpenThreadToken`
+uses reference validation. New threads use the process context; silently moving
+an impersonating caller's lookups to that context would change their meaning.
+See [thread creation](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createthread)
+and [thread token inspection](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openthreadtoken).
 
 Windows object identity consists of the volume serial and the full 128-bit file
 ID. Reaching a second drive with an already observed volume serial forces
@@ -154,6 +163,35 @@ handles have been released, and the read set has been erased before the caller
 can enter the unchanged reconciliation and mutation methods. There is no new
 claim that namespace stability persists after validation returns.
 
+## Parallel comparisons and retirement
+
+The owner thread authenticates records and prepares every comparison endpoint
+before freezing a private view map. Four workers process independent comparisons
+in batches of 32, with at most eight pending batches. Results retain input order.
+Workers receive immutable prepared views, perform the same directional overlap
+predicate and fresh root-relative negative probes, and cannot register paths or
+collect geometry. Counter updates use locks; correctness does not depend on the
+Python GIL. Positive witnesses, negative checks, and ownership exemptions are
+unchanged by scheduling.
+
+Only the owner may control the pool or observation phase. An admission gate
+covers every native batch, including work queued by a submission that raises
+before returning its future. Cleanup closes admission and drains all admitted
+native work before cancelling queued futures and joining the executor. A
+monotonic retirement fence is checked independently before clearing prepared
+views or releasing root handles. Interruptions during the drain are deferred
+until native work retires. No comparison can run during sealing or after root
+release, and a failed seal grants no index authority.
+
+A comparison error with successful cleanup can fall back to reference. Failure
+to retire the pool safely raises a fatal coordinator error before reference can
+authorize reconciliation. If retirement is unproved, cleanup preserves the
+views and root bindings rather than releasing resources beneath a live worker.
+Successful index authority requires a closed pool, zero active and pending work,
+completed-comparison accounting equal to the requested count, a verified seal,
+and complete native-handle closure. Shutdown and cancellation errors are not
+treated as successful retirement.
+
 ## Expiry, fallback, and operational costs
 
 Instances are local to one validation phase. Sealing disables further reads;
@@ -187,11 +225,18 @@ registry inventories, name-binding checks, and opened/closed handle counts.
 Published diagnostics retain no unrelated journal names, claim contents, paths,
 or tokens. An exception records its type, not its message.
 
-## Upgrade contract and promotion gate
+## Upgrade contract and qualification gate
 
-Normal installations continue to use reference validation. Neither consumer
-configuration nor the hidden experiment flag can override the closed promotion
-guard. Only a future reviewed source change after qualification can promote it.
+Normal Windows installations automatically attempt qualified indexed validation;
+other platforms continue to use reference validation. Every invocation checks
+the native capabilities and certificate described above. Existing consumer
+commands and CMake configuration need no changes. To force reference validation
+for an existing build, set `PROTOCYTE_REGISTRY_VALIDATION=reference` in its
+environment. Direct coordinator commands also accept
+`--reference-registry-validation`. The environment accepts `auto` (the default)
+or `reference`; unsupported values fail with a clear error. Explicit reference
+selection does not require the native helper to work.
+
 Packaging installs
 the additional trusted sibling Python helper, without requiring a new consumer
 command or runtime dependency. Protocol v1, plan serialization, claim tokens,
@@ -205,7 +250,7 @@ skipping the record. Valid registries need no migration, reset, regeneration, or
 token rotation. Malformed or unreadable recorded state requires its underlying
 problem to be repaired rather than being skipped.
 
-Promotion remains closed until all of the following have evidence:
+The parallel qualification supplies evidence for the following promotion gates:
 
 - Relevant native mutation semantics and fallback behavior are qualified for
   the enabled capability, with the namespace and writer boundaries above explicit.
@@ -214,9 +259,14 @@ Promotion remains closed until all of the following have evidence:
 - **All validation**, including current plans, every retained record, fresh
   negatives, inventories, versions, witnesses, and handle release, reliably stays
   below 30 seconds at the target scale and representative layouts/contention.
-- A reviewed authoritative integration preserves the mutation-time boundary.
+- The authoritative integration preserves the mutation-time boundary. The
+  experimental branch and draft MR remain subject to code review.
 
-The read-only candidate benchmark reports that entire candidate cost separately
-from its optional reference oracle. It produces no tokens and authorizes no
-reconciliation. Ordinary `commit-shadow` timings always include the mandatory
-reference pass; candidate timing must never be presented as that full operation.
+The read-only qualification harness reports the entire validation cost, including
+plan parsing, witness verification, worker retirement, and native-handle release,
+separately from its optional reference oracle. It produces no tokens and
+authorizes no reconciliation. The default-mode qualification exercises ordinary
+production selection with the source gate enabled. Ordinary `commit-shadow`
+timings always include the mandatory reference pass; candidate timing must never
+be presented as that full operation. The timing evidence covers the retained
+workload and measured host, not a universal latency bound on every installation.

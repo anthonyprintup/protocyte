@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import hashlib
 import importlib.util
 import os
@@ -66,6 +67,7 @@ def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) 
     "experimental_flag",
     [
         None,
+        "--reference-registry-validation",
         "--experimental-registry-index",
         "--experimental-native-observation",
         "--experimental-observation-commit",
@@ -134,7 +136,10 @@ def test_installed_coordinator_is_relocatable_and_keeps_prefix_unchanged(
         capture_output=True,
         text=True,
     )
-    if experimental_flag == "--experimental-committed-index":
+    tree = ast.parse(script.read_bytes())
+    qualified = next(node.value.value for node in tree.body if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "_COMMITTED_INDEX_QUALIFIED" for target in node.targets))
+    if experimental_flag == "--experimental-committed-index" and not qualified:
         assert result.returncode == 1, result.stdout + result.stderr
         assert "not qualified for consumer use" in result.stderr
         assert not result.stdout

@@ -28,15 +28,14 @@ def _load_coordinator() -> ModuleType:
     if test_mode == "indexed":
         # This module is used exclusively by isolated test registries.
         module._COMMITTED_INDEX_QUALIFIED = True
-    if test_mode != "reference":
-        original_initialize = module.OutputCoordinator.__init__
+    original_initialize = module.OutputCoordinator.__init__
 
-        def initialize(
-            self: object, lock_root: Path, *, registry_validation: str = test_mode
-        ) -> None:
-            original_initialize(self, lock_root, registry_validation=registry_validation)
+    def initialize(
+        self: object, lock_root: Path, *, registry_validation: str | None = test_mode
+    ) -> None:
+        original_initialize(self, lock_root, registry_validation=test_mode if registry_validation is None else registry_validation)
 
-        module.OutputCoordinator.__init__ = initialize
+    module.OutputCoordinator.__init__ = initialize
     return module
 
 
@@ -1955,12 +1954,12 @@ def test_registry_comparisons_reject_a_replaced_retained_root(
     monkeypatch.setattr(coordinator, "_paths_overlap", overlap)
     if engine.registry_validation == "indexed" and os.name == "nt":
         scope_type = coordinator._load_observation_commit().WindowsObservationCommit
-        native_overlap = scope_type.overlaps
+        native_overlap = scope_type._overlaps_views
 
-        def indexed_overlap(self: object, first: Path, second: Path) -> bool:
-            return replace_retained_root(first, second, native_overlap(self, first, second))
+        def indexed_overlap(self: object, first: object, second: object) -> bool:
+            return replace_retained_root(first.path, second.path, native_overlap(self, first, second))
 
-        monkeypatch.setattr(scope_type, "overlaps", indexed_overlap)
+        monkeypatch.setattr(scope_type, "_overlaps_views", indexed_overlap)
     with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
         engine.reconcile_set((), current)
     assert changed
