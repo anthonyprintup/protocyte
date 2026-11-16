@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import json
@@ -2586,16 +2587,23 @@ def test_reset_rejects_an_unowned_generated_symlink(tmp_path: Path) -> None:
     token = engine.reconcile(plan)
     outside = tmp_path / "outside.hpp"
     outside.write_text("// outside\n", encoding="utf-8")
+    root.mkdir()
     unexpected = root / "stale.protocyte.hpp"
     try:
         unexpected.symlink_to(outside)
     except OSError as error:
+        if (
+            error.errno not in (errno.EACCES, errno.EPERM, errno.ENOSYS, errno.ENOTSUP)
+            and getattr(error, "winerror", None) not in (1, 50, 1314)
+        ):
+            raise
         pytest.skip(f"file symlinks are unavailable: {error}")
 
     with pytest.raises(coordinator.CoordinatorError, match="unowned generated-looking"):
         engine.reset(plan, token)
 
     assert unexpected.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "// outside\n"
     assert (lock_root / "roots" / _identity(root)).is_dir()
 
 

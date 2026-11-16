@@ -93,6 +93,48 @@ or slower layouts; it also misses the proposed 25-second research budget.
 These tests establish the safety of retaining reference authority. They do not
 prove that sampled topology remains valid or that index-only operation is safe.
 
+## Upgrade and rollback review
+
+An additional isolated Windows/CPython 3.12 review used the exact public
+[coordinator revision cited in issue #54](https://github.com/anthonyprintup/protocyte/blob/a37bde7156f444a22f7ab9d42392c91adb54ad30/cmake/ProtocyteOutputCoordinator.py).
+Its source SHA-256 was verified as
+`2ff54b69242d46eb8e35a52d30b32bc9afd815c00b6c0abeb8765d6fe7ddbb85`.
+The experiment's coordinator/helper fingerprints remain unchanged from the
+published measurements.
+
+All **33 additional cases passed**:
+
+| Case | Count | What was checked |
+| --- | ---: | --- |
+| Normal upgrade and rollback | 4 | Old/reference/shadow interchange, unchanged claim tokens, plan digests, no-op output bytes/mtimes and successful publication in both versions |
+| Publication interrupted at four durable cuts | 12 | Recovery across versions from pending intent, either replaced output and committed snapshot, after deleting original staging payloads |
+| Initialization interrupted at two cuts | 6 | Cross-version retry after initial snapshot or visible claim |
+| Reset interrupted at three cuts | 9 | Cross-version completion using the existing token and durable reset intent |
+| Two actual processes sharing a registry | 2 | Old holds/new waits and new holds/old waits; no claim appears before release, reconciliation completes afterward |
+
+The crash cases cover old-to-reference, old-to-shadow and shadow-to-old. The
+steady-state cases additionally cover reference-to-old. These are tests against
+that specific protocol-v1 baseline, not a guarantee for every historical release.
+They used only fresh synthetic registries.
+
+AST comparison with preservation checkpoint `f804fd1` confirmed that the fresh
+registry validator, file-lock implementation and twelve mutation/recovery/lock
+methods retain their implementation. Protocol v1, plan header, registry namespace,
+public CMake calls and generated C++ are unchanged by the experiment. A normal
+upgrade should preserve existing build ownership without a state migration or
+reset. Reconfigure through the normal build workflow to select the upgraded
+package; relocating a build into another ownership identity remains subject to
+the existing ownership checks.
+
+The review also repaired a test fixture: the unowned-file-symlink reset test had
+not created its output directory, causing a missing-parent error to be reported
+as unavailable symlink support. It now creates the directory, verifies the
+external file survives, and only skips recognized permission/unsupported-operation
+errors. On this host it still skips for the genuine Windows symlink privilege
+restriction. Five other coordinator cases require case-sensitive paths or POSIX
+path semantics. Those six cases remain coverage gaps for this host; supported-platform
+CI and a suitable Windows symlink environment are still required before release.
+
 ## Promotion gate
 
 The remaining problem is the filesystem-observation lifetime, described in
