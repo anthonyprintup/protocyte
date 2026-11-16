@@ -76,3 +76,9 @@ private `native-shadow` mode. It retains reference authority and adds no indexed
 authorization mode. A real attribute-only reparse conversion disproved ordinary
 read-handle pinning as a path-lifetime proof. The fresh reader's pilot also failed
 the performance gate. The original cached-index promotion boundary remains closed.
+
+The next experiment uses an optimistic read-set commit with exact USN close
+witnesses and fresh negative comparisons. Its
+[contract and remaining proof boundaries](observation-commit-contract.md) and
+[measurements and upgrade evidence](observation-commit-results.md) preserve that
+boundary: reference validation remains mandatory and the default is unchanged.

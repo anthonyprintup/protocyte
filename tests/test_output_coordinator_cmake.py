@@ -64,7 +64,7 @@ def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) 
 
 @pytest.mark.parametrize(
     "experimental_flag",
-    ["--experimental-registry-index", "--experimental-native-observation"],
+    ["--experimental-registry-index", "--experimental-native-observation", "--experimental-observation-commit"],
 )
 def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
     tmp_path: Path,
@@ -78,6 +78,7 @@ def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
     script = next(relocated.rglob("ProtocyteOutputCoordinator.py"))
     assert script.with_name("ProtocyteOwnershipIndex.py").is_file()
     assert script.with_name("ProtocytePathObservation.py").is_file()
+    assert script.with_name("ProtocyteObservationCommit.py").is_file()
 
     def contents() -> dict[str, bytes]:
         return {

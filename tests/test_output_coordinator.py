@@ -2099,6 +2099,68 @@ def test_registry_enumeration_fails_closed_when_claim_state_is_unreadable(
         engine.reconcile(second)
 
 
+def test_unreadable_recorded_plan_metadata_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retained = _write_plan(
+        tmp_path / "retained.plan",
+        tmp_path / "retained/generated",
+        tmp_path / "retained/build",
+        ((_target("retained"), "sample.protocyte.hpp"),),
+    )
+    current = _write_plan(
+        tmp_path / "current.plan",
+        tmp_path / "current/generated",
+        tmp_path / "current/build",
+        ((_target("current"), "sample.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    token = engine.reconcile(retained)
+    recorded = engine._state_directory(retained.root) / "plan.json"
+    original_lstat = Path.lstat
+
+    def denied(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if path == recorded:
+            raise PermissionError("metadata denied by test")
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", denied)
+    with pytest.raises(coordinator.CoordinatorError, match="could not inspect configured output plan"):
+        engine.reconcile(current)
+    claim = engine._state_directory(retained.root) / "claim.json"
+    assert json.loads(claim.read_bytes())["token"] == token
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
+def test_dangling_recorded_plan_is_rejected_instead_of_treated_as_absent(
+    tmp_path: Path,
+) -> None:
+    retained = _write_plan(
+        tmp_path / "retained.plan",
+        tmp_path / "retained/generated",
+        tmp_path / "retained/build",
+        ((_target("retained"), "sample.protocyte.hpp"),),
+    )
+    current = _write_plan(
+        tmp_path / "current.plan",
+        tmp_path / "current/generated",
+        tmp_path / "current/build",
+        ((_target("current"), "sample.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    engine.reconcile(retained)
+    recorded = engine._state_directory(retained.root) / "plan.json"
+    recorded.unlink()
+    target = tmp_path / "removed-plan-target"
+    target.mkdir()
+    _directory_link(recorded, target)
+    target.rmdir()
+    assert not recorded.exists() and os.path.lexists(recorded)
+    with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
+        engine.reconcile(current)
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
 def test_physical_output_root_aliases_cannot_receive_distinct_claims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

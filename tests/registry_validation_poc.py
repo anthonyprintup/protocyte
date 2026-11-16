@@ -233,7 +233,7 @@ def main():
     parser.add_argument("--work", type=Path)
     parser.add_argument(
         "--registry-validation",
-        choices=("reference", "shadow", "native-shadow"),
+        choices=("reference", "shadow", "native-shadow", "commit-shadow"),
         default="reference",
     )
     args = parser.parse_args()
@@ -261,6 +261,7 @@ def main():
                 source,
                 source.with_name("ProtocyteOwnershipIndex.py"),
                 source.with_name("ProtocytePathObservation.py"),
+                source.with_name("ProtocyteObservationCommit.py"),
             )
             if path.is_file()
         },
@@ -281,6 +282,7 @@ def main():
                         source,
                         source.with_name("ProtocyteOwnershipIndex.py"),
                         source.with_name("ProtocytePathObservation.py"),
+                        source.with_name("ProtocyteObservationCommit.py"),
                     )
                     if path.is_file()
                 }

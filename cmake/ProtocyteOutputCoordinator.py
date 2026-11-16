@@ -456,6 +456,8 @@ def _walk_tree(root: Path) -> list[Path]:
 
 
 def _load_json(path: Path, description: str, *, _filesystem: Any = None) -> dict[str, Any]:
+    if _filesystem is not None and hasattr(_filesystem, "read_json"):
+        return _filesystem.read_json(path, description)
     project = project_path if _filesystem is None else _filesystem.project
     expected = project(path, leaf_may_be_file=True)
     if expected != path or _is_link(path):
@@ -1055,10 +1057,32 @@ class _FreshRegistryFilesystem:
         return _same_physical_path(first, second)
 
 
+_observation_commit_module: Any = None
+
+
+def _load_observation_commit() -> Any:
+    global _observation_commit_module
+    if _observation_commit_module is None:
+        path = Path(__file__).with_name("ProtocyteObservationCommit.py")
+        name = f"{__name__}_observation_commit"
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            _fail("experimental observation commit could not be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            exec(compile(path.read_bytes(), os.fspath(path), "exec"), module.__dict__)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        _observation_commit_module = module
+    return _observation_commit_module
+
+
 class OutputCoordinator:
     def __init__(self, lock_root: Path, *, registry_validation: str = "reference") -> None:
-        if registry_validation not in ("reference", "shadow", "native-shadow"):
-            _fail("registry validation must be reference or shadow (including native-shadow)")
+        if registry_validation not in ("reference", "shadow", "native-shadow", "commit-shadow"):
+            _fail("registry validation must be reference or shadow (including native/commit-shadow)")
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
         self.registry_validation = registry_validation
         self.validation_metrics: dict[str, Any] = {}
@@ -1481,6 +1505,27 @@ class OutputCoordinator:
         }
         self.validation_metrics = metrics
         preview_accepted: bool | None = None
+        if self.registry_validation == "commit-shadow":
+            if progress is not None:
+                progress.phase("validating provisional observation commit", "validation")
+            started = time.perf_counter()
+            try:
+                preview_accepted = self._preview_committed_index(
+                    plans, retiring_root_keys or set(), progress=progress
+                )
+                metrics["preview_result"] = "accepted" if preview_accepted else "conflict"
+            except Exception as error:
+                # A failed or unsupported certificate grants no authority. The
+                # ordinary reference path still determines this operation.
+                metrics["preview_result"] = "unverified"
+                metrics["commit_certificate"] = "unverified"
+                metrics["commit_failure_type"] = type(error).__name__
+                metrics["fallback"] = "reference"
+            finally:
+                metrics["preview_wall_seconds"] = time.perf_counter() - started
+            self._inject("after-observation-commit")
+            if progress is not None:
+                progress.phase("validating registry (reference authority)", "validation")
         if self.registry_validation == "native-shadow":
             if progress is not None:
                 progress.phase("fresh experimental path observation", "validation")
@@ -1548,7 +1593,10 @@ class OutputCoordinator:
         finally:
             metrics["reference_wall_seconds"] = time.perf_counter() - started
         metrics["reference_result"] = "accepted"
-        if self.registry_validation in ("shadow", "native-shadow"):
+        if self.registry_validation in ("shadow", "native-shadow", "commit-shadow"):
+            if metrics.get("fallback") == "reference":
+                metrics["agreement"] = None
+                return
             if metrics.get("preview_result") == "unavailable":
                 metrics["agreement"] = None
                 metrics["fallback"] = "reference"
@@ -1559,6 +1607,75 @@ class OutputCoordinator:
                     "experimental ownership index disagrees with the fresh reference "
                     "validator; no reconciliation changes were authorized"
                 )
+
+    def _preview_committed_index(
+        self, plans: Sequence[Plan], retiring_root_keys: set[str], *,
+        progress: _ReconcileProgress | None = None,
+    ) -> bool:
+        model = _load_ownership_index()
+        module = _load_observation_commit()
+        scope = module.WindowsObservationCommit(_load_path_observation(), model)
+        metrics = self.validation_metrics
+        metrics.update(commit_claims_checked=0, commit_certificate="unverified")
+        entries = []
+        accepted = True
+        try:
+            internal = (self.lock_root / "roots", self.lock_root / "generation", self.lock_root / "publication")
+            for plan in plans:
+                for target in plan.targets:
+                    if scope.contains(target.staging, self.lock_root) or scope.physically_contains(target.staging, self.lock_root):
+                        accepted = False
+                if scope.overlaps(plan.root, self.lock_root) or any(scope.overlaps(path, plan.root) for path in internal):
+                    accepted = False
+            roots = self.lock_root / "roots"
+            if plans and scope.record_exists(roots):
+                if scope.project(roots) != roots:
+                    _fail("provisional commit found an unsafe registry path")
+                for name in scope.list_names(roots):
+                    if not _is_sha256(name):
+                        _fail("provisional commit found an unsafe registry entry")
+                    state = roots / name
+                    if scope.project(state) != state:
+                        _fail("provisional commit found a changed registry entry")
+                    names = scope.list_names(state, relevant=frozenset(("claim.json", "plan.json")))
+                    if "claim.json" not in names:
+                        continue
+                    source = state / "claim.json"
+                    claim = _load_json(source, "output claim", _filesystem=scope)
+                    self._validate_claim_shape(claim, source)
+                    root, _ = self._claim_paths(claim, source, _filesystem=scope)
+                    if name != claim["root_key"]:
+                        _fail("provisional commit found a claim under the wrong key")
+                    recorded = self._load_recorded_plan(state, claim, _filesystem=scope)
+                    key, build = str(claim["root_key"]), str(claim["build_id"])
+                    entries.append((model.Reservation("root", key, build, None, scope.facts(root)), root, scope.is_stable(root)))
+                    if recorded is not None:
+                        for target in recorded.targets:
+                            entries.append((model.Reservation("staging", key, build, target.identity, scope.facts(target.staging)), target.staging, scope.is_stable(target.staging)))
+                    metrics["commit_claims_checked"] += 1
+                    if progress is not None:
+                        progress.phase(f"provisional observation commit ({metrics['commit_claims_checked']} claims)", "validation")
+            index = module.ProvisionalOwnershipIndex(model, scope, entries)
+            for plan in plans:
+                conflict = index.conflict(
+                    root=plan.root, root_key=scope.path_key(plan.root), build_id=plan.build_id,
+                    staging=((target.identity, target.staging) for target in plan.targets),
+                    retiring_root_keys=retiring_root_keys,
+                )
+                if conflict is not None:
+                    accepted = False
+            metrics["commit_reservations"] = len(entries)
+            metrics["commit_index_queries"] = index.queries
+            metrics["commit_fresh_comparisons"] = index.fresh_comparisons
+            self._inject("before-observation-commit")
+            scope.seal()
+            metrics["commit_certificate"] = "verified"
+            return accepted
+        finally:
+            try:
+                scope.close()
+            finally:
+                metrics.update(scope.metrics())
 
     def _preview_registry_index(
         self,
@@ -1909,7 +2026,18 @@ class OutputCoordinator:
         self, state: Path, claim: Mapping[str, Any], *, _filesystem: Any = None
     ) -> Plan | None:
         path = state / "plan.json"
-        if not path.exists():
+        if _filesystem is not None and hasattr(_filesystem, "record_exists"):
+            exists = _filesystem.record_exists(path)
+        else:
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                exists = False
+            except OSError as error:
+                _fail(f"could not inspect configured output plan {path}: {error}")
+            else:
+                exists = True
+        if not exists:
             return None
         plan = Plan.from_payload(
             _load_json(path, "configured output plan", _filesystem=_filesystem), path, _filesystem=_filesystem
@@ -2478,6 +2606,9 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--experimental-native-observation", action="store_true", help=argparse.SUPPRESS
     )
+    parser.add_argument(
+        "--experimental-observation-commit", action="store_true", help=argparse.SUPPRESS
+    )
     return parser.parse_args(arguments)
 
 
@@ -2492,12 +2623,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
-        if options.experimental_native_observation and options.experimental_registry_index:
+        if sum((options.experimental_native_observation, options.experimental_registry_index, options.experimental_observation_commit)) > 1:
             _fail("choose one experimental validation mode")
         coordinator = OutputCoordinator(
             options.lock_root,
             registry_validation=(
-                "native-shadow" if options.experimental_native_observation
+                "commit-shadow" if options.experimental_observation_commit
+                else "native-shadow" if options.experimental_native_observation
                 else "shadow" if options.experimental_registry_index else "reference"
             ),
         )

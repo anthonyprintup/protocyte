@@ -87,7 +87,11 @@ def _plan(
 
 def _implementation_fingerprint(module: ModuleType) -> dict[str, str]:
     paths = [Path(module.__file__)]
-    for name in ("ProtocyteOwnershipIndex.py", "ProtocytePathObservation.py"):
+    for name in (
+        "ProtocyteOwnershipIndex.py",
+        "ProtocytePathObservation.py",
+        "ProtocyteObservationCommit.py",
+    ):
         helper = paths[0].with_name(name)
         if helper.is_file():
             paths.append(helper)
@@ -317,6 +321,10 @@ def _sample(
         "registry_lock_held_wall_seconds": registry_held,
         "current_plan_validation_wall_seconds": current_validation,
         "validation_engine": registry_validation,
+        "python_registry_scans": counts["registry_scans"],
+        "native_registry_inventory_scans": getattr(
+            engine, "validation_metrics", {}
+        ).get("commit_full_inventory_scans", 0),
         "index_experiment": getattr(engine, "validation_metrics", {}),
         "shadow_candidate_wall_seconds": getattr(engine, "validation_metrics", {}).get(
             "preview_wall_seconds", 0.0
@@ -324,7 +332,13 @@ def _sample(
         "reference_validation_wall_seconds": getattr(
             engine, "validation_metrics", {}
         ).get("reference_wall_seconds", validation_wall),
-        **counts,
+        **{
+            **counts,
+            "registry_scans": counts["registry_scans"]
+            + getattr(engine, "validation_metrics", {}).get(
+                "commit_full_inventory_scans", 0
+            ),
+        },
         "validation_filesystem_calls": filesystem_calls,
         "completed_plans": len(tokens),
     }
@@ -345,7 +359,7 @@ def main() -> None:
     parser.add_argument("--existing-directories", action="store_true")
     parser.add_argument(
         "--registry-validation",
-        choices=("reference", "shadow", "native-shadow"),
+        choices=("reference", "shadow", "native-shadow", "commit-shadow"),
         default="reference",
     )
     parser.add_argument(
