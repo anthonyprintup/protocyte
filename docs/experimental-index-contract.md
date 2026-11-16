@@ -1,9 +1,9 @@
 # Experimental ownership-index contract
 
-This records the first sampled-index experiment. For the current qualified
-parallel observation mechanism and automatic Windows default, see the
+This records the first sampled-index experiment. For the reviewed parallel
+observation mechanism and closed promotion guard, see the
 [observation contract](observation-commit-contract.md) and
-[parallel results](parallel-probe-results.md).
+[MR review](mr55-review-results.md).
 
 Branch: `codex/experimental-generation-engine`, based on preservation checkpoint
 `f804fd1` (`codex/issue-54-registry-scaling`). No remote publication is involved.

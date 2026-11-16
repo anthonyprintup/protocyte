@@ -692,6 +692,7 @@ def test_indexed_incomplete_certificate_runs_reference_before_mutation(
 
     def incomplete(*args, **kwargs):
         engine.validation_metrics.update(
+            commit_cleanup_failed=False,
             commit_probe_state="closed",
             commit_probe_native_retired=True,
             commit_probe_active=0,

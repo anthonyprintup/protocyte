@@ -330,6 +330,7 @@ def candidate(
     assert metrics["commit_certificate"] == "verified"
     assert metrics["commit_state"] == "closed"
     assert metrics["commit_handles_opened"] == metrics["commit_handles_closed"]
+    assert metrics["commit_cleanup_failed"] is False
     assert metrics["commit_probe_state"] == "closed"
     assert metrics["commit_probe_native_retired"] is True
     assert metrics["commit_probe_active"] == metrics["commit_probe_pending"] == 0

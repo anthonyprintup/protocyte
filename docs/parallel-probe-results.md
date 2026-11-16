@@ -1,5 +1,11 @@
 # Parallel-probe qualification
 
+Historical qualification at `1d1e1b0`. The subsequent
+[MR review](mr55-review-results.md) fixed correctness and upgrade issues, then
+failed the repeat timing gate. **The current source gate is closed and the
+default is reference validation.** The initial enablement described below is
+preserved as historical evidence.
+
 **Passed: 20/20 complete validations below 30 seconds.** The experimental
 branch now automatically uses the committed index on qualified Windows
 invocations. The enabled default took **14.489–16.538 seconds**, with a

@@ -1,0 +1,1632 @@
+{
+  "date": "2026-11-16",
+  "reviewed_pull_request": 55,
+  "review_start_head": "1d1e1b030c2d4738c7778a22f1f5fc8effa24b3a",
+  "branch": "codex/experimental-generation-engine",
+  "decision": {
+    "merge_recommendation": "hold indexed promotion; keep MR draft",
+    "production_index_qualified": false,
+    "default_validation": "reference",
+    "consumer_cannot_enable_unqualified_index": true,
+    "required_validation_seconds": 30,
+    "reliable_timing_gate_passed": false
+  },
+  "findings": [
+    {
+      "priority": "P1",
+      "title": "Incomplete helpers could authorize overlapping staging",
+      "before": "A syntactically valid truncated pre-review helper accepted a root/staging conflict that fresh reference rejected.",
+      "fix": "Typed EOF capability markers and checks in both caller and helper entry points prevent incomplete or mixed helpers from gaining authority, including older callers.",
+      "status": "fixed",
+      "reproducer": {
+        "baseline_commit": "1d1e1b0",
+        "valid_truncated_helper_compiled": true,
+        "indexed_overlap_accepted": true,
+        "fresh_reference_overlap_rejected": true,
+        "current_claim_created": false,
+        "unsafe_reconciliation_executed": false
+      }
+    },
+    {
+      "priority": "P2",
+      "title": "Worker bookkeeping and lost wakeups could strand retirement",
+      "before": "An admission bookkeeping MemoryError left active=1 with no native query running; a failed final notification could strand a draining owner.",
+      "fix": "Admission is inside the retirement finally; active work retires before optional accounting, and draining rechecks the fence with a bounded condition wait.",
+      "status": "fixed"
+    },
+    {
+      "priority": "P2",
+      "title": "Native acquisition and release errors crossed the cleanup boundary",
+      "before": "An interrupted successful open lost an uncounted handle; failed close accounting could still permit reference authorization.",
+      "fix": "Unpublished output handles are retired on foreign-call exceptions; uncertain close completion is latched as fatal, never retried, and never permits fallback authorization.",
+      "status": "fixed",
+      "primary_source": "https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle"
+    },
+    {
+      "priority": "P2",
+      "title": "Routine CI depended on experimental branch history",
+      "before": "Pinned git-show unit tests could fail after shallow checkout, squash merge or branch deletion.",
+      "fix": "Routine contract tests are self-contained; actual pinned old/helper/coordinator checks live in the explicit 115-case historical-source qualifier. CI no longer fetches all history for these unit tests.",
+      "status": "fixed"
+    }
+  ],
+  "final_implementation_files": {
+    "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+    "ProtocyteOwnershipIndex.py": "bb9b4f8f6325861706aa2ea5e270e013a862f53f3485d3d06dcc2e1cdfde5630",
+    "ProtocytePathObservation.py": "9edce3ad2770452bdbbe0f610bba71b9a5708f6fa67d638aab44c5763ae764f0",
+    "ProtocyteObservationCommit.py": "d6cf05762997718e535a16a8392e26f7794b53a547774c58fa5472c9591bbba9"
+  },
+  "git_normalized_implementation_files": {
+    "ProtocyteOutputCoordinator.py": "f67a30883f713471ea661e8488903bef75108888bc5b247aa4f4dd0ba826814a",
+    "ProtocyteOwnershipIndex.py": "bb9b4f8f6325861706aa2ea5e270e013a862f53f3485d3d06dcc2e1cdfde5630",
+    "ProtocytePathObservation.py": "9edce3ad2770452bdbbe0f610bba71b9a5708f6fa67d638aab44c5763ae764f0",
+    "ProtocyteObservationCommit.py": "d6cf05762997718e535a16a8392e26f7794b53a547774c58fa5472c9591bbba9"
+  },
+  "source_normalization": {
+    "difference": "CRLF to LF only",
+    "ast_identical": true
+  },
+  "internal_helper_contracts": {
+    "commit": 2,
+    "ownership": 1,
+    "path": 1,
+    "published_at_eof": true
+  },
+  "ownership_protocol_version": 1,
+  "wire_lock_reference_and_mutation_ast_unchanged_since_review_start": [
+    "FileLock",
+    "Plan",
+    "_canonical_json",
+    "_path_key",
+    "_load_json",
+    "_validate_staging_path",
+    "OutputCoordinator._validate_registry_reference",
+    "OutputCoordinator._claim_paths",
+    "OutputCoordinator._load_recorded_plan",
+    "OutputCoordinator._validate_claim_shape",
+    "OutputCoordinator._require_plan_claim_binding",
+    "OutputCoordinator.reconcile_set",
+    "OutputCoordinator._reconcile_locked",
+    "OutputCoordinator.validate",
+    "OutputCoordinator.publish",
+    "OutputCoordinator.reset",
+    "OutputCoordinator._recover",
+    "OutputCoordinator._apply_pending",
+    "OutputCoordinator._publish_one",
+    "OutputCoordinator._initialize_claim_locked",
+    "OutputCoordinator._release_claim",
+    "OutputCoordinator._generation_lock",
+    "OutputCoordinator._publication_lock"
+  ],
+  "geometry_and_witness_ast_unchanged_since_review_start": [
+    "WindowsObservationCommit._identity",
+    "WindowsObservationCommit._root",
+    "WindowsObservationCommit._view",
+    "WindowsObservationCommit._descriptor",
+    "WindowsObservationCommit._overlaps_views",
+    "WindowsObservationCommit.path_key",
+    "WindowsObservationCommit.contains",
+    "WindowsObservationCommit.physically_contains",
+    "WindowsObservationCommit.read_json",
+    "WindowsObservationCommit._collect_witnesses",
+    "WindowsObservationCommit.seal"
+  ],
+  "workload": {
+    "registry_entries": 2239,
+    "ledger_records": 4478,
+    "current_plans": 11,
+    "targets_per_plan": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "declared_outputs": 232,
+    "committed_output_files_checked": 232,
+    "claims_plans_snapshots_and_outputs_unchanged": true,
+    "snapshot_byte_identical": true,
+    "tokens_produced": 0,
+    "reconciliation_authorized": false,
+    "ntfs_volumes": 2,
+    "python": "3.12.9",
+    "same_ledger_as_initial_mr_qualification": true,
+    "original_live_registry_and_lock_namespace": true,
+    "cold_os_cache_claimed": false
+  },
+  "repeat_timing_gate": {
+    "planned_samples": 10,
+    "executed_samples": 5,
+    "stopped_on_first_threshold_failure": true,
+    "complete_reference_readers_during_every_sample": 2,
+    "samples_under_30_seconds": 4,
+    "wall_samples_seconds": [
+      28.856071299989708,
+      29.55085189989768,
+      29.314126100041904,
+      28.384457200067118,
+      30.115117600071244
+    ],
+    "median_seconds": 29.314126100041904,
+    "source_note": "Cleanup fixes measured before final constructor-only compatibility guards; the comparison/IO algorithm is unchanged. This failed gate is not replaced by later controls.",
+    "run_intervals": [
+      {
+        "run": 1,
+        "started_unix_seconds": 1794863913.365,
+        "finished_unix_seconds": 1794863943.043,
+        "validation_seconds": 28.856071299989708
+      },
+      {
+        "run": 2,
+        "started_unix_seconds": 1794863943.084,
+        "finished_unix_seconds": 1794863973.393,
+        "validation_seconds": 29.55085189989768
+      },
+      {
+        "run": 3,
+        "started_unix_seconds": 1794863973.411,
+        "finished_unix_seconds": 1794864003.564,
+        "validation_seconds": 29.314126100041904
+      },
+      {
+        "run": 4,
+        "started_unix_seconds": 1794864003.582,
+        "finished_unix_seconds": 1794864032.65,
+        "validation_seconds": 28.384457200067118
+      },
+      {
+        "run": 5,
+        "started_unix_seconds": 1794864032.668,
+        "finished_unix_seconds": 1794864063.642,
+        "validation_seconds": 30.115117600071244
+      }
+    ],
+    "runs": [
+      {
+        "mode": "indexed",
+        "platform": "Windows",
+        "python": "3.12.9",
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+          "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+          "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de",
+          "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7"
+        },
+        "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "index_authorization_enabled": false,
+        "result": "accepted",
+        "validation_seconds": 28.856071299989708,
+        "validation_cpu_seconds": 30.796875,
+        "plan_parse_seconds": 0.22461200004909188,
+        "lock_wait_seconds": 0.41957729996647686,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 27.200438000028953,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 720656,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_cleanup_failed": false,
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0
+      },
+      {
+        "mode": "indexed",
+        "platform": "Windows",
+        "python": "3.12.9",
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+          "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+          "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de",
+          "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7"
+        },
+        "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "index_authorization_enabled": false,
+        "result": "accepted",
+        "validation_seconds": 29.55085189989768,
+        "validation_cpu_seconds": 30.953125,
+        "plan_parse_seconds": 0.20746730000246316,
+        "lock_wait_seconds": 0.4216287999879569,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 27.834398100036196,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 719856,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_cleanup_failed": false,
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0
+      },
+      {
+        "mode": "indexed",
+        "platform": "Windows",
+        "python": "3.12.9",
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+          "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+          "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de",
+          "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7"
+        },
+        "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "index_authorization_enabled": false,
+        "result": "accepted",
+        "validation_seconds": 29.314126100041904,
+        "validation_cpu_seconds": 29.703125,
+        "plan_parse_seconds": 0.17460689996369183,
+        "lock_wait_seconds": 0.37870399991516024,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 27.75422489992343,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 720896,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_cleanup_failed": false,
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0
+      },
+      {
+        "mode": "indexed",
+        "platform": "Windows",
+        "python": "3.12.9",
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+          "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+          "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de",
+          "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7"
+        },
+        "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "index_authorization_enabled": false,
+        "result": "accepted",
+        "validation_seconds": 28.384457200067118,
+        "validation_cpu_seconds": 30.265625,
+        "plan_parse_seconds": 0.18637050001416355,
+        "lock_wait_seconds": 0.34978070005308837,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 26.784217200009152,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 720096,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_cleanup_failed": false,
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0
+      },
+      {
+        "mode": "indexed",
+        "platform": "Windows",
+        "python": "3.12.9",
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+          "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+          "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de",
+          "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7"
+        },
+        "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "index_authorization_enabled": false,
+        "result": "accepted",
+        "validation_seconds": 30.115117600071244,
+        "validation_cpu_seconds": 30.6875,
+        "plan_parse_seconds": 0.22936410002876073,
+        "lock_wait_seconds": 0.47622479998972267,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 28.19692970009055,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 720416,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_cleanup_failed": false,
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0
+      }
+    ]
+  },
+  "final_source_control_comparison": {
+    "formal_promotion_gate": false,
+    "interpretation": "descriptive single old/new samples under one continuing reference reader; no controlled regression or reliability claim",
+    "runs": [
+      {
+        "mode": "old",
+        "started_unix_seconds": 1794864447.1990912,
+        "finished_unix_seconds": 1794864477.6079519,
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "52e1aae52d6f195e04b0b67e2fc8e7d8edffb418e9ac4f98a7e2e02fce1c2cee",
+          "ProtocyteOwnershipIndex.py": "7df8626756210f8dd0694bf26ffb7364f6c638f6361d14e61ef6c48df23dfd38",
+          "ProtocytePathObservation.py": "a745ea87565dab8b7ff0883d72a3d781854f3b88139d2ffc37052715de0bf1e4",
+          "ProtocyteObservationCommit.py": "143cd5e26bc25aafd848e7cc79df6d1d9d99793481aa5600df4d0541432d4664"
+        },
+        "qualification_driver_sha256": "a32a0a28f56d4a599820cda4a0a035d3c1f0f25c1e72c0680c74dee240a57714",
+        "formal_gate_sample": false,
+        "result": "accepted",
+        "validation_seconds": 29.89271359995473,
+        "validation_cpu_seconds": 30.171875,
+        "plan_parse_seconds": 0.2687357999384403,
+        "lock_wait_seconds": 0.512010500067845,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 27.833131999941543,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 728416,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0,
+        "complete_reference_readers_during_sample": 1
+      },
+      {
+        "mode": "reviewed",
+        "started_unix_seconds": 1794864478.8702788,
+        "finished_unix_seconds": 1794864508.4931316,
+        "implementation_files": {
+          "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+          "ProtocyteOwnershipIndex.py": "bb9b4f8f6325861706aa2ea5e270e013a862f53f3485d3d06dcc2e1cdfde5630",
+          "ProtocytePathObservation.py": "9edce3ad2770452bdbbe0f610bba71b9a5708f6fa67d638aab44c5763ae764f0",
+          "ProtocyteObservationCommit.py": "d6cf05762997718e535a16a8392e26f7794b53a547774c58fa5472c9591bbba9"
+        },
+        "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "formal_gate_sample": false,
+        "result": "accepted",
+        "validation_seconds": 29.135975199984387,
+        "validation_cpu_seconds": 29.5,
+        "plan_parse_seconds": 0.23981910001020879,
+        "lock_wait_seconds": 0.4828729999717325,
+        "current_plans": 11,
+        "registry_entries": 2239,
+        "original_live_registry_and_locks": true,
+        "native_metrics": {
+          "mode": "indexed",
+          "authoritative": "index",
+          "preview_wall_seconds": 26.958232400007546,
+          "reference_wall_seconds": 0.0,
+          "agreement": null,
+          "commit_claims_checked": 2239,
+          "commit_certificate": "verified",
+          "commit_reservations": 4486,
+          "commit_index_queries": 22,
+          "commit_fresh_comparisons": 84579,
+          "commit_open_calls": 30386,
+          "commit_info_calls": 58353,
+          "commit_negative_probes": 261703,
+          "commit_close_posts": 17958,
+          "commit_version_reads": 13457,
+          "commit_epoch_queries": 6,
+          "commit_journal_reads": 2,
+          "commit_journal_bytes": 719616,
+          "commit_witnesses": 8979,
+          "commit_records_read": 4478,
+          "commit_binding_checks": 12447,
+          "commit_record_read_calls": 8956,
+          "commit_record_seek_calls": 4478,
+          "commit_directory_enumerations": 8976,
+          "commit_full_inventory_scans": 2,
+          "commit_worker_context_checks": 2,
+          "commit_probe_state": "closed",
+          "commit_probe_workers": 4,
+          "commit_probe_native_retired": true,
+          "commit_probe_threads": 4,
+          "commit_probe_active": 0,
+          "commit_probe_peak_active": 4,
+          "commit_probe_pending": 0,
+          "commit_probe_peak_pending": 8,
+          "commit_probe_batches_submitted": 2662,
+          "commit_probe_batches_started": 2662,
+          "commit_probe_batches_finished": 2662,
+          "commit_probe_comparisons": 84579,
+          "commit_state": "closed",
+          "commit_cleanup_failed": false,
+          "commit_handles_opened": 26916,
+          "commit_handles_closed": 26916,
+          "commit_final_path_calls": 8979,
+          "preview_result": "accepted",
+          "reference_result": "not-required"
+        },
+        "ownership_or_output_mutations": 0,
+        "tokens_produced": 0,
+        "complete_reference_readers_during_sample": 1
+      }
+    ]
+  },
+  "full_reference_oracles": [
+    {
+      "mode": "legacy",
+      "implementation_files": {
+        "driver.py": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "legacy.py": "2ff54b69242d46eb8e35a52d30b32bc9afd815c00b6c0abeb8765d6fe7ddbb85",
+        "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7",
+        "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+        "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+        "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de"
+      },
+      "original_workload": true,
+      "frozen_sources": true,
+      "started_unix_seconds": 1794863478.6883984,
+      "finished_unix_seconds": 1794864731.773494,
+      "result": "accepted",
+      "registry_entries": 2239,
+      "claims_checked": 2239,
+      "validation_seconds": 1249.3908620000584,
+      "validation_cpu_seconds": 780.25,
+      "frozen_ledger": true,
+      "original_output_paths": true,
+      "original_namespace_checked_separately": true,
+      "live_shared_lock_held": false,
+      "ownership_or_output_mutations": 0
+    },
+    {
+      "mode": "reference",
+      "implementation_files": {
+        "driver.py": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+        "legacy.py": "2ff54b69242d46eb8e35a52d30b32bc9afd815c00b6c0abeb8765d6fe7ddbb85",
+        "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7",
+        "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+        "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+        "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de"
+      },
+      "original_workload": true,
+      "frozen_sources": true,
+      "started_unix_seconds": 1794863478.8033924,
+      "finished_unix_seconds": 1794864432.9595044,
+      "result": "accepted",
+      "registry_entries": 2239,
+      "claims_checked": 2239,
+      "validation_seconds": 948.4977354999864,
+      "validation_cpu_seconds": 572.734375,
+      "frozen_ledger": true,
+      "original_output_paths": true,
+      "original_namespace_checked_separately": true,
+      "live_shared_lock_held": false,
+      "ownership_or_output_mutations": 0
+    }
+  ],
+  "oracle_source_provenance": {
+    "source_fingerprints": {
+      "driver.py": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+      "legacy.py": "2ff54b69242d46eb8e35a52d30b32bc9afd815c00b6c0abeb8765d6fe7ddbb85",
+      "ProtocyteObservationCommit.py": "07aef70a2a6e0a428cf5d52ec1f4727f28723b251479548e90ba2475bb41a6f7",
+      "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+      "ProtocyteOwnershipIndex.py": "6ef189de3c19a52790d913ba45b7c0e59074704bbac5fd0c0e87e69e96ced829",
+      "ProtocytePathObservation.py": "62bc9e4901fbf31af1f4794b3764cb119ec848a3f78ce58b9e4469773221d7de"
+    },
+    "final_reference_methods_ast_identical": true,
+    "native_helpers_unused_by_reference_oracles": true
+  },
+  "preservation": {
+    "mode": "audit",
+    "platform": "Windows",
+    "python": "3.12.9",
+    "implementation_files": {
+      "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+      "ProtocyteOwnershipIndex.py": "bb9b4f8f6325861706aa2ea5e270e013a862f53f3485d3d06dcc2e1cdfde5630",
+      "ProtocytePathObservation.py": "9edce3ad2770452bdbbe0f610bba71b9a5708f6fa67d638aab44c5763ae764f0",
+      "ProtocyteObservationCommit.py": "d6cf05762997718e535a16a8392e26f7794b53a547774c58fa5472c9591bbba9"
+    },
+    "qualification_driver_sha256": "7de5fed96bfbf63ffab4110fecf5d05b18787b12c4d83fae4619f59538b49a5f",
+    "index_authorization_enabled": false,
+    "registry_entries": 2239,
+    "committed_output_files_checked": 232,
+    "claims_plans_snapshots_outputs_and_mtimes_unchanged": true,
+    "ownership_or_output_mutations": 0,
+    "tokens_produced": 0
+  },
+  "verification": {
+    "full_python314_suite": {
+      "passed": 1983,
+      "skipped": 41
+    },
+    "explicit_indexed_coordinator_suite": {
+      "passed": 89,
+      "skipped": 6
+    },
+    "minimum_python312_native_index_qualification": {
+      "passed": 257
+    },
+    "cmake_packaging_integration": {
+      "passed": 22,
+      "skipped": 1
+    },
+    "parallel_failure_and_upgrade_contract_tests": 120,
+    "cross_version_upgrade": {
+      "scope": "isolated Windows cross-version checks; no consumer registry accessed",
+      "legacy_git_blob": "25f1660190d3d1015fef3955814c8c737bd686c5",
+      "legacy_coordinator_sha256": "2ff54b69242d46eb8e35a52d30b32bc9afd815c00b6c0abeb8765d6fe7ddbb85",
+      "candidate_coordinator_sha256": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+      "implementation_files": {
+        "ProtocyteOutputCoordinator.py": "fff3bff61a9a6c542ad934a9473ad8ec043c2f3a4767220c6715e845942889f4",
+        "ProtocyteOwnershipIndex.py": "bb9b4f8f6325861706aa2ea5e270e013a862f53f3485d3d06dcc2e1cdfde5630",
+        "ProtocytePathObservation.py": "9edce3ad2770452bdbbe0f610bba71b9a5708f6fa67d638aab44c5763ae764f0",
+        "ProtocyteObservationCommit.py": "d6cf05762997718e535a16a8392e26f7794b53a547774c58fa5472c9591bbba9"
+      },
+      "candidate_helper_sha256": {
+        "ProtocyteOwnershipIndex.py": "bb9b4f8f6325861706aa2ea5e270e013a862f53f3485d3d06dcc2e1cdfde5630",
+        "ProtocytePathObservation.py": "9edce3ad2770452bdbbe0f610bba71b9a5708f6fa67d638aab44c5763ae764f0",
+        "ProtocyteObservationCommit.py": "d6cf05762997718e535a16a8392e26f7794b53a547774c58fa5472c9591bbba9"
+      },
+      "mixed_source_sha256": {
+        "helper-8851bde": "2e91b0a1df0d12b5b8b61dfe037c53cecf7393861058a08a19cc6c96d52c2583",
+        "helper-1d1e1b0": "143cd5e26bc25aafd848e7cc79df6d1d9d99793481aa5600df4d0541432d4664",
+        "coordinator-1d1e1b0": "88fbf0a18beab9b55a6efad4c8136bdc023834de149f7bced1715a09420948ca"
+      },
+      "unchanged_ast_methods_since_checkpoint": [
+        "reconcile_set",
+        "_reconcile_locked",
+        "validate",
+        "publish",
+        "reset",
+        "_recover",
+        "_apply_pending",
+        "_publish_one",
+        "_initialize_claim_locked",
+        "_release_claim",
+        "_generation_lock",
+        "_publication_lock"
+      ],
+      "reference_validator_ast_unchanged_since_checkpoint": false,
+      "file_lock_ast_unchanged_since_checkpoint": true,
+      "passed_cases": 115,
+      "production_index_authorization_qualified": false,
+      "index_authority_enabled_only_in_isolated_fixture_module": true,
+      "indexed_validations": 32,
+      "index_authorized_validations": 30,
+      "indexed_reference_fallbacks": 2,
+      "cases": [
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "old",
+          "reader": "reference",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "old",
+          "reader": "shadow",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "reference",
+          "reader": "old",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "shadow",
+          "reader": "old",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "old",
+          "reader": "native-shadow",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "native-shadow",
+          "reader": "old",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "old",
+          "reader": "indexed",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "indexed",
+          "reader": "old",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "old",
+          "reader": "default",
+          "passed": true
+        },
+        {
+          "kind": "upgrade-rollback-noop-token-and-publication",
+          "writer": "default",
+          "reader": "old",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "reference",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "shadow",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "shadow",
+          "reader": "old",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "native-shadow",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "native-shadow",
+          "reader": "old",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "commit-shadow",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "commit-shadow",
+          "reader": "old",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "indexed",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "indexed",
+          "reader": "old",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "old",
+          "reader": "default",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-pending",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-output-1",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-output-2",
+          "passed": true
+        },
+        {
+          "kind": "publication-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-initial-snapshot",
+          "passed": true
+        },
+        {
+          "kind": "initialization-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-claim",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-reset-intent",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-reset-output-1",
+          "passed": true
+        },
+        {
+          "kind": "reset-crash-recovery",
+          "writer": "default",
+          "reader": "old",
+          "cut": "after-reset-disposable",
+          "passed": true
+        },
+        {
+          "kind": "actual-previous-helper-reference-fallback",
+          "revision": "8851bde",
+          "passed": true
+        },
+        {
+          "kind": "actual-previous-helper-reference-fallback",
+          "revision": "1d1e1b0",
+          "passed": true
+        },
+        {
+          "kind": "actual-previous-coordinator-updated-helper",
+          "failed_cleanup": false,
+          "passed": true
+        },
+        {
+          "kind": "actual-previous-coordinator-updated-helper",
+          "failed_cleanup": true,
+          "passed": true
+        }
+      ]
+    },
+    "ruff": "passed",
+    "cpp_files_touched": 0
+  },
+  "limits": [
+    "The repeat timing gate failed; the index remains gated even though all sampled index answers agreed with reference.",
+    "Native queries must retire before root handles can close; blocked native IO can delay cancellation.",
+    "An uncertain failed close aborts the operation. Numeric handles are not retried because the OS may already have reused the value.",
+    "The consistency boundary remains past positive intervals with fresh negatives, not an atomic namespace freeze or protection against noncooperative record writers.",
+    "Capability, alias, journal and ordinary observation failures require complete safe cleanup before reference fallback.",
+    "Timing evidence covers this retained workload on one Windows/NTFS host with reused OS caches; it is not a universal latency guarantee."
+  ],
+  "privacy": "anonymous consumer; no paths, names, tokens, ledger contents, raw manifests or raw logs are published"
+}

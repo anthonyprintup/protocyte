@@ -6,7 +6,6 @@ import ctypes
 import os
 import random
 import sys
-import subprocess
 import threading
 from pathlib import Path
 
@@ -143,6 +142,8 @@ def test_invalid_default_override_is_rejected_and_explicit_reference_recovers(
         {"commit_probe_pending": False},
         {"commit_probe_comparisons": 1},
         {"commit_probe_comparisons": False},
+        {"commit_cleanup_failed": True},
+        {"commit_cleanup_failed": 0},
     ],
 )
 def test_incomplete_worker_accounting_cannot_authorize_mutation(
@@ -162,6 +163,7 @@ def test_incomplete_worker_accounting_cannot_authorize_mutation(
         engine.validation_metrics.update(
             commit_certificate="verified",
             commit_state="closed",
+            commit_cleanup_failed=False,
             commit_handles_opened=2,
             commit_handles_closed=2,
             commit_probe_state="closed",
@@ -203,7 +205,9 @@ def test_workers_overlap_and_cannot_control_the_session():
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt, SystemExit])
-@pytest.mark.parametrize("site", ["worker", "submit-after-queue", "shutdown", "wait"])
+@pytest.mark.parametrize(
+    "site", ["worker", "submit-after-queue", "shutdown", "wait", "notify"]
+)
 def test_every_failure_drains_admitted_work(error_type, site):
     first_started = threading.Event()
     second_started = threading.Event()
@@ -217,7 +221,7 @@ def test_every_failure_drains_admitted_work(error_type, site):
         if number == 0:
             first_started.set()
             assert second_started.wait(5)
-            if site in ("worker", "shutdown", "wait"):
+            if site in ("worker", "shutdown", "wait", "notify"):
                 failed.set()
                 raise error_type("injected worker failure")
             assert release.wait(5)
@@ -252,19 +256,30 @@ def test_every_failure_drains_admitted_work(error_type, site):
                 raise error_type("injected shutdown failure")
 
             session._executor.shutdown = shutdown
-        if site == "wait":
+        if site in ("wait", "notify"):
             real_wait = session._condition.wait
             interrupted = False
 
             def wait(*args, **kwargs):
                 nonlocal interrupted
-                if not interrupted:
+                if site == "notify":
+                    wait_interrupted.set()
+                elif not interrupted:
                     interrupted = True
                     wait_interrupted.set()
                     raise error_type("injected interruption while draining")
                 return real_wait(*args, **kwargs)
 
             session._condition.wait = wait
+        if site == "notify":
+            real_notify = session._condition.notify_all
+
+            def notify():
+                if session._active == 0:
+                    raise error_type("injected final retirement notification failure")
+                return real_notify()
+
+            session._condition.notify_all = notify
         try:
             session.compare((number, number) for number in range(128))
         except BaseException as error:
@@ -280,7 +295,7 @@ def test_every_failure_drains_admitted_work(error_type, site):
     thread.start()
     try:
         assert first_started.wait(5) and second_started.wait(5) and failed.wait(5)
-        if site == "wait":
+        if site in ("wait", "notify"):
             assert wait_interrupted.wait(5)
         assert not finished.is_set(), (
             "retired a session with an admitted query still active"
@@ -306,6 +321,61 @@ def test_every_failure_drains_admitted_work(error_type, site):
     # Even a job hidden by a failed submit cannot read prepared facts after close.
     with pytest.raises(commit.ObservationChanged, match="after retirement"):
         session._run(object())
+
+
+@pytest.mark.parametrize("error_type", [MemoryError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("site", ["admission", "completion"])
+def test_worker_bookkeeping_failure_retires_without_holding_owner(error_type, site):
+    failed = threading.Event()
+    finished = threading.Event()
+    sessions, errors = [], []
+
+    class ThreadSet(set):
+        def add(self, item):
+            failed.set()
+            raise error_type("injected admission bookkeeping failure")
+
+    class ComparisonCount(int):
+        def __add__(self, value):
+            failed.set()
+            raise error_type("injected completion bookkeeping failure")
+
+    def control():
+        session = commit.ProbeSession(lambda value: False, workers=1)
+        sessions.append(session)
+        if site == "admission":
+            session._threads = ThreadSet()
+        else:
+            session._comparisons = ComparisonCount(0)
+        try:
+            session.compare([(0, None)])
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            try:
+                session.close()
+            finally:
+                finished.set()
+
+    owner = threading.Thread(target=control)
+    owner.start()
+    try:
+        assert failed.wait(5)
+        retired = finished.wait(5)
+    finally:
+        if not finished.is_set():
+            # Bound this regression even on the old implementation's leaked
+            # counter. No native query ran in this isolated faulting session.
+            with sessions[0]._condition:
+                sessions[0]._active = 0
+                sessions[0]._condition.notify_all()
+        owner.join(timeout=10)
+    assert retired, "worker accounting stranded the owner in close()"
+    assert not owner.is_alive() and len(errors) == 1
+    assert isinstance(errors[0], error_type)
+    assert sessions[0].native_retired
+    assert sessions[0].metrics()["commit_probe_active"] == 0
+    assert sessions[0].metrics()["commit_probe_pending"] == 0
 
 
 def test_parallel_index_matches_serial_on_randomized_ownership_and_retirement():
@@ -575,22 +645,230 @@ def test_worker_failure_fallback_and_fatal_cleanup_preserve_claims(
     assert metrics["commit_handles_opened"] == metrics["commit_handles_closed"]
 
 
+@pytest.mark.parametrize("site", ["short-open", "root"])
+@pytest.mark.parametrize(
+    "failure",
+    ["false", "exception", "interrupt", "after-close", "after-close-interrupt"],
+)
+def test_native_release_failure_aborts_before_reference_or_mutation(
+    tmp_path, scope, monkeypatch, site, failure
+):
+    plan = helpers._write_plan(
+        tmp_path / "current.plan",
+        tmp_path / "generated",
+        tmp_path / "build",
+        ((helpers._target("failed-release"), "sample.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="reference"
+    )
+    token = engine.reconcile(plan)
+    state = engine._state_directory(plan.root)
+    before = {path.name: path.read_bytes() for path in state.iterdir()}
+    original = commit.WindowsObservationCommit.__init__
+    scopes, attempts, manual_cleanup = [], [], []
+
+    def initialize(readset, *args, **kwargs):
+        original(readset, *args, **kwargs)
+        scopes.append(readset)
+        raw_close = readset.reader._close
+
+        def close(handle):
+            is_root = any(
+                volume.handle is handle for volume in readset._volumes.values()
+            )
+            if (site == "root") == is_root and not attempts:
+                attempts.append(handle)
+                if failure in ("after-close", "after-close-interrupt"):
+                    assert raw_close(handle)
+                    if failure == "after-close-interrupt":
+                        raise KeyboardInterrupt(
+                            "interrupted after the OS closed the handle"
+                        )
+                    raise RuntimeError("failed after the OS closed the handle")
+                manual_cleanup.append((raw_close, handle))
+                if failure == "exception":
+                    raise RuntimeError("injected native release failure")
+                if failure == "interrupt":
+                    raise KeyboardInterrupt("injected native release interruption")
+                return False
+            if attempts and handle is attempts[0]:
+                attempts.append(handle)
+            return raw_close(handle)
+
+        readset.reader._close = close
+
+    monkeypatch.setattr(commit.WindowsObservationCommit, "__init__", initialize)
+    monkeypatch.setattr(
+        engine,
+        "_validate_registry_reference",
+        lambda *a, **k: pytest.fail("failed native cleanup authorized reference"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_reconcile_locked",
+        lambda *a, **k: pytest.fail("failed native cleanup authorized mutation"),
+    )
+    engine.registry_validation = "indexed"
+    expected = (
+        KeyboardInterrupt
+        if failure in ("interrupt", "after-close-interrupt")
+        else coordinator.CoordinatorError
+    )
+    try:
+        with pytest.raises(expected):
+            engine.reconcile(plan)
+    finally:
+        # Only the injector knows that these failures occurred before the OS
+        # call. Production must treat their completion as uncertain.
+        for raw_close, handle in manual_cleanup:
+            assert raw_close(handle)
+    assert len(attempts) == 1, "retried a native handle after uncertain completion"
+    assert {path.name: path.read_bytes() for path in state.iterdir()} == before
+    assert coordinator._load_json(state / "claim.json", "claim")["token"] == token
+    assert len(scopes) == 1
+    metrics = scopes[0].metrics()
+    assert metrics["commit_cleanup_failed"]
+    assert metrics["commit_state"] == "failed"
+    assert metrics["commit_handles_opened"] == metrics["commit_handles_closed"] + 1
+
+
+def test_failed_scope_close_never_retries_an_uncertain_handle(
+    scope, tmp_path, monkeypatch
+):
+    readset = commit.WindowsObservationCommit(
+        coordinator._load_path_observation(), model
+    )
+    readset.project(tmp_path)
+    roots = {
+        id(guard.handle): guard.handle
+        for guard in readset._objects.values()
+        if guard.handle
+    }
+    raw_close = readset.reader._close
+    attempts = []
+
+    def close(handle):
+        if id(handle) in roots:
+            attempts.append(handle)
+            return False
+        return raw_close(handle)
+
+    monkeypatch.setattr(readset.reader, "_close", close)
+    try:
+        for _ in range(2):
+            with pytest.raises(commit.ProbeCleanupFailed):
+                readset.close()
+        assert len(attempts) == len(roots)
+        metrics = readset.metrics()
+        assert metrics["commit_state"] == "failed"
+        assert metrics["commit_handles_opened"] > metrics["commit_handles_closed"]
+    finally:
+        for handle in roots.values():
+            assert raw_close(handle)
+
+
+@pytest.mark.parametrize("site", ["root", "relative"])
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("failed_close", [False, True])
+def test_interrupted_native_open_releases_unpublished_handle_before_fallback(
+    tmp_path, scope, monkeypatch, site, error_type, failed_close
+):
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="reference"
+    )
+    plan = helpers._write_plan(
+        tmp_path / "plan",
+        tmp_path / "generated",
+        tmp_path / "build",
+        ((helpers._target("interrupted-open"), "sample.protocyte.hpp"),),
+    )
+    token = engine.reconcile(plan)
+    state = engine._state_directory(plan.root)
+    claim = (state / "claim.json").read_bytes()
+    original = commit.WindowsObservationCommit.__init__
+    scopes, handles, opened = [], [], []
+    closed_values = set()
+
+    def initialize(readset, *args, **kwargs):
+        original(readset, *args, **kwargs)
+        scopes.append(readset)
+        raw_open, raw_close = readset.reader._open, readset.reader._close
+
+        def open_native(*args):
+            status = raw_open(*args)
+            is_root = not args[2]._obj.RootDirectory
+            if status >= 0 and (site == "root") == is_root and not handles:
+                value = ctypes.cast(
+                    args[0], ctypes.POINTER(readset.w.HANDLE)
+                ).contents.value
+                handles.append(value)
+                opened.append((raw_close, readset.w.HANDLE(value)))
+                raise error_type("injected exception after native open completed")
+            return status
+
+        def close(handle):
+            if failed_close and handles and handle.value == handles[0]:
+                return False
+            result = raw_close(handle)
+            if result:
+                closed_values.add(handle.value)
+            return result
+
+        readset.reader._open = open_native
+        readset.reader._close = close
+
+    monkeypatch.setattr(commit.WindowsObservationCommit, "__init__", initialize)
+    engine.registry_validation = "indexed"
+    try:
+        if failed_close:
+            monkeypatch.setattr(
+                engine,
+                "_validate_registry_reference",
+                lambda *a, **k: pytest.fail(
+                    "unreleased native open used reference authority"
+                ),
+            )
+            with pytest.raises(coordinator.CoordinatorError):
+                engine.reconcile(plan)
+        elif error_type is RuntimeError:
+            assert engine.reconcile(plan) == token
+            assert engine.validation_metrics["fallback"] == "reference"
+            assert engine.validation_metrics["reference_result"] == "accepted"
+        else:
+            with pytest.raises(error_type):
+                engine.reconcile(plan)
+    finally:
+        for raw_close, handle in opened:
+            if handle.value not in closed_values:
+                assert raw_close(handle)
+    assert len(handles) == 1 and len(scopes) == 1
+    metrics = scopes[0].metrics()
+    assert metrics["commit_handles_opened"] > 0
+    assert metrics["commit_handles_opened"] == metrics["commit_handles_closed"] + int(
+        failed_close
+    )
+    assert (state / "claim.json").read_bytes() == claim
+
+
+@pytest.mark.parametrize("previous_has_cleanup_error", [False, True])
 def test_previous_helper_during_upgrade_uses_reference_without_token_rotation(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, previous_has_cleanup_error
 ):
     from types import ModuleType
 
-    source = tmp_path / "previous-observation-helper.py"
-    repo = Path(__file__).resolve().parents[1]
-    source.write_bytes(
-        subprocess.check_output(
-            ["git", "show", "8851bde:cmake/ProtocyteObservationCommit.py"], cwd=repo
-        )
-    )
     previous = ModuleType("previous_observation_helper")
-    sys.modules[previous.__name__] = previous
-    exec(compile(source.read_bytes(), str(source), "exec"), previous.__dict__)
-    assert not hasattr(previous, "ProbeCleanupFailed")
+    # Both pre-pool and pre-review helper API shapes remain safe fallbacks.
+    # Actual pinned implementations run in verify_coordinator_upgrade.py;
+    # ordinary unit tests must work in archives and shallow/squashed checkouts.
+    if previous_has_cleanup_error:
+        previous.ProbeCleanupFailed = type("ProbeCleanupFailed", (RuntimeError,), {})
+    assert not hasattr(previous, "COMMIT_CONTRACT_VERSION")
+
+    def unavailable(*args, **kwargs):
+        pytest.fail("opened an incompatible helper during a partial upgrade")
+
+    previous.WindowsObservationCommit = unavailable
     engine = coordinator.OutputCoordinator(
         tmp_path / "locks", registry_validation="reference"
     )
@@ -610,3 +888,143 @@ def test_previous_helper_during_upgrade_uses_reference_without_token_rotation(
     assert engine.validation_metrics["fallback"] == "reference"
     assert engine.validation_metrics["reference_result"] == "accepted"
     assert (state / "claim.json").read_bytes() == claim
+
+
+@pytest.mark.parametrize("contract", [None, False, 1, 3, "2", 2.0])
+def test_unknown_helper_contract_falls_back_before_acquiring_handles(
+    tmp_path, monkeypatch, contract
+):
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="reference"
+    )
+    plan = helpers._write_plan(
+        tmp_path / "plan",
+        tmp_path / "generated",
+        tmp_path / "build",
+        ((helpers._target("helper-contract"), "sample.protocyte.hpp"),),
+    )
+    token = engine.reconcile(plan)
+    monkeypatch.setattr(commit, "COMMIT_CONTRACT_VERSION", contract)
+    monkeypatch.setattr(
+        commit,
+        "WindowsObservationCommit",
+        lambda *a, **k: pytest.fail("opened a scope through an incompatible helper"),
+    )
+    engine.registry_validation = "indexed"
+    assert engine.reconcile(plan) == token
+    assert engine.validation_metrics["fallback"] == "reference"
+    assert engine.validation_metrics["reference_result"] == "accepted"
+    assert "commit_handles_opened" not in engine.validation_metrics
+
+
+@pytest.mark.parametrize("dependency", ["ownership", "path"])
+@pytest.mark.parametrize("contract", [None, True, 0, 2, "1", 1.0])
+def test_unknown_dependency_contract_falls_back_before_acquiring_handles(
+    tmp_path, monkeypatch, dependency, contract
+):
+    module, marker = (
+        (model, "OWNERSHIP_CONTRACT_VERSION")
+        if dependency == "ownership"
+        else (coordinator._load_path_observation(), "PATH_CONTRACT_VERSION")
+    )
+    monkeypatch.setattr(module, marker, contract)
+    monkeypatch.setattr(
+        commit,
+        "WindowsObservationCommit",
+        lambda *a, **k: pytest.fail(
+            "opened a scope through an incompatible dependency"
+        ),
+    )
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="indexed"
+    )
+    plan = helpers._write_plan(
+        tmp_path / "plan",
+        tmp_path / "generated",
+        tmp_path / "build",
+        ((helpers._target("dependency-contract"), "sample.protocyte.hpp"),),
+    )
+    assert engine.reconcile(plan)
+    assert engine.validation_metrics["fallback"] == "reference"
+    assert "commit_handles_opened" not in engine.validation_metrics
+
+
+@pytest.mark.parametrize(
+    "filename,marker,loader",
+    [
+        (
+            "ProtocyteObservationCommit.py",
+            "COMMIT_CONTRACT_VERSION",
+            "_load_observation_commit",
+        ),
+        (
+            "ProtocyteOwnershipIndex.py",
+            "OWNERSHIP_CONTRACT_VERSION",
+            "_load_ownership_index",
+        ),
+        (
+            "ProtocytePathObservation.py",
+            "PATH_CONTRACT_VERSION",
+            "_load_path_observation",
+        ),
+    ],
+)
+def test_valid_truncated_helper_cannot_authorize_an_index(
+    tmp_path, monkeypatch, filename, marker, loader
+):
+    from types import ModuleType
+
+    path = Path(__file__).resolve().parents[1] / "cmake" / filename
+    source = path.read_text()
+    if filename == "ProtocyteObservationCommit.py":
+        # Keep a valid but incomplete conflict() that checks roots and then
+        # implicitly accepts without checking current staging reservations.
+        source = source.rsplit("        for target, path in staging:", 1)[0]
+    else:
+        source = source.rsplit(marker + " =", 1)[0]
+    incomplete = ModuleType(f"incomplete_helper_{next(_modules)}")
+    sys.modules[incomplete.__name__] = incomplete
+    exec(compile(source, filename, "exec"), incomplete.__dict__)
+    assert not hasattr(incomplete, marker)
+    # Older coordinators do not inspect the marker themselves. The helper's
+    # entry point must reject the partial file before touching OS resources.
+    if filename == "ProtocyteObservationCommit.py":
+        with pytest.raises(incomplete.CapabilityUnavailable, match="incomplete"):
+            incomplete.WindowsObservationCommit(
+                coordinator._load_path_observation(), model
+            )
+    elif filename == "ProtocytePathObservation.py":
+        with pytest.raises(incomplete.ObservationUnavailable, match="incomplete"):
+            incomplete.FreshPathObserver()
+    else:
+        with pytest.raises(RuntimeError, match="incomplete"):
+            incomplete.OwnershipIndex(())
+    monkeypatch.setattr(coordinator, loader, lambda: incomplete)
+    engine = coordinator.OutputCoordinator(
+        tmp_path / "locks", registry_validation="indexed"
+    )
+    target = helpers._target("truncated-contract")
+    current_root = tmp_path / "generated"
+    staging = tmp_path / f".protocyte-generation-staging-{target}"
+    retained = helpers._write_plan(
+        tmp_path / "retained.plan",
+        staging / "foreign",
+        tmp_path / "old-build",
+        ((helpers._target("foreign"), "old.protocyte.hpp"),),
+    )
+    engine.registry_validation = "reference"
+    engine.reconcile(retained)
+    current = helpers._write_plan(
+        tmp_path / "current.plan",
+        current_root,
+        tmp_path / "build",
+        ((target, "sample.protocyte.hpp"),),
+    )
+    engine.registry_validation = "indexed"
+    with pytest.raises(
+        coordinator.CoordinatorError, match="staging overlaps a claimed output root"
+    ):
+        engine.reconcile(current)
+    assert engine.validation_metrics["fallback"] == "reference"
+    assert engine.validation_metrics["reference_result"] == "rejected"
+    assert not engine._state_directory(current.root).exists()

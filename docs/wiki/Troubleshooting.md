@@ -208,14 +208,13 @@ wait includes preparing and acquiring its lock files. `registry_entries` counts
 state directories, including any abandoned initialization directories encountered;
 `claims_checked` counts authenticated claim/plan records.
 
-On supported Windows/NTFS installations, registry validation automatically uses
-the qualified committed index. Unsupported capabilities or an unverified
-observation use full reference validation, which can take longer. Existing
-builds need no migration, registry reset, or new configuration. To force the
+Registry validation currently uses the full reference validator. The experimental
+index remains gated after its repeat timing qualification exceeded 30 seconds;
+see the [MR review](../mr55-review-results.md). Existing builds need no migration,
+registry reset, or new configuration. To explicitly select the
 reference validator while diagnosing an installation, set
 `PROTOCYTE_REGISTRY_VALIDATION=reference` in the build environment; remove it to
-restore automatic selection. See the
-[qualification and limits](../parallel-probe-results.md).
+restore automatic selection, which remains reference while promotion is closed.
 
 If cleanup refuses an unsafe path or cannot remove it, the diagnostic warns that inert staging data outside `OUT_DIR` may remain. Stop related processes and remove only the named staging path after inspecting it.
 

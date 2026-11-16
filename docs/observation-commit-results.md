@@ -4,7 +4,8 @@ This is the historical synthetic qualification at commit `0fe8ad4`. Its source
 fingerprints and closed promotion decision are retained below. See the newer
 [retained consumer qualification](consumer-validation-results.md) for subsequent
 serial measurements and the [parallel-probe qualification](parallel-probe-results.md)
-for the current integration decision. The disabled default described below is
+for the initial enablement. The subsequent [MR review](mr55-review-results.md)
+records the current closed promotion decision. The disabled default below is
 the historical decision for this synthetic snapshot.
 
 The index remains **disabled as an authority** on

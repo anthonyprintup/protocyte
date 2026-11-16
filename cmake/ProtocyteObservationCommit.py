@@ -36,7 +36,7 @@ class ObservationChanged(RuntimeError):
 
 
 class ProbeCleanupFailed(RuntimeError):
-    """Worker retirement failed: reference fallback must not authorize mutation."""
+    """Native work or handle cleanup failed; fallback must not authorize mutation."""
 
 
 class ProbeSession:
@@ -70,27 +70,34 @@ class ProbeSession:
         )
 
     def _run(self, batch):
-        with self._condition:
-            if not self._accepting:
-                raise ObservationChanged("probe work admitted after retirement")
-            self._active += 1
-            self._peak = max(self._peak, self._active)
-            self._started += 1
-            self._threads.add(threading.get_ident())
+        admitted = False
         completed = 0
         result = []
         try:
+            with self._condition:
+                if not self._accepting:
+                    raise ObservationChanged("probe work admitted after retirement")
+                self._active += 1
+                admitted = True
+                # Bookkeeping can allocate and raise. It belongs inside the
+                # same retirement finally as the native comparison itself.
+                self._peak = max(self._peak, self._active)
+                self._started += 1
+                self._threads.add(threading.get_ident())
             for reservation, prepared in batch:
                 if self._compare(prepared):
                     result.append(reservation)
                 completed += 1
             return result
         finally:
-            with self._condition:
-                self._comparisons += completed
-                self._completed += 1
-                self._active -= 1
-                self._condition.notify_all()
+            if admitted:
+                with self._condition:
+                    # Retire first: even a later accounting failure cannot
+                    # leave close() waiting for a batch that already exited.
+                    self._active -= 1
+                    self._condition.notify_all()
+                    self._comparisons += completed
+                    self._completed += 1
 
     def compare(self, prepared):
         self._require_owner()
@@ -146,7 +153,9 @@ class ProbeSession:
                         if not self._active:
                             self._native_retired = True
                             break
-                        self._condition.wait()
+                        # A worker may fail while notifying its retirement.
+                        # Recheck the fence even if that notification is lost.
+                        self._condition.wait(timeout=0.1)
                 except BaseException as error:
                     if self._close_error is None:
                         self._close_error = error
@@ -359,6 +368,15 @@ class WindowsObservationCommit:
     MAX_RECORD_BYTES = 16 * 1024 * 1024
 
     def __init__(self, native: Any, model: Any) -> None:
+        # Keep old coordinators safe too: they predate the caller-side version
+        # checks and can import an in-progress or mixed helper installation.
+        contracts = (
+            (globals().get("COMMIT_CONTRACT_VERSION"), 2),
+            (getattr(native, "PATH_CONTRACT_VERSION", None), 1),
+            (getattr(model, "OWNERSHIP_CONTRACT_VERSION", None), 1),
+        )
+        if any(type(value) is not int or value != expected for value, expected in contracts):
+            raise CapabilityUnavailable("incomplete observation helper installation")
         if os.name != "nt":
             raise CapabilityUnavailable("commit observations require Windows")
         self.native, self.model = native, model
@@ -376,6 +394,7 @@ class WindowsObservationCommit:
         self._inventories: list[
             tuple[_Guard, tuple[str, ...], frozenset[str] | None]
         ] = []
+        self._cleanup_error: BaseException | None = None
         self._counts = {
             name: 0
             for name in (
@@ -608,8 +627,17 @@ class WindowsObservationCommit:
         return key
 
     def _release(self, handle: Any) -> None:
-        if not self.reader._close(handle):
-            raise CommitUnavailable("native handle release failed")
+        try:
+            closed = self.reader._close(handle)
+        except BaseException as error:
+            self._cleanup_error = error
+            if isinstance(error, Exception):
+                raise ProbeCleanupFailed("native handle release failed") from error
+            raise
+        if not closed:
+            error = ProbeCleanupFailed("native handle release failed")
+            self._cleanup_error = error
+            raise error
         self.reader.handles_closed += 1
 
     def _adopt(
@@ -718,8 +746,8 @@ class WindowsObservationCommit:
     def _open_child(self, request: Any):
         self._counts["commit_open_calls"] += 1
         handle, status = self.w.HANDLE(), self.reader._status()
-        result = self.reader._open(
-            ctypes.byref(handle),
+        result = self.reader._invoke_open(
+            handle,
             0x100081,
             ctypes.byref(request[2]),
             ctypes.byref(status),
@@ -1163,12 +1191,13 @@ class WindowsObservationCommit:
 
     def close(self) -> None:
         self._require_owner()
-        error = None
+        error = self._cleanup_error
         if self._comparison_reader is not None:
             try:
                 self._comparison_reader.close()
             except BaseException as failure:
-                error = failure
+                if error is None:
+                    error = failure
             if not self._comparison_reader.probe_session.native_retired:
                 raise ProbeCleanupFailed(
                     "root handles cannot close before native probe retirement"
@@ -1177,8 +1206,11 @@ class WindowsObservationCommit:
         for guard in reversed(tuple(self._objects.values())):
             if guard.handle is None:
                 continue
+            # Never retry an uncertain close: the OS may already have consumed
+            # the value and reused it for an unrelated process/thread handle.
+            handle, guard.handle = guard.handle, None
             try:
-                self._release(guard.handle)
+                self._release(handle)
             except BaseException as failure:
                 if error is None:
                     error = failure
@@ -1188,8 +1220,16 @@ class WindowsObservationCommit:
         self._bindings.clear()
         self._inventories.clear()
         self._volumes.clear()
-        self.reader.close()
+        try:
+            self.reader.close()
+        except BaseException as failure:
+            if error is None:
+                error = failure
         if error is not None:
+            self._state = "failed"
+            self._cleanup_error = error
+            if isinstance(error, Exception) and not isinstance(error, ProbeCleanupFailed):
+                raise ProbeCleanupFailed("native observation cleanup failed") from error
             raise error
 
     def metrics(self) -> dict[str, Any]:
@@ -1204,6 +1244,7 @@ class WindowsObservationCommit:
             "commit_info_calls": self._counts["commit_info_calls"]
             + self.reader.information_calls,
             "commit_state": self._state,
+            "commit_cleanup_failed": self._cleanup_error is not None,
             "commit_handles_opened": self.reader.handles_opened,
             "commit_handles_closed": self.reader.handles_closed,
             "commit_final_path_calls": self.reader.final_path_calls,
@@ -1283,3 +1324,8 @@ class ProvisionalOwnershipIndex:
                     continue
                 return "staging-staging"
         return None
+
+
+# Publish only after the complete helper has loaded. A syntactically valid
+# truncated install must not advertise its contract. This is not a disk format.
+COMMIT_CONTRACT_VERSION = 2

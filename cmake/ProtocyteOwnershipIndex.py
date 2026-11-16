@@ -50,6 +50,9 @@ class OwnershipIndex:
     """
 
     def __init__(self, reservations: Iterable[Reservation]) -> None:
+        contract = globals().get("OWNERSHIP_CONTRACT_VERSION")
+        if type(contract) is not int or contract != 1:
+            raise RuntimeError("incomplete ownership helper installation")
         self.reservations = tuple(reservations)
         self.queries = 0
         exact: dict[LocationKey, set[int]] = {}
@@ -120,3 +123,7 @@ class OwnershipIndex:
                     continue
                 return "staging-staging"
         return None
+
+
+# EOF capability marker; an incomplete installed source cannot advertise it.
+OWNERSHIP_CONTRACT_VERSION = 1

@@ -1,13 +1,13 @@
 # Experimental observation commit
 
-Status: qualified parallel `indexed` validation is the automatic Windows default
-on `codex/experimental-generation-engine`. The
-[parallel-probe qualification](parallel-probe-results.md) passed 20/20 complete
-retained-workload validations below 30 seconds, including ten under concurrent
-reference-reader load. Index authority still requires a verified certificate,
-complete worker retirement, and balanced native handle accounting. Unsupported
-or unverified observations use reference validation; failed worker retirement
-aborts before mutation. `commit-shadow` remains available for differential checks.
+Status: index promotion is **closed** on `codex/experimental-generation-engine`.
+The [MR review](mr55-review-results.md) fixed concurrency, cleanup and partial-upgrade
+issues, but its repeat timing gate exceeded 30 seconds. Normal consumer commands
+use reference validation; neither the hidden indexed flag nor the private mode
+can override the source guard. Only isolated fixtures and the mutation-forbidden
+qualification harness can exercise index authority in their own module.
+`commit-shadow` remains available for differential checks with reference authority.
+The earlier [parallel qualification](parallel-probe-results.md) is historical.
 
 This replaces the previous fresh-observation experiment's repeated full path
 walks with a provisional read set. Its certificate verifies the requested native
@@ -57,6 +57,13 @@ Positive reuse also requires every component's input spelling to exactly match
 the canonical native spelling. Case variants, short-name aliases, and other
 noncanonical spellings fall back. This is a correctness boundary, not a path
 normalization performed on behalf of the caller.
+
+Trusted helper sources advertise internal contracts only at EOF:
+`commit=2`, `ownership=1`, and `path=1`. Caller and helper-entry checks require
+exact integer versions before acquiring native resources or building an index.
+Entry checks also protect older coordinators that do not inspect those markers.
+An incomplete or incompatible installation uses reference validation; these
+markers do not change the v1 ownership format or require a consumer setting.
 
 ## Positive read-set argument
 
@@ -183,6 +190,11 @@ views or releasing root handles. Interruptions during the drain are deferred
 until native work retires. No comparison can run during sealing or after root
 release, and a failed seal grants no index authority.
 
+Admission bookkeeping belongs inside the same retirement `finally` as native
+work. Active work retires before optional completion accounting. The drain uses
+a bounded condition wait to recheck its fence if a worker's final notification
+fails; a lost wakeup cannot strand an already-retired pool.
+
 A comparison error with successful cleanup can fall back to reference. Failure
 to retire the pool safely raises a fatal coordinator error before reference can
 authorize reconciliation. If retirement is unproved, cleanup preserves the
@@ -191,6 +203,16 @@ Successful index authority requires a closed pool, zero active and pending work,
 completed-comparison accounting equal to the requested count, a verified seal,
 and complete native-handle closure. Shutdown and cancellation errors are not
 treated as successful retirement.
+
+An exception can arrive after a native open writes an output handle but before
+the caller receives it. The native wrapper releases that unpublished handle
+exactly once and accounts for it before propagating the exception. Any failed
+native release or unbalanced final accounting is fatal before reference can
+authorize mutation, including failures involving short opens or volume roots.
+Uncertain close completion is latched: numeric handles are never retried because
+the OS may already have consumed and reused their value. Remaining known roots
+close once; the operation stays failed. See
+[CloseHandle usage](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle).
 
 ## Expiry, fallback, and operational costs
 
@@ -227,10 +249,9 @@ or tokens. An exception records its type, not its message.
 
 ## Upgrade contract and qualification gate
 
-Normal Windows installations automatically attempt qualified indexed validation;
-other platforms continue to use reference validation. Every invocation checks
-the native capabilities and certificate described above. Existing consumer
-commands and CMake configuration need no changes. To force reference validation
+Normal installations use reference validation on every platform while the
+promotion guard is closed. Existing consumer commands and CMake configuration
+need no changes. To explicitly select reference validation
 for an existing build, set `PROTOCYTE_REGISTRY_VALIDATION=reference` in its
 environment. Direct coordinator commands also accept
 `--reference-registry-validation`. The environment accepts `auto` (the default)
@@ -250,7 +271,8 @@ skipping the record. Valid registries need no migration, reset, regeneration, or
 token rotation. Malformed or unreadable recorded state requires its underlying
 problem to be repaired rather than being skipped.
 
-The parallel qualification supplies evidence for the following promotion gates:
+The following promotion gates remain required. Correctness and upgrade evidence
+is recorded in the review; repeat timing failed and blocks promotion:
 
 - Relevant native mutation semantics and fallback behavior are qualified for
   the enabled capability, with the namespace and writer boundaries above explicit.
@@ -266,7 +288,8 @@ The read-only qualification harness reports the entire validation cost, includin
 plan parsing, witness verification, worker retirement, and native-handle release,
 separately from its optional reference oracle. It produces no tokens and
 authorizes no reconciliation. The default-mode qualification exercises ordinary
-production selection with the source gate enabled. Ordinary `commit-shadow`
+production selection when the source gate is enabled. The review does not enable
+that source gate. Ordinary `commit-shadow`
 timings always include the mandatory reference pass; candidate timing must never
 be presented as that full operation. The timing evidence covers the retained
 workload and measured host, not a universal latency bound on every installation.

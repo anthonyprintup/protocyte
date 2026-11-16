@@ -394,6 +394,123 @@ def main() -> None:
                 }
             )
 
+    # Historical source checks are deliberately in this explicit qualifier,
+    # not routine unit tests: a squash merge need not retain branch commits.
+    mixed_source_hashes = {}
+    for revision in ("8851bde", "1d1e1b0"):
+        path = WORK / f"legacy/helper-{revision}.py"
+        path.write_bytes(
+            subprocess.check_output(
+                ["git", "show", f"{revision}:cmake/ProtocyteObservationCommit.py"],
+                cwd=REPO,
+            )
+        )
+        previous_helper = load(f"mixed_helper_{revision}", path)
+        mixed_source_hashes[f"helper-{revision}"] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+        root, locks, plan_file, _, _ = fixture(f"mixed-helper-{revision}")
+        reader = engine("reference", locks)
+        plan = new.Plan.read(plan_file)
+        token = reader.reconcile(plan)
+        state = reader._state_directory(root)
+        claim = (state / "claim.json").read_bytes()
+        load_commit, commit_module = (
+            new._load_observation_commit,
+            new._observation_commit_module,
+        )
+        try:
+            new._load_observation_commit = lambda: previous_helper
+            new._observation_commit_module = previous_helper
+            reader.registry_validation = "indexed"
+            assert reader.reconcile(plan) == token
+            assert reader.validation_metrics["fallback"] == "reference"
+            assert reader.validation_metrics["reference_result"] == "accepted"
+            assert "commit_handles_opened" not in reader.validation_metrics
+            assert (state / "claim.json").read_bytes() == claim
+        finally:
+            new._load_observation_commit, new._observation_commit_module = (
+                load_commit,
+                commit_module,
+            )
+        results.append(
+            {
+                "kind": "actual-previous-helper-reference-fallback",
+                "revision": revision,
+                "passed": True,
+            }
+        )
+
+    path = WORK / "legacy/pre-review-coordinator.py"
+    path.write_bytes(
+        subprocess.check_output(
+            ["git", "show", "1d1e1b0:cmake/ProtocyteOutputCoordinator.py"], cwd=REPO
+        )
+    )
+    previous = load("mixed_previous_coordinator", path)
+    mixed_source_hashes["coordinator-1d1e1b0"] = hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+    previous._COMMITTED_INDEX_QUALIFIED = True
+    previous._load_ownership_index = new._load_ownership_index
+    previous._load_path_observation = new._load_path_observation
+    previous._load_observation_commit = new._load_observation_commit
+    updated_helper = new._load_observation_commit()
+    previous._observation_commit_module = updated_helper
+    for failed_cleanup in (False, True):
+        root, locks, plan_file, _, _ = fixture(
+            f"previous-coordinator-updated-helper-{failed_cleanup}"
+        )
+        reader = previous.OutputCoordinator(locks, registry_validation="reference")
+        plan = previous.Plan.read(plan_file)
+        token = reader.reconcile(plan)
+        claim = (reader._state_directory(root) / "claim.json").read_bytes()
+        constructor = updated_helper.WindowsObservationCommit.__init__
+        failed = []
+        if failed_cleanup:
+
+            def initialize(readset, *args, **kwargs):
+                constructor(readset, *args, **kwargs)
+                raw_close = readset.reader._close
+
+                def close(handle):
+                    if not failed:
+                        failed.append((raw_close, handle))
+                        return False
+                    return raw_close(handle)
+
+                readset.reader._close = close
+
+            updated_helper.WindowsObservationCommit.__init__ = initialize
+        try:
+            reader.registry_validation = "indexed"
+            if failed_cleanup:
+                try:
+                    reader.reconcile(plan)
+                except previous.CoordinatorError as error:
+                    assert "could not be retired safely" in str(error)
+                else:
+                    raise AssertionError(
+                        "previous coordinator accepted failed native cleanup"
+                    )
+                assert reader.validation_metrics["reference_wall_seconds"] == 0.0
+            else:
+                assert reader.reconcile(plan) == token
+                assert reader.validation_metrics["authoritative"] == "index"
+            assert (reader._state_directory(root) / "claim.json").read_bytes() == claim
+        finally:
+            updated_helper.WindowsObservationCommit.__init__ = constructor
+            # Only the injector knows that no OS close was attempted.
+            for raw_close, handle in failed:
+                assert raw_close(handle)
+        results.append(
+            {
+                "kind": "actual-previous-coordinator-updated-helper",
+                "failed_cleanup": failed_cleanup,
+                "passed": True,
+            }
+        )
+
     assert {
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in IMPLEMENTATION
@@ -414,6 +531,7 @@ def main() -> None:
                 "ProtocyteObservationCommit.py",
             )
         },
+        "mixed_source_sha256": mixed_source_hashes,
         "unchanged_ast_methods_since_checkpoint": unchanged,
         "reference_validator_ast_unchanged_since_checkpoint": reference_unchanged,
         "file_lock_ast_unchanged_since_checkpoint": True,

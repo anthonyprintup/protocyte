@@ -161,6 +161,7 @@ def test_indexed_qualification_requires_mutation_guard_and_restores_promotion_ga
             commit_certificate="verified",
             commit_state="closed",
             commit_handles_opened=1,
+            commit_cleanup_failed=False,
             commit_handles_closed=1,
             commit_claims_checked=1,
             commit_probe_state="closed",

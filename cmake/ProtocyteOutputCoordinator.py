@@ -36,10 +36,9 @@ from typing import Any, Iterator, Mapping, NoReturn, Sequence
 
 
 PROTOCOL_VERSION = 1
-# Qualified on the complete retained consumer workload, including concurrent
-# reference-reader load. Runtime capability, complete worker retirement, and
-# exact native witnesses remain mandatory; every unverified case uses reference.
-_COMMITTED_INDEX_QUALIFIED = True
+# Review fixes are awaiting repeat qualification. Only isolated or
+# mutation-forbidden qualification modules can exercise provisional authority.
+_COMMITTED_INDEX_QUALIFIED = False
 PLAN_HEADER = "protocyte-output-plan-v1"
 GENERATED_SUFFIXES = (".protocyte.cpp", ".protocyte.hpp", "/runtime.hpp")
 
@@ -1539,7 +1538,7 @@ class OutputCoordinator:
                 module = _observation_commit_module
                 cleanup_failure = getattr(module, "ProbeCleanupFailed", None)
                 if cleanup_failure is not None and isinstance(error, cleanup_failure):
-                    _fail("native probe workers could not be retired safely; no reconciliation changes were authorized")
+                    _fail("native observation resources could not be retired safely; no reconciliation changes were authorized")
                 # A failed or unsupported certificate grants no authority. The
                 # ordinary reference path still determines this operation.
                 metrics["preview_result"] = "unverified"
@@ -1553,6 +1552,7 @@ class OutputCoordinator:
                     preview_accepted is True
                     and metrics.get("commit_certificate") == "verified"
                     and metrics.get("commit_state") == "closed"
+                    and metrics.get("commit_cleanup_failed") is False
                     and metrics.get("commit_probe_state") == "closed"
                     and metrics.get("commit_probe_native_retired") is True
                     and type(metrics.get("commit_probe_active")) is int
@@ -1674,7 +1674,17 @@ class OutputCoordinator:
     ) -> bool:
         model = _load_ownership_index()
         module = _load_observation_commit()
-        scope = module.WindowsObservationCommit(_load_path_observation(), model)
+        # A partially updated install must not dispatch work through an older
+        # helper lacking exception-safe admission and fatal handle cleanup.
+        contract = getattr(module, "COMMIT_CONTRACT_VERSION", None)
+        if type(contract) is not int or contract != 2:
+            raise RuntimeError("observation helper contract requires reference validation")
+        native = _load_path_observation()
+        for dependency, marker in ((model, "OWNERSHIP_CONTRACT_VERSION"), (native, "PATH_CONTRACT_VERSION")):
+            contract = getattr(dependency, marker, None)
+            if type(contract) is not int or contract != 1:
+                raise RuntimeError("observation dependency requires reference validation")
+        scope = module.WindowsObservationCommit(native, model)
         metrics = self.validation_metrics
         metrics.update(commit_claims_checked=0, commit_certificate="unverified")
         entries = []

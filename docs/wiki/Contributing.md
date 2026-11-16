@@ -124,13 +124,25 @@ during a measurement. See the experiment's
 [results](../experimental-index-results.md) and
 [correctness contract](../experimental-index-contract.md) before interpreting
 the preview numbers. That sampled experiment always retains reference authority.
-The subsequent committed index is now the automatic Windows default when native
-capabilities and its complete certificate are verified; see the
-[parallel qualification](../parallel-probe-results.md) and
+The subsequent committed index remains behind a closed source promotion guard
+after the [MR review](../mr55-review-results.md) failed repeat timing. See the
+[historical parallel qualification](../parallel-probe-results.md) and
 [observation contract](../observation-commit-contract.md). Unsupported or
 unverified observations fall back to reference validation. Set
 `PROTOCYTE_REGISTRY_VALIDATION=reference` to compare an existing build using the
 reference path.
+
+Actual historical helper/coordinator interoperability checks run separately:
+
+```console
+python tests/verify_coordinator_upgrade.py --work .pytest-tmp/upgrade-new
+```
+
+That explicit qualifier needs the pinned public source blobs and checkpoints
+listed in its source. It checks 115 upgrade, rollback, cleanup and recovery cases
+in fresh private registries. Routine unit tests are self-contained and do not
+require unmerged branch history, a full checkout or a network fetch. Publish only
+the sanitized result receipt, not fixture records or subprocess logs.
 
 The fresh native-reader investigation can be measured with
 `--registry-validation native-shadow` in the scaling benchmark or POC. It keeps

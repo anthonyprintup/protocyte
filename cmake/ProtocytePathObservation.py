@@ -25,6 +25,9 @@ class FreshPathObserver:
     """Own native call bindings, not observations, for one validation phase."""
 
     def __init__(self) -> None:
+        contract = globals().get("PATH_CONTRACT_VERSION")
+        if type(contract) is not int or contract != 1:
+            raise ObservationUnavailable("incomplete path helper installation")
         if os.name != "nt":
             raise ObservationUnavailable("native path observation requires Windows")
         from ctypes import wintypes as w
@@ -120,6 +123,22 @@ class FreshPathObserver:
             raise ObservationUnavailable("path needs the portable reference reader")
         return "\\??\\" + text
 
+    def _invoke_open(self, handle, *arguments):
+        try:
+            return self._open(ctypes.byref(handle), *arguments)
+        except BaseException:
+            # A foreign call can raise after the OS wrote its output handle.
+            # It has not been published to any caller yet; retire it exactly
+            # once before propagating the error or permitting reference work.
+            if handle.value:
+                try:
+                    self.handles_opened += 1
+                finally:
+                    if not self._close(handle):
+                        raise UnsafeObservation("interrupted open could not release its handle")
+                    self.handles_closed += 1
+            raise
+
     def _open_existing(self, path: Path):
         text = self._native_name(path)
         encoded_length = len(text.encode("utf-16-le"))
@@ -142,8 +161,8 @@ class FreshPathObserver:
         status = self._status()
         handle = self._w.HANDLE()
         self.open_calls += 1
-        result = self._open(
-            ctypes.byref(handle),
+        result = self._invoke_open(
+            handle,
             0x100080,  # SYNCHRONIZE | FILE_READ_ATTRIBUTES
             ctypes.byref(attributes),
             ctypes.byref(status),
@@ -243,3 +262,7 @@ class FreshPathObserver:
             "native_handles_opened": self.handles_opened,
             "native_handles_closed": self.handles_closed,
         }
+
+
+# EOF capability marker; an incomplete installed source cannot advertise it.
+PATH_CONTRACT_VERSION = 1
