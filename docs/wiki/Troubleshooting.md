@@ -202,7 +202,8 @@ progress on standard error. It distinguishes waiting for registry, generation, o
 publication locks from current-plan validation, registry validation, and output
 reconciliation. Lines include plan/claim counts and elapsed phase times, without
 consumer paths or claim tokens. Fast operations remain silent; long operations
-emit at most twelve progress lines and one completion or failure summary. A lock
+emit progress every five seconds until completion, followed by one completion
+or failure summary. A lock
 wait includes preparing and acquiring its lock files. `registry_entries` counts
 state directories, including any abandoned initialization directories encountered;
 `claims_checked` counts authenticated claim/plan records.

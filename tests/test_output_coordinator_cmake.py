@@ -30,6 +30,35 @@ def _configure(source: Path, build: Path) -> subprocess.CompletedProcess[str]:
     return _configure_out_dir_owner_project(source, build, "-G", "Ninja")
 
 
+def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) -> None:
+    source = tmp_path / "project"
+    source.mkdir()
+    repo_root = Path(__file__).resolve().parents[1]
+    result_path = tmp_path / "selected.txt"
+    (source / "CMakeLists.txt").write_text(
+        "\n".join(
+            [
+                "cmake_minimum_required(VERSION 3.24)",
+                "project(registry_isolation LANGUAGES NONE)",
+                f'include("{(repo_root / "cmake/ProtocyteFunctions.cmake").as_posix()}")',
+                "_protocyte_shared_output_lock_directory(selected)",
+                f'file(WRITE "{result_path.as_posix()}" "${{selected}}")',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["cmake", "-S", str(source), "-B", str(tmp_path / "build")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert Path(result_path.read_text()).resolve() == (
+        tmp_path / "isolated-user-cache/protocyte/output-locks-v1"
+    ).resolve()
+
+
 def test_coordinator_recovers_default_output_after_build_tree_recreation(
     tmp_path: Path,
 ) -> None:

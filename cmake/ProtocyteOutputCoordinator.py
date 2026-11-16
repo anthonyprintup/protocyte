@@ -31,13 +31,12 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, NoReturn, Sequence
+from typing import Any, Iterator, Mapping, NoReturn, Sequence
 
 
 PROTOCOL_VERSION = 1
 PLAN_HEADER = "protocyte-output-plan-v1"
 GENERATED_SUFFIXES = (".protocyte.cpp", ".protocyte.hpp", "/runtime.hpp")
-
 
 class CoordinatorError(RuntimeError):
     """A fail-closed coordinator error suitable for a CMake diagnostic."""
@@ -92,27 +91,6 @@ def _require_absolute(path: Path, description: str) -> Path:
     return Path(os.path.normpath(text))
 
 
-def _existing_chain(path: Path) -> list[Path]:
-    current = path
-    missing: list[Path] = []
-    while not os.path.lexists(current):
-        parent = current.parent
-        if parent == current:
-            _fail(f"could not find an existing ancestor for {path}")
-        missing.append(current)
-        current = parent
-    chain: list[Path] = []
-    cursor = current
-    while True:
-        chain.append(cursor)
-        parent = cursor.parent
-        if parent == cursor:
-            break
-        cursor = parent
-    chain.reverse()
-    return chain
-
-
 def project_path(path: Path, *, leaf_may_be_file: bool = False) -> Path:
     """Resolve existing components and append a normalized missing suffix.
 
@@ -130,7 +108,10 @@ def project_path(path: Path, *, leaf_may_be_file: bool = False) -> Path:
                 _fail(f"could not project filesystem path: {path}")
             suffix.append(existing.name)
             existing = existing.parent
-        for component in _existing_chain(existing):
+        # Construct the chain without another existence search. Every component
+        # is still freshly checked, and the separate stat/strict resolve below
+        # retries if the initially existing leaf has disappeared.
+        for component in (*reversed(existing.parents), existing):
             if _is_link(component):
                 _fail(f"filesystem path contains a symbolic link or junction: {path}")
         try:
@@ -231,15 +212,41 @@ def _physically_contains(parent: Path, child: Path) -> bool:
 
 def _projected_physically_contains(parent: Path, child: Path) -> bool:
     parent_key = _physical_location_key(parent)
-    current = child
+    return parent_key in _physical_ancestor_keys(child)
+
+
+def _physical_ancestor_keys(path: Path) -> Iterator[tuple[int, int, tuple[str, ...]]]:
+    """Observe ancestry once, only for this directional comparison.
+
+    Missing descendants share their nearest existing directory's identity plus
+    a normalized suffix. Existing ordinary directories use the device/inode
+    relation used by samefile, without its two additional following stat calls.
+    No observations survive the comparison, including negative observations.
+    """
+    current = path
+    missing: list[str] = []
     while True:
-        if _same_physical_path(parent, current) or parent_key == _physical_location_key(
-            current
-        ):
-            return True
+        try:
+            observed = current.lstat()
+        except FileNotFoundError:
+            missing.append(current.name.casefold())
+        except OSError as error:
+            _fail(f"could not identify physical filesystem location {path}: {error}")
+        else:
+            if _stat_is_link(observed):
+                _fail(f"filesystem path contains a symbolic link or junction: {path}")
+            if not stat.S_ISDIR(observed.st_mode):
+                _fail(f"filesystem path has a non-directory ancestor: {current}")
+            suffix = tuple(reversed(missing))
+            for length in range(len(suffix), 0, -1):
+                yield observed.st_dev, observed.st_ino, suffix[:length]
+            missing.clear()
+            yield observed.st_dev, observed.st_ino, ()
         next_parent = current.parent
         if next_parent == current:
-            return False
+            if missing:
+                _fail(f"could not identify physical filesystem location: {path}")
+            return
         current = next_parent
 
 
@@ -541,15 +548,14 @@ class FileLock:
 
 
 class _ReconcileProgress:
-    """Bounded, path-free stderr progress, including while OS locks block.
+    """Bounded-frequency, path-free stderr progress while work or locks block.
 
-    Fast operations stay silent. Long operations emit at most twelve progress
-    lines and one completion/failure summary. Nothing is written to the claim
+    Fast operations stay silent. Long operations report throughout their lifetime
+    and emit one completion/failure summary. Nothing is written to the claim
     token stream on stdout. The reporter observes counters only, not the FS.
     """
 
     INTERVAL_SECONDS = 5.0
-    MAX_REPORTS = 12
 
     def __init__(self, current: int, retired: int) -> None:
         self.current = current
@@ -607,13 +613,8 @@ class _ReconcileProgress:
 
     def _report(self) -> bool:
         with self._mutex:
-            if self._reports >= self.MAX_REPORTS:
-                return False
             self._reports += 1
-            phase = self._phase
-            if self._reports == self.MAX_REPORTS:
-                phase += " (further progress suppressed until completion)"
-            self._emit(phase)
+            self._emit(self._phase)
             return True
 
     def _run(self) -> None:

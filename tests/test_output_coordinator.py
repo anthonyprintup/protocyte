@@ -108,6 +108,45 @@ def test_project_path_retries_when_an_existing_leaf_disappears(
     assert interrupted
 
 
+@pytest.mark.parametrize("replacement", ["absent", "file", "directory-link"])
+def test_projection_rechecks_a_leaf_replaced_before_chain_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    leaf = tmp_path / "disappearing"
+    leaf.mkdir()
+    original_lexists = coordinator.os.path.lexists
+    original_is_link = coordinator._is_link
+    removed = False
+    inspected: list[Path] = []
+
+    def lexists(path: Path) -> bool:
+        nonlocal removed
+        result = original_lexists(path)
+        if path == leaf and not removed:
+            removed = True
+            leaf.rmdir()
+            if replacement == "file":
+                leaf.touch()
+            elif replacement == "directory-link":
+                _directory_link(leaf, tmp_path)
+        return result
+
+    def is_link(path: Path) -> bool:
+        inspected.append(path)
+        return original_is_link(path)
+
+    monkeypatch.setattr(coordinator.os.path, "lexists", lexists)
+    monkeypatch.setattr(coordinator, "_is_link", is_link)
+    if replacement == "absent":
+        assert coordinator.project_path(leaf) == leaf
+    else:
+        with pytest.raises(
+            coordinator.CoordinatorError, match="symbolic link or junction|non-directory"
+        ):
+            coordinator.project_path(leaf)
+    assert removed and leaf in inspected
+
+
 def test_durable_directory_creation_resyncs_a_preexisting_retry_chain(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1680,17 +1719,39 @@ def test_physical_containment_checks_ancestors_of_missing_paths(
     first, alias = tmp_path / "first", tmp_path / "alias"
     first.mkdir()
     alias.mkdir()
-    original_samefile = coordinator.os.path.samefile
+    original_lstat = Path.lstat
 
-    def samefile(left: object, right: object) -> bool:
-        if {Path(left), Path(right)} == {first, alias}:
-            return True
-        return original_samefile(left, right)
+    def lstat(path: Path) -> os.stat_result:
+        # Model the actual samefile identity relation, including ancestor IDs.
+        return original_lstat(first if path == alias else path)
 
-    monkeypatch.setattr(coordinator.os.path, "samefile", samefile)
+    monkeypatch.setattr(Path, "lstat", lstat)
     assert coordinator._paths_overlap(first, alias / "missing" / "nested")
     assert coordinator._paths_overlap(alias / "missing" / "nested", first)
     assert not coordinator._paths_overlap(first, tmp_path / "unrelated")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows short directory names")
+def test_overlap_preserves_windows_short_name_aliases(tmp_path: Path) -> None:
+    import ctypes
+
+    directory = tmp_path / "directory-with-a-long-name"
+    directory.mkdir()
+    get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+    get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32)
+    get_short_path.restype = ctypes.c_uint32
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = get_short_path(str(directory), buffer, len(buffer))
+    if (
+        not length
+        or length >= len(buffer)
+        or buffer.value.casefold() == str(directory).casefold()
+    ):
+        pytest.skip("filesystem does not provide a distinct 8.3 directory spelling")
+    alias = Path(buffer.value)
+    assert coordinator._path_key(directory) == coordinator._path_key(alias)
+    assert coordinator._paths_overlap(directory / "missing", alias / "missing/child")
+    assert coordinator._paths_overlap(alias / "missing/child", directory / "missing")
 
 
 @pytest.mark.parametrize("replacement", ["file", "directory-link"])
@@ -1743,6 +1804,85 @@ def test_missing_suffixes_use_the_physical_identity_of_the_existing_ancestor(
     monkeypatch.setattr(Path, "lstat", lstat_with_alias)
     assert coordinator._paths_overlap(first / "missing", alias / "missing" / "child")
     assert not coordinator._paths_overlap(first / "missing", alias / "other")
+
+
+@pytest.mark.parametrize("depth", [1, 16, 64])
+def test_physical_ancestry_observations_are_linear_in_missing_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    child = tmp_path.joinpath(*(f"missing-{index}" for index in range(depth)))
+    observed: list[Path] = []
+    original_lstat = Path.lstat
+
+    def lstat(path: Path) -> os.stat_result:
+        observed.append(path)
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    keys = list(coordinator._physical_ancestor_keys(child))
+    assert len(observed) == len(child.parents) + 1
+    assert len(set(observed)) == len(observed)
+    assert len(keys) == len(observed)
+    anchor = original_lstat(tmp_path)
+    assert keys[0] == (
+        anchor.st_dev,
+        anchor.st_ino,
+        tuple(f"missing-{index}" for index in range(depth)),
+    )
+
+
+@pytest.mark.parametrize("depth", [1, 64])
+def test_overlap_metadata_probes_stay_linear_in_missing_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for index in range(depth):
+        first /= f"missing-{index}"
+        second /= f"missing-{index}"
+    original_lstat = Path.lstat
+    observations = 0
+
+    def lstat(path: Path) -> os.stat_result:
+        nonlocal observations
+        observations += 1
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    assert not coordinator._paths_overlap(first, second)
+    # Includes fresh projections, both directional physical checks and platform
+    # pathlib behavior. A generous linear bound still catches repeated searches
+    # of the missing suffix for each ancestor (the former quadratic behavior).
+    assert observations <= 12 * (len(first.parents) + len(second.parents))
+
+
+@pytest.mark.parametrize("replacement", ["file", "directory-link"])
+def test_physical_ancestry_rejects_ancestor_replacement_after_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    parent = tmp_path / "parent"
+    ancestor = tmp_path / "ancestor"
+    ancestor.mkdir()
+    child = ancestor / "missing"
+    original_project = coordinator.project_path
+
+    def project(path: Path, **options: object) -> Path:
+        result = original_project(path, **options)
+        if path == child:
+            ancestor.rmdir()
+            if replacement == "file":
+                ancestor.touch()
+            else:
+                _directory_link(ancestor, tmp_path)
+        return result
+
+    monkeypatch.setattr(coordinator, "project_path", project)
+    with pytest.raises(
+        coordinator.CoordinatorError, match="symbolic link or junction|non-directory"
+    ):
+        coordinator._paths_overlap(parent, child)
 
 
 def _directory_link(link: Path, destination: Path) -> None:
@@ -1824,10 +1964,9 @@ def test_reconciliation_revalidates_paths_after_registry_validation(
     assert not list((engine.lock_root / "roots").glob("*/claim.json"))
 
 
-def test_progress_is_bounded_path_free_and_keeps_stdout_clean(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+def test_progress_continues_past_former_cutoff_and_keeps_stdout_clean(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(coordinator._ReconcileProgress, "MAX_REPORTS", 3)
     with coordinator._ReconcileProgress(4, 1) as progress:
         progress.phase("waiting for registry lock", "lock_wait")
         assert progress._report()
@@ -1836,17 +1975,19 @@ def test_progress_is_bounded_path_free_and_keeps_stdout_clean(
         assert progress._report()
         progress.phase("reconciling outputs", "reconciliation")
         assert progress._report()
-        for _ in range(10):
-            assert not progress._report()
+        for _ in range(20):
+            progress.registry(claim=True)
+            assert progress._report()
     output = capsys.readouterr()
     assert not output.out
-    assert len(output.err.splitlines()) == 4
+    assert len(output.err.splitlines()) == 24
     assert "waiting for registry lock" in output.err
     assert "validating registry" in output.err
     assert "current_plans=4 retired_plans=1" in output.err
     assert "claims_checked=1 registry_entries=8" in output.err
     assert "lock_wait=" in output.err and "validation=" in output.err
-    assert "further progress suppressed" in output.err
+    assert "claims_checked=21 registry_entries=8" in output.err
+    assert "further progress suppressed" not in output.err
     assert "complete;" in output.err
 
 
@@ -1864,6 +2005,27 @@ def test_progress_reports_failure_and_fast_operations_stay_silent(
     assert not output.out
     assert len(output.err.splitlines()) == 2
     assert "failed;" in output.err
+
+
+def test_progress_worker_keeps_reporting_until_stopped(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    progress = coordinator._ReconcileProgress(11, 0)
+    progress.phase("validating registry", "validation")
+    progress.registry(states=24)
+
+    class ControlledStop:
+        def wait(self, interval: float) -> bool:
+            assert interval == progress.INTERVAL_SECONDS
+            progress.registry(claim=True)
+            return progress._claims == 24
+
+    monkeypatch.setattr(progress, "_stop", ControlledStop())
+    progress._run()
+    output = capsys.readouterr()
+    assert not output.out
+    assert len(output.err.splitlines()) == 23
+    assert "claims_checked=23 registry_entries=24" in output.err
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires case-sensitive paths")
@@ -1945,7 +2107,13 @@ def test_physical_output_root_aliases_cannot_receive_distinct_claims(
         ((_target("second"), "second.protocyte.hpp"),),
     )
     original_samefile = coordinator.os.path.samefile
+    original_lstat = Path.lstat
     aliases = {os.path.normcase(os.fspath(root_a)), os.path.normcase(os.fspath(root_b))}
+
+    def lstat_with_root_alias(path: Path) -> os.stat_result:
+        # Non-link physical aliases have matching directory IDs, not just a
+        # samefile override. Exercise the non-following containment checks too.
+        return original_lstat(root_a if path == root_b else path)
 
     def samefile_with_root_alias(first_path: object, second_path: object) -> bool:
         pair = {
@@ -1957,6 +2125,7 @@ def test_physical_output_root_aliases_cannot_receive_distinct_claims(
         return original_samefile(first_path, second_path)
 
     monkeypatch.setattr(coordinator.os.path, "samefile", samefile_with_root_alias)
+    monkeypatch.setattr(Path, "lstat", lstat_with_root_alias)
     engine = coordinator.OutputCoordinator(lock_root)
 
     with pytest.raises(coordinator.CoordinatorError, match="overlapping roots"):

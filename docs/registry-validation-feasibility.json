@@ -1,0 +1,57 @@
+{
+  "platform": "Windows",
+  "python": "3.12.9",
+  "coordinator_sha256": "1b0fb79eae89041c2b4949c713ec66d8d18e28941780a6652ddd6fb619b2bf87",
+  "timings_include_instrumentation": true,
+  "measurement": "Disjoint outermost function timers; every check delegates unchanged",
+  "sample": {
+    "retained_claims": 64,
+    "current_plans": 11,
+    "seed_wall_seconds": 4.133827799989376,
+    "seed_cpu_seconds": 2.9375,
+    "validation_wall_seconds": 7.560460099950433,
+    "validation_cpu_seconds": 7.484375,
+    "reconcile_wall_seconds": 8.651100200018845,
+    "reconcile_cpu_seconds": 8.390625,
+    "lock_wait_wall_seconds": 0.14277940010651946,
+    "registry_lock_held_wall_seconds": 8.637750900001265,
+    "current_plan_validation_wall_seconds": 0.3990691000362858,
+    "registry_validations": 1,
+    "registry_scans": 1,
+    "recorded_plan_loads_in_validation": 64,
+    "path_projections_in_validation": 7621,
+    "path_projections_total": 8655,
+    "validation_filesystem_calls": {
+      "nt.stat": 160990,
+      "nt.lstat": 14664,
+      "nt._getfinalpathname": 15242
+    },
+    "completed_plans": 11
+  },
+  "disjoint_direct_registry_phases": {
+    "project_path": {
+      "calls": 45,
+      "wall_seconds": 0.025041300046723336
+    },
+    "_paths_overlap": {
+      "calls": 2860,
+      "wall_seconds": 6.196185298904311
+    },
+    "_load_json": {
+      "calls": 64,
+      "wall_seconds": 0.06436010013567284
+    },
+    "claim_path_authentication": {
+      "calls": 64,
+      "wall_seconds": 0.15887819975614548
+    },
+    "recorded_plan_authentication": {
+      "calls": 64,
+      "wall_seconds": 0.6475167000317015
+    },
+    "_path_key": {
+      "calls": 704,
+      "wall_seconds": 0.43822220008587465
+    }
+  }
+}

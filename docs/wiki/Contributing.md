@@ -64,8 +64,11 @@ python tests/benchmark_output_registry.py --claims 0 8 16 --plans 1 4 --repeat 3
 
 It creates each retained claim through the real coordinator in a fresh private
 registry and reports seed, registry validation, and reconciliation wall/CPU times
-separately. It also counts registry scans, recorded-plan loads, and path
-projections. It does not generate C++, use the shared registry, or access the
+separately. Setup includes plan creation and uses real initialization/reconciliation
+helpers under private registry/generation/publication locks; it avoids an
+all-pairs setup scan. The measured `reconcile_set` performs every production
+check unchanged. It counts registry scans, recorded-plan loads, path projections,
+and profiled filesystem calls. It does not generate C++, use the shared registry, or access the
 network. The printed temporary directory retains the synthetic state and
 `results.json`; use `--work NEW_DIRECTORY` to choose that directory explicitly.
 
@@ -74,6 +77,24 @@ against another revision at the same workspace depth. The report includes every
 sample and median times. Compare operation counts as well as wall times: Windows
 filesystem probes, path depth, caching, and concurrent machine activity affect
 timings. The focused regression tests are in `tests/test_output_coordinator.py`.
+
+Filesystem counters include native existence queries on newer Windows Python.
+Attribute probes from experimental compared sources are counted separately:
+substituting a cheaper query must not be reported as eliminating an observation.
+
+For a larger sample, explicitly opt in (up to 4,096 claims and 32 plans):
+
+```bash
+python tests/benchmark_output_registry.py --large --claims 2048 --plans 11 --repeat 1
+```
+
+Start with 64 claims to estimate cost; large setup and validation may take
+minutes. The original issue #54 measurement is also available as
+`tests/registry_validation_poc.py`. Publish only scripts and sanitized results;
+synthetic fixture records contain local paths and must remain private. CMake
+pytest fixtures use a per-test cache base even when exercising the default
+registry selector. Retained claims are released only by an ownership-aware
+reset, never by age, missing build trees or test-looking names.
 
 ## Documentation
 
