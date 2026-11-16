@@ -202,10 +202,17 @@ progress on standard error. It distinguishes waiting for registry, generation, o
 publication locks from current-plan validation, registry validation, and output
 reconciliation. Lines include plan/claim counts and elapsed phase times, without
 consumer paths or claim tokens. Fast operations remain silent; long operations
-emit at most twelve progress lines and one completion or failure summary. A lock
+emit progress every five seconds until completion, followed by one completion
+or failure summary. A lock
 wait includes preparing and acquiring its lock files. `registry_entries` counts
 state directories, including any abandoned initialization directories encountered;
 `claims_checked` counts authenticated claim/plan records.
+
+Registry validation uses the accelerated validator where supported and falls back
+to full validation when needed. Existing builds need no migration, cache reset,
+or new configuration. To use the full validator while diagnosing an issue, set
+`PROTOCYTE_REGISTRY_VALIDATION=reference` in the build environment; remove it to
+restore automatic selection.
 
 If cleanup refuses an unsafe path or cannot remove it, the diagnostic warns that inert staging data outside `OUT_DIR` may remain. Stop related processes and remove only the named staging path after inspecting it.
 

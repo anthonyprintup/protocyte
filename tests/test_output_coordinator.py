@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import json
@@ -23,6 +24,18 @@ def _load_coordinator() -> ModuleType:
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
     specification.loader.exec_module(module)
+    test_mode = os.environ.get("PROTOCYTE_TEST_REGISTRY_VALIDATION", "reference")
+    if test_mode == "indexed":
+        # This module is used exclusively by isolated test registries.
+        module._COMMITTED_INDEX_QUALIFIED = True
+    original_initialize = module.OutputCoordinator.__init__
+
+    def initialize(
+        self: object, lock_root: Path, *, registry_validation: str | None = test_mode
+    ) -> None:
+        original_initialize(self, lock_root, registry_validation=test_mode if registry_validation is None else registry_validation)
+
+    module.OutputCoordinator.__init__ = initialize
     return module
 
 
@@ -106,6 +119,45 @@ def test_project_path_retries_when_an_existing_leaf_disappears(
 
     assert coordinator.project_path(disappearing) == disappearing
     assert interrupted
+
+
+@pytest.mark.parametrize("replacement", ["absent", "file", "directory-link"])
+def test_projection_rechecks_a_leaf_replaced_before_chain_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    leaf = tmp_path / "disappearing"
+    leaf.mkdir()
+    original_lexists = coordinator.os.path.lexists
+    original_is_link = coordinator._is_link
+    removed = False
+    inspected: list[Path] = []
+
+    def lexists(path: Path) -> bool:
+        nonlocal removed
+        result = original_lexists(path)
+        if path == leaf and not removed:
+            removed = True
+            leaf.rmdir()
+            if replacement == "file":
+                leaf.touch()
+            elif replacement == "directory-link":
+                _directory_link(leaf, tmp_path)
+        return result
+
+    def is_link(path: Path) -> bool:
+        inspected.append(path)
+        return original_is_link(path)
+
+    monkeypatch.setattr(coordinator.os.path, "lexists", lexists)
+    monkeypatch.setattr(coordinator, "_is_link", is_link)
+    if replacement == "absent":
+        assert coordinator.project_path(leaf) == leaf
+    else:
+        with pytest.raises(
+            coordinator.CoordinatorError, match="symbolic link or junction|non-directory"
+        ):
+            coordinator.project_path(leaf)
+    assert removed and leaf in inspected
 
 
 def test_durable_directory_creation_resyncs_a_preexisting_retry_chain(
@@ -1588,7 +1640,9 @@ def test_registry_records_are_loaded_once_per_batch(
 
     retained = [plan(f"retained-{index}") for index in range(4)]
     current = [plan(f"current-{index}") for index in range(current_count)]
-    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    # This is the production reference contract; shadow deliberately reads each
+    # record once in its preview and once in the mandatory reference phase.
+    engine = coordinator.OutputCoordinator(tmp_path / "locks", registry_validation="reference")
     engine.reconcile_set((), retained)
     expected = {engine._state_directory(value.root) for value in retained}
     loaded: list[Path] = []
@@ -1680,17 +1734,39 @@ def test_physical_containment_checks_ancestors_of_missing_paths(
     first, alias = tmp_path / "first", tmp_path / "alias"
     first.mkdir()
     alias.mkdir()
-    original_samefile = coordinator.os.path.samefile
+    original_lstat = Path.lstat
 
-    def samefile(left: object, right: object) -> bool:
-        if {Path(left), Path(right)} == {first, alias}:
-            return True
-        return original_samefile(left, right)
+    def lstat(path: Path) -> os.stat_result:
+        # Model the actual samefile identity relation, including ancestor IDs.
+        return original_lstat(first if path == alias else path)
 
-    monkeypatch.setattr(coordinator.os.path, "samefile", samefile)
+    monkeypatch.setattr(Path, "lstat", lstat)
     assert coordinator._paths_overlap(first, alias / "missing" / "nested")
     assert coordinator._paths_overlap(alias / "missing" / "nested", first)
     assert not coordinator._paths_overlap(first, tmp_path / "unrelated")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows short directory names")
+def test_overlap_preserves_windows_short_name_aliases(tmp_path: Path) -> None:
+    import ctypes
+
+    directory = tmp_path / "directory-with-a-long-name"
+    directory.mkdir()
+    get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+    get_short_path.argtypes = (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32)
+    get_short_path.restype = ctypes.c_uint32
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = get_short_path(str(directory), buffer, len(buffer))
+    if (
+        not length
+        or length >= len(buffer)
+        or buffer.value.casefold() == str(directory).casefold()
+    ):
+        pytest.skip("filesystem does not provide a distinct 8.3 directory spelling")
+    alias = Path(buffer.value)
+    assert coordinator._path_key(directory) == coordinator._path_key(alias)
+    assert coordinator._paths_overlap(directory / "missing", alias / "missing/child")
+    assert coordinator._paths_overlap(alias / "missing/child", directory / "missing")
 
 
 @pytest.mark.parametrize("replacement", ["file", "directory-link"])
@@ -1745,6 +1821,88 @@ def test_missing_suffixes_use_the_physical_identity_of_the_existing_ancestor(
     assert not coordinator._paths_overlap(first / "missing", alias / "other")
 
 
+@pytest.mark.parametrize("depth", [1, 16, 64])
+def test_physical_ancestry_observations_are_linear_in_missing_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    child = tmp_path.joinpath(*(f"missing-{index}" for index in range(depth)))
+    observed: list[Path] = []
+    original_lstat = Path.lstat
+
+    def lstat(path: Path) -> os.stat_result:
+        observed.append(path)
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    keys = list(coordinator._physical_ancestor_keys(child))
+    assert len(observed) == len(child.parents) + 1
+    assert len(set(observed)) == len(observed)
+    assert len(keys) == len(observed)
+    anchor = original_lstat(tmp_path)
+    assert keys[0] == (
+        anchor.st_dev,
+        anchor.st_ino,
+        tuple(f"missing-{index}" for index in range(depth)),
+    )
+
+
+@pytest.mark.parametrize("depth", [1, 64])
+def test_overlap_metadata_probes_stay_linear_in_missing_depth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, depth: int
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for index in range(depth):
+        first /= f"missing-{index}"
+        second /= f"missing-{index}"
+    original_lstat = Path.lstat
+    observations = 0
+
+    def lstat(path: Path) -> os.stat_result:
+        nonlocal observations
+        observations += 1
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    assert not coordinator._paths_overlap(first, second)
+    # Includes fresh projections, both directional physical checks and platform
+    # pathlib behavior. A generous linear bound still catches repeated searches
+    # of the missing suffix for each ancestor (the former quadratic behavior).
+    assert observations <= 12 * (len(first.parents) + len(second.parents))
+
+
+@pytest.mark.parametrize("replacement", ["file", "directory-link"])
+def test_physical_ancestry_rejects_ancestor_replacement_after_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: str
+) -> None:
+    parent = tmp_path / "parent"
+    ancestor = tmp_path / "ancestor"
+    ancestor.mkdir()
+    child = ancestor / "missing"
+    original_project = coordinator.project_path
+
+    def project(path: Path, **options: object) -> Path:
+        result = original_project(path, **options)
+        if path == child:
+            ancestor.rmdir()
+            if replacement == "file":
+                ancestor.touch()
+            else:
+                _directory_link(ancestor, tmp_path)
+        return result
+
+    monkeypatch.setattr(coordinator, "project_path", project)
+    with pytest.raises(
+        coordinator.CoordinatorError,
+        # POSIX can reject the child with ENOTDIR before reaching its replaced
+        # ancestor; Windows can report the child missing and inspect the parent.
+        match="symbolic link or junction|non-directory|could not identify physical filesystem location",
+    ):
+        coordinator._paths_overlap(parent, child)
+
+
 def _directory_link(link: Path, destination: Path) -> None:
     try:
         link.symlink_to(destination, target_is_directory=True)
@@ -1785,16 +1943,26 @@ def test_registry_comparisons_reject_a_replaced_retained_root(
     original_overlap = coordinator._paths_overlap
     changed = False
 
-    def overlap(first: Path, second: Path) -> bool:
+    def replace_retained_root(first: Path, second: Path, result: bool) -> bool:
         nonlocal changed
-        result = original_overlap(first, second)
         if not changed and first == retained_root and second == current[0].root:
             changed = True
             # The previously missing directory is replaced after one comparison.
             _directory_link(retained_root, tmp_path)
         return result
 
+    def overlap(first: Path, second: Path) -> bool:
+        return replace_retained_root(first, second, original_overlap(first, second))
+
     monkeypatch.setattr(coordinator, "_paths_overlap", overlap)
+    if engine.registry_validation == "indexed" and os.name == "nt":
+        scope_type = coordinator._load_observation_commit().WindowsObservationCommit
+        native_overlap = scope_type._overlaps_views
+
+        def indexed_overlap(self: object, first: object, second: object) -> bool:
+            return replace_retained_root(first.path, second.path, native_overlap(self, first, second))
+
+        monkeypatch.setattr(scope_type, "_overlaps_views", indexed_overlap)
     with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
         engine.reconcile_set((), current)
     assert changed
@@ -1824,10 +1992,9 @@ def test_reconciliation_revalidates_paths_after_registry_validation(
     assert not list((engine.lock_root / "roots").glob("*/claim.json"))
 
 
-def test_progress_is_bounded_path_free_and_keeps_stdout_clean(
-    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+def test_progress_continues_past_former_cutoff_and_keeps_stdout_clean(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(coordinator._ReconcileProgress, "MAX_REPORTS", 3)
     with coordinator._ReconcileProgress(4, 1) as progress:
         progress.phase("waiting for registry lock", "lock_wait")
         assert progress._report()
@@ -1836,17 +2003,19 @@ def test_progress_is_bounded_path_free_and_keeps_stdout_clean(
         assert progress._report()
         progress.phase("reconciling outputs", "reconciliation")
         assert progress._report()
-        for _ in range(10):
-            assert not progress._report()
+        for _ in range(20):
+            progress.registry(claim=True)
+            assert progress._report()
     output = capsys.readouterr()
     assert not output.out
-    assert len(output.err.splitlines()) == 4
+    assert len(output.err.splitlines()) == 24
     assert "waiting for registry lock" in output.err
     assert "validating registry" in output.err
     assert "current_plans=4 retired_plans=1" in output.err
     assert "claims_checked=1 registry_entries=8" in output.err
     assert "lock_wait=" in output.err and "validation=" in output.err
-    assert "further progress suppressed" in output.err
+    assert "claims_checked=21 registry_entries=8" in output.err
+    assert "further progress suppressed" not in output.err
     assert "complete;" in output.err
 
 
@@ -1864,6 +2033,27 @@ def test_progress_reports_failure_and_fast_operations_stay_silent(
     assert not output.out
     assert len(output.err.splitlines()) == 2
     assert "failed;" in output.err
+
+
+def test_progress_worker_keeps_reporting_until_stopped(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    progress = coordinator._ReconcileProgress(11, 0)
+    progress.phase("validating registry", "validation")
+    progress.registry(states=24)
+
+    class ControlledStop:
+        def wait(self, interval: float) -> bool:
+            assert interval == progress.INTERVAL_SECONDS
+            progress.registry(claim=True)
+            return progress._claims == 24
+
+    monkeypatch.setattr(progress, "_stop", ControlledStop())
+    progress._run()
+    output = capsys.readouterr()
+    assert not output.out
+    assert len(output.err.splitlines()) == 23
+    assert "claims_checked=23 registry_entries=24" in output.err
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires case-sensitive paths")
@@ -1924,6 +2114,78 @@ def test_registry_enumeration_fails_closed_when_claim_state_is_unreadable(
         engine.reconcile(second)
 
 
+def test_unreadable_recorded_plan_metadata_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retained = _write_plan(
+        tmp_path / "retained.plan",
+        tmp_path / "retained/generated",
+        tmp_path / "retained/build",
+        ((_target("retained"), "sample.protocyte.hpp"),),
+    )
+    current = _write_plan(
+        tmp_path / "current.plan",
+        tmp_path / "current/generated",
+        tmp_path / "current/build",
+        ((_target("current"), "sample.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    token = engine.reconcile(retained)
+    recorded = engine._state_directory(retained.root) / "plan.json"
+    original_lstat = Path.lstat
+
+    def denied(path: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if path == recorded:
+            raise PermissionError("metadata denied by test")
+        return original_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", denied)
+    if engine.registry_validation == "indexed" and os.name == "nt":
+        scope_type = coordinator._load_observation_commit().WindowsObservationCommit
+        record_exists = scope_type.record_exists
+
+        def inaccessible_record(self: object, path: Path) -> bool:
+            if path == recorded:
+                raise PermissionError("metadata denied by test")
+            return record_exists(self, path)
+
+        monkeypatch.setattr(scope_type, "record_exists", inaccessible_record)
+    with pytest.raises(coordinator.CoordinatorError, match="could not inspect configured output plan"):
+        engine.reconcile(current)
+    claim = engine._state_directory(retained.root) / "claim.json"
+    assert json.loads(claim.read_bytes())["token"] == token
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
+def test_dangling_recorded_plan_is_rejected_instead_of_treated_as_absent(
+    tmp_path: Path,
+) -> None:
+    retained = _write_plan(
+        tmp_path / "retained.plan",
+        tmp_path / "retained/generated",
+        tmp_path / "retained/build",
+        ((_target("retained"), "sample.protocyte.hpp"),),
+    )
+    current = _write_plan(
+        tmp_path / "current.plan",
+        tmp_path / "current/generated",
+        tmp_path / "current/build",
+        ((_target("current"), "sample.protocyte.hpp"),),
+    )
+    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    engine.reconcile(retained)
+    recorded = engine._state_directory(retained.root) / "plan.json"
+    recorded.unlink()
+    target = tmp_path / "removed-plan-target"
+    target.mkdir()
+    _directory_link(recorded, target)
+    target.rmdir()
+    assert not recorded.exists() and os.path.lexists(recorded)
+    with pytest.raises(coordinator.CoordinatorError, match="symbolic link or junction"):
+        engine.reconcile(current)
+    assert len(list((engine.lock_root / "roots").glob("*/claim.json"))) == 1
+
+
 def test_physical_output_root_aliases_cannot_receive_distinct_claims(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1945,7 +2207,13 @@ def test_physical_output_root_aliases_cannot_receive_distinct_claims(
         ((_target("second"), "second.protocyte.hpp"),),
     )
     original_samefile = coordinator.os.path.samefile
+    original_lstat = Path.lstat
     aliases = {os.path.normcase(os.fspath(root_a)), os.path.normcase(os.fspath(root_b))}
+
+    def lstat_with_root_alias(path: Path) -> os.stat_result:
+        # Non-link physical aliases have matching directory IDs, not just a
+        # samefile override. Exercise the non-following containment checks too.
+        return original_lstat(root_a if path == root_b else path)
 
     def samefile_with_root_alias(first_path: object, second_path: object) -> bool:
         pair = {
@@ -1957,10 +2225,32 @@ def test_physical_output_root_aliases_cannot_receive_distinct_claims(
         return original_samefile(first_path, second_path)
 
     monkeypatch.setattr(coordinator.os.path, "samefile", samefile_with_root_alias)
+    monkeypatch.setattr(Path, "lstat", lstat_with_root_alias)
     engine = coordinator.OutputCoordinator(lock_root)
 
     with pytest.raises(coordinator.CoordinatorError, match="overlapping roots"):
         engine._validate_plan_set((first, second))
+
+    if engine.registry_validation == "indexed" and os.name == "nt":
+        scope_type = coordinator._load_observation_commit().WindowsObservationCommit
+        native_identity = scope_type._identity
+        scope = scope_type(coordinator._load_path_observation(), coordinator._load_ownership_index())
+        try:
+            handle = scope.reader._open_existing(root_a)
+            assert handle is not None
+            try:
+                alias_identity = native_identity(scope, handle)
+            finally:
+                scope._release(handle)
+        finally:
+            scope.close()
+
+        def identity_with_root_alias(self: object, handle: object) -> tuple[int, int]:
+            identity = native_identity(self, handle)
+            canonical = self.reader._describe(handle, leaf_may_be_file=True)
+            return alias_identity if canonical == root_b else identity
+
+        monkeypatch.setattr(scope_type, "_identity", identity_with_root_alias)
 
     engine.reconcile(first)
     with pytest.raises(coordinator.CoordinatorError, match="root claimed"):
@@ -2405,16 +2695,23 @@ def test_reset_rejects_an_unowned_generated_symlink(tmp_path: Path) -> None:
     token = engine.reconcile(plan)
     outside = tmp_path / "outside.hpp"
     outside.write_text("// outside\n", encoding="utf-8")
+    root.mkdir()
     unexpected = root / "stale.protocyte.hpp"
     try:
         unexpected.symlink_to(outside)
     except OSError as error:
+        if (
+            error.errno not in (errno.EACCES, errno.EPERM, errno.ENOSYS, errno.ENOTSUP)
+            and getattr(error, "winerror", None) not in (1, 50, 1314)
+        ):
+            raise
         pytest.skip(f"file symlinks are unavailable: {error}")
 
     with pytest.raises(coordinator.CoordinatorError, match="unowned generated-looking"):
         engine.reset(plan, token)
 
     assert unexpected.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "// outside\n"
     assert (lock_root / "roots" / _identity(root)).is_dir()
 
 

@@ -4354,10 +4354,17 @@ def test_command_line_plugin_formatter_timeout_stops_hanging_process_tree(
 ) -> None:
     grandchild_ready = tmp_path / "formatter-grandchild-ready"
     child_survived = tmp_path / "formatter-child-survived"
-    grandchild = (
-        "from pathlib import Path; import time; "
-        f"Path({str(grandchild_ready)!r}).touch(); time.sleep(1); "
-        f"Path({str(child_survived)!r}).touch()"
+    child_release = tmp_path / "formatter-child-release"
+    grandchild = "\n".join(
+        [
+            "from pathlib import Path",
+            "import time",
+            f"Path({str(grandchild_ready)!r}).touch()",
+            "deadline = time.monotonic() + 15",
+            f"while not Path({str(child_release)!r}).exists() and time.monotonic() < deadline:",
+            "    time.sleep(0.01)",
+            f"Path({str(child_survived)!r}).touch()",
+        ]
     )
     child = (
         "import subprocess, sys, time; "
@@ -4392,21 +4399,27 @@ def test_command_line_plugin_formatter_timeout_stops_hanging_process_tree(
         )
         formatter.chmod(0o755)
 
+    # Windows can start several interpreter/redirector processes here. Give
+    # startup its own margin, then release the descendant only after timeout;
+    # this tests tree termination rather than a 0.5-second startup assumption.
     response = generate_response(
         _basic_request(
             parameter=(
-                f"clang_format={formatter.as_posix()},formatter_timeout_seconds=0.5"
+                f"clang_format={formatter.as_posix()},formatter_timeout_seconds=5"
             )
         ),
         use_plugin_defaults=True,
     )
 
-    assert (
-        "clang-format timed out for simple.protocyte.hpp after 0.5 seconds"
-        in response.error
-    )
-    assert not response.file
-    assert grandchild_ready.is_file()
+    try:
+        assert (
+            "clang-format timed out for simple.protocyte.hpp after 5.0 seconds"
+            in response.error
+        )
+        assert not response.file
+        assert grandchild_ready.is_file()
+    finally:
+        child_release.touch()
     time.sleep(1.25)
     assert not child_survived.exists()
 
