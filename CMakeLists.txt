@@ -174,6 +174,7 @@ if(PROTOCYTE_INSTALL)
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteSourceDependency.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteGenerate.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteOutputCoordinator.py"
+            "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteOwnershipIndex.py"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteResetOutputDirectory.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteFunctions.cmake"
             "${CMAKE_CURRENT_LIST_DIR}/cmake/ProtocyteProcess.cmake"

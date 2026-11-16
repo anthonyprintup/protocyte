@@ -67,11 +67,19 @@ def plan(module, work, name):
     return module.Plan.read(path)
 
 
-def sample(module, work, retained_count, current_count):
+def sample(
+    module, work, retained_count, current_count, registry_validation="reference"
+):
     setup_start = time.perf_counter()
     retained = [plan(module, work, "retained-%04d" % i) for i in range(retained_count)]
     current = [plan(module, work, "current-%04d" % i) for i in range(current_count)]
-    engine = module.OutputCoordinator(work / "isolated-registry")
+    engine = (
+        module.OutputCoordinator(work / "isolated-registry")
+        if registry_validation == "reference"
+        else module.OutputCoordinator(
+            work / "isolated-registry", registry_validation=registry_validation
+        )
+    )
 
     # Fixture seeding only: avoid quadratic conflict comparisons during setup.
     # Use real initialization/reconciliation helpers under PRIVATE locks.
@@ -172,6 +180,8 @@ def sample(module, work, retained_count, current_count):
         "validation_operation_counts": counts,
         "validation_filesystem_calls": filesystem,
         "completed_plans": len(tokens),
+        "validation_engine": registry_validation,
+        "index_experiment": getattr(engine, "validation_metrics", {}),
     }
 
 
@@ -221,6 +231,9 @@ def main():
     parser.add_argument("--plans", type=int, nargs="+", default=[1, 11])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--work", type=Path)
+    parser.add_argument(
+        "--registry-validation", choices=("reference", "shadow"), default="reference"
+    )
     args = parser.parse_args()
     if (
         any(not 0 <= n <= 4096 for n in args.claims)
@@ -240,6 +253,11 @@ def main():
         "os": platform.system(),
         "python": platform.python_version(),
         "coordinator_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "implementation_files": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (source, source.with_name("ProtocyteOwnershipIndex.py"))
+            if path.is_file()
+        },
         "timings_include_instrumentation": True,
         "samples": [],
     }
@@ -247,7 +265,19 @@ def main():
         for claims in args.claims:
             for plans in args.plans:
                 work = root / ("r%d-c%d-p%d" % (repetition, claims, plans))
-                row = {"repetition": repetition, **sample(module, work, claims, plans)}
+                row = {
+                    "repetition": repetition,
+                    **sample(module, work, claims, plans, args.registry_validation),
+                }
+                observed_files = {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in (source, source.with_name("ProtocyteOwnershipIndex.py"))
+                    if path.is_file()
+                }
+                if observed_files != result["implementation_files"]:
+                    raise RuntimeError(
+                        "coordinator sources changed during the POC; discard timings"
+                    )
                 result["samples"].append(row)
                 print(json.dumps(row), flush=True)
     result["progress_demo"] = progress_demo(module)

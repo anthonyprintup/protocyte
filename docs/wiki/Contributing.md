@@ -96,6 +96,35 @@ pytest fixtures use a per-test cache base even when exercising the default
 registry selector. Retained claims are released only by an ownership-aware
 reset, never by age, missing build trees or test-looking names.
 
+The experimental ownership index supports a `shadow` benchmark mode. It runs
+both the sampled preview and the mandatory fresh reference validator; full
+validation timings include both. Baseline checkouts use reference mode:
+
+```bash
+python tests/benchmark_output_registry.py --registry-validation shadow --claims 0 8 16 --plans 1 11 --repeat 1
+python tests/registry_validation_poc.py --registry-validation shadow --claims 0 8 16 --plans 1 11
+```
+
+The scaling benchmark also accepts `--targets-per-plan 3 --shared-build-root
+--existing-directories` to exercise anonymous alternate layouts. Both sides of a
+baseline comparison use the same layout. The defaults preserve the original
+one-target, separate-build, absent-directory fixture.
+
+A separate **read-only, non-authoritative** experiment measures only the sampled
+algorithm. It performs no fresh registry reference pass after seeding and grants
+no authority to reconcile or publish; its timing is not a reconciler speedup:
+
+```bash
+python tests/benchmark_ownership_preview.py --large --claims 2172 --plans 11 --work .pytest-tmp/index-preview-new
+```
+
+The work directory must be new. The preview supports the same layout flags.
+Both tools record the coordinator/helper fingerprints and reject source changes
+during a measurement. See the experiment's
+[results](../experimental-index-results.md) and
+[correctness contract](../experimental-index-contract.md) before interpreting
+the preview numbers. The default coordinator remains reference mode.
+
 ## Documentation
 
 The canonical wiki source is `docs/wiki/` in the main repository. Edit and

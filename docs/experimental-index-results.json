@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "status": "experimental shadow index; safe under-30-second target NOT achieved",
+  "preservation_commit": "f804fd1",
+  "branch": "codex/experimental-generation-engine",
+  "default_validation": "reference",
+  "index_only_authorization_available": false,
+  "notes": [
+    "Fresh explicit synthetic fixtures only; no consumer/shared registry accessed.",
+    "Setup uses real locked initialization/reconciliation helpers; it is excluded from measured validation.",
+    "Preview measurements are read-only and non-authoritative; full shadow measurements retain the fresh reference pass.",
+    "All published measurements match the recorded final coordinator/helper source fingerprints.",
+    "Timings include instrumentation and uncontrolled workstation/cache effects; fresh process does not imply cold OS cache.",
+    "Equal claim/plan counts do not establish consumer-equivalent filesystem geometry.",
+    "Total preview projections add fresh JSON-loader projections to sampled geometry projections; they are an operation-count inference.",
+    "Earlier pilot measurements and a sample affected by source edits are excluded."
+  ],
+  "verification": {
+    "default_python_regression": {
+      "command": "python -m pytest -q -n 4",
+      "result": "passed"
+    },
+    "cmake_integration": {
+      "passed": 17,
+      "skipped": 1
+    },
+    "shadow_coordinator": {
+      "passed": 87,
+      "skipped": 6
+    },
+    "python_312_coordinator_and_index": {
+      "passed": 113,
+      "skipped": 6
+    },
+    "new_index_tests": 26
+  },
+  "measurements": {
+    "preview_256": {
+      "scope": "read-only sampled algorithm; NOT reference verified or authorized",
+      "reference_validation_performed": false,
+      "reconciliation_authorized": false,
+      "tokens_produced": 0,
+      "platform": "Windows",
+      "python": "3.12.9",
+      "implementation_files": {
+        "ProtocyteOutputCoordinator.py": "c5df9de17a3c5f5f715ffd8c0944eb45444450113a4fa529139b7cdb31f1efb2",
+        "ProtocyteOwnershipIndex.py": "7df8626756210f8dd0694bf26ffb7364f6c638f6361d14e61ef6c48df23dfd38"
+      },
+      "timings_include_instrumentation": true,
+      "retained_claims": 256,
+      "current_plans": 11,
+      "layout": {
+        "targets_per_plan": 1,
+        "shared_build_root": false,
+        "existing_directories": false
+      },
+      "setup_wall_seconds": 38.34785110002849,
+      "setup_cpu_seconds": 20.640625,
+      "lock_preparation_and_wait_seconds": 0.45253629999933764,
+      "current_plan_validation_seconds": 1.361329699982889,
+      "preview_wall_seconds": 3.3018979000044055,
+      "preview_cpu_seconds": 2.71875,
+      "preview_filesystem_calls": {
+        "nt.stat": 24174,
+        "nt.lstat": 1841,
+        "nt._getfinalpathname": 2612
+      },
+      "index_experiment": {
+        "mode": "preview-only",
+        "authoritative": "none",
+        "preview_claims": 256,
+        "preview_records_read": 512,
+        "preview_unclaimed_states": 0,
+        "indexed_reservations": 512,
+        "index_queries": 22,
+        "sampled_geometry_projections": 794,
+        "sampled_directory_observations": 538
+      },
+      "total_preview_path_projections_inferred": 1306
+    },
+    "preview_2172": {
+      "scope": "read-only sampled algorithm; NOT reference verified or authorized",
+      "reference_validation_performed": false,
+      "reconciliation_authorized": false,
+      "tokens_produced": 0,
+      "platform": "Windows",
+      "python": "3.12.9",
+      "implementation_files": {
+        "ProtocyteOutputCoordinator.py": "c5df9de17a3c5f5f715ffd8c0944eb45444450113a4fa529139b7cdb31f1efb2",
+        "ProtocyteOwnershipIndex.py": "7df8626756210f8dd0694bf26ffb7364f6c638f6361d14e61ef6c48df23dfd38"
+      },
+      "timings_include_instrumentation": true,
+      "retained_claims": 2172,
+      "current_plans": 11,
+      "layout": {
+        "targets_per_plan": 1,
+        "shared_build_root": false,
+        "existing_directories": false
+      },
+      "setup_wall_seconds": 372.5879960000166,
+      "setup_cpu_seconds": 186.453125,
+      "lock_preparation_and_wait_seconds": 0.6658470000256784,
+      "current_plan_validation_seconds": 1.1836236999952234,
+      "preview_wall_seconds": 28.48035039997194,
+      "preview_cpu_seconds": 22.3125,
+      "preview_filesystem_calls": {
+        "nt.stat": 200446,
+        "nt.lstat": 15253,
+        "nt._getfinalpathname": 21772
+      },
+      "index_experiment": {
+        "mode": "preview-only",
+        "authoritative": "none",
+        "preview_claims": 2172,
+        "preview_records_read": 4344,
+        "preview_unclaimed_states": 0,
+        "indexed_reservations": 4344,
+        "index_queries": 22,
+        "sampled_geometry_projections": 6542,
+        "sampled_directory_observations": 4370
+      },
+      "total_preview_path_projections_inferred": 10886
+    },
+    "preview_existing_multi": {
+      "scope": "read-only sampled algorithm; NOT reference verified or authorized",
+      "reference_validation_performed": false,
+      "reconciliation_authorized": false,
+      "tokens_produced": 0,
+      "platform": "Windows",
+      "python": "3.12.9",
+      "implementation_files": {
+        "ProtocyteOutputCoordinator.py": "c5df9de17a3c5f5f715ffd8c0944eb45444450113a4fa529139b7cdb31f1efb2",
+        "ProtocyteOwnershipIndex.py": "7df8626756210f8dd0694bf26ffb7364f6c638f6361d14e61ef6c48df23dfd38"
+      },
+      "timings_include_instrumentation": true,
+      "retained_claims": 8,
+      "current_plans": 11,
+      "layout": {
+        "targets_per_plan": 3,
+        "shared_build_root": true,
+        "existing_directories": true
+      },
+      "setup_wall_seconds": 1.30061920004664,
+      "setup_cpu_seconds": 0.78125,
+      "lock_preparation_and_wait_seconds": 0.3847935000085272,
+      "current_plan_validation_seconds": 2.5029661000007764,
+      "preview_wall_seconds": 0.2400352000258863,
+      "preview_cpu_seconds": 0.203125,
+      "preview_filesystem_calls": {
+        "nt.stat": 2185,
+        "nt.lstat": 98,
+        "nt._getfinalpathname": 194
+      },
+      "index_experiment": {
+        "mode": "preview-only",
+        "authoritative": "none",
+        "preview_claims": 8,
+        "preview_records_read": 16,
+        "preview_unclaimed_states": 0,
+        "indexed_reservations": 32,
+        "index_queries": 44,
+        "sampled_geometry_projections": 81,
+        "sampled_directory_observations": 80
+      },
+      "total_preview_path_projections_inferred": 97
+    },
+    "shadow_existing_multi": {
+      "platform": "Windows",
+      "python": "3.12.9",
+      "timings_include_instrumentation": true,
+      "setup_method": "private locked initialization/reconciliation (issue #54 POC)",
+      "coordinator_sha256": {
+        "candidate": "c5df9de17a3c5f5f715ffd8c0944eb45444450113a4fa529139b7cdb31f1efb2"
+      },
+      "implementation_files": {
+        "candidate": {
+          "ProtocyteOutputCoordinator.py": "c5df9de17a3c5f5f715ffd8c0944eb45444450113a4fa529139b7cdb31f1efb2",
+          "ProtocyteOwnershipIndex.py": "7df8626756210f8dd0694bf26ffb7364f6c638f6361d14e61ef6c48df23dfd38"
+        }
+      },
+      "samples": [
+        {
+          "revision": "candidate",
+          "repetition": 0,
+          "retained_claims": 8,
+          "current_plans": 11,
+          "layout": {
+            "targets_per_plan": 3,
+            "shared_build_root": true,
+            "existing_directories": true
+          },
+          "seed_wall_seconds": 1.6187621999997646,
+          "seed_cpu_seconds": 1.03125,
+          "validation_wall_seconds": 9.143145899986848,
+          "validation_cpu_seconds": 7.46875,
+          "reconcile_wall_seconds": 13.890712999971583,
+          "reconcile_cpu_seconds": 11.4375,
+          "lock_wait_wall_seconds": 0.26127159991301596,
+          "registry_lock_held_wall_seconds": 13.852026400039904,
+          "current_plan_validation_wall_seconds": 3.316249900031835,
+          "validation_engine": "shadow",
+          "index_experiment": {
+            "mode": "shadow",
+            "authoritative": "reference",
+            "preview_wall_seconds": 0.33316159999230877,
+            "reference_wall_seconds": 8.809812899969984,
+            "agreement": true,
+            "preview_claims": 8,
+            "preview_records_read": 16,
+            "preview_unclaimed_states": 0,
+            "indexed_reservations": 32,
+            "index_queries": 44,
+            "sampled_geometry_projections": 81,
+            "sampled_directory_observations": 80,
+            "preview_result": "accepted",
+            "reference_result": "accepted"
+          },
+          "shadow_candidate_wall_seconds": 0.33316159999230877,
+          "reference_validation_wall_seconds": 8.809812899969984,
+          "registry_validations": 1,
+          "registry_scans": 2,
+          "recorded_plan_loads_in_validation": 16,
+          "path_projections_in_validation": 3430,
+          "path_projections_total": 5872,
+          "validation_filesystem_calls": {
+            "nt.stat": 84391,
+            "nt.lstat": 3432,
+            "nt._getfinalpathname": 6860
+          },
+          "completed_plans": 11
+        }
+      ],
+      "medians": [
+        {
+          "retained_claims": 8,
+          "current_plans": 11,
+          "candidate": {
+            "seed_wall_seconds": 1.6187621999997646,
+            "seed_cpu_seconds": 1.03125,
+            "validation_wall_seconds": 9.143145899986848,
+            "validation_cpu_seconds": 7.46875,
+            "reconcile_wall_seconds": 13.890712999971583,
+            "reconcile_cpu_seconds": 11.4375,
+            "lock_wait_wall_seconds": 0.26127159991301596,
+            "registry_lock_held_wall_seconds": 13.852026400039904,
+            "current_plan_validation_wall_seconds": 3.316249900031835,
+            "shadow_candidate_wall_seconds": 0.33316159999230877,
+            "reference_validation_wall_seconds": 8.809812899969984,
+            "registry_validations": 1,
+            "registry_scans": 2,
+            "recorded_plan_loads_in_validation": 16,
+            "path_projections_in_validation": 3430,
+            "path_projections_total": 5872
+          }
+        }
+      ]
+    }
+  }
+}

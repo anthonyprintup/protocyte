@@ -169,4 +169,7 @@ active validation work. Clearing retained claims, dropping physical checks,
 changing the shared namespace or relaxing safety to meet a timing gate are not
 part of this plan.
 
-No production coordinator logic was changed for this feasibility assessment.
+This feasibility assessment preceded the implementation. A subsequent
+[ownership-index experiment](experimental-index-results.md) measured the
+read-only sampled phase at the exact claim/plan count. Its shadow mode retains
+fresh reference authority; it has not achieved safe under-30-second validation.

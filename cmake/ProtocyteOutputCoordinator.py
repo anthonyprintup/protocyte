@@ -20,6 +20,7 @@ import argparse
 import contextlib
 import ctypes
 import hashlib
+import importlib.util
 import json
 import os
 import secrets
@@ -744,7 +745,9 @@ class Plan:
         )
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any], source: Path) -> Plan:
+    def from_payload(
+        cls, payload: Mapping[str, Any], source: Path, *, _filesystem: Any = None
+    ) -> Plan:
         if (
             set(payload)
             != {
@@ -761,8 +764,10 @@ class Plan:
             or not isinstance(payload["targets"], list)
         ):
             _fail(f"configured output plan is malformed: {source}")
-        root = project_path(Path(str(payload["root"])))
-        build_root = project_path(Path(str(payload["build_root"])))
+        project = project_path if _filesystem is None else _filesystem.project
+        path_key = _path_key if _filesystem is None else _filesystem.path_key
+        root = project(Path(str(payload["root"])))
+        build_root = project(Path(str(payload["build_root"])))
         outputs: list[PlanOutput] = []
         for value in payload["outputs"]:
             if (
@@ -789,7 +794,7 @@ class Plan:
                 PlanTarget(
                     identity,
                     _validate_staging_path(
-                        root, identity, Path(str(value["staging"]))
+                        root, identity, Path(str(value["staging"])), _filesystem=_filesystem
                     ),
                 )
             )
@@ -797,7 +802,7 @@ class Plan:
         plan = cls(
             root,
             build_root,
-            _path_key(build_root),
+            path_key(build_root),
             tuple(sorted(targets, key=lambda target: target.identity)),
             tuple(sorted(outputs, key=lambda output: (output.relative, output.target))),
         )
@@ -813,11 +818,13 @@ class Plan:
 
 
 def _validate_staging_path(
-    root: Path | None, identity: str, path: Path
+    root: Path | None, identity: str, path: Path, *, _filesystem: Any = None
 ) -> Path:
-    path = project_path(_require_absolute(path, "generation staging directory"))
+    project = project_path if _filesystem is None else _filesystem.project
+    overlaps = _paths_overlap if _filesystem is None else _filesystem.overlaps
+    path = project(_require_absolute(path, "generation staging directory"))
     if root is not None:
-        expected = project_path(
+        expected = project(
             root.parent / f".protocyte-generation-staging-{identity}"
         )
         if path != expected:
@@ -825,7 +832,7 @@ def _validate_staging_path(
                 "output plan target metadata contains an unexpected staging directory: "
                 f"{path}"
             )
-        if _paths_overlap(root, path):
+        if overlaps(root, path):
             _fail(
                 "output plan generation staging overlaps its own output root: "
                 f"{path} and {root}"
@@ -878,9 +885,109 @@ def _generation_environment() -> dict[str, str]:
     return environment
 
 
+_ownership_module: Any = None
+
+
+def _load_ownership_index() -> Any:
+    global _ownership_module
+    if _ownership_module is None:
+        path = Path(__file__).with_name("ProtocyteOwnershipIndex.py")
+        name = f"{__name__}_ownership_index"
+        spec = importlib.util.spec_from_file_location(name, path)
+        if spec is None or spec.loader is None:
+            _fail("experimental ownership index could not be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            # Loading an optional preview must not create __pycache__ in a
+            # source/installed prefix. Compile exactly the trusted sibling
+            # source; do not change process-global bytecode/import settings.
+            exec(compile(path.read_bytes(), os.fspath(path), "exec"), module.__dict__)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+        _ownership_module = module
+    return _ownership_module
+
+
+class _SampledRegistryFilesystem:
+    """Read-only, non-authoritative samples for one experimental preview.
+
+    Only the shadow preview may use these cached observations. They do not
+    survive its scope or replace any fresh reference/mutation-time checks.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+        self._projected: dict[str, Path] = {}
+        self._facts: dict[str, Any] = {}
+        self._closed = False
+        self.projections = 0
+        self.observations = 0
+
+    def close(self) -> None:
+        self._closed = True
+        self._projected.clear()
+        self._facts.clear()
+
+    def project(self, path: Path) -> Path:
+        if self._closed:
+            _fail("experimental filesystem sample used outside its preview")
+        name = os.fspath(_require_absolute(path, "sampled directory"))
+        if name not in self._projected:
+            projected = project_path(path)
+            self.projections += 1
+            self._projected[name] = projected
+            self._projected.setdefault(os.fspath(projected), projected)
+        return self._projected[name]
+
+    def path_key(self, path: Path) -> str:
+        identity = os.fspath(self.project(path)).replace("\\", "/").casefold()
+        return _sha256_bytes(identity.encode("utf-8"))
+
+    def facts(self, path: Path) -> Any:
+        projected = self.project(path)
+        name = os.fspath(projected)
+        if name not in self._facts:
+            ancestors = tuple(_physical_ancestor_keys(projected))
+            location = _physical_location_key(projected)
+            if location not in ancestors:
+                _fail("experimental sample observed a changed physical identity")
+            self._facts[name] = self._model.DirectoryObservation(
+                name.replace("\\", "/").casefold().rstrip("/"),
+                location,
+                ancestors,
+            )
+            self.observations += 1
+        return self._facts[name]
+
+    def overlaps(self, first: Path, second: Path) -> bool:
+        return bool(self.facts(first).overlaps(self.facts(second)))
+
+    def contains(self, parent: Path, child: Path) -> bool:
+        return _projected_contains(self.project(parent), self.project(child))
+
+    def physically_contains(self, parent: Path, child: Path) -> bool:
+        return self.facts(parent).location in self.facts(child).ancestors
+
+    def same_path(self, first: Path, second: Path) -> bool:
+        if self._closed:
+            _fail("experimental filesystem sample used outside its preview")
+        if first == second:
+            return True
+        first_key, second_key = self.facts(first).location, self.facts(second).location
+        # samefile fails for missing endpoints. Do not turn equivalent missing
+        # suffixes into a successful immutable claim/plan identity binding.
+        return not first_key[2] and not second_key[2] and first_key == second_key
+
+
 class OutputCoordinator:
-    def __init__(self, lock_root: Path) -> None:
+    def __init__(self, lock_root: Path, *, registry_validation: str = "reference") -> None:
+        if registry_validation not in ("reference", "shadow"):
+            _fail("registry validation must be reference or shadow")
         self.lock_root = project_path(_require_absolute(lock_root, "output lock root"))
+        self.registry_validation = registry_validation
+        self.validation_metrics: dict[str, Any] = {}
 
     def reconcile(self, plan: Plan) -> str:
         # All claim/plan writers hold the registry lock through plan commit, so
@@ -1291,6 +1398,164 @@ class OutputCoordinator:
         *,
         progress: _ReconcileProgress | None = None,
     ) -> None:
+        metrics: dict[str, Any] = {
+            "mode": self.registry_validation,
+            "authoritative": "reference",
+            "preview_wall_seconds": 0.0,
+            "reference_wall_seconds": 0.0,
+            "agreement": None,
+        }
+        self.validation_metrics = metrics
+        preview_accepted: bool | None = None
+        if self.registry_validation == "shadow":
+            if progress is not None:
+                progress.phase("sampling experimental ownership index", "validation")
+            started = time.perf_counter()
+            try:
+                preview_accepted = self._preview_registry_index(
+                    plans, retiring_root_keys or set(), progress=progress
+                )
+                metrics["preview_result"] = "accepted" if preview_accepted else "conflict"
+            except Exception as error:
+                # Even a preview/parser failure cannot replace a fresh reference
+                # pass. Keep diagnostics path-free and fail closed if reference
+                # later accepts; preserve its original error if it rejects.
+                metrics["preview_result"] = "sample-error"
+                metrics["preview_error_type"] = type(error).__name__
+            finally:
+                metrics["preview_wall_seconds"] = time.perf_counter() - started
+            self._inject("after-index-preview")
+            if progress is not None:
+                progress.phase("validating registry (reference authority)", "validation")
+
+        started = time.perf_counter()
+        try:
+            self._validate_registry_reference(plans, retiring_root_keys, progress=progress)
+        except CoordinatorError:
+            metrics["reference_result"] = "rejected"
+            if preview_accepted is not None:
+                metrics["agreement"] = not preview_accepted
+            raise
+        finally:
+            metrics["reference_wall_seconds"] = time.perf_counter() - started
+        metrics["reference_result"] = "accepted"
+        if self.registry_validation == "shadow":
+            metrics["agreement"] = preview_accepted is True
+            if preview_accepted is not True:
+                _fail(
+                    "experimental ownership index disagrees with the fresh reference "
+                    "validator; no reconciliation changes were authorized"
+                )
+
+    def _preview_registry_index(
+        self,
+        plans: Sequence[Plan],
+        retiring_root_keys: set[str],
+        *,
+        progress: _ReconcileProgress | None = None,
+    ) -> bool:
+        """Sample all ownership records without authorizing or mutating anything.
+
+        The caller holds the ordinary reconciliation locks. Filesystem facts are
+        deliberately untrusted across comparisons: only the subsequent fresh
+        reference pass can authorize proceeding. No preview objects escape.
+        """
+        model = _load_ownership_index()
+        sample = _SampledRegistryFilesystem(model)
+        metrics = self.validation_metrics
+        metrics.update(preview_claims=0, preview_records_read=0, preview_unclaimed_states=0)
+        reservations: list[Any] = []
+        try:
+            internal_paths = (
+                self.lock_root / "roots", self.lock_root / "generation",
+                self.lock_root / "publication",
+            )
+            for plan in plans:
+                for target in plan.targets:
+                    if sample.contains(target.staging, self.lock_root) or sample.physically_contains(
+                        target.staging, self.lock_root
+                    ):
+                        metrics["preview_conflict"] = "staging-lock-namespace"
+                        return False
+                if sample.overlaps(plan.root, self.lock_root) or any(
+                    sample.overlaps(path, plan.root) for path in internal_paths
+                ):
+                    metrics["preview_conflict"] = "root-lock-namespace"
+                    return False
+            roots = self.lock_root / "roots"
+            if plans and os.path.lexists(roots):
+                if sample.project(roots) != roots:
+                    _fail("experimental sample found an unsafe registry path")
+                with os.scandir(roots) as stream:
+                    states = sorted(stream, key=lambda entry: entry.name)
+                for entry in states:
+                    state = roots / entry.name
+                    if (
+                        _is_link(state) or not entry.is_dir(follow_symlinks=False)
+                        or not _is_sha256(entry.name)
+                    ):
+                        _fail("experimental sample found an unsafe registry entry")
+                    with os.scandir(state) as stream:
+                        names = {child.name for child in stream}
+                    if "claim.json" not in names:
+                        # Reference validation owns abandoned-initialization
+                        # cleanup. A preview must never mutate registry state.
+                        metrics["preview_unclaimed_states"] += 1
+                        continue
+                    source = state / "claim.json"
+                    claim = _load_json(source, "output claim")
+                    metrics["preview_records_read"] += 1
+                    self._validate_claim_shape(claim, source)
+                    root, _ = self._claim_paths(claim, source, _filesystem=sample)
+                    if entry.name != claim["root_key"]:
+                        _fail("experimental sample found a claim under the wrong key")
+                    recorded = self._load_recorded_plan(state, claim, _filesystem=sample)
+                    if recorded is not None:
+                        metrics["preview_records_read"] += 1
+                    root_key, build_id = str(claim["root_key"]), str(claim["build_id"])
+                    reservations.append(model.Reservation(
+                        "root", root_key, build_id, None, sample.facts(root)
+                    ))
+                    if recorded is not None:
+                        reservations.extend(
+                            model.Reservation(
+                                "staging", root_key, build_id, target.identity,
+                                sample.facts(target.staging),
+                            )
+                            for target in recorded.targets
+                        )
+                    metrics["preview_claims"] += 1
+                    if progress is not None:
+                        progress.phase(
+                            f"sampling experimental index ({metrics['preview_claims']} claims)",
+                            "validation",
+                        )
+            index = model.OwnershipIndex(reservations)
+            metrics["indexed_reservations"] = len(reservations)
+            for plan in plans:
+                conflict = index.conflict(
+                    root=sample.facts(plan.root), root_key=sample.path_key(plan.root),
+                    build_id=plan.build_id,
+                    staging=((target.identity, sample.facts(target.staging)) for target in plan.targets),
+                    retiring_root_keys=retiring_root_keys,
+                )
+                metrics["index_queries"] = index.queries
+                if conflict is not None:
+                    metrics["preview_conflict"] = conflict
+                    return False
+            return True
+        finally:
+            metrics["sampled_geometry_projections"] = sample.projections
+            metrics["sampled_directory_observations"] = sample.observations
+            sample.close()
+
+    def _validate_registry_reference(
+        self,
+        plans: Sequence[Plan],
+        retiring_root_keys: set[str] | None = None,
+        *,
+        progress: _ReconcileProgress | None = None,
+    ) -> None:
         if not plans:
             return
         if retiring_root_keys is None:
@@ -1426,26 +1691,32 @@ class OutputCoordinator:
 
     @staticmethod
     def _require_plan_claim_binding(
-        plan: Plan, claim: Mapping[str, Any], source: Path
+        plan: Plan, claim: Mapping[str, Any], source: Path, *, _filesystem: Any = None
     ) -> None:
-        claim_root, claim_build_root = OutputCoordinator._claim_paths(claim, source)
+        path_key = _path_key if _filesystem is None else _filesystem.path_key
+        same_path = _same_physical_path if _filesystem is None else _filesystem.same_path
+        claim_root, claim_build_root = OutputCoordinator._claim_paths(
+            claim, source, _filesystem=_filesystem
+        )
         if (
-            str(claim["root_key"]) != _path_key(plan.root)
+            str(claim["root_key"]) != path_key(plan.root)
             or str(claim["build_id"]) != plan.build_id
-            or not _same_physical_path(claim_root, plan.root)
-            or not _same_physical_path(claim_build_root, plan.build_root)
+            or not same_path(claim_root, plan.root)
+            or not same_path(claim_build_root, plan.build_root)
         ):
             _fail(f"configured output plan does not match its immutable claim: {source}")
 
     @staticmethod
     def _claim_paths(
-        claim: Mapping[str, Any], source: Path
+        claim: Mapping[str, Any], source: Path, *, _filesystem: Any = None
     ) -> tuple[Path, Path]:
-        claim_root = project_path(Path(str(claim["root"])))
-        claim_build_root = project_path(Path(str(claim["build_root"])))
+        project = project_path if _filesystem is None else _filesystem.project
+        path_key = _path_key if _filesystem is None else _filesystem.path_key
+        claim_root = project(Path(str(claim["root"])))
+        claim_build_root = project(Path(str(claim["build_root"])))
         if (
-            str(claim["root_key"]) != _path_key(claim_root)
-            or str(claim["build_id"]) != _path_key(claim_build_root)
+            str(claim["root_key"]) != path_key(claim_root)
+            or str(claim["build_id"]) != path_key(claim_build_root)
         ):
             _fail(f"output claim identity is inconsistent: {source}")
         return claim_root, claim_build_root
@@ -1508,13 +1779,15 @@ class OutputCoordinator:
             )
 
     def _load_recorded_plan(
-        self, state: Path, claim: Mapping[str, Any]
+        self, state: Path, claim: Mapping[str, Any], *, _filesystem: Any = None
     ) -> Plan | None:
         path = state / "plan.json"
         if not path.exists():
             return None
-        plan = Plan.from_payload(_load_json(path, "configured output plan"), path)
-        self._require_plan_claim_binding(plan, claim, path)
+        plan = Plan.from_payload(
+            _load_json(path, "configured output plan"), path, _filesystem=_filesystem
+        )
+        self._require_plan_claim_binding(plan, claim, path, _filesystem=_filesystem)
         return plan
 
     @staticmethod
@@ -2072,6 +2345,9 @@ def _parse_arguments(arguments: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--exec", dest="execution", nargs=argparse.REMAINDER)
     parser.add_argument("--current-plan", type=Path, action="append", default=[])
     parser.add_argument("--retired-plan", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--experimental-registry-index", action="store_true", help=argparse.SUPPRESS
+    )
     return parser.parse_args(arguments)
 
 
@@ -2086,7 +2362,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
             return 0
         if options.lock_root is None:
             _fail(f"{options.command} requires --lock-root")
-        coordinator = OutputCoordinator(options.lock_root)
+        coordinator = OutputCoordinator(
+            options.lock_root,
+            registry_validation="shadow" if options.experimental_registry_index else "reference",
+        )
         if options.command == "reconcile-set":
             current = [Plan.read(path) for path in options.current_plan]
             retired = [Plan.read(path) for path in options.retired_plan]

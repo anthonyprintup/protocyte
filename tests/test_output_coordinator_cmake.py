@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import importlib.util
 import os
 import shutil
@@ -44,7 +45,8 @@ def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) 
                 "_protocyte_shared_output_lock_directory(selected)",
                 f'file(WRITE "{result_path.as_posix()}" "${{selected}}")',
             ]
-        ) + "\n",
+        )
+        + "\n",
         encoding="utf-8",
     )
     result = subprocess.run(
@@ -54,9 +56,75 @@ def test_default_registry_selector_uses_the_isolated_test_cache(tmp_path: Path) 
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert Path(result_path.read_text()).resolve() == (
-        tmp_path / "isolated-user-cache/protocyte/output-locks-v1"
-    ).resolve()
+    assert (
+        Path(result_path.read_text()).resolve()
+        == (tmp_path / "isolated-user-cache/protocyte/output-locks-v1").resolve()
+    )
+
+
+def test_installed_shadow_coordinator_is_relocatable_and_keeps_prefix_unchanged(
+    tmp_path: Path,
+) -> None:
+    _, prefix = _test_cmake._configure_fetchcontent_install_fixture(
+        tmp_path, protocyte_install=True
+    )
+    relocated = tmp_path / "relocated-prefix"
+    prefix.rename(relocated)
+    script = next(relocated.rglob("ProtocyteOutputCoordinator.py"))
+    assert script.with_name("ProtocyteOwnershipIndex.py").is_file()
+
+    def contents() -> dict[str, bytes]:
+        return {
+            path.relative_to(relocated).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).digest()
+            for path in relocated.rglob("*")
+            if path.is_file()
+        }
+
+    before = contents()
+    build = tmp_path / "consumer-build"
+    build.mkdir()
+    root = tmp_path / "generated"
+    target = hashlib.sha256(b"installed-shadow").hexdigest()
+    staging = tmp_path / f".protocyte-generation-staging-{target}"
+    plan = tmp_path / "outputs.plan"
+
+    def encoded(path: Path | str) -> str:
+        return os.fspath(path).encode().hex()
+
+    plan.write_text(
+        "\n".join(
+            [
+                "protocyte-output-plan-v1",
+                "root-hex=" + encoded(root),
+                "build-root-hex=" + encoded(build),
+                "target=" + target + "|" + encoded(staging),
+                "output=" + target + "|" + encoded("sample.protocyte.hpp"),
+            ]
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "reconcile",
+            "--lock-root",
+            str(tmp_path / "locks"),
+            "--plan",
+            str(plan),
+            "--experimental-registry-index",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(result.stdout.strip()) == 64
+    assert len(result.stdout.splitlines()) == 1
+    assert contents() == before
 
 
 def test_coordinator_recovers_default_output_after_build_tree_recreation(
@@ -213,7 +281,8 @@ def test_configure_surfaces_lock_progress_without_corrupting_claim_tokens(
                 assert time.monotonic() < deadline, diagnostic
                 time.sleep(0.05)
             progress_lines = [
-                line for line in diagnostic.splitlines()
+                line
+                for line in diagnostic.splitlines()
                 if "Protocyte output coordinator:" in line
             ]
             assert progress_lines and all(
@@ -307,7 +376,8 @@ def test_reconfigure_retires_interrupted_staging_for_a_removed_target(
     assert configured.returncode == 0, configured.stdout + configured.stderr
     plan = next((build / "CMakeFiles" / "protocyte-output-plans").glob("*.plan"))
     target_line = next(
-        line for line in plan.read_text(encoding="ascii").splitlines()
+        line
+        for line in plan.read_text(encoding="ascii").splitlines()
         if line.startswith("target=")
     )
     staging = Path(bytes.fromhex(target_line.split("|", 1)[1]).decode("utf-8"))
@@ -359,12 +429,8 @@ def test_conflicting_root_move_preserves_the_last_successful_outputs(
     second_build = tmp_path / "second-build"
     second_output = tmp_path / "second-generated"
     locks = tmp_path / "locks"
-    _write_out_dir_owner_project(
-        first_source, first_output, output_lock_root=locks
-    )
-    _write_out_dir_owner_project(
-        second_source, second_output, output_lock_root=locks
-    )
+    _write_out_dir_owner_project(first_source, first_output, output_lock_root=locks)
+    _write_out_dir_owner_project(second_source, second_output, output_lock_root=locks)
     assert _configure(first_source, first_build).returncode == 0
     assert _build_out_dir_owner_project(first_build).returncode == 0
     assert _configure(second_source, second_build).returncode == 0
@@ -375,9 +441,7 @@ def test_conflicting_root_move_preserves_the_last_successful_outputs(
     prior_plan_text = prior_plan.read_text(encoding="ascii")
     first_header = first_output / "demo_0.protocyte.hpp"
     first_header_bytes = first_header.read_bytes()
-    _write_out_dir_owner_project(
-        first_source, second_output, output_lock_root=locks
-    )
+    _write_out_dir_owner_project(first_source, second_output, output_lock_root=locks)
 
     rejected = _configure(first_source, first_build)
 
@@ -418,9 +482,7 @@ def test_public_reset_rejects_duplicate_single_value_keywords(tmp_path: Path) ->
 
     assert configured.returncode != 0
     diagnostic = " ".join((configured.stdout + configured.stderr).split())
-    assert (
-        "duplicate single-value keyword(s): OUT_DIR, EXPECTED_CLAIM" in diagnostic
-    )
+    assert "duplicate single-value keyword(s): OUT_DIR, EXPECTED_CLAIM" in diagnostic
 
 
 def test_coordinator_skips_an_inherited_incompatible_python(tmp_path: Path) -> None:
@@ -451,9 +513,10 @@ def test_coordinator_skips_an_inherited_incompatible_python(tmp_path: Path) -> N
     )
 
     assert configured.returncode == 0, configured.stdout + configured.stderr
-    assert Path(result_file.read_text(encoding="utf-8")).resolve() != Path(
-        shutil.which("cmake") or ""
-    ).resolve()
+    assert (
+        Path(result_file.read_text(encoding="utf-8")).resolve()
+        != Path(shutil.which("cmake") or "").resolve()
+    )
 
 
 def test_reconfigure_discards_an_already_released_retired_plan(
@@ -531,11 +594,13 @@ def test_build_root_is_physical_when_configured_through_a_directory_link(
 
     assert configured.returncode == 0, configured.stdout + configured.stderr
     assert generated.returncode == 0, generated.stdout + generated.stderr
-    plan = next(
-        (real_build / "CMakeFiles" / "protocyte-output-plans").glob("*.plan")
+    plan = next((real_build / "CMakeFiles" / "protocyte-output-plans").glob("*.plan"))
+    encoded_build_root = (
+        plan.read_text(encoding="ascii").splitlines()[2].split("=", 1)[1]
     )
-    encoded_build_root = plan.read_text(encoding="ascii").splitlines()[2].split("=", 1)[1]
-    assert Path(bytes.fromhex(encoded_build_root).decode("utf-8")) == real_build.resolve()
+    assert (
+        Path(bytes.fromhex(encoded_build_root).decode("utf-8")) == real_build.resolve()
+    )
 
 
 def test_public_reset_requires_token_and_releases_claim(tmp_path: Path) -> None:

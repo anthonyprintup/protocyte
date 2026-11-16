@@ -23,6 +23,16 @@ def _load_coordinator() -> ModuleType:
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
     specification.loader.exec_module(module)
+    test_mode = os.environ.get("PROTOCYTE_TEST_REGISTRY_VALIDATION", "reference")
+    if test_mode != "reference":
+        original_initialize = module.OutputCoordinator.__init__
+
+        def initialize(
+            self: object, lock_root: Path, *, registry_validation: str = test_mode
+        ) -> None:
+            original_initialize(self, lock_root, registry_validation=registry_validation)
+
+        module.OutputCoordinator.__init__ = initialize
     return module
 
 
@@ -1627,7 +1637,9 @@ def test_registry_records_are_loaded_once_per_batch(
 
     retained = [plan(f"retained-{index}") for index in range(4)]
     current = [plan(f"current-{index}") for index in range(current_count)]
-    engine = coordinator.OutputCoordinator(tmp_path / "locks")
+    # This is the production reference contract; shadow deliberately reads each
+    # record once in its preview and once in the mandatory reference phase.
+    engine = coordinator.OutputCoordinator(tmp_path / "locks", registry_validation="reference")
     engine.reconcile_set((), retained)
     expected = {engine._state_directory(value.root) for value in retained}
     loaded: list[Path] = []

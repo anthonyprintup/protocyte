@@ -230,5 +230,8 @@ Those would obscure whether the algorithm is faster and whether safety survived.
   Internal task manifests, registry maintenance and performance switches stay
   out of the required user workflow.
 
-This document is an implementation proposal. The new CLI and packaged backend
-described here have not been implemented, and the 30-second target is not yet proven.
+The first experimental core now exists behind the current entry point in shadow
+mode; see [its results](experimental-index-results.md) and
+[authority contract](experimental-index-contract.md). The new CLI and packaged
+backend described here have not been implemented, and the safe 30-second target
+is not yet proven.
