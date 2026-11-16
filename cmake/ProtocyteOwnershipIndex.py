@@ -1,8 +1,7 @@
-"""Experimental ownership geometry, with no mutation or filesystem authority.
+"""Ownership geometry, with no mutation or filesystem authority.
 
-An index describes sampled observations only. It cannot authorize reconciliation
-or publication. The coordinator's shadow mode always runs its fresh reference
-validator after the preview, and fails closed on disagreement.
+The observing caller must authenticate records and verify the observation
+scope before using this geometry to authorize reconciliation or publication.
 """
 
 from __future__ import annotations

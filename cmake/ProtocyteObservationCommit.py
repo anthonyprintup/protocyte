@@ -1,4 +1,4 @@
-"""Experimental optimistic read-set commit; never standalone mutation authority.
+"""Transient native read-set commit; never standalone mutation authority.
 
 Positive objects use root-anchored short opens and exact ID/version witnesses.
 Only volume roots retain handles; foreign build directories are not pinned.

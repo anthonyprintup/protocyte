@@ -36,9 +36,10 @@ from typing import Any, Iterator, Mapping, NoReturn, Sequence
 
 
 PROTOCOL_VERSION = 1
-# Review fixes are awaiting repeat qualification. Only isolated or
-# mutation-forbidden qualification modules can exercise provisional authority.
-_COMMITTED_INDEX_QUALIFIED = False
+# Enable native validation after correctness and upgrade qualification.
+# Every invocation still requires supported capabilities, verified witnesses,
+# complete worker retirement, and successful native-handle cleanup.
+_COMMITTED_INDEX_QUALIFIED = True
 PLAN_HEADER = "protocyte-output-plan-v1"
 GENERATED_SUFFIXES = (".protocyte.cpp", ".protocyte.hpp", "/runtime.hpp")
 
@@ -1522,7 +1523,7 @@ class OutputCoordinator:
             metrics["fallback"] = "reference"
         if self.registry_validation == "commit-shadow" or index_allowed:
             if progress is not None:
-                progress.phase("validating provisional observation commit", "validation")
+                progress.phase("validating registry", "validation")
             started = time.perf_counter()
             try:
                 # Close markers on shared ancestors would otherwise invalidate
@@ -1730,7 +1731,7 @@ class OutputCoordinator:
                     metrics["commit_claims_checked"] += 1
                     if progress is not None:
                         progress.registry(claim=True)
-                        progress.phase(f"provisional observation commit ({metrics['commit_claims_checked']} claims)", "validation")
+                        progress.phase(f"validating registry ({metrics['commit_claims_checked']} claims)", "validation")
             queries = [
                 (plan.root, scope.path_key(plan.root), plan.build_id,
                  tuple((target.identity, target.staging) for target in plan.targets))

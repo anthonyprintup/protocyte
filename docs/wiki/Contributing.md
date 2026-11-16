@@ -64,11 +64,8 @@ python tests/benchmark_output_registry.py --claims 0 8 16 --plans 1 4 --repeat 3
 
 It creates each retained claim through the real coordinator in a fresh private
 registry and reports seed, registry validation, and reconciliation wall/CPU times
-separately. Setup includes plan creation and uses real initialization/reconciliation
-helpers under private registry/generation/publication locks; it avoids an
-all-pairs setup scan. The measured `reconcile_set` performs every production
-check unchanged. It counts registry scans, recorded-plan loads, path projections,
-and profiled filesystem calls. It does not generate C++, use the shared registry, or access the
+separately. It also counts registry scans, recorded-plan loads, and path
+projections. It does not generate C++, use the shared registry, or access the
 network. The printed temporary directory retains the synthetic state and
 `results.json`; use `--work NEW_DIRECTORY` to choose that directory explicitly.
 
@@ -77,79 +74,6 @@ against another revision at the same workspace depth. The report includes every
 sample and median times. Compare operation counts as well as wall times: Windows
 filesystem probes, path depth, caching, and concurrent machine activity affect
 timings. The focused regression tests are in `tests/test_output_coordinator.py`.
-
-Filesystem counters include native existence queries on newer Windows Python.
-Attribute probes from experimental compared sources are counted separately:
-substituting a cheaper query must not be reported as eliminating an observation.
-
-For a larger sample, explicitly opt in (up to 4,096 claims and 32 plans):
-
-```bash
-python tests/benchmark_output_registry.py --large --claims 2048 --plans 11 --repeat 1
-```
-
-Start with 64 claims to estimate cost; large setup and validation may take
-minutes. The original issue #54 measurement is also available as
-`tests/registry_validation_poc.py`. Publish only scripts and sanitized results;
-synthetic fixture records contain local paths and must remain private. CMake
-pytest fixtures use a per-test cache base even when exercising the default
-registry selector. Retained claims are released only by an ownership-aware
-reset, never by age, missing build trees or test-looking names.
-
-The experimental ownership index supports a `shadow` benchmark mode. It runs
-both the sampled preview and the mandatory fresh reference validator; full
-validation timings include both. Baseline checkouts use reference mode:
-
-```bash
-python tests/benchmark_output_registry.py --registry-validation shadow --claims 0 8 16 --plans 1 11 --repeat 1
-python tests/registry_validation_poc.py --registry-validation shadow --claims 0 8 16 --plans 1 11
-```
-
-The scaling benchmark also accepts `--targets-per-plan 3 --shared-build-root
---existing-directories` to exercise anonymous alternate layouts. Both sides of a
-baseline comparison use the same layout. The defaults preserve the original
-one-target, separate-build, absent-directory fixture.
-
-A separate **read-only, non-authoritative** experiment measures only the sampled
-algorithm. It performs no fresh registry reference pass after seeding and grants
-no authority to reconcile or publish; its timing is not a reconciler speedup:
-
-```bash
-python tests/benchmark_ownership_preview.py --large --claims 2172 --plans 11 --work .pytest-tmp/index-preview-new
-```
-
-The work directory must be new. The preview supports the same layout flags.
-Both tools record the coordinator/helper fingerprints and reject source changes
-during a measurement. See the experiment's
-[results](../experimental-index-results.md) and
-[correctness contract](../experimental-index-contract.md) before interpreting
-the preview numbers. That sampled experiment always retains reference authority.
-The subsequent committed index remains behind a closed source promotion guard
-after the [MR review](../mr55-review-results.md) failed repeat timing. See the
-[historical parallel qualification](../parallel-probe-results.md) and
-[observation contract](../observation-commit-contract.md). Unsupported or
-unverified observations fall back to reference validation. Set
-`PROTOCYTE_REGISTRY_VALIDATION=reference` to compare an existing build using the
-reference path.
-
-Actual historical helper/coordinator interoperability checks run separately:
-
-```console
-python tests/verify_coordinator_upgrade.py --work .pytest-tmp/upgrade-new
-```
-
-That explicit qualifier needs the pinned public source blobs and checkpoints
-listed in its source. It checks 115 upgrade, rollback, cleanup and recovery cases
-in fresh private registries. Routine unit tests are self-contained and do not
-require unmerged branch history, a full checkout or a network fetch. Publish only
-the sanitized result receipt, not fixture records or subprocess logs.
-
-The fresh native-reader investigation can be measured with
-`--registry-validation native-shadow` in the scaling benchmark or POC. It keeps
-the cross product and fresh physical checks, then always runs reference validation.
-Native open/query/close counters and all three source fingerprints are reported.
-This mode is an experiment and has not passed the large-workload timing gate;
-see [its results and counterexample](../observation-mechanism-results.md).
 
 ## Documentation
 

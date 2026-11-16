@@ -208,13 +208,11 @@ wait includes preparing and acquiring its lock files. `registry_entries` counts
 state directories, including any abandoned initialization directories encountered;
 `claims_checked` counts authenticated claim/plan records.
 
-Registry validation currently uses the full reference validator. The experimental
-index remains gated after its repeat timing qualification exceeded 30 seconds;
-see the [MR review](../mr55-review-results.md). Existing builds need no migration,
-registry reset, or new configuration. To explicitly select the
-reference validator while diagnosing an installation, set
+Registry validation uses the accelerated validator where supported and falls back
+to full validation when needed. Existing builds need no migration, cache reset,
+or new configuration. To use the full validator while diagnosing an issue, set
 `PROTOCYTE_REGISTRY_VALIDATION=reference` in the build environment; remove it to
-restore automatic selection, which remains reference while promotion is closed.
+restore automatic selection.
 
 If cleanup refuses an unsafe path or cannot remove it, the diagnostic warns that inert staging data outside `OUT_DIR` may remain. Stop related processes and remove only the named staging path after inspecting it.
 

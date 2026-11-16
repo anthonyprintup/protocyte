@@ -1,9 +1,9 @@
-"""Experimental fresh Windows path observations, never an operation-wide lease.
+"""Fresh Windows path operations, never an operation-wide lease.
 
 Each projection opens the entire existing path with OBJ_DONT_REPARSE, reads that
 handle and closes it before returning. No filesystem facts are cached. Missing
 components are searched again on every call. This module grants no ownership or
-mutation authority; the coordinator uses it only behind reference verification.
+mutation authority; the coordinator verifies the observation scope separately.
 """
 
 from __future__ import annotations
